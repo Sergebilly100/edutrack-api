@@ -15,7 +15,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:seed": "tsx src/shared/database/seed.ts",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "sync-types": "mkdir -p ../edutrack-web/src/shared/types && cp src/shared/types/index.ts ../edutrack-web/src/shared/types/index.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",
