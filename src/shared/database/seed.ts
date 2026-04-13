@@ -215,8 +215,15 @@ const main = async (): Promise<void> => {
     }
 
     const directorUser = await tx.execute<IdRow>(sql`
-      INSERT INTO users (role, name, email, password_hash, is_active)
-      VALUES ('director', 'Direction Sainte-Marie', 'direction@sainte-marie.edu.ci', ${directorPasswordHash}, true)
+      INSERT INTO users (role, name, phone, email, password_hash, is_active)
+      VALUES (
+        'director',
+        'Direction Sainte-Marie',
+        '2250701234567',
+        'direction@sainte-marie.edu.ci',
+        ${directorPasswordHash},
+        true
+      )
       RETURNING id
     `);
     const directorId = directorUser.rows[0]?.id;

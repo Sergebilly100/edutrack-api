@@ -19,7 +19,7 @@
     "sync-types": "mkdir -p ../edutrack-web/src/shared/types && cp src/shared/types/index.ts ../edutrack-web/src/shared/types/index.ts"
   },
   "dependencies": {
-    "@fastify/cors": "^10.0.2",
+    "@fastify/cors": "^8.5.0",
     "@fastify/helmet": "^13.0.2",
     "@fastify/multipart": "^9.0.3",
     "@fastify/rate-limit": "^10.3.0",

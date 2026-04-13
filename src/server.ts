@@ -1,9 +1,20 @@
 import 'dotenv/config';
 
+import cors from '@fastify/cors';
 import Fastify from 'fastify';
+
+import authController from './modules/auth/auth.controller.js';
 
 const app = Fastify({ logger: true });
 const port = Number(process.env.PORT || 3000);
+
+app.register(cors, {
+  origin: true,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+});
+
+app.register(authController);
 
 app.get('/health', async () => ({ status: 'ok' }));
 
