@@ -7,6 +7,7 @@ const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
   throw new Error('[db] DATABASE_URL environment variable is required');
 }
+export const databaseUrl = DATABASE_URL;
 
 const pool = new Pool({ connectionString: DATABASE_URL });
 
