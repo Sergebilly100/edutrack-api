@@ -1,14 +1,13 @@
 import { randomBytes } from 'node:crypto';
+import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { sql } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/node-postgres';
-import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
 
 import { databaseUrl, db } from './db.js';
 
-const DEFAULT_ROOMS = ['Salle A1', 'Salle A2', 'Salle A3', 'Salle des profs'] as const;
+const DEFAULT_ROOMS = ['Salle A1', 'Salle A2', 'Labo Sciences', 'Salle Langues'] as const;
 
 const DEFAULT_TIME_SLOTS = [
   { label: '7h30 - 9h00', startTime: '07:30', endTime: '09:00', sortOrder: 1 },
@@ -36,13 +35,40 @@ const runTenantMigrations = async (
 
   try {
     console.info('[tenant-init] Running tenant migrations', { schemaName });
-    await client.query(`SET search_path TO "${schemaName}", public`);
+    const migrationsFolder = path.resolve(process.cwd(), 'src/shared/database/migrations');
+    const migrationFiles = (await readdir(migrationsFolder))
+      .filter((file) => /^(000[1-9]\d*|00[1-9]\d*|0[1-9]\d*|[1-9]\d*)_.*\.sql$/.test(file))
+      .sort();
 
-    await migrate(drizzle(client), {
-      migrationsFolder: path.resolve(process.cwd(), 'src/shared/database/migrations'),
-    });
+    for (const migrationFile of migrationFiles) {
+      const migrationPath = path.join(migrationsFolder, migrationFile);
+      const content = await readFile(migrationPath, 'utf-8');
 
-    await client.query('SET search_path TO public');
+      const schemaAwareSql = content
+        .replace(/CREATE SCHEMA "tenant";/g, `CREATE SCHEMA IF NOT EXISTS "${schemaName}";`)
+        .replace(/"tenant"/g, `"${schemaName}"`);
+
+      const statements = schemaAwareSql
+        .split('--> statement-breakpoint')
+        .map((statement) => statement.trim())
+        .filter((statement) => statement.length > 0);
+
+      for (const statement of statements) {
+        try {
+          await client.query(statement);
+        } catch (error) {
+          const pgError = error as { code?: string };
+          const duplicateCodes = new Set(['42P06', '42P07', '42710']);
+
+          if (pgError.code && duplicateCodes.has(pgError.code)) {
+            continue;
+          }
+
+          throw error;
+        }
+      }
+    }
+
     console.info('[tenant-init] Tenant migrations completed', { schemaName });
   } finally {
     client.release();
