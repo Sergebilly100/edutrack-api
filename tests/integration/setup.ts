@@ -141,7 +141,12 @@ const getCurrentDayOfWeek = (): number => {
   return day === 0 ? 1 : day;
 };
 
-const timeFromDate = (date: Date): string => date.toISOString().slice(11, 19);
+const toTimeFromUtcMinutes = (minutes: number): string => {
+  const clamped = Math.max(0, Math.min(minutes, 23 * 60 + 59));
+  const hours = Math.floor(clamped / 60);
+  const mins = clamped % 60;
+  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:00`;
+};
 
 const seedTenantData = async (): Promise<SeedContext> => {
   const teacherPassword = 'edutrack2024';
@@ -154,8 +159,17 @@ const seedTenantData = async (): Promise<SeedContext> => {
   const validTo = formatDate(addDays(now, 7));
   const dayOfWeek = getCurrentDayOfWeek();
 
-  const slotStartTime = timeFromDate(new Date(now.getTime() - 5 * 60 * 1000));
-  const slotEndTime = timeFromDate(new Date(now.getTime() + 55 * 60 * 1000));
+  const nowMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+  let slotStartMinutes = Math.max(0, nowMinutes - 5);
+  let slotEndMinutes = Math.min(23 * 60 + 59, nowMinutes + 55);
+
+  if (slotEndMinutes <= slotStartMinutes) {
+    slotStartMinutes = Math.max(0, nowMinutes - 30);
+    slotEndMinutes = Math.min(23 * 60 + 59, slotStartMinutes + 60);
+  }
+
+  const slotStartTime = toTimeFromUtcMinutes(slotStartMinutes);
+  const slotEndTime = toTimeFromUtcMinutes(slotEndMinutes);
   const slotLabel = `test-slot-${schemaSuffix}`;
 
   const tenantSchema = quoteIdentifier(TEST_SCHEMA_NAME);
