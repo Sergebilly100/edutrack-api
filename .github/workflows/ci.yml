@@ -42,11 +42,30 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Validate JWT test secrets
+      - name: Prepare JWT keys for CI
         run: |
-          if [ -z "${JWT_PRIVATE_KEY}" ] || [ -z "${JWT_PUBLIC_KEY}" ]; then
-            echo "Missing required secrets: JWT_PRIVATE_KEY_TEST and JWT_PUBLIC_KEY_TEST."
-            exit 1
+          if [ -n "${JWT_PRIVATE_KEY}" ] && [ -n "${JWT_PUBLIC_KEY}" ]; then
+            echo "Using JWT_*_TEST secrets."
+            {
+              echo "JWT_PRIVATE_KEY<<EOF"
+              echo "${JWT_PRIVATE_KEY}"
+              echo "EOF"
+              echo "JWT_PUBLIC_KEY<<EOF"
+              echo "${JWT_PUBLIC_KEY}"
+              echo "EOF"
+            } >> "$GITHUB_ENV"
+          else
+            echo "JWT_*_TEST secrets not found. Generating ephemeral RSA key pair for CI."
+            openssl genpkey -algorithm RSA -out private.pem -pkeyopt rsa_keygen_bits:2048
+            openssl rsa -pubout -in private.pem -out public.pem
+            {
+              echo "JWT_PRIVATE_KEY<<EOF"
+              cat private.pem
+              echo "EOF"
+              echo "JWT_PUBLIC_KEY<<EOF"
+              cat public.pem
+              echo "EOF"
+            } >> "$GITHUB_ENV"
           fi
 
       - name: Start PostgreSQL and Redis
