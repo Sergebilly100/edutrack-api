@@ -9,19 +9,14 @@ import {
 import {
   createSchedule,
   deleteScheduleById,
-  findRoomById,
   findTeacherIdByUserId,
-  listRooms,
   listSchedulePeriods,
-  type RoomUpdateInput,
   type ScheduleMutationInput,
-  updateRoom,
   updateSchedule,
   updateSchedulePeriod,
 } from './schedule.repository.js';
 import {
   createPeriodFromInput,
-  createRoomWithQrToken,
   duplicatePeriod,
   getActiveSchedulesForDate,
 } from './schedule.service.js';
@@ -29,8 +24,6 @@ import {
   periodDuplicatePayloadSchema,
   periodPayloadSchema,
   periodUpdatePayloadSchema,
-  roomCreatePayloadSchema,
-  roomUpdatePayloadSchema,
   schedulePayloadSchema,
 } from './schedule.schemas.js';
 
@@ -52,15 +45,6 @@ const mapSchedulePayload = (
   timeSlotId: payload.time_slot_id,
   dayOfWeek: payload.day_of_week,
   subject: payload.subject,
-  isActive: payload.is_active,
-});
-
-const mapRoomUpdatePayload = (
-  payload: z.infer<typeof roomUpdatePayloadSchema>
-): RoomUpdateInput => ({
-  name: payload.name,
-  building: payload.building,
-  capacity: payload.capacity,
   isActive: payload.is_active,
 });
 
@@ -334,81 +318,4 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     }
   });
 
-  app.get('/api/v1/rooms', { preHandler: [attachTenantDb] }, async (request, reply) => {
-    try {
-      const rooms = await listRooms(ensureTenantDb(request));
-      return reply.send({ rooms });
-    } catch (error) {
-      return handleError(request, reply, error);
-    }
-  });
-
-  app.post('/api/v1/rooms', { preHandler: [attachTenantDb] }, async (request, reply) => {
-    try {
-      const body = roomCreatePayloadSchema.parse(request.body);
-
-      const room = await createRoomWithQrToken(ensureTenantDb(request), {
-        name: body.name,
-        building: body.building,
-        capacity: body.capacity,
-        isActive: body.is_active,
-      });
-
-      return reply.code(201).send({ room });
-    } catch (error) {
-      return handleError(request, reply, error);
-    }
-  });
-
-  app.put('/api/v1/rooms/:id', { preHandler: [attachTenantDb] }, async (request, reply) => {
-    try {
-      const { id } = paramsIdSchema.parse(request.params);
-      const body = roomUpdatePayloadSchema.parse(request.body);
-
-      const room = await updateRoom(ensureTenantDb(request), id, mapRoomUpdatePayload(body));
-
-      if (!room) {
-        return reply.code(404).send({
-          error: 'Room not found',
-          code: 'NOT_FOUND',
-          statusCode: 404,
-        });
-      }
-
-      return reply.send({ room });
-    } catch (error) {
-      return handleError(request, reply, error);
-    }
-  });
-
-  app.get('/api/v1/rooms/:id/qr', { preHandler: [attachTenantDb] }, async (request, reply) => {
-    try {
-      const { id } = paramsIdSchema.parse(request.params);
-
-      const room = await findRoomById(ensureTenantDb(request), id);
-      if (!room) {
-        return reply.code(404).send({
-          error: 'Room not found',
-          code: 'NOT_FOUND',
-          statusCode: 404,
-        });
-      }
-
-      return reply.send({
-        room: {
-          id: room.id,
-          name: room.name,
-          building: room.building,
-          capacity: room.capacity,
-          isActive: room.isActive,
-        },
-        qr: {
-          token: room.qrToken,
-          value: `EDUTRACK_ROOM:${room.qrToken}`,
-        },
-      });
-    } catch (error) {
-      return handleError(request, reply, error);
-    }
-  });
 }

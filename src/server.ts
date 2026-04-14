@@ -5,6 +5,7 @@ import Fastify from 'fastify';
 
 import adminController from './modules/admin/admin.controller.js';
 import authController from './modules/auth/auth.controller.js';
+import roomsController from './modules/rooms/rooms.controller.js';
 import studentsController from './modules/students/students.controller.js';
 import scheduleController from './modules/schedule/schedule.controller.js';
 
@@ -21,6 +22,7 @@ app.register(authController);
 app.register(adminController);
 app.register(studentsController);
 app.register(scheduleController);
+app.register(roomsController);
 
 app.get('/health', async () => ({ status: 'ok' }));
 
