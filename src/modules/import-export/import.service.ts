@@ -261,7 +261,7 @@ export class ImportService {
           makeError({
             row: line,
             column: 'Téléphone parent',
-            message: 'Format invalide, attendu 225XXXXXXXXXX',
+            message: 'Format invalide, attendu 225 suivi de 10 chiffres',
             value: parentPhoneRaw,
           })
         );

@@ -27,12 +27,12 @@ export const studentsListQuerySchema = z.object({
 
 const parentPhoneSchema = z
   .string()
-  .regex(PHONE_CI_REGEX, 'parent_phone must match 225XXXXXXXXXX')
+  .regex(PHONE_CI_REGEX, 'parent_phone must match 225 followed by 10 digits')
   .nullable();
 
 const parentPhone2Schema = z
   .string()
-  .regex(PHONE_CI_REGEX, 'parent_phone_2 must match 225XXXXXXXXXX')
+  .regex(PHONE_CI_REGEX, 'parent_phone_2 must match 225 followed by 10 digits')
   .nullable();
 
 export const createStudentBodySchema = z.object({
