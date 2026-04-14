@@ -9,6 +9,7 @@ declare module 'fastify' {
 }
 
 const DIRECTOR_SECRETARY_ROLES = new Set(['director', 'secretary']);
+const TEACHER_DIRECTOR_SECRETARY_ROLES = new Set(['teacher', 'director', 'secretary']);
 
 const extractBearerToken = (request: FastifyRequest): string => {
   const authorization = request.headers.authorization;
@@ -99,6 +100,52 @@ export const requireDirectorOrSecretary = async (
   }
 
   if (!DIRECTOR_SECRETARY_ROLES.has(claims.role)) {
+    forbidden(reply, 'Forbidden');
+    return;
+  }
+
+  request.claims = claims;
+};
+
+export const requireTeacher = async (
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> => {
+  await authenticateRequest(request, reply);
+  if (reply.sent) {
+    return;
+  }
+
+  const claims = request.auth;
+  if (!claims) {
+    unauthorized(reply, 'Unauthorized');
+    return;
+  }
+
+  if (claims.role !== 'teacher') {
+    forbidden(reply, 'Forbidden');
+    return;
+  }
+
+  request.claims = claims;
+};
+
+export const requireTeacherOrDirectorOrSecretary = async (
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> => {
+  await authenticateRequest(request, reply);
+  if (reply.sent) {
+    return;
+  }
+
+  const claims = request.auth;
+  if (!claims) {
+    unauthorized(reply, 'Unauthorized');
+    return;
+  }
+
+  if (!TEACHER_DIRECTOR_SECRETARY_ROLES.has(claims.role)) {
     forbidden(reply, 'Forbidden');
     return;
   }

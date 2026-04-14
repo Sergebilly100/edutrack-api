@@ -10,6 +10,23 @@ export type TeacherCheckedInPayload = {
   checkedInVia: CheckedInVia;
 };
 
+export type TeacherLatePayload = TeacherCheckedInPayload & {
+  lateMinutes: number;
+};
+
+export type TeacherQrAlertPayload = {
+  tenantId: string;
+  schemaName: string;
+  teacherId: string;
+  scheduleId: string;
+  date: string;
+  alertType:
+    | 'teacher_qr_mismatch'
+    | 'teacher_qr_missing_scan'
+    | 'teacher_qr_scan_out_of_time';
+  roomMismatch: boolean;
+};
+
 export type TeacherAbsentPayload = {
   tenantId: string;
   schemaName: string;
@@ -39,8 +56,14 @@ export type SubscriptionExpiredPayload = {
 
 export type EventMap = {
   'teacher.checked_in': TeacherCheckedInPayload;
+  'teacher.late': TeacherLatePayload;
+  'teacher.qr_alert': TeacherQrAlertPayload;
   'teacher.absent': TeacherAbsentPayload;
-  'teacher.*': TeacherCheckedInPayload | TeacherAbsentPayload;
+  'teacher.*':
+    | TeacherCheckedInPayload
+    | TeacherLatePayload
+    | TeacherQrAlertPayload
+    | TeacherAbsentPayload;
   'student.absent': StudentAbsentPayload;
   'subscription.expired': SubscriptionExpiredPayload;
 };

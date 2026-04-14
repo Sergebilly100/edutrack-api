@@ -4,6 +4,7 @@ import cors from '@fastify/cors';
 import Fastify from 'fastify';
 
 import adminController from './modules/admin/admin.controller.js';
+import attendanceController from './modules/attendance/attendance.controller.js';
 import authController from './modules/auth/auth.controller.js';
 import roomsController from './modules/rooms/rooms.controller.js';
 import studentsController from './modules/students/students.controller.js';
@@ -20,6 +21,7 @@ app.register(cors, {
 
 app.register(authController);
 app.register(adminController);
+app.register(attendanceController);
 app.register(studentsController);
 app.register(scheduleController);
 app.register(roomsController);

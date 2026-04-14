@@ -2,7 +2,10 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
-import { requireDirectorOrSecretary } from '../../shared/middleware/auth.middleware.js';
+import {
+  requireDirectorOrSecretary,
+  requireTeacherOrDirectorOrSecretary,
+} from '../../shared/middleware/auth.middleware.js';
 
 import { StudentsModuleError, buildStudentsService } from './students.service.js';
 import {
@@ -104,7 +107,7 @@ export default async function studentsController(app: FastifyInstance): Promise<
     }
   });
 
-  app.post('/api/v1/attendance/students/bulk', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.post('/api/v1/attendance/students/bulk', { preHandler: requireTeacherOrDirectorOrSecretary }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const body = bulkAttendanceBodySchema.parse(request.body ?? {});
