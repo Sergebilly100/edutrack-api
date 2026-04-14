@@ -3,7 +3,10 @@ import 'dotenv/config';
 import cors from '@fastify/cors';
 import Fastify from 'fastify';
 
+import adminController from './modules/admin/admin.controller.js';
 import authController from './modules/auth/auth.controller.js';
+import studentsController from './modules/students/students.controller.js';
+import scheduleController from './modules/schedule/schedule.controller.js';
 
 const app = Fastify({ logger: true });
 const port = Number(process.env.PORT || 3000);
@@ -15,6 +18,9 @@ app.register(cors, {
 });
 
 app.register(authController);
+app.register(adminController);
+app.register(studentsController);
+app.register(scheduleController);
 
 app.get('/health', async () => ({ status: 'ok' }));
 

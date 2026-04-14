@@ -1,6 +1,7 @@
 import 'dotenv/config';
 
 import { drizzle } from 'drizzle-orm/node-postgres';
+import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -17,6 +18,25 @@ pool.on('error', (err) => {
 });
 
 export const db = drizzle(pool);
+export type TenantDb = NodePgDatabase<Record<string, unknown>>;
+
+export const acquireTenantDb = async (
+  schemaName: string
+): Promise<{ db: TenantDb; release: () => void }> => {
+  if (!/^[a-z][a-z0-9_]{0,62}$/.test(schemaName)) {
+    throw new Error(`[db] Invalid schema name: "${schemaName}"`);
+  }
+
+  const client = await pool.connect();
+  await client.query(`SET search_path TO "${schemaName}", public`);
+
+  return {
+    db: drizzle(client) as TenantDb,
+    release: () => {
+      client.release();
+    },
+  };
+};
 
 /**
  * Exécute `callback` avec une instance Drizzle dont le search_path est
@@ -27,22 +47,12 @@ export const db = drizzle(pool);
  */
 export const withTenantSchema = async <T>(
   schemaName: string,
-  callback: (tenantDb: ReturnType<typeof drizzle>) => Promise<T>
+  callback: (tenantDb: TenantDb) => Promise<T>
 ): Promise<T> => {
-  // Validation stricte : schéma PostgreSQL = lettres minuscules, chiffres, underscore
-  if (!/^[a-z][a-z0-9_]{0,62}$/.test(schemaName)) {
-    throw new Error(`[db] Invalid schema name: "${schemaName}"`);
-  }
-
-  const client = await pool.connect();
+  const tenant = await acquireTenantDb(schemaName);
   try {
-    // Identifiant entre guillemets doubles pour éviter toute injection SQL
-    await client.query(`SET search_path TO "${schemaName}", public`);
-    const tenantDb = drizzle(client);
-    return await callback(
-      tenantDb as unknown as ReturnType<typeof drizzle>
-    );
+    return await callback(tenant.db);
   } finally {
-    client.release();
+    tenant.release();
   }
 };
