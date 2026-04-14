@@ -6,13 +6,18 @@ import { withTenantSchema } from '../../shared/database/db.js';
 import { off as defaultOff, on as defaultOn } from '../../shared/events/event-bus.js';
 import type {
   EventMap,
+  StudentAbsentPayload,
   TeacherLatePayload,
   TeacherQrAlertPayload,
 } from '../../shared/events/events.types.js';
 import type { NotificationType } from '../../shared/types/index.js';
 
 import type { NotificationSmsJobData, SmsSender } from './notifications.queue.js';
-import { buildTeacherLateSms, buildTeacherQrAlertSms } from './notifications.sms.js';
+import {
+  buildStudentAbsentSms,
+  buildTeacherLateSms,
+  buildTeacherQrAlertSms,
+} from './notifications.sms.js';
 import {
   defaultRepository,
   type NotificationsRepository,
@@ -25,11 +30,11 @@ type NotificationsServiceDeps = {
     callback: (tenantDb: TenantDbLike) => Promise<T>
   ) => Promise<T>;
   eventBus: {
-    on: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert'>>(
+    on: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'student.absent'>>(
       event: K,
       handler: (payload: EventMap[K]) => void
     ) => void;
-    off: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert'>>(
+    off: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'student.absent'>>(
       event: K,
       handler: (payload: EventMap[K]) => void
     ) => void;
@@ -134,14 +139,22 @@ export class NotificationsService {
     });
   };
 
+  private readonly studentAbsentListener = (payload: EventMap['student.absent']): void => {
+    void this.handleStudentAbsent(payload).catch((error) => {
+      console.error('[notifications] failed to process student.absent', error);
+    });
+  };
+
   start(): void {
     this.deps.eventBus.on('teacher.late', this.teacherLateListener);
     this.deps.eventBus.on('teacher.qr_alert', this.teacherQrAlertListener);
+    this.deps.eventBus.on('student.absent', this.studentAbsentListener);
   }
 
   stop(): void {
     this.deps.eventBus.off('teacher.late', this.teacherLateListener);
     this.deps.eventBus.off('teacher.qr_alert', this.teacherQrAlertListener);
+    this.deps.eventBus.off('student.absent', this.studentAbsentListener);
   }
 
   async handleTeacherLate(payload: TeacherLatePayload): Promise<void> {
@@ -236,6 +249,45 @@ export class NotificationsService {
       await this.deps.repository.insertNotificationLog(tenantDb, {
         type: notificationType,
         recipientPhone: context.directorPhone,
+        message,
+        status: 'queued',
+        providerRef: queueRef,
+        relatedId: payload.scheduleId,
+      });
+    });
+  }
+
+  async handleStudentAbsent(payload: StudentAbsentPayload): Promise<void> {
+    await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
+      const message = buildStudentAbsentSms({
+        studentFirstName: payload.studentFirstName,
+        subject: payload.subject,
+        date: payload.date,
+        schoolPhone: payload.schoolPhone,
+      });
+
+      const queueRef = buildQueueRef(payload.schemaName, 'student_absent_parent');
+
+      await this.deps.smsQueue.add(
+        'send-sms',
+        toSmsJobData({
+          queueRef,
+          to: payload.parentPhone,
+          message,
+          notificationType: 'student_absent_parent',
+          schemaName: payload.schemaName,
+          relatedId: payload.scheduleId,
+        }),
+        {
+          jobId: queueRef,
+          removeOnComplete: true,
+          removeOnFail: true,
+        }
+      );
+
+      await this.deps.repository.insertNotificationLog(tenantDb, {
+        type: 'student_absent_parent',
+        recipientPhone: payload.parentPhone,
         message,
         status: 'queued',
         providerRef: queueRef,

@@ -72,6 +72,7 @@ export const attendanceHistoryQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   class_id: z.uuid().optional(),
   student_id: z.uuid().optional(),
+  schedule_id: z.uuid().optional(),
   date_from: z.string().regex(ISO_DATE_REGEX).optional(),
   date_to: z.string().regex(ISO_DATE_REGEX).optional(),
 });
@@ -119,6 +120,8 @@ export type AttendanceStudentRecord = {
   className: string;
   status: 'present' | 'absent' | 'excused';
   markedBy: string | null;
+  smsStatus: 'queued' | 'sent' | 'failed' | 'delivered' | null;
+  smsNotified: boolean;
   createdAt: string;
 };
 
@@ -130,6 +133,8 @@ export type TodayAbsenceRow = {
   studentLastName: string;
   scheduleId: string | null;
   date: string;
+  smsStatus: 'queued' | 'sent' | 'failed' | 'delivered' | null;
+  smsNotified: boolean;
 };
 
 export type TodayAbsenceGroup = {
@@ -141,6 +146,8 @@ export type TodayAbsenceGroup = {
     studentLastName: string;
     scheduleId: string | null;
     date: string;
+    smsStatus: 'queued' | 'sent' | 'failed' | 'delivered' | null;
+    smsNotified: boolean;
   }>;
 };
 

@@ -120,4 +120,41 @@ describe('notifications event-bus integration', () => {
       expect.any(Object)
     );
   });
+
+  it('emit(student.absent) queue un SMS parent + log queued', async () => {
+    emit('student.absent', {
+      tenantId: 'tenant-1',
+      schemaName: 'school_sainte_marie',
+      studentId: 'student-1',
+      scheduleId: 'schedule-1',
+      studentFirstName: 'Awa',
+      parentPhone: '2250700000009',
+      subject: 'Mathématiques',
+      date: '2026-04-14',
+      schoolPhone: '2250700000001',
+    });
+
+    await vi.waitFor(() => {
+      expect(smsQueue.add).toHaveBeenCalledTimes(1);
+    });
+
+    expect(smsQueue.add).toHaveBeenCalledWith(
+      'send-sms',
+      expect.objectContaining({
+        notificationType: 'student_absent_parent',
+        to: '2250700000009',
+        relatedId: 'schedule-1',
+      }),
+      expect.any(Object)
+    );
+
+    expect(repository.insertNotificationLog).toHaveBeenCalledWith(
+      tenantDb,
+      expect.objectContaining({
+        type: 'student_absent_parent',
+        recipientPhone: '2250700000009',
+        status: 'queued',
+      })
+    );
+  });
 });

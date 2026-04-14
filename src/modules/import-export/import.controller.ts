@@ -2,7 +2,7 @@ import { createReadStream, existsSync } from 'node:fs';
 import path from 'node:path';
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { ZodError } from 'zod';
+import { ZodError, z } from 'zod';
 
 import { requireDirectorOrSecretary } from '../../shared/middleware/auth.middleware.js';
 import {
@@ -54,6 +54,10 @@ const ensureTenantDb = (request: FastifyRequest) => {
 
   return request.db;
 };
+
+const importHistoryQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
 
 export default async function importExportController(app: FastifyInstance): Promise<void> {
   app.addHook('onResponse', async (request) => {
@@ -120,6 +124,21 @@ export default async function importExportController(app: FastifyInstance): Prom
         const report = await service.confirm(type, fileBuffer, ensureTenantDb(request));
 
         return reply.send(report);
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.get(
+    '/api/v1/import/history',
+    { preHandler: [requireDirectorOrSecretary, attachTenantDb] },
+    async (request, reply) => {
+      try {
+        const { limit } = importHistoryQuerySchema.parse(request.query ?? {});
+        const service = buildImportService();
+        const items = await service.listHistory(ensureTenantDb(request), limit);
+        return reply.send({ items });
       } catch (error) {
         return handleError(reply, error);
       }

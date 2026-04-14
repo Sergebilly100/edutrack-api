@@ -218,6 +218,28 @@ export class ImportService {
     return this.confirmSchedule(validation, db);
   }
 
+  async listHistory(
+    db: QueryExecutor,
+    limit: number
+  ): Promise<
+    Array<{
+      id: string;
+      imported_at: string;
+      type: ImportType;
+      imported_count: number;
+      updated_count: number;
+    }>
+  > {
+    const rows = await this.repository.listImportHistory(db, limit);
+    return rows.map((row) => ({
+      id: row.id,
+      imported_at: row.imported_at,
+      type: row.import_type,
+      imported_count: row.imported_count,
+      updated_count: row.updated_count,
+    }));
+  }
+
   private async validateStudents(fileBuffer: Buffer, db: QueryExecutor): Promise<StudentValidation> {
     const parsed = parseWorkbook(fileBuffer);
     ensureRequiredHeaders(parsed.rows, STUDENTS_HEADERS);
@@ -592,6 +614,12 @@ export class ImportService {
         }
       }
 
+      await this.repository.createImportHistory(executor, {
+        importType: 'students',
+        importedCount: imported,
+        updatedCount: updated,
+      });
+
       return {
         imported,
         updated,
@@ -636,6 +664,12 @@ export class ImportService {
           updated += 1;
         }
       }
+
+      await this.repository.createImportHistory(executor, {
+        importType: 'teachers',
+        importedCount: imported,
+        updatedCount: updated,
+      });
 
       return {
         imported,
@@ -711,6 +745,12 @@ export class ImportService {
           updated += 1;
         }
       }
+
+      await this.repository.createImportHistory(executor, {
+        importType: 'schedule',
+        importedCount: imported,
+        updatedCount: updated,
+      });
 
       return {
         imported,

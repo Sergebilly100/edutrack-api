@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { NotificationsService } from '../../src/modules/notifications/notifications.service.js';
-import type { TeacherLatePayload, TeacherQrAlertPayload } from '../../src/shared/events/events.types.js';
+import type {
+  StudentAbsentPayload,
+  TeacherLatePayload,
+  TeacherQrAlertPayload,
+} from '../../src/shared/events/events.types.js';
 
 const repository = {
   getLateAlertContext: vi.fn(),
@@ -21,17 +25,28 @@ const withTenantSchema = vi.fn();
 const eventBusHandlers: {
   'teacher.late'?: (payload: TeacherLatePayload) => void;
   'teacher.qr_alert'?: (payload: TeacherQrAlertPayload) => void;
+  'student.absent'?: (payload: StudentAbsentPayload) => void;
 } = {};
 
 const eventBus = {
-  on: vi.fn((event: 'teacher.late' | 'teacher.qr_alert', handler: (payload: unknown) => void) => {
+  on: vi.fn(
+    (
+      event: 'teacher.late' | 'teacher.qr_alert' | 'student.absent',
+      handler: (payload: unknown) => void
+    ) => {
     if (event === 'teacher.late') {
       eventBusHandlers['teacher.late'] = handler as (payload: TeacherLatePayload) => void;
       return;
     }
 
-    eventBusHandlers['teacher.qr_alert'] = handler as (payload: TeacherQrAlertPayload) => void;
-  }),
+      if (event === 'teacher.qr_alert') {
+        eventBusHandlers['teacher.qr_alert'] = handler as (payload: TeacherQrAlertPayload) => void;
+        return;
+      }
+
+      eventBusHandlers['student.absent'] = handler as (payload: StudentAbsentPayload) => void;
+    }
+  ),
   off: vi.fn(),
 };
 
@@ -60,6 +75,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   eventBusHandlers['teacher.late'] = undefined;
   eventBusHandlers['teacher.qr_alert'] = undefined;
+  eventBusHandlers['student.absent'] = undefined;
 
   withTenantSchema.mockImplementation(async (_schemaName, callback) => callback(tenantDb));
   smsQueue.add.mockResolvedValue({ id: 'job-1' });
@@ -74,7 +90,7 @@ beforeEach(() => {
 });
 
 describe('notifications.service', () => {
-  it('start() subscribe aux events teacher.late et teacher.qr_alert', () => {
+  it('start() subscribe aux events teacher.late, teacher.qr_alert et student.absent', () => {
     const service = new NotificationsService({
       withTenantSchema,
       repository,
@@ -86,8 +102,10 @@ describe('notifications.service', () => {
 
     expect(eventBus.on).toHaveBeenCalledWith('teacher.late', expect.any(Function));
     expect(eventBus.on).toHaveBeenCalledWith('teacher.qr_alert', expect.any(Function));
+    expect(eventBus.on).toHaveBeenCalledWith('student.absent', expect.any(Function));
     expect(eventBusHandlers['teacher.late']).toBeTypeOf('function');
     expect(eventBusHandlers['teacher.qr_alert']).toBeTypeOf('function');
+    expect(eventBusHandlers['student.absent']).toBeTypeOf('function');
   });
 
   it('stop() désinscrit les deux listeners', () => {
@@ -103,6 +121,7 @@ describe('notifications.service', () => {
 
     expect(eventBus.off).toHaveBeenCalledWith('teacher.late', expect.any(Function));
     expect(eventBus.off).toHaveBeenCalledWith('teacher.qr_alert', expect.any(Function));
+    expect(eventBus.off).toHaveBeenCalledWith('student.absent', expect.any(Function));
   });
 
   it('teacher.late queue le SMS et loggue queued', async () => {
@@ -212,6 +231,52 @@ describe('notifications.service', () => {
       expect.objectContaining({
         type: 'teacher_qr_mismatch',
         status: 'queued',
+      })
+    );
+  });
+
+  it('student.absent queue le SMS parent et loggue queued', async () => {
+    const service = new NotificationsService({
+      withTenantSchema,
+      repository,
+      eventBus,
+      smsQueue: smsQueue as never,
+    });
+
+    const payload: StudentAbsentPayload = {
+      tenantId: 'tenant-1',
+      schemaName: 'school_sainte_marie',
+      studentId: 'student-1',
+      scheduleId: 'schedule-1',
+      studentFirstName: 'Awa',
+      parentPhone: '2250700000001',
+      subject: 'Maths',
+      date: '2026-04-14',
+      schoolPhone: '2250701234567',
+    };
+
+    await service.handleStudentAbsent(payload);
+
+    expect(smsQueue.add).toHaveBeenCalledWith(
+      'send-sms',
+      expect.objectContaining({
+        type: 'send-sms',
+        to: '2250700000001',
+        notificationType: 'student_absent_parent',
+        relatedId: 'schedule-1',
+      }),
+      expect.objectContaining({
+        jobId: expect.stringContaining('notif:school_sainte_marie:student_absent_parent:'),
+      })
+    );
+
+    expect(repository.insertNotificationLog).toHaveBeenCalledWith(
+      tenantDb,
+      expect.objectContaining({
+        type: 'student_absent_parent',
+        recipientPhone: '2250700000001',
+        status: 'queued',
+        relatedId: 'schedule-1',
       })
     );
   });

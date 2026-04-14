@@ -25,8 +25,6 @@ type TenantRow = {
   estimated_mrr_fcfa: number;
 };
 
-type CountRow = { total: number };
-
 type TenantMetricsRow = {
   active_users_48h: number;
   active_teachers: number;
@@ -233,17 +231,6 @@ export const listTenants = async (
   publicDb: TenantDb,
   query: ListTenantsQuery
 ): Promise<TenantListResult> => {
-  const page = query.page;
-  const limit = query.limit;
-  const offset = (page - 1) * limit;
-
-  const countResult = await publicDb.execute<CountRow>(sql`
-    SELECT COUNT(*)::int AS total
-    FROM public.tenants
-  `);
-
-  const total = parseNumeric(getRows<CountRow>(countResult)[0]?.total);
-
   const tenantsResult = await publicDb.execute<TenantRow>(sql`
     SELECT
       t.id,
@@ -261,13 +248,11 @@ export const listTenants = async (
       GROUP BY tenant_id
     ) s ON s.tenant_id = t.id
     ORDER BY t.created_at DESC
-    LIMIT ${limit}
-    OFFSET ${offset}
   `);
 
   const tenantRows = getRows<TenantRow>(tenantsResult);
 
-  const tenants = await mapWithConcurrency(
+  const tenantsWithMetrics = await mapWithConcurrency(
     tenantRows,
     TENANT_METRICS_CONCURRENCY,
     async (tenant) => {
@@ -293,8 +278,38 @@ export const listTenants = async (
     }
   );
 
+  const summary = {
+    activeTenants: tenantsWithMetrics.filter((tenant) => tenant.status === 'active').length,
+    trialTenants: tenantsWithMetrics.filter((tenant) => tenant.status === 'trial').length,
+    totalMrrFcfa: tenantsWithMetrics.reduce((sum, tenant) => sum + tenant.estimatedMrrFcfa, 0),
+    churnRiskTenants: tenantsWithMetrics.filter((tenant) => tenant.churnRisk).length,
+  };
+
+  const filteredTenants = tenantsWithMetrics.filter((tenant) => {
+    if (query.plan && tenant.plan !== query.plan) {
+      return false;
+    }
+
+    if (query.status && tenant.status !== query.status) {
+      return false;
+    }
+
+    if (typeof query.churnRisk === 'boolean' && tenant.churnRisk !== query.churnRisk) {
+      return false;
+    }
+
+    return true;
+  });
+
+  const page = query.page;
+  const limit = query.limit;
+  const offset = (page - 1) * limit;
+  const total = filteredTenants.length;
+  const tenants = filteredTenants.slice(offset, offset + limit);
+
   return {
     tenants,
+    summary,
     pagination: {
       page,
       limit,

@@ -2,8 +2,14 @@ import { randomBytes } from 'node:crypto';
 
 import {
   createRoom,
+  listClassesCatalog,
+  listRooms,
+  listSchedulesForPeriod,
+  listTeachersCatalog,
+  listTimeSlotsCatalog,
   type Room,
   type RoomInsertInput,
+  type ClassCatalogItem,
   createSchedulePeriod,
   duplicatePeriodWithSchedules,
   findActiveSchedulePeriodByDate,
@@ -12,6 +18,8 @@ import {
   type ActiveSchedule,
   type QueryExecutor,
   type SchedulePeriod,
+  type TeacherCatalogItem,
+  type TimeSlotCatalogItem,
 } from './schedule.repository.js';
 
 export type ActiveSchedulesResult = {
@@ -19,6 +27,16 @@ export type ActiveSchedulesResult = {
   dayOfWeek: number;
   period: SchedulePeriod | null;
   schedules: ActiveSchedule[];
+};
+
+export type WeeklySchedulesResult = {
+  date: string;
+  period: SchedulePeriod | null;
+  schedules: ActiveSchedule[];
+  teachers: TeacherCatalogItem[];
+  classes: ClassCatalogItem[];
+  rooms: Room[];
+  timeSlots: TimeSlotCatalogItem[];
 };
 
 export type DuplicatePeriodInput = {
@@ -79,6 +97,49 @@ export const getActiveSchedulesForDate = async (
     dayOfWeek,
     period,
     schedules,
+  };
+};
+
+export const getWeeklySchedulesForDate = async (
+  db: QueryExecutor,
+  dateInput: string | Date
+): Promise<WeeklySchedulesResult> => {
+  const date = parseDateInput(dateInput);
+  const isoDate = formatDate(date);
+
+  const [period, teachers, classes, rooms, timeSlots] = await Promise.all([
+    findActiveSchedulePeriodByDate(db, isoDate),
+    listTeachersCatalog(db),
+    listClassesCatalog(db),
+    listRooms(db),
+    listTimeSlotsCatalog(db),
+  ]);
+
+  if (!period) {
+    return {
+      date: isoDate,
+      period: null,
+      schedules: [],
+      teachers,
+      classes,
+      rooms: rooms.filter((room) => room.isActive),
+      timeSlots,
+    };
+  }
+
+  const schedules = await listSchedulesForPeriod(db, {
+    periodId: period.id,
+    date: isoDate,
+  });
+
+  return {
+    date: isoDate,
+    period,
+    schedules,
+    teachers,
+    classes,
+    rooms: rooms.filter((room) => room.isActive),
+    timeSlots,
   };
 };
 

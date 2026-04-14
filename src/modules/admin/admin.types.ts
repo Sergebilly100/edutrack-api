@@ -9,6 +9,12 @@ export type TenantStatus = (typeof TENANT_STATUS_VALUES)[number];
 export const listTenantsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(200).default(25),
+  plan: z.enum(TENANT_PLAN_VALUES).optional(),
+  status: z.enum(TENANT_STATUS_VALUES).optional(),
+  churnRisk: z
+    .union([z.boolean(), z.coerce.number().int().min(0).max(1), z.enum(['true', 'false'])])
+    .transform((value) => (value === 'true' ? true : value === 'false' ? false : Boolean(value)))
+    .optional(),
 });
 
 export const createTenantBodySchema = z.object({
@@ -62,6 +68,12 @@ export type TenantListItem = {
 
 export type TenantListResult = {
   tenants: TenantListItem[];
+  summary: {
+    activeTenants: number;
+    trialTenants: number;
+    totalMrrFcfa: number;
+    churnRiskTenants: number;
+  };
   pagination: {
     page: number;
     limit: number;

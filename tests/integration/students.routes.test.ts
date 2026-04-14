@@ -193,6 +193,29 @@ describe('students routes', () => {
     await app.close();
   });
 
+  it('GET /api/v1/attendance/students transmet schedule_id au service', async () => {
+    const app = await buildApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/attendance/students?schedule_id=d81cecfb-6544-4651-a420-84e7ca2419c7&student_id=66f048d8-d053-48e2-b4a8-7fce3ebc3ed8&page=1&limit=20',
+      headers: { authorization: 'Bearer valid-token' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.service.listAttendanceHistory).toHaveBeenCalledWith({
+      page: 1,
+      limit: 20,
+      class_id: undefined,
+      student_id: '66f048d8-d053-48e2-b4a8-7fce3ebc3ed8',
+      schedule_id: 'd81cecfb-6544-4651-a420-84e7ca2419c7',
+      date_from: undefined,
+      date_to: undefined,
+    });
+
+    await app.close();
+  });
+
   it('GET /api/v1/students refuse un rôle non autorisé', async () => {
     mocks.verifyAccessToken.mockResolvedValue({
       sub: 'user-2',

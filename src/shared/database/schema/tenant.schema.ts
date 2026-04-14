@@ -56,6 +56,12 @@ export const notificationStatusEnum = tenant.enum('notification_status', [
   'delivered',
 ]);
 
+export const importTypeEnum = tenant.enum('import_type', [
+  'students',
+  'teachers',
+  'schedule',
+]);
+
 export const users = tenant.table('users', {
   id: uuid('id').defaultRandom().primaryKey(),
   role: userRoleEnum('role').notNull(),
@@ -330,5 +336,22 @@ export const notificationsLog = tenant.table(
     notifStatusIdx: index('idx_notif_status')
       .on(table.status)
       .where(sql`${table.status} = 'queued'`),
+  })
+);
+
+export const importHistory = tenant.table(
+  'import_history',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    importType: importTypeEnum('import_type').notNull(),
+    importedCount: integer('imported_count').notNull().default(0),
+    updatedCount: integer('updated_count').notNull().default(0),
+    importedAt: timestamp('imported_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    importHistoryTypeIdx: index('idx_import_history_type').on(table.importType),
+    importHistoryImportedAtIdx: index('idx_import_history_imported_at').on(table.importedAt),
   })
 );

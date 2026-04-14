@@ -42,6 +42,7 @@ export type StudentAbsentPayload = {
   tenantId: string;
   schemaName: string;
   studentId: string;
+  scheduleId: string;
   studentFirstName: string;
   parentPhone: string;
   subject: string;

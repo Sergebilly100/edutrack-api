@@ -1,7 +1,11 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError, z } from 'zod';
 
-import { authenticateRequest } from '../../shared/middleware/auth.middleware.js';
+import {
+  authenticateRequest,
+  requireDirectorOrSecretary,
+  requireTeacherOrDirectorOrSecretary,
+} from '../../shared/middleware/auth.middleware.js';
 import {
   attachTenantDb,
   releaseTenantDb,
@@ -19,6 +23,7 @@ import {
   createPeriodFromInput,
   duplicatePeriod,
   getActiveSchedulesForDate,
+  getWeeklySchedulesForDate,
 } from './schedule.service.js';
 import {
   periodDuplicatePayloadSchema,
@@ -144,7 +149,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
 
   app.get(
     '/api/v1/schedule/periods',
-    { preHandler: [attachTenantDb] },
+    { preHandler: [requireDirectorOrSecretary, attachTenantDb] },
     async (request, reply) => {
       try {
         const periods = await listSchedulePeriods(ensureTenantDb(request));
@@ -157,7 +162,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
 
   app.post(
     '/api/v1/schedule/periods',
-    { preHandler: [authenticateRequest, attachTenantDb] },
+    { preHandler: [requireDirectorOrSecretary, attachTenantDb] },
     async (request, reply) => {
       try {
         const body = periodPayloadSchema.parse(request.body);
@@ -178,7 +183,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
 
   app.put(
     '/api/v1/schedule/periods/:id',
-    { preHandler: [attachTenantDb] },
+    { preHandler: [requireDirectorOrSecretary, attachTenantDb] },
     async (request, reply) => {
       try {
         const { id } = paramsIdSchema.parse(request.params);
@@ -208,7 +213,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
 
   app.post(
     '/api/v1/schedule/periods/:id/duplicate',
-    { preHandler: [authenticateRequest, attachTenantDb] },
+    { preHandler: [requireDirectorOrSecretary, attachTenantDb] },
     async (request, reply) => {
       try {
         const { id } = paramsIdSchema.parse(request.params);
@@ -231,14 +236,39 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     }
   );
 
-  app.get('/api/v1/schedule/active', { preHandler: [attachTenantDb] }, async (request, reply) => {
-    try {
-      const active = await getActiveSchedulesForDate(ensureTenantDb(request), new Date());
-      return reply.send(active);
-    } catch (error) {
-      return handleError(request, reply, error);
+  app.get(
+    '/api/v1/schedule/active',
+    { preHandler: [requireTeacherOrDirectorOrSecretary, attachTenantDb] },
+    async (request, reply) => {
+      try {
+        const active = await getActiveSchedulesForDate(ensureTenantDb(request), new Date());
+        return reply.send(active);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
     }
-  });
+  );
+
+  app.get(
+    '/api/v1/schedule/weekly',
+    { preHandler: [requireTeacherOrDirectorOrSecretary, attachTenantDb] },
+    async (request, reply) => {
+      try {
+        const weekly = await getWeeklySchedulesForDate(ensureTenantDb(request), new Date());
+        return reply.send({
+          date: weekly.date,
+          period: weekly.period,
+          schedules: weekly.schedules,
+          teachers: weekly.teachers,
+          classes: weekly.classes,
+          rooms: weekly.rooms,
+          time_slots: weekly.timeSlots,
+        });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
 
   app.get(
     '/api/v1/schedule/teacher/me',
@@ -268,54 +298,66 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     }
   );
 
-  app.post('/api/v1/schedule', { preHandler: [attachTenantDb] }, async (request, reply) => {
-    try {
-      const body = schedulePayloadSchema.parse(request.body);
-      const created = await createSchedule(ensureTenantDb(request), mapSchedulePayload(body));
+  app.post(
+    '/api/v1/schedule',
+    { preHandler: [requireDirectorOrSecretary, attachTenantDb] },
+    async (request, reply) => {
+      try {
+        const body = schedulePayloadSchema.parse(request.body);
+        const created = await createSchedule(ensureTenantDb(request), mapSchedulePayload(body));
 
-      return reply.code(201).send({ schedule: created });
-    } catch (error) {
-      return handleError(request, reply, error);
-    }
-  });
-
-  app.put('/api/v1/schedule/:id', { preHandler: [attachTenantDb] }, async (request, reply) => {
-    try {
-      const { id } = paramsIdSchema.parse(request.params);
-      const body = schedulePayloadSchema.parse(request.body);
-      const updated = await updateSchedule(ensureTenantDb(request), id, mapSchedulePayload(body));
-
-      if (!updated) {
-        return reply.code(404).send({
-          error: 'Schedule not found',
-          code: 'NOT_FOUND',
-          statusCode: 404,
-        });
+        return reply.code(201).send({ schedule: created });
+      } catch (error) {
+        return handleError(request, reply, error);
       }
-
-      return reply.send({ schedule: updated });
-    } catch (error) {
-      return handleError(request, reply, error);
     }
-  });
+  );
 
-  app.delete('/api/v1/schedule/:id', { preHandler: [attachTenantDb] }, async (request, reply) => {
-    try {
-      const { id } = paramsIdSchema.parse(request.params);
-      const deleted = await deleteScheduleById(ensureTenantDb(request), id);
+  app.put(
+    '/api/v1/schedule/:id',
+    { preHandler: [requireDirectorOrSecretary, attachTenantDb] },
+    async (request, reply) => {
+      try {
+        const { id } = paramsIdSchema.parse(request.params);
+        const body = schedulePayloadSchema.parse(request.body);
+        const updated = await updateSchedule(ensureTenantDb(request), id, mapSchedulePayload(body));
 
-      if (!deleted) {
-        return reply.code(404).send({
-          error: 'Schedule not found',
-          code: 'NOT_FOUND',
-          statusCode: 404,
-        });
+        if (!updated) {
+          return reply.code(404).send({
+            error: 'Schedule not found',
+            code: 'NOT_FOUND',
+            statusCode: 404,
+          });
+        }
+
+        return reply.send({ schedule: updated });
+      } catch (error) {
+        return handleError(request, reply, error);
       }
-
-      return reply.code(204).send();
-    } catch (error) {
-      return handleError(request, reply, error);
     }
-  });
+  );
+
+  app.delete(
+    '/api/v1/schedule/:id',
+    { preHandler: [requireDirectorOrSecretary, attachTenantDb] },
+    async (request, reply) => {
+      try {
+        const { id } = paramsIdSchema.parse(request.params);
+        const deleted = await deleteScheduleById(ensureTenantDb(request), id);
+
+        if (!deleted) {
+          return reply.code(404).send({
+            error: 'Schedule not found',
+            code: 'NOT_FOUND',
+            statusCode: 404,
+          });
+        }
+
+        return reply.code(204).send();
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
 
 }

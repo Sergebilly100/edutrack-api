@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 
 import type {
+  ImportType,
   ScheduleImportRow,
   StudentImportRow,
   TeacherImportRow,
@@ -24,6 +25,13 @@ type ExistingTeacherRow = { id: string; user_id: string };
 type UserInsertRow = { id: string };
 type TeacherInsertRow = { id: string; user_id: string };
 type ScheduleInsertRow = { id: string };
+type ImportHistoryRow = {
+  id: string;
+  imported_at: string;
+  import_type: ImportType;
+  imported_count: number;
+  updated_count: number;
+};
 
 const getRows = <T>(result: unknown): T[] => {
   if (typeof result !== 'object' || result === null || !('rows' in result)) {
@@ -32,6 +40,28 @@ const getRows = <T>(result: unknown): T[] => {
 
   const rows = (result as { rows?: T[] }).rows;
   return Array.isArray(rows) ? rows : [];
+};
+
+const ensureImportHistoryInfrastructure = async (db: QueryExecutor): Promise<void> => {
+  await db.execute(sql.raw(`
+    DO $$
+    BEGIN
+      CREATE TYPE import_type AS ENUM ('students', 'teachers', 'schedule');
+    EXCEPTION
+      WHEN duplicate_object THEN null;
+    END
+    $$;
+  `));
+
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS import_history (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+      import_type import_type NOT NULL,
+      imported_count integer DEFAULT 0 NOT NULL,
+      updated_count integer DEFAULT 0 NOT NULL,
+      imported_at timestamp with time zone DEFAULT now() NOT NULL
+    );
+  `));
 };
 
 export type ImportRepository = {
@@ -57,6 +87,18 @@ export type ImportRepository = {
       roomId: string;
     }
   ) => Promise<'inserted' | 'updated'>;
+  createImportHistory: (
+    db: QueryExecutor,
+    entry: {
+      importType: ImportType;
+      importedCount: number;
+      updatedCount: number;
+    }
+  ) => Promise<void>;
+  listImportHistory: (
+    db: QueryExecutor,
+    limit: number
+  ) => Promise<ImportHistoryRow[]>;
 };
 
 export const defaultImportRepository: ImportRepository = {
@@ -296,5 +338,51 @@ export const defaultImportRepository: ImportRepository = {
     `);
 
     return existing ? 'updated' : 'inserted';
+  },
+
+  async createImportHistory(db, entry) {
+    try {
+      await db.execute(sql`
+        INSERT INTO import_history (import_type, imported_count, updated_count)
+        VALUES (${entry.importType}, ${entry.importedCount}, ${entry.updatedCount})
+      `);
+    } catch (error) {
+      const pgError = error as { code?: string };
+      if (pgError.code === '42P01' || pgError.code === '42704') {
+        await ensureImportHistoryInfrastructure(db);
+        await db.execute(sql`
+          INSERT INTO import_history (import_type, imported_count, updated_count)
+          VALUES (${entry.importType}, ${entry.importedCount}, ${entry.updatedCount})
+        `);
+        return;
+      }
+      throw error;
+    }
+  },
+
+  async listImportHistory(db, limit) {
+    try {
+      const result = await db.execute(sql`
+        SELECT id, imported_at::text AS imported_at, import_type, imported_count, updated_count
+        FROM import_history
+        ORDER BY imported_at DESC
+        LIMIT ${limit}
+      `);
+
+      return getRows<ImportHistoryRow>(result);
+    } catch (error) {
+      const pgError = error as { code?: string };
+      if (pgError.code === '42P01' || pgError.code === '42704') {
+        await ensureImportHistoryInfrastructure(db);
+        const retryResult = await db.execute(sql`
+          SELECT id, imported_at::text AS imported_at, import_type, imported_count, updated_count
+          FROM import_history
+          ORDER BY imported_at DESC
+          LIMIT ${limit}
+        `);
+        return getRows<ImportHistoryRow>(retryResult);
+      }
+      throw error;
+    }
   },
 };

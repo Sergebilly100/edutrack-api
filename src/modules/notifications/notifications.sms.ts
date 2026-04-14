@@ -33,6 +33,13 @@ type TeacherQrOutOfTimeSmsParams = {
   slotLabel: string;
 };
 
+type StudentAbsentSmsParams = {
+  studentFirstName: string;
+  subject: string;
+  date: string;
+  schoolPhone: string;
+};
+
 const ELLIPSIS = '...';
 
 const normalizeText = (value: string): string => value.replace(/\s+/g, ' ').trim();
@@ -85,5 +92,11 @@ export const buildTeacherQrAlertSms = (
   const outOfTimeParams = params as TeacherQrOutOfTimeSmsParams;
   return limitSmsLength(
     `EduTrack: Scan QR hors horaire par ${safeText(outOfTimeParams.teacherName)} - ${safeText(outOfTimeParams.subject)} ${safeText(outOfTimeParams.date)} ${safeText(outOfTimeParams.slotLabel)}`
+  );
+};
+
+export const buildStudentAbsentSms = (params: StudentAbsentSmsParams): string => {
+  return limitSmsLength(
+    `EduTrack: ${safeText(params.studentFirstName)} absent(e) en ${safeText(params.subject)} le ${safeText(params.date)}. Contact école: ${safeText(params.schoolPhone)}`
   );
 };

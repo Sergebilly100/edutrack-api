@@ -121,6 +121,7 @@ describe('students.service', () => {
       'student.absent',
       expect.objectContaining({
         tenantId: 'tenant-1',
+        scheduleId: 'schedule-1',
         studentId: 'student-1',
         parentPhone: '2250700000001',
       })
@@ -192,6 +193,8 @@ describe('students.service', () => {
         studentLastName: 'Kouassi',
         scheduleId: 'sched-1',
         date: '2026-04-13',
+        smsStatus: 'sent',
+        smsNotified: true,
       },
       {
         classId: 'class-1',
@@ -201,6 +204,8 @@ describe('students.service', () => {
         studentLastName: 'Bamba',
         scheduleId: 'sched-1',
         date: '2026-04-13',
+        smsStatus: null,
+        smsNotified: false,
       },
       {
         classId: 'class-2',
@@ -210,6 +215,8 @@ describe('students.service', () => {
         studentLastName: 'Traore',
         scheduleId: 'sched-2',
         date: '2026-04-13',
+        smsStatus: 'queued',
+        smsNotified: false,
       },
     ]);
 

@@ -62,6 +62,7 @@ type AttendanceRow = {
   class_name: string;
   status: 'present' | 'absent' | 'excused';
   marked_by: string | null;
+  sms_status: 'queued' | 'sent' | 'failed' | 'delivered' | null;
   created_at: Date;
 };
 
@@ -73,6 +74,7 @@ type TodayAbsenceDbRow = {
   student_last_name: string;
   schedule_id: string | null;
   date: string;
+  sms_status: 'queued' | 'sent' | 'failed' | 'delivered' | null;
 };
 
 type TenantIdentityRow = {
@@ -111,6 +113,8 @@ const mapAttendance = (row: AttendanceRow): AttendanceStudentRecord => ({
   className: row.class_name,
   status: row.status,
   markedBy: row.marked_by,
+  smsStatus: row.sms_status,
+  smsNotified: row.sms_status === 'sent' || row.sms_status === 'delivered',
   createdAt: row.created_at.toISOString(),
 });
 
@@ -150,6 +154,10 @@ const buildAttendanceWhere = (query: AttendanceHistoryQuery): SQL[] => {
 
   if (query.student_id) {
     where.push(sql`s.id = ${query.student_id}`);
+  }
+
+  if (query.schedule_id) {
+    where.push(sql`a.schedule_id = ${query.schedule_id}`);
   }
 
   if (query.date_from) {
@@ -498,10 +506,21 @@ export class StudentsRepository {
           c.name AS class_name,
           a.status,
           a.marked_by,
+          sms_log.status::text AS sms_status,
           a.created_at
         FROM attendances_student a
         INNER JOIN students s ON s.id = a.student_id
         INNER JOIN classes c ON c.id = s.class_id
+        LEFT JOIN LATERAL (
+          SELECT n.status
+          FROM notifications_log n
+          WHERE n.type = 'student_absent_parent'
+            AND n.related_id = a.schedule_id
+            AND n.recipient_phone = s.parent_phone
+            AND COALESCE(n.sent_at::date, n.created_at::date) = a.date::date
+          ORDER BY n.created_at DESC
+          LIMIT 1
+        ) sms_log ON true
         ${where}
         ORDER BY a.date DESC, a.created_at DESC
         LIMIT ${query.limit}
@@ -531,10 +550,21 @@ export class StudentsRepository {
         s.first_name AS student_first_name,
         s.last_name AS student_last_name,
         a.schedule_id,
-        a.date
+        a.date,
+        sms_log.status::text AS sms_status
       FROM attendances_student a
       INNER JOIN students s ON s.id = a.student_id
       INNER JOIN classes c ON c.id = s.class_id
+      LEFT JOIN LATERAL (
+        SELECT n.status
+        FROM notifications_log n
+        WHERE n.type = 'student_absent_parent'
+          AND n.related_id = a.schedule_id
+          AND n.recipient_phone = s.parent_phone
+          AND COALESCE(n.sent_at::date, n.created_at::date) = a.date::date
+        ORDER BY n.created_at DESC
+        LIMIT 1
+      ) sms_log ON true
       WHERE a.status = 'absent'
         AND a.date = COALESCE(${date ?? null}, CURRENT_DATE::text)
       ORDER BY c.name ASC, s.last_name ASC, s.first_name ASC
@@ -548,6 +578,8 @@ export class StudentsRepository {
       studentLastName: row.student_last_name,
       scheduleId: row.schedule_id,
       date: row.date,
+      smsStatus: row.sms_status,
+      smsNotified: row.sms_status === 'sent' || row.sms_status === 'delivered',
     }));
   }
 

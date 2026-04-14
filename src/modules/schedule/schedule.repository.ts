@@ -92,6 +92,44 @@ export type Room = {
   createdAt: string;
 };
 
+type TeacherCatalogRow = {
+  id: string;
+  name: string;
+  username: string;
+};
+
+export type TeacherCatalogItem = {
+  id: string;
+  name: string;
+  username: string;
+};
+
+type ClassCatalogRow = {
+  id: string;
+  name: string;
+};
+
+export type ClassCatalogItem = {
+  id: string;
+  name: string;
+};
+
+type TimeSlotCatalogRow = {
+  id: string;
+  label: string;
+  start_time: string;
+  end_time: string;
+  sort_order: number;
+};
+
+export type TimeSlotCatalogItem = {
+  id: string;
+  label: string;
+  startTime: string;
+  endTime: string;
+  sortOrder: number;
+};
+
 export type PeriodInsertInput = {
   name: string;
   validFrom: string;
@@ -155,6 +193,25 @@ const mapRoom = (row: RoomRow): Room => ({
   capacity: row.capacity,
   isActive: row.is_active,
   createdAt: row.created_at,
+});
+
+const mapTeacherCatalogItem = (row: TeacherCatalogRow): TeacherCatalogItem => ({
+  id: row.id,
+  name: row.name,
+  username: row.username,
+});
+
+const mapClassCatalogItem = (row: ClassCatalogRow): ClassCatalogItem => ({
+  id: row.id,
+  name: row.name,
+});
+
+const mapTimeSlotCatalogItem = (row: TimeSlotCatalogRow): TimeSlotCatalogItem => ({
+  id: row.id,
+  label: row.label,
+  startTime: row.start_time,
+  endTime: row.end_time,
+  sortOrder: row.sort_order,
 });
 
 const mapActiveSchedule = (row: ActiveScheduleRow): ActiveSchedule => ({
@@ -392,6 +449,89 @@ export const listSchedulesForPeriodAndDay = async (
   `);
 
   return getRows<ActiveScheduleRow>(result).map(mapActiveSchedule);
+};
+
+export const listSchedulesForPeriod = async (
+  db: QueryExecutor,
+  params: {
+    periodId: string;
+    date: string;
+  }
+): Promise<ActiveSchedule[]> => {
+  const result = await db.execute<ActiveScheduleRow>(sql`
+    SELECT
+      s.id,
+      s.schedule_period_id,
+      s.teacher_id,
+      u.name AS teacher_name,
+      t.username AS teacher_username,
+      s.class_id,
+      c.name AS class_name,
+      s.room_id,
+      r.name AS room_name,
+      r.qr_token AS room_qr_token,
+      s.time_slot_id,
+      ts.label AS time_slot_label,
+      ts.start_time::text AS start_time,
+      ts.end_time::text AS end_time,
+      ts.sort_order,
+      s.day_of_week,
+      s.subject,
+      at.status::text AS attendance_status,
+      at.checked_in_at::text AS attendance_checked_in_at,
+      at.late_minutes AS attendance_late_minutes
+    FROM schedules s
+    INNER JOIN teachers t ON t.id = s.teacher_id
+    INNER JOIN users u ON u.id = t.user_id
+    INNER JOIN classes c ON c.id = s.class_id
+    INNER JOIN rooms r ON r.id = s.room_id
+    INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+    LEFT JOIN attendances_teacher at ON at.schedule_id = s.id AND at.date = ${params.date}
+    WHERE s.schedule_period_id = ${params.periodId}
+      AND s.day_of_week BETWEEN 1 AND 6
+      AND s.is_active = true
+    ORDER BY s.day_of_week ASC, ts.sort_order ASC, ts.start_time ASC, u.name ASC
+  `);
+
+  return getRows<ActiveScheduleRow>(result).map(mapActiveSchedule);
+};
+
+export const listTeachersCatalog = async (
+  db: QueryExecutor
+): Promise<TeacherCatalogItem[]> => {
+  const result = await db.execute<TeacherCatalogRow>(sql`
+    SELECT t.id, u.name, t.username
+    FROM teachers t
+    INNER JOIN users u ON u.id = t.user_id
+    WHERE u.is_active = true
+    ORDER BY u.name ASC
+  `);
+
+  return getRows<TeacherCatalogRow>(result).map(mapTeacherCatalogItem);
+};
+
+export const listClassesCatalog = async (
+  db: QueryExecutor
+): Promise<ClassCatalogItem[]> => {
+  const result = await db.execute<ClassCatalogRow>(sql`
+    SELECT id, name
+    FROM classes
+    ORDER BY name ASC
+  `);
+
+  return getRows<ClassCatalogRow>(result).map(mapClassCatalogItem);
+};
+
+export const listTimeSlotsCatalog = async (
+  db: QueryExecutor
+): Promise<TimeSlotCatalogItem[]> => {
+  const result = await db.execute<TimeSlotCatalogRow>(sql`
+    SELECT id, label, start_time::text AS start_time, end_time::text AS end_time, sort_order
+    FROM time_slots
+    ORDER BY sort_order ASC, start_time ASC
+  `);
+
+  return getRows<TimeSlotCatalogRow>(result).map(mapTimeSlotCatalogItem);
 };
 
 export const createSchedule = async (

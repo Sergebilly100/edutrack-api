@@ -184,6 +184,7 @@ export class StudentsService {
         tenantId,
         schemaName: context.schemaName,
         studentId: student.id,
+        scheduleId: input.scheduleId,
         studentFirstName: student.firstName,
         parentPhone: student.parentPhone,
         subject: schedule.subject,
@@ -225,6 +226,8 @@ export class StudentsService {
           studentLastName: row.studentLastName,
           scheduleId: row.scheduleId,
           date: row.date,
+          smsStatus: row.smsStatus,
+          smsNotified: row.smsNotified,
         });
         continue;
       }
@@ -239,6 +242,8 @@ export class StudentsService {
             studentLastName: row.studentLastName,
             scheduleId: row.scheduleId,
             date: row.date,
+            smsStatus: row.smsStatus,
+            smsNotified: row.smsNotified,
           },
         ],
       });

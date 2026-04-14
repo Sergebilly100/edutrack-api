@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildStudentAbsentSms,
   buildTeacherLateSms,
   buildTeacherQrAlertSms,
   SMS_MAX_LENGTH,
@@ -113,5 +114,19 @@ describe('notifications.sms', () => {
     });
 
     expect(sms).toContain('N/A');
+  });
+
+  it('buildStudentAbsentSms() produit le template attendu', () => {
+    const sms = buildStudentAbsentSms({
+      studentFirstName: 'Awa',
+      subject: 'Mathématiques',
+      date: '2026-04-14',
+      schoolPhone: '2250700000001',
+    });
+
+    expect(sms).toBe(
+      'EduTrack: Awa absent(e) en Mathématiques le 2026-04-14. Contact école: 2250700000001'
+    );
+    expect(sms.length).toBeLessThanOrEqual(SMS_MAX_LENGTH);
   });
 });
