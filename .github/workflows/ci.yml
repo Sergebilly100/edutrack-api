@@ -11,6 +11,7 @@ jobs:
     timeout-minutes: 30
     env:
       DATABASE_URL: postgresql://edutrack:edutrack@localhost:5432/edutrack_test
+      DATABASE_URL_TEST: postgresql://edutrack:edutrack@localhost:5432/edutrack_test
       REDIS_URL: redis://localhost:6379
       NODE_ENV: test
       SMS_MOCK: "true"
