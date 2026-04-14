@@ -50,6 +50,34 @@ describe('EventBus', () => {
     expect(wildcardHandler).toHaveBeenCalledWith(payload);
   });
 
+  it('teacher.* capte plusieurs events teacher (checked_in + late)', () => {
+    const checkedInPayload: EventMap['teacher.checked_in'] = {
+      tenantId: 'tenant-8',
+      schemaName: 'ecole_demo_8',
+      teacherId: 'teacher-8',
+      scheduleId: 'schedule-8',
+      date: '2025-01-16',
+      checkedInAt: '2025-01-16T07:35:00.000Z',
+      checkedInVia: 'app',
+    };
+
+    const latePayload: EventMap['teacher.late'] = {
+      ...checkedInPayload,
+      lateMinutes: 18,
+    };
+
+    const wildcardHandler = vi.fn();
+
+    on('teacher.*', wildcardHandler);
+    emit('teacher.checked_in', checkedInPayload);
+    emit('teacher.late', latePayload);
+    off('teacher.*', wildcardHandler);
+
+    expect(wildcardHandler).toHaveBeenCalledTimes(2);
+    expect(wildcardHandler).toHaveBeenNthCalledWith(1, checkedInPayload);
+    expect(wildcardHandler).toHaveBeenNthCalledWith(2, latePayload);
+  });
+
   it('off() empêche le handler de recevoir les émissions ultérieures', () => {
     const payload: EventMap['teacher.absent'] = {
       tenantId: 'tenant-3',

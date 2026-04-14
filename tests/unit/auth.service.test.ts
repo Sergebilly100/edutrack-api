@@ -28,6 +28,9 @@ import {
   getMe,
   getMeFromToken,
   login,
+  signRefreshToken,
+  verifyAccessToken,
+  verifyRefreshToken,
   type TenantDb,
 } from '../../src/modules/auth/auth.service.js';
 
@@ -97,6 +100,14 @@ describe('auth.service', () => {
       },
     });
     expect(result.accessToken).toBeTypeOf('string');
+
+    const claims = await verifyAccessToken(result.accessToken);
+    expect(claims).toMatchObject({
+      sub: 'user-1',
+      role: 'director',
+      schemaName: 'tenant_demo',
+    });
+    expect(claims.username).toBeUndefined();
   });
 
   it('login() réussi par username avec username présent', async () => {
@@ -112,6 +123,14 @@ describe('auth.service', () => {
 
     expect(result.user.role).toBe('teacher');
     expect(result.user.username).toBe('diallo.ibra');
+
+    const claims = await verifyAccessToken(result.accessToken);
+    expect(claims).toMatchObject({
+      sub: 'user-2',
+      role: 'teacher',
+      schemaName: 'tenant_demo',
+      username: 'diallo.ibra',
+    });
   });
 
   it('login() échoue si is_active = false', async () => {
@@ -171,7 +190,13 @@ describe('auth.service', () => {
     });
   });
 
-  it('getMe() avec token expiré throw (jose)', async () => {
+  it('getMe() échoue si profil introuvable', async () => {
+    mocks.findUserProfileById.mockResolvedValue(null);
+
+    await expect(getMe(db, 'missing-user')).rejects.toThrow('Invalid credentials');
+  });
+
+  it('verifyAccessToken() avec token expiré throw JWTExpired (jose)', async () => {
     const privateKey = await importPKCS8(process.env.JWT_PRIVATE_KEY ?? '', 'RS256');
     const expiredToken = await new SignJWT({
       sub: 'user-2',
@@ -185,6 +210,61 @@ describe('auth.service', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 1100));
 
-    await expect(getMeFromToken(db, expiredToken)).rejects.toThrow();
+    await expect(verifyAccessToken(expiredToken)).rejects.toMatchObject({
+      name: 'JWTExpired',
+    });
+  });
+
+  it('verifyRefreshToken() avec access token (type manquant) throw Invalid refresh token', async () => {
+    const privateKey = await importPKCS8(process.env.JWT_PRIVATE_KEY ?? '', 'RS256');
+    const invalidRefreshToken = await new SignJWT({
+      sub: 'user-2',
+      role: 'teacher',
+      schemaName: 'tenant_demo',
+    })
+      .setProtectedHeader({ alg: 'RS256' })
+      .setIssuedAt()
+      .setExpirationTime('30d')
+      .sign(privateKey);
+
+    await expect(verifyRefreshToken(invalidRefreshToken)).rejects.toThrow(
+      'Invalid refresh token'
+    );
+  });
+
+  it('signRefreshToken() + verifyRefreshToken() retourne des claims refresh valides', async () => {
+    const refreshToken = await signRefreshToken('user-2', 'tenant_demo');
+
+    const claims = await verifyRefreshToken(refreshToken);
+    expect(claims).toMatchObject({
+      sub: 'user-2',
+      schemaName: 'tenant_demo',
+      type: 'refresh',
+    });
+  });
+
+  it('getMeFromToken() retourne le profil utilisateur depuis le JWT', async () => {
+    mocks.findUserByPhone.mockResolvedValue(activeTeacher);
+    mocks.findUserByUsername.mockResolvedValue(null);
+    mocks.verify.mockResolvedValue(true);
+    mocks.findUserProfileById.mockResolvedValue(activeTeacher);
+
+    const loginResult = await login(db, {
+      identifier: '2250701234567',
+      password: 'test1234',
+      schemaName: 'tenant_demo',
+    });
+
+    const me = await getMeFromToken(db, loginResult.accessToken);
+    expect(me).toEqual({
+      user: {
+        id: 'user-2',
+        role: 'teacher',
+        name: 'Prof Test',
+        phone: null,
+        email: 'prof@test.ci',
+        username: 'diallo.ibra',
+      },
+    });
   });
 });

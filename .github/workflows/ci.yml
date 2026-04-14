@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: postgresql://edutrack:edutrack@localhost:5432/edutrack_test
+      REDIS_URL: redis://localhost:6379
+      NODE_ENV: test
+      SMS_MOCK: "true"
+      JWT_PRIVATE_KEY: ${{ secrets.JWT_PRIVATE_KEY_TEST }}
+      JWT_PUBLIC_KEY: ${{ secrets.JWT_PUBLIC_KEY_TEST }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node20-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node20-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Validate JWT test secrets
+        run: |
+          if [ -z "${JWT_PRIVATE_KEY}" ] || [ -z "${JWT_PUBLIC_KEY}" ]; then
+            echo "Missing required secrets: JWT_PRIVATE_KEY_TEST and JWT_PUBLIC_KEY_TEST."
+            exit 1
+          fi
+
+      - name: Start PostgreSQL and Redis
+        run: docker compose up -d postgres redis
+
+      - name: Wait for PostgreSQL
+        run: |
+          for i in {1..30}; do
+            if docker exec edutrack-postgres pg_isready -U edutrack -d postgres >/dev/null 2>&1; then
+              echo "PostgreSQL is ready."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "PostgreSQL did not become ready in time."
+          exit 1
+
+      - name: Wait for Redis
+        run: |
+          for i in {1..30}; do
+            if docker exec edutrack-redis redis-cli ping | grep -q PONG; then
+              echo "Redis is ready."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Redis did not become ready in time."
+          exit 1
+
+      - name: Ensure edutrack_test database exists
+        run: |
+          if ! docker exec edutrack-postgres psql -U edutrack -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='edutrack_test'" | grep -q 1; then
+            docker exec edutrack-postgres psql -U edutrack -d postgres -c "CREATE DATABASE edutrack_test;"
+          fi
+
+      - name: Run migrations
+        run: npm run db:migrate
+
+      - name: Run unit tests
+        run: npm run test:unit
+
+      - name: Run integration tests
+        run: npm run test:integration
+
+      - name: Stop services
+        if: always()
+        run: docker compose down -v --remove-orphans || true

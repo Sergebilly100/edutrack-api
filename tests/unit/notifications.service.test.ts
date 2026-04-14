@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { SMS_MAX_LENGTH } from '../../src/modules/notifications/notifications.sms.js';
 import { NotificationsService } from '../../src/modules/notifications/notifications.service.js';
 import type {
   StudentAbsentPayload,
@@ -134,6 +135,8 @@ describe('notifications.service', () => {
 
     await service.handleTeacherLate(baseLatePayload);
 
+    const smsData = smsQueue.add.mock.calls[0]?.[1];
+
     expect(smsQueue.add).toHaveBeenCalledWith(
       'send-sms',
       expect.objectContaining({
@@ -145,6 +148,8 @@ describe('notifications.service', () => {
         jobId: expect.stringContaining('notif:school_sainte_marie:teacher_late_director:'),
       })
     );
+    expect(smsData?.message).toContain('Kouassi Awa');
+    expect((smsData?.message as string).length).toBeLessThanOrEqual(SMS_MAX_LENGTH);
 
     expect(repository.insertNotificationLog).toHaveBeenCalledWith(
       tenantDb,
@@ -154,6 +159,28 @@ describe('notifications.service', () => {
         recipientPhone: '2250700000001',
       })
     );
+  });
+
+  it('teacher.late garde un message <= SMS_MAX_LENGTH avec nom long (30 chars)', async () => {
+    repository.getLateAlertContext.mockResolvedValueOnce({
+      teacherName: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ1234',
+      subject: 'Mathématiques avancées',
+      className: 'Terminale D1',
+      slotLabel: '07h30-09h00',
+      directorPhone: '2250700000001',
+    });
+
+    const service = new NotificationsService({
+      withTenantSchema,
+      repository,
+      eventBus,
+      smsQueue: smsQueue as never,
+    });
+
+    await service.handleTeacherLate(baseLatePayload);
+
+    const smsData = smsQueue.add.mock.calls[0]?.[1];
+    expect((smsData?.message as string).length).toBeLessThanOrEqual(SMS_MAX_LENGTH);
   });
 
   it('teacher.late sans directorPhone ne déclenche pas de SMS', async () => {
