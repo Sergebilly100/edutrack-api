@@ -20,10 +20,14 @@ const generateQrToken = (): string => randomBytes(32).toString('hex');
 
 type PublicRoom = Omit<RoomEntity, 'qrToken'>;
 
-const toPublicRoom = (room: RoomEntity): PublicRoom => {
-  const { qrToken: _omit, ...pub } = room;
-  return pub;
-};
+const toPublicRoom = (room: RoomEntity): PublicRoom => ({
+  id: room.id,
+  name: room.name,
+  building: room.building,
+  capacity: room.capacity,
+  isActive: room.isActive,
+  createdAt: room.createdAt,
+});
 
 const buildQrUrl = (token: string): string => {
   const base = process.env.QR_SCAN_BASE_URL;

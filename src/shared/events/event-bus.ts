@@ -1,4 +1,8 @@
-import { EventEmitter2 } from 'eventemitter2';
+import EventEmitter2 from 'eventemitter2';
+import type {
+  ConstructorOptions,
+  EventEmitter2 as EventEmitter2Type,
+} from 'eventemitter2';
 
 import type { EmittableEventMap, EventMap } from './events.types.js';
 
@@ -6,12 +10,14 @@ type EventName = keyof EventMap;
 type EmittableEventName = keyof EmittableEventMap;
 type EventHandler<K extends EventName> = (payload: EventMap[K]) => void;
 const DEFAULT_MAX_LISTENERS = 50;
+type EventEmitter2Ctor = new (options?: ConstructorOptions) => EventEmitter2Type;
+const EventEmitter2Class = EventEmitter2 as unknown as EventEmitter2Ctor;
 
 class EventBus {
-  private readonly emitter: EventEmitter2;
+  private readonly emitter: EventEmitter2Type;
 
   constructor() {
-    this.emitter = new EventEmitter2({
+    this.emitter = new EventEmitter2Class({
       wildcard: true,
       delimiter: '.',
       maxListeners:

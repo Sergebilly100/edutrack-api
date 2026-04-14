@@ -6,8 +6,6 @@ import type { RoomEntity, RoomEntityRow, RoomStatsRow } from './rooms.types.js';
 
 export type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
 
-type IdRow = { id: string };
-
 type FutureUsageRow = { has_future_active_schedule: boolean };
 
 const getRows = <TRow extends QueryResultRow>(result: QueryResult<TRow>): TRow[] => result.rows;
