@@ -12,6 +12,8 @@ const repository = {
   upsertStudent: vi.fn(),
   upsertTeacher: vi.fn(),
   upsertSchedule: vi.fn(),
+  createImportHistory: vi.fn(),
+  listImportHistory: vi.fn(),
 };
 
 const db = {
@@ -47,6 +49,8 @@ beforeEach(() => {
   repository.upsertStudent.mockResolvedValue('inserted');
   repository.upsertTeacher.mockResolvedValue('inserted');
   repository.upsertSchedule.mockResolvedValue('inserted');
+  repository.createImportHistory.mockResolvedValue(undefined);
+  repository.listImportHistory.mockResolvedValue([]);
 });
 
 describe('import.service', () => {
