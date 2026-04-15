@@ -59,3 +59,24 @@ export type NotificationType =
   | 'student_absent_parent'
   | 'payment_reminder'
   | 'custom';
+
+export type PermissionKey =
+  | 'teachers.view'
+  | 'teachers.create'
+  | 'teachers.edit'
+  | 'teachers.block'
+  | 'teachers.documents'
+  | 'students.view'
+  | 'students.create'
+  | 'students.edit'
+  | 'students.documents'
+  | 'schedule.view'
+  | 'schedule.edit'
+  | 'attendance.view'
+  | 'attendance.mark_students'
+  | 'salary.view'
+  | 'salary.compute'
+  | 'salary.mark_paid'
+  | 'salary.export'
+  | 'settings.positions'
+  | 'settings.school';

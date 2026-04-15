@@ -8,8 +8,10 @@ import { Redis } from 'ioredis';
 import adminController from './modules/admin/admin.controller.js';
 import attendanceController from './modules/attendance/attendance.controller.js';
 import authController from './modules/auth/auth.controller.js';
+import documentsController from './modules/documents/documents.controller.js';
 import importExportController from './modules/import-export/import.controller.js';
 import notificationsController from './modules/notifications/notifications.controller.js';
+import permissionsController from './modules/permissions/permissions.controller.js';
 import {
   createNotificationsQueue,
   createNotificationsWorker,
@@ -44,7 +46,7 @@ app.register(cors, {
 });
 app.register(multipart, {
   limits: {
-    fileSize: 5 * 1024 * 1024,
+    fileSize: 10 * 1024 * 1024,
   },
 });
 
@@ -56,8 +58,10 @@ app.register(studentsController);
 app.register(teachersController);
 app.register(scheduleController);
 app.register(roomsController);
+app.register(documentsController);
 app.register(schoolController);
 app.register(importExportController);
+app.register(permissionsController);
 
 app.get('/health', async () => ({ status: 'ok' }));
 

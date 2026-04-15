@@ -12,6 +12,7 @@
     "test:unit:t28": "vitest --run tests/unit/attendance.service.test.ts tests/unit/auth.service.test.ts tests/unit/notifications.service.test.ts tests/unit/shared/events/event-bus.test.ts",
     "test:unit:t28:coverage": "vitest --run --coverage tests/unit/attendance.service.test.ts tests/unit/auth.service.test.ts tests/unit/notifications.service.test.ts tests/unit/shared/events/event-bus.test.ts --coverage.include=src/modules/attendance/attendance.service.ts --coverage.include=src/modules/auth/auth.service.ts --coverage.include=src/modules/notifications/notifications.service.ts --coverage.include=src/shared/events/event-bus.ts",
     "test:integration": "vitest tests/integration",
+    "test:integration:a3": "vitest run tests/integration/permissions.routes.test.ts",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
@@ -21,6 +22,8 @@
     "sync-types": "mkdir -p ../edutrack-web/src/shared/types && cp src/shared/types/index.ts ../edutrack-web/src/shared/types/index.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1030.0",
+    "@aws-sdk/s3-request-presigner": "^3.1030.0",
     "@fastify/cors": "^11.2.0",
     "@fastify/helmet": "^13.0.2",
     "@fastify/multipart": "^9.4.0",

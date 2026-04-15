@@ -5,6 +5,8 @@ import {
   date,
   index,
   integer,
+  jsonb,
+  numeric,
   pgSchema,
   text,
   time,
@@ -13,6 +15,7 @@ import {
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
+import type { PermissionKey } from '../../types/index.js';
 
 export const tenant = pgSchema('tenant');
 
@@ -62,6 +65,17 @@ export const importTypeEnum = tenant.enum('import_type', [
   'schedule',
 ]);
 
+export const documentEntityTypeEnum = tenant.enum('document_entity_type', [
+  'teacher',
+  'student',
+]);
+
+export const salaryStatusEnum = tenant.enum('salary_status', [
+  'pending',
+  'paid',
+  'disputed',
+]);
+
 export const users = tenant.table('users', {
   id: uuid('id').defaultRandom().primaryKey(),
   role: userRoleEnum('role').notNull(),
@@ -87,6 +101,9 @@ export const teachers = tenant.table(
     type: teacherTypeEnum('type').notNull(),
     subjects: text('subjects').array().notNull().default(sql`'{}'::text[]`),
     hourlyRate: integer('hourly_rate'),
+    isBlocked: boolean('is_blocked').notNull().default(false),
+    blockedReason: text('blocked_reason'),
+    blockedAt: timestamp('blocked_at', { withTimezone: true, mode: 'date' }),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
       .notNull()
       .defaultNow(),
@@ -116,8 +133,11 @@ export const students = tenant.table(
       .references(() => classes.id),
     firstName: varchar('first_name', { length: 100 }).notNull(),
     lastName: varchar('last_name', { length: 100 }).notNull(),
+    parentName: varchar('parent_name', { length: 255 }),
     parentPhone: varchar('parent_phone', { length: 20 }),
+    parentName2: varchar('parent_name_2', { length: 255 }),
     parentPhone2: varchar('parent_phone_2', { length: 20 }),
+    notes: text('notes'),
     isActive: boolean('is_active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
       .notNull()
@@ -353,5 +373,98 @@ export const importHistory = tenant.table(
   (table) => ({
     importHistoryTypeIdx: index('idx_import_history_type').on(table.importType),
     importHistoryImportedAtIdx: index('idx_import_history_imported_at').on(table.importedAt),
+  })
+);
+
+export const documents = tenant.table(
+  'documents',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    entityType: documentEntityTypeEnum('entity_type').notNull(),
+    entityId: uuid('entity_id').notNull(),
+    type: varchar('type', { length: 50 }).notNull(),
+    name: varchar('name', { length: 255 }).notNull(),
+    r2Key: varchar('r2_key', { length: 500 }).notNull(),
+    uploadedBy: uuid('uploaded_by')
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    documentsEntityIdx: index('idx_documents_entity').on(table.entityType, table.entityId),
+  })
+);
+
+export const adminPositions = tenant.table(
+  'admin_positions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    name: varchar('name', { length: 100 }).notNull(),
+    permissions: jsonb('permissions').$type<PermissionKey[]>().notNull().default(sql`'[]'::jsonb`),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    positionsCreatedByIdx: index('idx_positions_created_by').on(table.createdBy),
+  })
+);
+
+export const positionAssignments = tenant.table(
+  'position_assignments',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    positionId: uuid('position_id')
+      .notNull()
+      .references(() => adminPositions.id, { onDelete: 'cascade' }),
+    assignedBy: uuid('assigned_by')
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    positionAssignmentUnique: unique('position_assignments_user_position_unique').on(
+      table.userId,
+      table.positionId
+    ),
+  })
+);
+
+export const salaryRecords = tenant.table(
+  'salary_records',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    teacherId: uuid('teacher_id')
+      .notNull()
+      .references(() => teachers.id),
+    periodMonth: date('period_month', { mode: 'string' }).notNull(),
+    hoursPlanned: numeric('hours_planned', { precision: 6, scale: 2 }).notNull(),
+    hoursDone: numeric('hours_done', { precision: 6, scale: 2 }).notNull(),
+    hourlyRate: integer('hourly_rate').notNull(),
+    totalFcfa: integer('total_fcfa').notNull(),
+    status: salaryStatusEnum('status').notNull().default('pending'),
+    paidAt: timestamp('paid_at', { withTimezone: true, mode: 'date' }),
+    paidBy: uuid('paid_by').references(() => users.id),
+    notes: text('notes'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    salaryTeacherMonthUnique: unique('salary_records_teacher_period_month_unique').on(
+      table.teacherId,
+      table.periodMonth
+    ),
+    salaryTeacherMonthIdx: index('idx_salary_teacher_month').on(table.teacherId, table.periodMonth),
   })
 );

@@ -21,13 +21,17 @@ type SeedContext = {
   teacherUsername: string;
   teacherPassword: string;
   directorUserId: string;
+  secretaryUserId: string;
   directorPassword: string;
+  secretaryPassword: string;
   validRoomToken: string;
 };
 
-const DATABASE_URL_TEST = process.env.DATABASE_URL_TEST;
+const DATABASE_URL_TEST = process.env.DATABASE_URL_TEST ?? process.env.DATABASE_URL;
 if (!DATABASE_URL_TEST) {
-  throw new Error('[integration] DATABASE_URL_TEST is required');
+  throw new Error(
+    '[integration] DATABASE_URL_TEST is required (or DATABASE_URL as fallback).'
+  );
 }
 
 // Force all app DB imports to point to the isolated test database.
@@ -96,7 +100,12 @@ export const getToken = async (role: TestRole): Promise<string> => {
   const context = getContext();
   const privateKey = await getPrivateKey();
 
-  const subject = role === 'teacher' ? context.teacherUserId : context.directorUserId;
+  const subject =
+    role === 'teacher'
+      ? context.teacherUserId
+      : role === 'secretary'
+        ? context.secretaryUserId
+        : context.directorUserId;
   const payload = {
     sub: subject,
     role,
@@ -151,8 +160,10 @@ const toTimeFromUtcMinutes = (minutes: number): string => {
 const seedTenantData = async (): Promise<SeedContext> => {
   const teacherPassword = 'edutrack2024';
   const directorPassword = 'director2024';
+  const secretaryPassword = 'secretary2024';
   const teacherPasswordHash = await argon2.hash(teacherPassword);
   const directorPasswordHash = await argon2.hash(directorPassword);
+  const secretaryPasswordHash = await argon2.hash(secretaryPassword);
 
   const now = new Date();
   const validFrom = formatDate(addDays(now, -7));
@@ -197,9 +208,19 @@ const seedTenantData = async (): Promise<SeedContext> => {
       [teacherPasswordHash]
     );
 
+    const secretaryResult = await client.query<{ id: string }>(
+      `
+        INSERT INTO users (role, name, phone, email, password_hash, is_active)
+        VALUES ('secretary', 'Integration Secretary', '2250702345678', 'secretary.integration@edutrack.local', $1, true)
+        RETURNING id
+      `,
+      [secretaryPasswordHash]
+    );
+
     const teacherUserId = teacherUserResult.rows[0]?.id;
     const directorUserId = directorResult.rows[0]?.id;
-    if (!teacherUserId || !directorUserId) {
+    const secretaryUserId = secretaryResult.rows[0]?.id;
+    if (!teacherUserId || !directorUserId || !secretaryUserId) {
       throw new Error('[integration] Failed to seed users');
     }
 
@@ -309,7 +330,9 @@ const seedTenantData = async (): Promise<SeedContext> => {
       teacherUsername,
       teacherPassword,
       directorUserId,
+      secretaryUserId,
       directorPassword,
+      secretaryPassword,
       validRoomToken: room.qr_token,
     };
   } catch (error) {
@@ -337,11 +360,15 @@ const initApp = async (): Promise<FastifyInstance> => {
     { default: attendanceController },
     { default: scheduleController },
     { default: importExportController },
+    { default: permissionsController },
+    { requirePermission },
   ] = await Promise.all([
     import('../../src/modules/auth/auth.controller.js'),
     import('../../src/modules/attendance/attendance.controller.js'),
     import('../../src/modules/schedule/schedule.controller.js'),
     import('../../src/modules/import-export/import.controller.js'),
+    import('../../src/modules/permissions/permissions.controller.js'),
+    import('../../src/shared/middleware/auth.middleware.js'),
   ]);
 
   const testApp = Fastify({ logger: false });
@@ -355,6 +382,12 @@ const initApp = async (): Promise<FastifyInstance> => {
   testApp.register(attendanceController);
   testApp.register(scheduleController);
   testApp.register(importExportController);
+  testApp.register(permissionsController);
+  testApp.post(
+    '/api/v1/billing/salary/compute',
+    { preHandler: requirePermission('salary.compute') },
+    async () => ({ ok: true })
+  );
 
   await testApp.ready();
   return testApp;

@@ -1,12 +1,12 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
+import { withTenantSchema } from '../database/db.js';
+import type { PermissionKey } from '../types/index.js';
+import {
+  PermissionsRepository,
+} from '../../modules/permissions/permissions.repository.js';
+import { resolveEffectivePermissions } from '../../modules/permissions/permissions.service.js';
 import { verifyAccessToken, type AccessTokenClaims } from '../../modules/auth/auth.service.js';
-
-declare module 'fastify' {
-  interface FastifyRequest {
-    claims?: AccessTokenClaims;
-  }
-}
 
 const DIRECTOR_SECRETARY_ROLES = new Set(['director', 'secretary']);
 const TEACHER_DIRECTOR_SECRETARY_ROLES = new Set(['teacher', 'director', 'secretary']);
@@ -41,6 +41,14 @@ const forbidden = (reply: FastifyReply, message: string): FastifyReply => {
   });
 };
 
+const internalError = (reply: FastifyReply, message = 'Internal server error'): FastifyReply => {
+  return reply.code(500).send({
+    error: message,
+    code: 'INTERNAL_ERROR',
+    statusCode: 500,
+  });
+};
+
 export const authenticateRequest = async (
   request: FastifyRequest,
   reply: FastifyReply
@@ -48,16 +56,13 @@ export const authenticateRequest = async (
   request.user = null;
   request.auth = undefined;
   request.claims = undefined;
+  request.permissions = undefined;
+
+  let claims: AccessTokenClaims;
 
   try {
     const token = extractBearerToken(request);
-    const claims = await verifyAccessToken(token);
-    request.claims = claims;
-    request.auth = claims;
-    request.user = {
-      userId: claims.sub,
-      schemaName: claims.schemaName,
-    };
+    claims = await verifyAccessToken(token);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Invalid access token';
     if (message === 'Missing Authorization header' || message === 'Invalid Authorization header') {
@@ -67,6 +72,27 @@ export const authenticateRequest = async (
 
     unauthorized(reply, 'Invalid access token');
     return;
+  }
+
+  try {
+    const permissions = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+      const repository = new PermissionsRepository(tenantDb);
+      return resolveEffectivePermissions(repository, claims);
+    });
+
+    request.claims = claims;
+    request.auth = claims;
+    request.user = {
+      userId: claims.sub,
+      schemaName: claims.schemaName,
+    };
+    request.permissions = new Set<PermissionKey>(permissions);
+  } catch (error) {
+    request.log.error(
+      { err: error instanceof Error ? error.message : 'unknown error' },
+      '[auth] failed to resolve permissions'
+    );
+    internalError(reply, 'Failed to resolve permissions');
   }
 };
 
@@ -175,3 +201,17 @@ export const requireDirector = async (
 
   request.claims = claims;
 };
+
+export const requirePermission =
+  (permission: PermissionKey) =>
+  async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    await authenticateRequest(request, reply);
+    if (reply.sent) {
+      return;
+    }
+
+    if (!request.permissions?.has(permission)) {
+      forbidden(reply, `Permission ${permission} required`);
+      return;
+    }
+  };

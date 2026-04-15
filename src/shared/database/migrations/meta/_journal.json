@@ -36,6 +36,13 @@
       "when": 1776182400000,
       "tag": "0004_calm_satana",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1776266652744,
+      "tag": "0005_short_meltdown",
+      "breakpoints": true
     }
   ]
 }

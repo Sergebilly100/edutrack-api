@@ -261,6 +261,10 @@ const main = async (): Promise<void> => {
     await tx.execute(sql.raw(`SET LOCAL search_path TO "${TENANT.schemaName}", public`));
 
     console.info('[seed] Resetting tenant data...');
+    await tx.execute(sql`DELETE FROM position_assignments`);
+    await tx.execute(sql`DELETE FROM salary_records`);
+    await tx.execute(sql`DELETE FROM admin_positions`);
+    await tx.execute(sql`DELETE FROM documents`);
     await tx.execute(sql`DELETE FROM attendances_student`);
     await tx.execute(sql`DELETE FROM attendances_teacher`);
     await tx.execute(sql`DELETE FROM notifications_log`);
@@ -303,6 +307,24 @@ const main = async (): Promise<void> => {
     const directorId = directorUser.rows[0]?.id;
     if (!directorId) {
       throw new Error('[seed] Failed to create director user');
+    }
+
+    const secretaryUser = await tx.execute<IdRow>(sql`
+      INSERT INTO users (role, name, phone, email, password_hash, is_active)
+      VALUES (
+        'secretary',
+        'Secrétaire Sainte-Marie',
+        '+225070888888',
+        'secretariat@sainte-marie.ci',
+        ${teacherPasswordHash},
+        true
+      )
+      RETURNING id
+    `);
+
+    const secretaryId = secretaryUser.rows[0]?.id;
+    if (!secretaryId) {
+      throw new Error('[seed] Failed to create secretary user');
     }
 
     console.info('[seed] Inserting teachers (vacataires) with stable check-in tokens...');
@@ -408,6 +430,76 @@ const main = async (): Promise<void> => {
         COALESCE(t.subjects[1], 'Cours') AS primary_subject
       FROM teachers t
       ORDER BY t.created_at ASC
+    `);
+
+    const firstTeacherId = teachersResult.rows[0]?.id;
+    const secondTeacherId = teachersResult.rows[1]?.id;
+    if (!firstTeacherId || !secondTeacherId) {
+      throw new Error('[seed] Missing teachers required for salary records');
+    }
+
+    await tx.execute(sql`
+      INSERT INTO admin_positions (name, permissions, created_by)
+      VALUES (
+        'Censeur',
+        ${JSON.stringify(['teachers.view', 'students.view', 'attendance.view'])}::jsonb,
+        ${directorId}
+      )
+      RETURNING id
+    `);
+
+    await tx.execute(sql`
+      INSERT INTO position_assignments (user_id, position_id, assigned_by)
+      SELECT
+        ${secretaryId},
+        ap.id,
+        ${directorId}
+      FROM admin_positions ap
+      WHERE ap.name = 'Censeur'
+      LIMIT 1
+    `);
+
+    const currentMonth = formatDate(new Date()).slice(0, 7);
+    const monthDate = `${currentMonth}-01`;
+
+    await tx.execute(sql`
+      INSERT INTO salary_records (
+        teacher_id,
+        period_month,
+        hours_planned,
+        hours_done,
+        hourly_rate,
+        total_fcfa,
+        status,
+        notes,
+        paid_at,
+        paid_by
+      )
+      VALUES
+      (
+        ${firstTeacherId},
+        ${monthDate},
+        48.00,
+        45.50,
+        5000,
+        227500,
+        'pending',
+        'Bilan mois courant',
+        NULL,
+        NULL
+      ),
+      (
+        ${secondTeacherId},
+        ${monthDate},
+        42.00,
+        41.00,
+        4500,
+        184500,
+        'paid',
+        'Règlement validé',
+        NOW(),
+        ${directorId}
+      )
     `);
 
     const roomByName = new Map(roomsResult.rows.map((room) => [room.name, room.id]));
