@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   verify: vi.fn(),
   findUserByPhone: vi.fn(),
   findUserByUsername: vi.fn(),
+  findUserByEmail: vi.fn(),
   findUserProfileById: vi.fn(),
   updateLastLoginAt: vi.fn(),
 }));
@@ -20,6 +21,7 @@ vi.mock('argon2', () => ({
 vi.mock('../../src/modules/auth/auth.repository.js', () => ({
   findUserByPhone: mocks.findUserByPhone,
   findUserByUsername: mocks.findUserByUsername,
+  findUserByEmail: mocks.findUserByEmail,
   findUserProfileById: mocks.findUserProfileById,
   updateLastLoginAt: mocks.updateLastLoginAt,
 }));
@@ -77,6 +79,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.findUserByEmail.mockResolvedValue(null);
 });
 
 describe('auth.service', () => {
@@ -163,6 +166,7 @@ describe('auth.service', () => {
   it('login() échoue si identifier inconnu', async () => {
     mocks.findUserByPhone.mockResolvedValue(null);
     mocks.findUserByUsername.mockResolvedValue(null);
+    mocks.findUserByEmail.mockResolvedValue(null);
 
     await expect(
       login(db, {
