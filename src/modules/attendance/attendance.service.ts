@@ -74,12 +74,17 @@ export class AttendanceService {
     });
 
     if (status.status !== 'absent') {
-      await scheduleQrMissingScanCheck({
-        schemaName: context.schemaName,
-        scheduleId: schedule.scheduleId,
-        date,
-        slotStartTimeUtc: schedule.slotStartTime,
-      });
+      try {
+        await scheduleQrMissingScanCheck({
+          schemaName: context.schemaName,
+          scheduleId: schedule.scheduleId,
+          date,
+          slotStartTimeUtc: schedule.slotStartTime,
+        });
+      } catch (error) {
+        // Ne pas bloquer le pointage si la queue Redis est indisponible.
+        console.error('[attendance] failed to schedule qr missing-scan check', error);
+      }
     }
 
     const commonPayload = {
@@ -227,6 +232,79 @@ export class AttendanceService {
     }
 
     return missing.length;
+  }
+
+  async getTodayForDirector(): Promise<{
+    date: string;
+    present: number;
+    absent: number;
+    not_checked: number;
+    present_count: number;
+    absent_count: number;
+    not_checked_count: number;
+    unmarked_count: number;
+    courses: Array<{
+      schedule_id: string;
+      teacher_name: string;
+      subject: string;
+      class: string;
+      class_name: string;
+      room_name: string;
+      slot_label: string;
+      start_time: string;
+      end_time: string;
+      status: 'present' | 'absent' | 'not_checked';
+      attendance_status: 'present' | 'absent' | 'late' | 'excused' | null;
+      late_minutes: number | null;
+      room_mismatch: boolean;
+      room_scanned_name: string | null;
+      checked_in_at: string | null;
+    }>;
+  }> {
+    const today = await this.repository.listTodayForDirector();
+    return {
+      date: today.date,
+      present: today.presentCount,
+      absent: today.absentCount,
+      not_checked: today.unmarkedCount,
+      present_count: today.presentCount,
+      absent_count: today.absentCount,
+      not_checked_count: today.unmarkedCount,
+      unmarked_count: today.unmarkedCount,
+      courses: today.courses.map((course) => ({
+        ...course,
+        class: course.class_name,
+        status:
+          course.attendance_status === 'absent'
+            ? 'absent'
+            : course.attendance_status === null
+              ? 'not_checked'
+              : 'present',
+        room_mismatch: course.room_mismatch ?? false,
+      })),
+    };
+  }
+
+  async getHistoryForDirector(days: number): Promise<
+    Array<{
+      date: string;
+      present: number;
+      absent: number;
+      not_checked: number;
+      present_count: number;
+      absent_count: number;
+      not_checked_count: number;
+      total_count: number;
+      attendance_rate: number;
+    }>
+  > {
+    const rows = await this.repository.listHistoryForDirector(days);
+    return rows.map((row) => ({
+      ...row,
+      present: row.present_count,
+      absent: row.absent_count,
+      not_checked: row.not_checked_count,
+    }));
   }
 }
 

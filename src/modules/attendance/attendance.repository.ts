@@ -56,6 +56,31 @@ type ActiveAttendanceRow = {
   checked_in_at: string | null;
 };
 
+type DirectorTodayCourseRow = {
+  schedule_id: string;
+  teacher_name: string;
+  subject: string;
+  class_name: string;
+  room_name: string;
+  slot_label: string;
+  start_time: string;
+  end_time: string;
+  attendance_status: 'present' | 'absent' | 'late' | 'excused' | null;
+  late_minutes: number | null;
+  room_mismatch: boolean | null;
+  room_scanned_name: string | null;
+  checked_in_at: string | null;
+};
+
+type DirectorHistoryRow = {
+  date: string;
+  present_count: number;
+  absent_count: number;
+  not_checked_count: number;
+  total_count: number;
+  attendance_rate: number;
+};
+
 const getRows = <TRow extends QueryResultRow>(result: QueryResult<TRow>): TRow[] => result.rows;
 
 const mapScheduleContext = (row: ScheduleContextRow): AttendanceScheduleContext => ({
@@ -346,5 +371,171 @@ export class AttendanceRepository {
       teacherId: row.teacher_id,
       scheduleId: row.schedule_id,
     }));
+  }
+
+  async listTodayForDirector(): Promise<{
+    date: string;
+    courses: DirectorTodayCourseRow[];
+    presentCount: number;
+    absentCount: number;
+    unmarkedCount: number;
+  }> {
+    const dateResult = await this.db.execute<{ date: string; day_of_week: number }>(sql`
+      SELECT
+        (NOW() AT TIME ZONE 'Africa/Abidjan')::date::text AS date,
+        EXTRACT(ISODOW FROM (NOW() AT TIME ZONE 'Africa/Abidjan'))::int AS day_of_week
+    `);
+    const dateRow = getRows(dateResult)[0];
+    const today = dateRow?.date;
+    const dayOfWeek = dateRow?.day_of_week;
+
+    if (!today || !dayOfWeek) {
+      return {
+        date: new Date().toISOString().slice(0, 10),
+        courses: [],
+        presentCount: 0,
+        absentCount: 0,
+        unmarkedCount: 0,
+      };
+    }
+
+    const coursesResult = await this.db.execute<DirectorTodayCourseRow>(sql`
+      WITH active_period AS (
+        SELECT id
+        FROM schedule_periods
+        WHERE is_active = true
+          AND valid_from <= ${today}
+          AND valid_to >= ${today}
+        ORDER BY created_at DESC
+        LIMIT 1
+      )
+      SELECT
+        s.id::text AS schedule_id,
+        u.name AS teacher_name,
+        s.subject,
+        c.name AS class_name,
+        r.name AS room_name,
+        ts.label AS slot_label,
+        ts.start_time::text AS start_time,
+        ts.end_time::text AS end_time,
+        at.status::text AS attendance_status,
+        at.late_minutes,
+        at.room_mismatch,
+        scanned_room.name AS room_scanned_name,
+        at.checked_in_at::text AS checked_in_at
+      FROM schedules s
+      INNER JOIN active_period ap ON ap.id = s.schedule_period_id
+      INNER JOIN teachers t ON t.id = s.teacher_id
+      INNER JOIN users u ON u.id = t.user_id
+      INNER JOIN classes c ON c.id = s.class_id
+      INNER JOIN rooms r ON r.id = s.room_id
+      INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+      LEFT JOIN attendances_teacher at
+        ON at.schedule_id = s.id
+       AND at.date = ${today}
+      LEFT JOIN rooms scanned_room ON scanned_room.id = at.room_scanned_id
+      WHERE s.day_of_week = ${dayOfWeek}
+        AND s.is_active = true
+      ORDER BY ts.sort_order ASC, ts.start_time ASC, c.name ASC
+    `);
+
+    const courses = getRows(coursesResult);
+    let presentCount = 0;
+    let absentCount = 0;
+    let unmarkedCount = 0;
+    for (const course of courses) {
+      if (
+        course.attendance_status === 'present' ||
+        course.attendance_status === 'late' ||
+        course.attendance_status === 'excused'
+      ) {
+        presentCount += 1;
+        continue;
+      }
+
+      if (course.attendance_status === 'absent') {
+        absentCount += 1;
+        continue;
+      }
+
+      unmarkedCount += 1;
+    }
+
+    return {
+      date: today,
+      courses,
+      presentCount,
+      absentCount,
+      unmarkedCount,
+    };
+  }
+
+  async listHistoryForDirector(days: number): Promise<DirectorHistoryRow[]> {
+    const safeDays = Math.max(1, Math.min(days, 30));
+
+    const result = await this.db.execute<DirectorHistoryRow>(sql`
+      WITH params AS (
+        SELECT
+          (NOW() AT TIME ZONE 'Africa/Abidjan')::date AS today,
+          ${safeDays}::int AS days
+      ),
+      dates AS (
+        SELECT generate_series(
+          (SELECT today - ((days - 1) * INTERVAL '1 day') FROM params),
+          (SELECT today FROM params),
+          INTERVAL '1 day'
+        )::date AS date
+      ),
+      active_period AS (
+        SELECT id, valid_from, valid_to
+        FROM schedule_periods
+        WHERE is_active = true
+        ORDER BY created_at DESC
+        LIMIT 1
+      ),
+      schedules_by_date AS (
+        SELECT
+          d.date,
+          s.id AS schedule_id
+        FROM dates d
+        LEFT JOIN active_period ap
+          ON d.date BETWEEN ap.valid_from AND ap.valid_to
+        LEFT JOIN schedules s
+          ON s.schedule_period_id = ap.id
+         AND s.day_of_week = EXTRACT(ISODOW FROM d.date)::int
+         AND s.is_active = true
+      )
+      SELECT
+        sbd.date::text AS date,
+        COALESCE(
+          SUM(CASE WHEN at.status IN ('present', 'late', 'excused') THEN 1 ELSE 0 END),
+          0
+        )::int AS present_count,
+        COALESCE(
+          SUM(CASE WHEN at.status = 'absent' THEN 1 ELSE 0 END),
+          0
+        )::int AS absent_count,
+        COALESCE(
+          SUM(CASE WHEN at.id IS NULL THEN 1 ELSE 0 END),
+          0
+        )::int AS not_checked_count,
+        COUNT(sbd.schedule_id)::int AS total_count,
+        COALESCE(
+          ROUND(
+            100.0 * SUM(CASE WHEN at.status IN ('present', 'late', 'excused') THEN 1 ELSE 0 END)::numeric
+            / NULLIF(COUNT(sbd.schedule_id), 0),
+            2
+          ),
+          0
+        )::float AS attendance_rate
+      FROM schedules_by_date sbd
+      LEFT JOIN attendances_teacher at
+        ON at.schedule_id = sbd.schedule_id
+       AND at.date = sbd.date
+      GROUP BY sbd.date
+      ORDER BY sbd.date ASC
+    `);
+
+    return getRows(result);
   }
 }

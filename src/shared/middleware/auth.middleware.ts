@@ -152,3 +152,26 @@ export const requireTeacherOrDirectorOrSecretary = async (
 
   request.claims = claims;
 };
+
+export const requireDirector = async (
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> => {
+  await authenticateRequest(request, reply);
+  if (reply.sent) {
+    return;
+  }
+
+  const claims = request.auth;
+  if (!claims) {
+    unauthorized(reply, 'Unauthorized');
+    return;
+  }
+
+  if (claims.role !== 'director') {
+    forbidden(reply, 'Forbidden');
+    return;
+  }
+
+  request.claims = claims;
+};

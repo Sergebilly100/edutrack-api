@@ -2,6 +2,7 @@ import argon2 from 'argon2';
 import { importPKCS8, importSPKI, jwtVerify, SignJWT, type JWTPayload } from 'jose';
 
 import {
+  findUserByEmail,
   findUserByPhone,
   findUserByUsername,
   findUserProfileById,
@@ -146,7 +147,12 @@ export const login = async (db: TenantDb, input: LoginInput): Promise<LoginResul
       return byPhone;
     }
 
-    return findUserByUsername(db, input.identifier);
+    const byUsername = await findUserByUsername(db, input.identifier);
+    if (byUsername) {
+      return byUsername;
+    }
+
+    return findUserByEmail(db, input.identifier);
   })();
 
   if (!authUser || !authUser.isActive) {

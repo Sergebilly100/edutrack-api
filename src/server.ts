@@ -9,6 +9,7 @@ import adminController from './modules/admin/admin.controller.js';
 import attendanceController from './modules/attendance/attendance.controller.js';
 import authController from './modules/auth/auth.controller.js';
 import importExportController from './modules/import-export/import.controller.js';
+import notificationsController from './modules/notifications/notifications.controller.js';
 import {
   createNotificationsQueue,
   createNotificationsWorker,
@@ -16,8 +17,10 @@ import {
 import { defaultRepository } from './modules/notifications/notifications.repository.js';
 import { NotificationsService, defaultSmsSender } from './modules/notifications/notifications.service.js';
 import roomsController from './modules/rooms/rooms.controller.js';
+import schoolController from './modules/school/school.controller.js';
 import studentsController from './modules/students/students.controller.js';
 import scheduleController from './modules/schedule/schedule.controller.js';
+import teachersController from './modules/teachers/teachers.controller.js';
 
 const app = Fastify({ logger: true });
 const port = Number(process.env.PORT || 3000);
@@ -48,9 +51,12 @@ app.register(multipart, {
 app.register(authController);
 app.register(adminController);
 app.register(attendanceController);
+app.register(notificationsController);
 app.register(studentsController);
+app.register(teachersController);
 app.register(scheduleController);
 app.register(roomsController);
+app.register(schoolController);
 app.register(importExportController);
 
 app.get('/health', async () => ({ status: 'ok' }));

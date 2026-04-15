@@ -22,6 +22,15 @@ export type QrAlertContext = LateAlertContext & {
   scannedRoom: string;
 };
 
+export type NotificationLogRow = {
+  id: string;
+  type: NotificationType;
+  message: string;
+  sent_at: string | null;
+  recipient_phone: string;
+  status: 'queued' | 'sent' | 'failed' | 'delivered';
+};
+
 export type NotificationsRepository = {
   getLateAlertContext: (
     tenantDb: TenantDbLike,
@@ -56,6 +65,13 @@ export type NotificationsRepository = {
     tenantDb: TenantDbLike,
     payload: Pick<TeacherQrAlertPayload, 'teacherId' | 'scheduleId' | 'date'>
   ) => Promise<void>;
+  listNotificationLog: (
+    tenantDb: TenantDbLike,
+    params: {
+      limit: number;
+      types?: NotificationType[];
+    }
+  ) => Promise<NotificationLogRow[]>;
 };
 
 const getFirstRow = <TRow>(result: { rows: TRow[] }): TRow | null => {
@@ -216,5 +232,30 @@ export const defaultRepository: NotificationsRepository = {
         AND schedule_id = ${payload.scheduleId}
         AND date = ${payload.date}
     `);
+  },
+
+  async listNotificationLog(tenantDb, params) {
+    const safeLimit = Math.max(1, Math.min(params.limit, 50));
+    const filteredTypes = params.types?.filter(Boolean) ?? [];
+    const whereClause =
+      filteredTypes.length === 0
+        ? sql``
+        : sql`WHERE type IN (${sql.join(filteredTypes.map((item) => sql`${item}`), sql`, `)})`;
+
+    const result = await asExecutor(tenantDb).execute<NotificationLogRow>(sql`
+      SELECT
+        id::text AS id,
+        type::text AS type,
+        message,
+        sent_at::text AS sent_at,
+        recipient_phone,
+        status::text AS status
+      FROM notifications_log
+      ${whereClause}
+      ORDER BY COALESCE(sent_at, created_at) DESC, created_at DESC
+      LIMIT ${safeLimit}
+    `);
+
+    return result.rows;
   },
 };

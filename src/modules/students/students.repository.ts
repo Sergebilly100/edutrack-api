@@ -90,6 +90,19 @@ const getRows = <T>(result: unknown): T[] => {
   return Array.isArray(rows) ? rows : [];
 };
 
+const toIsoDateTime = (value: Date | string): string => {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return new Date().toISOString();
+  }
+
+  return parsed.toISOString();
+};
+
 const mapStudent = (row: StudentRow): StudentRecord => ({
   id: row.id,
   classId: row.class_id,
@@ -99,7 +112,7 @@ const mapStudent = (row: StudentRow): StudentRecord => ({
   parentPhone: row.parent_phone,
   parentPhone2: row.parent_phone_2,
   isActive: row.is_active,
-  createdAt: row.created_at.toISOString(),
+  createdAt: toIsoDateTime(row.created_at),
 });
 
 const mapAttendance = (row: AttendanceRow): AttendanceStudentRecord => ({
@@ -115,7 +128,7 @@ const mapAttendance = (row: AttendanceRow): AttendanceStudentRecord => ({
   markedBy: row.marked_by,
   smsStatus: row.sms_status,
   smsNotified: row.sms_status === 'sent' || row.sms_status === 'delivered',
-  createdAt: row.created_at.toISOString(),
+  createdAt: toIsoDateTime(row.created_at),
 });
 
 const toTotal = (row: TotalRow | undefined): number => {
@@ -550,7 +563,7 @@ export class StudentsRepository {
         s.first_name AS student_first_name,
         s.last_name AS student_last_name,
         a.schedule_id,
-        a.date,
+        a.date::text AS date,
         sms_log.status::text AS sms_status
       FROM attendances_student a
       INNER JOIN students s ON s.id = a.student_id
@@ -566,7 +579,7 @@ export class StudentsRepository {
         LIMIT 1
       ) sms_log ON true
       WHERE a.status = 'absent'
-        AND a.date = COALESCE(${date ?? null}, CURRENT_DATE::text)
+        AND a.date = COALESCE(${date ?? null}::date, CURRENT_DATE)
       ORDER BY c.name ASC, s.last_name ASC, s.first_name ASC
     `);
 

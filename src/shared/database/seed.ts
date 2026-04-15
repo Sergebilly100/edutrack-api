@@ -1,121 +1,175 @@
-import { randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 
 import argon2 from 'argon2';
 import { sql } from 'drizzle-orm';
 
 import { db } from './db.js';
 import { createTenantSchema } from './tenant-init.js';
-import { generateUsername } from '../utils/username.js';
 
 const TENANT = {
-  name: 'Lycee Sainte-Marie',
+  name: 'Groupe Scolaire Sainte-Marie de Cocody',
   subdomain: 'sainte-marie',
   schemaName: 'school_sainte_marie',
-  plan: 'pro',
+  // "starter" requested by product spec is mapped to current enum value "essential".
+  plan: 'essential',
   status: 'active',
 } as const;
 
-const DEFAULT_PASSWORD = 'edutrack2024';
+const DIRECTOR_EMAIL = 'directeur@sainte-marie.ci';
+const DEFAULT_PASSWORD = 'Test1234!';
 
 const TIME_SLOTS = [
-  { label: '7h30 - 9h00', startTime: '07:30', endTime: '09:00', sortOrder: 1 },
-  { label: '9h00 - 10h30', startTime: '09:00', endTime: '10:30', sortOrder: 2 },
-  { label: '10h30 - 12h00', startTime: '10:30', endTime: '12:00', sortOrder: 3 },
-  { label: '12h00 - 13h30', startTime: '12:00', endTime: '13:30', sortOrder: 4 },
-  { label: '13h30 - 15h00', startTime: '13:30', endTime: '15:00', sortOrder: 5 },
-  { label: '15h00 - 16h30', startTime: '15:00', endTime: '16:30', sortOrder: 6 },
+  { label: '07h30 - 09h00', startTime: '07:30', endTime: '09:00', sortOrder: 1 },
+  { label: '09h15 - 10h45', startTime: '09:15', endTime: '10:45', sortOrder: 2 },
+  { label: '11h00 - 12h30', startTime: '11:00', endTime: '12:30', sortOrder: 3 },
+  { label: '14h00 - 15h30', startTime: '14:00', endTime: '15:30', sortOrder: 4 },
 ] as const;
 
-const ROOM_NAMES = ['Salle A1', 'Salle A2', 'Labo Sciences', 'Salle Langues'] as const;
+const ROOM_NAMES = ['Salle A1', 'Salle A2', 'Salle B1', 'Labo Sciences'] as const;
 
 const TEACHER_SEED = [
   {
-    firstName: 'Ibrahim',
-    lastName: 'Diallo',
-    fullName: 'Ibrahim Diallo',
+    firstName: 'Kouadio',
+    lastName: 'Nguessan',
+    fullName: 'Kouadio Nguessan',
+    email: 'kouadio.nguessan@sainte-marie.ci',
+    phone: '+225070100001',
+    checkInToken: '0d9d0f07-7b92-44c8-a0cf-28f8906ab001',
     type: 'vacataire',
     subjects: ['Mathematiques'],
     hourlyRate: 5000,
   },
   {
-    firstName: 'Fatima',
+    firstName: 'Aminata',
     lastName: 'Kone',
-    fullName: 'Fatima Kone',
+    fullName: 'Aminata Kone',
+    email: 'aminata.kone@sainte-marie.ci',
+    phone: '+225070100002',
+    checkInToken: '1bb0f4f3-5cd2-45a8-b45d-8b9f6c19c002',
     type: 'vacataire',
     subjects: ['Francais'],
     hourlyRate: 4500,
   },
   {
-    firstName: 'Mamadou',
-    lastName: 'Traore',
-    fullName: 'Mamadou Traore',
-    type: 'permanent',
-    subjects: ['SVT'],
-    hourlyRate: null,
-  },
-  {
-    firstName: 'Aminata',
-    lastName: 'Bamba',
-    fullName: 'Aminata Bamba',
-    type: 'vacataire',
-    subjects: ['Anglais'],
-    hourlyRate: 4000,
-  },
-  {
-    firstName: 'Serge',
+    firstName: 'Blaise',
     lastName: 'Yao',
-    fullName: 'Serge Yao',
+    fullName: 'Blaise Yao',
+    email: 'blaise.yao@sainte-marie.ci',
+    phone: '+225070100003',
+    checkInToken: '2a6bf42f-49e4-47b8-8425-7e1a7b67d003',
     type: 'vacataire',
     subjects: ['Physique-Chimie'],
+    hourlyRate: 5500,
+  },
+  {
+    firstName: 'Mariam',
+    lastName: 'Coulibaly',
+    fullName: 'Mariam Coulibaly',
+    email: 'mariam.coulibaly@sainte-marie.ci',
+    phone: '+225070100004',
+    checkInToken: '31a89fb4-86f5-4d4e-bf56-f14bd86bb004',
+    type: 'vacataire',
+    subjects: ['Anglais'],
+    hourlyRate: 4800,
+  },
+  {
+    firstName: 'Jean',
+    lastName: 'Traore',
+    fullName: 'Jean Traore',
+    email: 'jean.traore@sainte-marie.ci',
+    phone: '+225070100005',
+    checkInToken: '4c4ff73d-7f31-4faa-9792-6d038747f005',
+    type: 'vacataire',
+    subjects: ['Histoire-Geographie'],
     hourlyRate: 5000,
+  },
+  {
+    firstName: 'Rosine',
+    lastName: 'Bamba',
+    fullName: 'Rosine Bamba',
+    email: 'rosine.bamba@sainte-marie.ci',
+    phone: '+225070100006',
+    checkInToken: '5db59d8d-9f74-4ca2-8df7-df32ba3de006',
+    type: 'vacataire',
+    subjects: ['SVT'],
+    hourlyRate: 5200,
   },
 ] as const;
 
 const CLASSES = [
-  { name: '3eme A', level: '3eme' },
-  { name: '3eme B', level: '3eme' },
+  { name: '3ème A', level: '3ème' },
+  { name: '2nde B', level: '2nde' },
   { name: 'Terminale C', level: 'Terminale' },
 ] as const;
 
 const FIRST_NAMES = [
   'Aya',
-  'Koffi',
   'Awa',
-  'Yannick',
+  'Koffi',
   'Mireille',
+  'Yann',
+  'Fatou',
+  'Kevin',
+  'Rosine',
   'Cedric',
   'Mariam',
-  'Jean',
-  'Nadia',
-  'Wilfried',
+  'Yasmine',
 ] as const;
 
 const LAST_NAMES = [
   'Kouame',
-  'Kone',
+  'Kouassi',
   'Diallo',
-  'Bamba',
+  'Nguessan',
   'Traore',
   'Yao',
-  'Kouassi',
-  'NGuessan',
+  'Bamba',
+  'Kone',
   'Ouattara',
   'Soro',
+  'Coulibaly',
 ] as const;
 
 type IdRow = { id: string };
 
 type RoomRow = { id: string; name: string };
 
-type SlotRow = { id: string; label: string };
+type SlotRow = {
+  id: string;
+  label: string;
+  start_time: string;
+  end_time: string;
+  sort_order: number;
+};
 
-type TeacherRow = { id: string; username: string };
+type TeacherRow = { id: string; username: string; primary_subject: string };
 
 type ClassRow = { id: string; name: string };
 
-type ScheduleRow = { id: string; teacher_username: string; day_of_week: number; slot_label: string };
+type StudentRow = { id: string; class_id: string };
 
-const generateQrToken = (): string => randomBytes(32).toString('hex');
+type ScheduleRow = {
+  id: string;
+  teacher_id: string;
+  class_id: string;
+  room_id: string;
+  day_of_week: number;
+  slot_start: string;
+};
+
+const deterministicHex = (seed: string, length: number): string => {
+  const digest = createHash('sha256').update(seed).digest('hex');
+  if (digest.length >= length) return digest.slice(0, length);
+  return `${digest}${deterministicHex(`${seed}:x`, length - digest.length)}`;
+};
+
+const deterministicScore = (seed: string): number => {
+  const digest = createHash('sha256').update(seed).digest();
+  const value = digest.readUInt32BE(0);
+  return value / 0xffffffff;
+};
+
+const deterministicQrToken = (seed: string): string => deterministicHex(seed, 64);
 
 const formatDate = (date: Date): string => {
   const year = date.getUTCFullYear();
@@ -130,9 +184,14 @@ const addDays = (date: Date, days: number): Date => {
   return copy;
 };
 
+const dayOfWeekFromDate = (date: Date): number => {
+  const day = date.getUTCDay();
+  return day === 0 ? 7 : day;
+};
+
 const getCurrentWeekBounds = (): { monday: string; friday: string } => {
   const now = new Date();
-  const day = now.getUTCDay();
+  const day = dayOfWeekFromDate(now);
   const daysSinceMonday = (day + 6) % 7;
   const mondayDate = addDays(now, -daysSinceMonday);
   const fridayDate = addDays(mondayDate, 4);
@@ -143,38 +202,66 @@ const getCurrentWeekBounds = (): { monday: string; friday: string } => {
   };
 };
 
+const getLastTwoSchoolWeeksDates = (): string[] => {
+  const today = new Date();
+  const dates: string[] = [];
+  for (let offset = 13; offset >= 0; offset -= 1) {
+    const candidate = addDays(today, -offset);
+    const day = dayOfWeekFromDate(candidate);
+    if (day >= 1 && day <= 5) {
+      dates.push(formatDate(candidate));
+    }
+  }
+  return dates;
+};
+
+const addMinutesToTime = (time: string, minutesToAdd: number): string => {
+  const [hourRaw, minuteRaw] = time.slice(0, 5).split(':');
+  const totalMinutes = Number(hourRaw) * 60 + Number(minuteRaw) + minutesToAdd;
+  const hour = Math.floor(totalMinutes / 60)
+    .toString()
+    .padStart(2, '0');
+  const minute = (totalMinutes % 60).toString().padStart(2, '0');
+  return `${hour}:${minute}`;
+};
+
 const buildStudents = (classId: string, classIndex: number) => {
-  return FIRST_NAMES.map((firstName, studentIndex) => {
+  return Array.from({ length: 10 }).map((_, studentIndex) => {
+    const firstName = FIRST_NAMES[(studentIndex + classIndex * 3) % FIRST_NAMES.length];
     const lastName = LAST_NAMES[(studentIndex + classIndex * 2) % LAST_NAMES.length];
-    const phoneSuffix = `${classIndex}${studentIndex}`.padStart(2, '0');
+    const phoneSeed = classIndex * 10 + studentIndex + 1;
     return {
       classId,
       firstName,
       lastName,
-      parentPhone: `225070000${phoneSuffix}11`,
-      parentPhone2: `225010000${phoneSuffix}22`,
+      parentPhone: `2250${phoneSeed.toString().padStart(9, '0')}`,
+      parentPhone2: `2250${(100 + phoneSeed).toString().padStart(9, '0')}`,
     };
   });
 };
 
 const main = async (): Promise<void> => {
   const week = getCurrentWeekBounds();
+  const periodValidFrom = formatDate(addDays(new Date(), -21));
+  const periodValidTo = formatDate(addDays(new Date(), 21));
+  const lastTwoSchoolWeeks = getLastTwoSchoolWeeksDates();
   const teacherPasswordHash = await argon2.hash(DEFAULT_PASSWORD);
-  const directorPasswordHash = await argon2.hash('director2024');
+  const directorPasswordHash = await argon2.hash(DEFAULT_PASSWORD);
 
   console.info('[seed] Creating tenant schema and applying tenant migrations...');
   await createTenantSchema(TENANT.schemaName);
 
   console.info('[seed] Upserting tenant in public schema...');
   const tenantResult = await db.execute<{ id: string }>(sql`
-    INSERT INTO public.tenants (name, subdomain, schema_name, plan, status)
-    VALUES (${TENANT.name}, ${TENANT.subdomain}, ${TENANT.schemaName}, ${TENANT.plan}, ${TENANT.status})
+    INSERT INTO public.tenants (name, subdomain, schema_name, plan, status, onboarding_completed)
+    VALUES (${TENANT.name}, ${TENANT.subdomain}, ${TENANT.schemaName}, ${TENANT.plan}, ${TENANT.status}, true)
     ON CONFLICT (subdomain)
     DO UPDATE SET
       name = EXCLUDED.name,
       schema_name = EXCLUDED.schema_name,
       plan = EXCLUDED.plan,
       status = EXCLUDED.status,
+      onboarding_completed = true,
       updated_at = NOW()
     RETURNING id
   `);
@@ -190,6 +277,7 @@ const main = async (): Promise<void> => {
     console.info('[seed] Resetting tenant data...');
     await tx.execute(sql`DELETE FROM attendances_student`);
     await tx.execute(sql`DELETE FROM attendances_teacher`);
+    await tx.execute(sql`DELETE FROM notifications_log`);
     await tx.execute(sql`DELETE FROM schedules`);
     await tx.execute(sql`DELETE FROM schedule_periods`);
     await tx.execute(sql`DELETE FROM students`);
@@ -203,7 +291,7 @@ const main = async (): Promise<void> => {
     for (const roomName of ROOM_NAMES) {
       await tx.execute(sql`
         INSERT INTO rooms (name, qr_token, is_active)
-        VALUES (${roomName}, ${generateQrToken()}, true)
+        VALUES (${roomName}, ${deterministicQrToken(`${TENANT.schemaName}:${roomName}`)}, true)
       `);
     }
 
@@ -218,9 +306,9 @@ const main = async (): Promise<void> => {
       INSERT INTO users (role, name, phone, email, password_hash, is_active)
       VALUES (
         'director',
-        'Direction Sainte-Marie',
-        '2250701234567',
-        'direction@sainte-marie.edu.ci',
+        'Directeur Sainte-Marie',
+        '+225070999999',
+        ${DIRECTOR_EMAIL},
         ${directorPasswordHash},
         true
       )
@@ -231,15 +319,15 @@ const main = async (): Promise<void> => {
       throw new Error('[seed] Failed to create director user');
     }
 
-    console.info('[seed] Inserting teachers with generated usernames...');
-    const existingUsernames: string[] = [];
+    console.info('[seed] Inserting teachers (vacataires) with stable check-in tokens...');
     for (const teacher of TEACHER_SEED) {
       const userResult = await tx.execute<IdRow>(sql`
-        INSERT INTO users (role, name, email, password_hash, is_active)
+        INSERT INTO users (role, name, phone, email, password_hash, is_active)
         VALUES (
           'teacher',
           ${teacher.fullName},
-          ${`${teacher.firstName.toLowerCase()}.${teacher.lastName.toLowerCase()}@edutrack.local`},
+          ${teacher.phone},
+          ${teacher.email},
           ${teacherPasswordHash},
           true
         )
@@ -251,9 +339,6 @@ const main = async (): Promise<void> => {
         throw new Error(`[seed] Failed to create teacher user ${teacher.fullName}`);
       }
 
-      const username = generateUsername(teacher.lastName, teacher.firstName, existingUsernames);
-      existingUsernames.push(username);
-
       const subjectsArray = sql`ARRAY[${sql.join(
         teacher.subjects.map((subject) => sql`${subject}`),
         sql`, `
@@ -263,7 +348,7 @@ const main = async (): Promise<void> => {
         INSERT INTO teachers (user_id, username, type, subjects, hourly_rate)
         VALUES (
           ${userId},
-          ${username},
+          ${teacher.checkInToken},
           ${teacher.type}::teacher_type,
           ${subjectsArray},
           ${teacher.hourlyRate}
@@ -282,7 +367,7 @@ const main = async (): Promise<void> => {
     const classesResult = await tx.execute<ClassRow>(sql`
       SELECT id, name
       FROM classes
-      ORDER BY name
+      ORDER BY created_at ASC
     `);
 
     for (const [classIndex, klass] of classesResult.rows.entries()) {
@@ -302,13 +387,13 @@ const main = async (): Promise<void> => {
       }
     }
 
-    console.info('[seed] Inserting active schedule period for current week...');
+    console.info('[seed] Inserting active schedule period...');
     const periodResult = await tx.execute<IdRow>(sql`
       INSERT INTO schedule_periods (name, valid_from, valid_to, is_active, created_by)
       VALUES (
-        ${`Semaine du ${week.monday} au ${week.friday}`},
-        ${week.monday},
-        ${week.friday},
+        ${`Période active ${periodValidFrom} → ${periodValidTo}`},
+        ${periodValidFrom},
+        ${periodValidTo},
         true,
         ${directorId}
       )
@@ -326,265 +411,315 @@ const main = async (): Promise<void> => {
       ORDER BY name
     `);
     const slotsResult = await tx.execute<SlotRow>(sql`
-      SELECT id, label
+      SELECT id, label, start_time::text, end_time::text, sort_order
       FROM time_slots
       ORDER BY sort_order
     `);
     const teachersResult = await tx.execute<TeacherRow>(sql`
-      SELECT id, username
-      FROM teachers
-      ORDER BY username
+      SELECT
+        t.id,
+        t.username,
+        COALESCE(t.subjects[1], 'Cours') AS primary_subject
+      FROM teachers t
+      ORDER BY t.created_at ASC
     `);
 
     const roomByName = new Map(roomsResult.rows.map((room) => [room.name, room.id]));
-    const slotByLabel = new Map(slotsResult.rows.map((slot) => [slot.label, slot.id]));
-    const teacherByUsername = new Map(teachersResult.rows.map((teacher) => [teacher.username, teacher.id]));
-    const classByName = new Map(classesResult.rows.map((klass) => [klass.name, klass.id]));
+    const classByIndex = classesResult.rows;
+    const slotByIndex = slotsResult.rows;
 
-    const scheduleBlueprint = [
-      { teacher: 'diallo.ibra', className: '3eme A', room: 'Salle A1', slot: '7h30 - 9h00', day: 1, subject: 'Mathematiques' },
-      { teacher: 'diallo.ibra', className: '3eme B', room: 'Salle A2', slot: '9h00 - 10h30', day: 3, subject: 'Mathematiques' },
-      { teacher: 'diallo.ibra', className: 'Terminale C', room: 'Labo Sciences', slot: '13h30 - 15h00', day: 5, subject: 'Mathematiques' },
-      { teacher: 'kone.fati', className: '3eme B', room: 'Salle Langues', slot: '10h30 - 12h00', day: 1, subject: 'Francais' },
-      { teacher: 'kone.fati', className: '3eme A', room: 'Salle Langues', slot: '12h00 - 13h30', day: 2, subject: 'Francais' },
-      { teacher: 'kone.fati', className: 'Terminale C', room: 'Salle A2', slot: '15h00 - 16h30', day: 4, subject: 'Francais' },
-      { teacher: 'traore.mama', className: 'Terminale C', room: 'Labo Sciences', slot: '7h30 - 9h00', day: 2, subject: 'SVT' },
-      { teacher: 'traore.mama', className: '3eme A', room: 'Labo Sciences', slot: '9h00 - 10h30', day: 4, subject: 'SVT' },
-      { teacher: 'traore.mama', className: '3eme B', room: 'Labo Sciences', slot: '12h00 - 13h30', day: 5, subject: 'SVT' },
-      { teacher: 'bamba.amin', className: '3eme A', room: 'Salle Langues', slot: '13h30 - 15h00', day: 1, subject: 'Anglais' },
-      { teacher: 'bamba.amin', className: '3eme B', room: 'Salle Langues', slot: '15h00 - 16h30', day: 3, subject: 'Anglais' },
-      { teacher: 'bamba.amin', className: 'Terminale C', room: 'Salle A1', slot: '10h30 - 12h00', day: 5, subject: 'Anglais' },
-      { teacher: 'yao.serg', className: 'Terminale C', room: 'Labo Sciences', slot: '10h30 - 12h00', day: 2, subject: 'Physique-Chimie' },
-      { teacher: 'yao.serg', className: '3eme A', room: 'Salle A2', slot: '7h30 - 9h00', day: 4, subject: 'Physique-Chimie' },
-      { teacher: 'yao.serg', className: '3eme B', room: 'Salle A1', slot: '9h00 - 10h30', day: 5, subject: 'Physique-Chimie' },
-    ] as const;
+    console.info('[seed] Inserting schedules (5 days x 4 slots x 3 classes)...');
+    for (let day = 1; day <= 5; day += 1) {
+      for (const [slotIndex, slot] of slotByIndex.entries()) {
+        for (const [classIndex, klass] of classByIndex.entries()) {
+          const teacher = teachersResult.rows[(day + slotIndex + classIndex * 2) % teachersResult.rows.length];
+          const roomName = ROOM_NAMES[(day + slotIndex + classIndex) % ROOM_NAMES.length];
+          const roomId = roomByName.get(roomName);
+          if (!teacher || !roomId) {
+            throw new Error('[seed] Missing teacher/room while building schedule grid');
+          }
 
-    console.info('[seed] Inserting schedules linked to period + rooms...');
-    for (const schedule of scheduleBlueprint) {
-      const teacherId = teacherByUsername.get(schedule.teacher);
-      const classId = classByName.get(schedule.className);
-      const roomId = roomByName.get(schedule.room);
-      const timeSlotId = slotByLabel.get(schedule.slot);
-
-      if (!teacherId || !classId || !roomId || !timeSlotId) {
-        throw new Error(`[seed] Missing FK data for schedule ${JSON.stringify(schedule)}`);
+          await tx.execute(sql`
+            INSERT INTO schedules (
+              schedule_period_id,
+              teacher_id,
+              class_id,
+              room_id,
+              time_slot_id,
+              day_of_week,
+              subject,
+              is_active
+            )
+            VALUES (
+              ${schedulePeriodId},
+              ${teacher.id},
+              ${klass.id},
+              ${roomId},
+              ${slot.id},
+              ${day},
+              ${teacher.primary_subject},
+              true
+            )
+          `);
+        }
       }
-
-      await tx.execute(sql`
-        INSERT INTO schedules (
-          schedule_period_id,
-          teacher_id,
-          class_id,
-          room_id,
-          time_slot_id,
-          day_of_week,
-          subject,
-          is_active
-        )
-        VALUES (
-          ${schedulePeriodId},
-          ${teacherId},
-          ${classId},
-          ${roomId},
-          ${timeSlotId},
-          ${schedule.day},
-          ${schedule.subject},
-          true
-        )
-      `);
     }
 
     const schedulesResult = await tx.execute<ScheduleRow>(sql`
       SELECT
         s.id,
-        t.username AS teacher_username,
+        s.teacher_id,
+        s.class_id,
+        s.room_id,
         s.day_of_week,
-        ts.label AS slot_label
+        ts.start_time::text AS slot_start
       FROM schedules s
-      INNER JOIN teachers t ON t.id = s.teacher_id
       INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+      WHERE s.schedule_period_id = ${schedulePeriodId}
       ORDER BY s.day_of_week, ts.sort_order
     `);
 
-    const scheduleByComposite = new Map(
-      schedulesResult.rows.map((row) => [`${row.teacher_username}|${row.day_of_week}|${row.slot_label}`, row.id])
+    const studentsResult = await tx.execute<StudentRow>(sql`
+      SELECT id, class_id
+      FROM students
+      ORDER BY created_at ASC
+    `);
+    const studentsByClass = new Map<string, string[]>();
+    for (const student of studentsResult.rows) {
+      const existing = studentsByClass.get(student.class_id) ?? [];
+      existing.push(student.id);
+      studentsByClass.set(student.class_id, existing);
+    }
+
+    console.info('[seed] Inserting teacher attendances (past 2 weeks: present/absent/non-pointé)...');
+    let teacherAttendanceCount = 0;
+    for (const schedule of schedulesResult.rows) {
+      for (const date of lastTwoSchoolWeeks) {
+        if (dayOfWeekFromDate(new Date(`${date}T00:00:00.000Z`)) !== schedule.day_of_week) {
+          continue;
+        }
+
+        const outcomeScore = deterministicScore(`${schedule.id}|${date}|teacher`);
+        if (outcomeScore >= 0.86) {
+          continue; // non-pointé
+        }
+
+        if (outcomeScore < 0.67) {
+          const lateMinutes = Math.floor(deterministicScore(`${schedule.id}|${date}|late`) * 8);
+          const checkedAt = addMinutesToTime(schedule.slot_start, lateMinutes);
+          const mismatch = deterministicScore(`${schedule.id}|${date}|mismatch`) < 0.11;
+          const roomPool = roomsResult.rows.filter((room) => room.id !== schedule.room_id);
+          const mismatchRoom = roomPool[Math.floor(deterministicScore(`${schedule.id}|${date}|room`) * roomPool.length)];
+          const scannedRoomId = mismatch && mismatchRoom ? mismatchRoom.id : schedule.room_id;
+
+          await tx.execute(sql`
+            INSERT INTO attendances_teacher (
+              teacher_id,
+              schedule_id,
+              date,
+              status,
+              checked_in_at,
+              late_minutes,
+              room_scanned_id,
+              room_scan_start_at,
+              room_scan_end_at,
+              room_mismatch,
+              qr_alert_sent,
+              marked_by,
+              note
+            )
+            VALUES (
+              ${schedule.teacher_id},
+              ${schedule.id},
+              ${date},
+              'present',
+              ${`${date}T${checkedAt}:00.000Z`},
+              ${lateMinutes},
+              ${scannedRoomId},
+              ${`${date}T${addMinutesToTime(checkedAt, -1)}:00.000Z`},
+              ${`${date}T${addMinutesToTime(checkedAt, 3)}:00.000Z`},
+              ${mismatch},
+              ${mismatch},
+              ${directorId},
+              ${mismatch ? 'Scan salle incorrecte' : 'Présence validée'}
+            )
+          `);
+          teacherAttendanceCount += 1;
+          continue;
+        }
+
+        await tx.execute(sql`
+          INSERT INTO attendances_teacher (
+            teacher_id,
+            schedule_id,
+            date,
+            status,
+            checked_in_at,
+            late_minutes,
+            room_scanned_id,
+            room_scan_start_at,
+            room_scan_end_at,
+            room_mismatch,
+            qr_alert_sent,
+            marked_by,
+            note
+          )
+          VALUES (
+            ${schedule.teacher_id},
+            ${schedule.id},
+            ${date},
+            'absent',
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            false,
+            false,
+            ${directorId},
+            'Absence relevée'
+          )
+        `);
+        teacherAttendanceCount += 1;
+      }
+    }
+
+    const todayDate = formatDate(new Date());
+    const todayDay = dayOfWeekFromDate(new Date(`${todayDate}T00:00:00.000Z`));
+    const todaySchedules = schedulesResult.rows.filter((row) => row.day_of_week === todayDay);
+
+    // Guarantee dashboard scenario for today:
+    // - >=3 planned courses (already true with seeded timetable)
+    // - 2 present, 1 absent, 1 unmarked
+    if (todaySchedules.length >= 4) {
+      const [presentA, presentB, absentA, unmarkedA] = todaySchedules;
+
+      const upsertTeacherAttendance = async (input: {
+        schedule: ScheduleRow;
+        status: 'present' | 'absent';
+        checkedAt?: string;
+        note: string;
+      }) => {
+        await tx.execute(sql`
+          INSERT INTO attendances_teacher (
+            teacher_id,
+            schedule_id,
+            date,
+            status,
+            checked_in_at,
+            late_minutes,
+            room_scanned_id,
+            room_scan_start_at,
+            room_scan_end_at,
+            room_mismatch,
+            qr_alert_sent,
+            marked_by,
+            note
+          )
+          VALUES (
+            ${input.schedule.teacher_id},
+            ${input.schedule.id},
+            ${todayDate},
+            ${input.status},
+            ${input.checkedAt ? `${todayDate}T${input.checkedAt}:00.000Z` : null},
+            ${input.status === 'present' ? 0 : null},
+            ${input.status === 'present' ? input.schedule.room_id : null},
+            ${input.checkedAt ? `${todayDate}T${addMinutesToTime(input.checkedAt, -1)}:00.000Z` : null},
+            ${input.checkedAt ? `${todayDate}T${addMinutesToTime(input.checkedAt, 2)}:00.000Z` : null},
+            false,
+            false,
+            ${directorId},
+            ${input.note}
+          )
+          ON CONFLICT (teacher_id, schedule_id, date)
+          DO UPDATE SET
+            status = EXCLUDED.status,
+            checked_in_at = EXCLUDED.checked_in_at,
+            late_minutes = EXCLUDED.late_minutes,
+            room_scanned_id = EXCLUDED.room_scanned_id,
+            room_scan_start_at = EXCLUDED.room_scan_start_at,
+            room_scan_end_at = EXCLUDED.room_scan_end_at,
+            room_mismatch = EXCLUDED.room_mismatch,
+            qr_alert_sent = EXCLUDED.qr_alert_sent,
+            marked_by = EXCLUDED.marked_by,
+            note = EXCLUDED.note
+        `);
+      };
+
+      await upsertTeacherAttendance({
+        schedule: presentA,
+        status: 'present',
+        checkedAt: presentA.slot_start.slice(0, 5),
+        note: 'Présence garantie seed (1/2)',
+      });
+      await upsertTeacherAttendance({
+        schedule: presentB,
+        status: 'present',
+        checkedAt: addMinutesToTime(presentB.slot_start.slice(0, 5), 3),
+        note: 'Présence garantie seed (2/2)',
+      });
+      await upsertTeacherAttendance({
+        schedule: absentA,
+        status: 'absent',
+        note: 'Absence garantie seed',
+      });
+      await tx.execute(sql`
+        DELETE FROM attendances_teacher
+        WHERE teacher_id = ${unmarkedA.teacher_id}
+          AND schedule_id = ${unmarkedA.id}
+          AND date = ${todayDate}
+      `);
+    }
+
+    console.info('[seed] Inserting student attendances (past 2 weeks)...');
+    let studentAttendanceCount = 0;
+    for (const schedule of schedulesResult.rows) {
+      const classStudentIds = studentsByClass.get(schedule.class_id) ?? [];
+      if (classStudentIds.length === 0) continue;
+
+      for (const date of lastTwoSchoolWeeks) {
+        if (dayOfWeekFromDate(new Date(`${date}T00:00:00.000Z`)) !== schedule.day_of_week) {
+          continue;
+        }
+
+        for (const studentId of classStudentIds) {
+          const score = deterministicScore(`${studentId}|${schedule.id}|${date}|student`);
+          if (score >= 0.9) {
+            continue; // non-pointé
+          }
+
+          const status = score < 0.8 ? 'present' : 'absent';
+          await tx.execute(sql`
+            INSERT INTO attendances_student (
+              student_id,
+              schedule_id,
+              date,
+              status,
+              marked_by,
+              note
+            )
+            VALUES (
+              ${studentId},
+              ${schedule.id},
+              ${date},
+              ${status}::attendance_student_status,
+              ${directorId},
+              ${status === 'present' ? 'Présence en classe' : 'Absence signalée'}
+            )
+          `);
+          studentAttendanceCount += 1;
+        }
+      }
+    }
+
+    console.info(
+      `[seed] Stats: teachers=${teachersResult.rows.length}, classes=${classesResult.rows.length}, students=${studentsResult.rows.length}, schedules=${schedulesResult.rows.length}, att_teacher=${teacherAttendanceCount}, att_student=${studentAttendanceCount}`
     );
-
-    const today = new Date();
-    const twoDaysAgo = formatDate(addDays(today, -2));
-    const yesterday = formatDate(addDays(today, -1));
-    const todayDate = formatDate(today);
-
-    console.info('[seed] Inserting teacher attendances (mismatch + late included)...');
-    await tx.execute(sql`
-      INSERT INTO attendances_teacher (
-        teacher_id,
-        schedule_id,
-        date,
-        status,
-        checked_in_at,
-        late_minutes,
-        room_scanned_id,
-        room_scan_start_at,
-        room_scan_end_at,
-        room_mismatch,
-        qr_alert_sent,
-        marked_by,
-        note
-      )
-      VALUES (
-        ${teacherByUsername.get('diallo.ibra')!},
-        ${scheduleByComposite.get('diallo.ibra|1|7h30 - 9h00')!},
-        ${twoDaysAgo},
-        'present',
-        ${`${twoDaysAgo}T07:29:00.000Z`},
-        0,
-        ${roomByName.get('Salle A1')!},
-        ${`${twoDaysAgo}T07:28:00.000Z`},
-        ${`${twoDaysAgo}T09:02:00.000Z`},
-        false,
-        false,
-        ${directorId},
-        'A l heure'
-      )
-    `);
-
-    await tx.execute(sql`
-      INSERT INTO attendances_teacher (
-        teacher_id,
-        schedule_id,
-        date,
-        status,
-        checked_in_at,
-        late_minutes,
-        room_scanned_id,
-        room_scan_start_at,
-        room_scan_end_at,
-        room_mismatch,
-        qr_alert_sent,
-        marked_by,
-        note
-      )
-      VALUES (
-        ${teacherByUsername.get('kone.fati')!},
-        ${scheduleByComposite.get('kone.fati|1|10h30 - 12h00')!},
-        ${yesterday},
-        'late',
-        ${`${yesterday}T10:42:00.000Z`},
-        12,
-        ${roomByName.get('Salle Langues')!},
-        ${`${yesterday}T10:41:00.000Z`},
-        ${`${yesterday}T12:01:00.000Z`},
-        false,
-        false,
-        ${directorId},
-        'Retard trafic'
-      )
-    `);
-
-    await tx.execute(sql`
-      INSERT INTO attendances_teacher (
-        teacher_id,
-        schedule_id,
-        date,
-        status,
-        checked_in_at,
-        late_minutes,
-        room_scanned_id,
-        room_scan_start_at,
-        room_scan_end_at,
-        room_mismatch,
-        qr_alert_sent,
-        marked_by,
-        note
-      )
-      VALUES (
-        ${teacherByUsername.get('traore.mama')!},
-        ${scheduleByComposite.get('traore.mama|2|7h30 - 9h00')!},
-        ${todayDate},
-        'present',
-        ${`${todayDate}T07:33:00.000Z`},
-        3,
-        ${roomByName.get('Salle A1')!},
-        ${`${todayDate}T07:32:00.000Z`},
-        ${`${todayDate}T09:05:00.000Z`},
-        true,
-        true,
-        ${directorId},
-        'QR scanne dans la mauvaise salle'
-      )
-    `);
-
-    await tx.execute(sql`
-      INSERT INTO attendances_teacher (
-        teacher_id,
-        schedule_id,
-        date,
-        status,
-        checked_in_at,
-        late_minutes,
-        room_scanned_id,
-        room_scan_start_at,
-        room_scan_end_at,
-        room_mismatch,
-        qr_alert_sent,
-        marked_by,
-        note
-      )
-      VALUES (
-        ${teacherByUsername.get('bamba.amin')!},
-        ${scheduleByComposite.get('bamba.amin|1|13h30 - 15h00')!},
-        ${todayDate},
-        'present',
-        ${`${todayDate}T13:31:00.000Z`},
-        1,
-        ${roomByName.get('Salle A2')!},
-        ${`${todayDate}T13:30:00.000Z`},
-        ${`${todayDate}T15:01:00.000Z`},
-        true,
-        true,
-        ${directorId},
-        'Mismatch pour test alerte dashboard'
-      )
-    `);
-
-    await tx.execute(sql`
-      INSERT INTO attendances_teacher (
-        teacher_id,
-        schedule_id,
-        date,
-        status,
-        checked_in_at,
-        late_minutes,
-        room_scanned_id,
-        room_scan_start_at,
-        room_scan_end_at,
-        room_mismatch,
-        qr_alert_sent,
-        marked_by,
-        note
-      )
-      VALUES (
-        ${teacherByUsername.get('yao.serg')!},
-        ${scheduleByComposite.get('yao.serg|2|10h30 - 12h00')!},
-        ${yesterday},
-        'absent',
-        NULL,
-        NULL,
-        NULL,
-        NULL,
-        NULL,
-        false,
-        false,
-        ${directorId},
-        'Absence non justifiee'
-      )
-    `);
   });
 
   console.info('[seed] Seed completed successfully');
   console.info(`[seed] Tenant: ${TENANT.subdomain} (${TENANT.schemaName})`);
-  console.info('[seed] Teacher login ready: diallo.ibra / edutrack2024');
+  console.info(`[seed] Director login ready: ${DIRECTOR_EMAIL} / ${DEFAULT_PASSWORD}`);
 };
 
 void main().catch((error) => {

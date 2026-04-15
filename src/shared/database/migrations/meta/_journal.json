@@ -29,6 +29,13 @@
       "when": 1776175500000,
       "tag": "0003_steady_mercury",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1776182400000,
+      "tag": "0004_calm_satana",
+      "breakpoints": true
     }
   ]
 }

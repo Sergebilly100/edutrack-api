@@ -1,4 +1,5 @@
 import {
+  boolean,
   inet,
   integer,
   pgEnum,
@@ -48,6 +49,7 @@ export const tenants = pgTable('tenants', {
   schemaName: varchar('schema_name', { length: 100 }).notNull().unique(),
   plan: tenantPlanEnum('plan').notNull().default('essential'),
   status: tenantStatusEnum('status').notNull().default('trial'),
+  onboardingCompleted: boolean('onboarding_completed').notNull().default(false),
   trialEndsAt: timestamp('trial_ends_at', { withTimezone: true, mode: 'date' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
     .notNull()

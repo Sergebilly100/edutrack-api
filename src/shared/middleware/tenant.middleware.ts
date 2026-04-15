@@ -19,6 +19,14 @@ export const attachTenantDb = async (
   request.db = null;
   request.tenantDbRelease = null;
 
+  const schemaFromJwt = request.claims?.schemaName?.trim();
+  if (schemaFromJwt && SCHEMA_NAME_REGEX.test(schemaFromJwt)) {
+    const tenant = await acquireTenantDb(schemaFromJwt);
+    request.db = tenant.db;
+    request.tenantDbRelease = tenant.release;
+    return;
+  }
+
   const headerValue = request.headers['x-tenant-schema'];
   if (typeof headerValue !== 'string') {
     void badRequest(reply);

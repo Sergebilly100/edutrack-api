@@ -92,6 +92,20 @@ export const findUserByUsername = async (
   return row ? mapAuthUser(row) : null;
 };
 
+export const findUserByEmail = async (
+  db: QueryExecutor,
+  email: string
+): Promise<AuthUser | null> => {
+  const result = await db.execute(sql`
+    ${baseSelect}
+    WHERE u.email = ${email}
+    LIMIT 1
+  `);
+
+  const [row] = getRows(result);
+  return row ? mapAuthUser(row) : null;
+};
+
 export const findUserProfileById = async (
   db: QueryExecutor,
   userId: string

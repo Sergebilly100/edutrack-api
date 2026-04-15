@@ -2,7 +2,10 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
-import { requireDirectorOrSecretary } from '../../shared/middleware/auth.middleware.js';
+import {
+  requireDirectorOrSecretary,
+  requireTeacherOrDirectorOrSecretary,
+} from '../../shared/middleware/auth.middleware.js';
 
 import { buildRoomsService, RoomsModuleError } from './rooms.service.js';
 import {
@@ -55,7 +58,7 @@ const handleError = (
 };
 
 export default async function roomsController(app: FastifyInstance): Promise<void> {
-  app.get('/api/v1/rooms', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.get('/api/v1/rooms', { preHandler: requireTeacherOrDirectorOrSecretary }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {

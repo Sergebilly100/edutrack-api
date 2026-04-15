@@ -14,7 +14,7 @@ import {
 } from './auth.service.js';
 
 const loginSchema = z.object({
-  identifier: z.string().min(4).max(20),
+  identifier: z.string().trim().min(4).max(255),
   password: z.string().min(1),
 });
 

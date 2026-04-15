@@ -19,6 +19,19 @@ const toNumber = (value: string | number): number => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const toIsoDateTime = (value: Date | string): string => {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return new Date().toISOString();
+  }
+
+  return parsed.toISOString();
+};
+
 const mapRoomEntity = (row: RoomEntityRow): RoomEntity => ({
   id: row.id,
   name: row.name,
@@ -26,7 +39,7 @@ const mapRoomEntity = (row: RoomEntityRow): RoomEntity => ({
   building: row.building,
   capacity: row.capacity,
   isActive: row.is_active,
-  createdAt: row.created_at.toISOString(),
+  createdAt: toIsoDateTime(row.created_at),
 });
 
 export class RoomsRepository {
@@ -182,7 +195,7 @@ export const mapRoomStats = (row: RoomStatsRow) => ({
   building: row.building,
   capacity: row.capacity,
   isActive: row.is_active,
-  createdAt: row.created_at.toISOString(),
+  createdAt: toIsoDateTime(row.created_at),
   stats: {
     weeklySchedulesCount: toNumber(row.weekly_schedules_count),
     scansCount: toNumber(row.scans_count),

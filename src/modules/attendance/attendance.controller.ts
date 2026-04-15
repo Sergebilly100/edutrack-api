@@ -1,8 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { ZodError } from 'zod';
+import { ZodError, z } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
-import { requireTeacher } from '../../shared/middleware/auth.middleware.js';
+import { requireDirector, requireTeacher } from '../../shared/middleware/auth.middleware.js';
 
 import { AttendanceModuleError, buildAttendanceService } from './attendance.service.js';
 import { checkInBodySchema, qrScanBodySchema } from './attendance.types.js';
@@ -106,6 +106,37 @@ export default async function attendanceController(app: FastifyInstance): Promis
       });
 
       return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.get('/api/v1/attendance/today', { preHandler: requireDirector }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildAttendanceService(tenantDb);
+        return service.getTodayForDirector();
+      });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  const attendanceHistoryQuerySchema = z.object({
+    days: z.coerce.number().int().min(1).max(30).default(7),
+  });
+
+  app.get('/api/v1/attendance/history', { preHandler: requireDirector }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const query = attendanceHistoryQuerySchema.parse(request.query ?? {});
+      const rows = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildAttendanceService(tenantDb);
+        return service.getHistoryForDirector(query.days);
+      });
+      return reply.send(rows);
     } catch (error) {
       return handleError(request, reply, error);
     }

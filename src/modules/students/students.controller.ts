@@ -42,10 +42,18 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
 };
 
 export default async function studentsController(app: FastifyInstance): Promise<void> {
-  app.get('/api/v1/students', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.get('/api/v1/students', { preHandler: requireTeacherOrDirectorOrSecretary }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const query = studentsListQuerySchema.parse(request.query ?? {});
+
+      if (claims.role === 'teacher' && !query.class_id) {
+        return reply.code(400).send({
+          error: 'class_id is required for teacher',
+          code: 'BAD_REQUEST',
+          statusCode: 400,
+        });
+      }
 
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
         const service = buildStudentsService(tenantDb);
