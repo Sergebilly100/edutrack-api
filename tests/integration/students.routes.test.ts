@@ -219,7 +219,7 @@ describe('students routes', () => {
   it('GET /api/v1/students refuse un rôle non autorisé', async () => {
     mocks.verifyAccessToken.mockResolvedValue({
       sub: 'user-2',
-      role: 'teacher',
+      role: 'super_admin',
       schemaName: 'school_sainte_marie',
     });
 
