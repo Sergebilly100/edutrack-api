@@ -43,6 +43,13 @@
       "when": 1776266652744,
       "tag": "0005_short_meltdown",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1776272400000,
+      "tag": "0006_admin_v3_public_tenants",
+      "breakpoints": true
     }
   ]
 }

@@ -2,17 +2,27 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 
 import {
+  createSchoolBodySchema,
   createTenantBodySchema,
+  listSchoolsQuerySchema,
   listTenantsQuerySchema,
+  schoolTenantIdParamsSchema,
   tenantParamsSchema,
+  updateSchoolConfigBodySchema,
   updateTenantBodySchema,
   updateTenantParamsSchema,
 } from './admin.types.js';
 import {
   createImpersonationToken,
+  createSchool,
   createTenant,
+  getAdminMetrics,
+  getRevenueMetrics,
+  getSchoolDetails,
   getTenantStats,
+  listSchools,
   listTenants,
+  updateSchoolConfig,
   updateTenant,
 } from './admin.service.js';
 import { adminAuditOnSend } from '../../shared/middleware/admin-audit.middleware.js';
@@ -101,6 +111,69 @@ export default async function adminController(app: FastifyInstance): Promise<voi
     try {
       const query = listTenantsQuerySchema.parse(request.query);
       const result = await listTenants(ensurePublicDb(request), query);
+      return reply.send(result);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.post('/api/v1/admin/schools', { preHandler: preHandlers }, async (request, reply) => {
+    try {
+      const payload = createSchoolBodySchema.parse(request.body);
+      const result = await createSchool(ensurePublicDb(request), payload);
+      return reply.code(201).send(result);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/admin/schools', { preHandler: preHandlers }, async (request, reply) => {
+    try {
+      const query = listSchoolsQuerySchema.parse(request.query);
+      const result = await listSchools(ensurePublicDb(request), query);
+      return reply.send(result);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/admin/schools/:tenantId', { preHandler: preHandlers }, async (request, reply) => {
+    try {
+      const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+      const result = await getSchoolDetails(ensurePublicDb(request), tenantId);
+      return reply.send(result);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.patch(
+    '/api/v1/admin/schools/:tenantId/config',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+        const payload = updateSchoolConfigBodySchema.parse(request.body);
+        await updateSchoolConfig(ensurePublicDb(request), tenantId, payload);
+        return reply.send({ success: true });
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.get('/api/v1/admin/metrics', { preHandler: preHandlers }, async (request, reply) => {
+    try {
+      const result = await getAdminMetrics(ensurePublicDb(request));
+      return reply.send(result);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/admin/metrics/revenue', { preHandler: preHandlers }, async (request, reply) => {
+    try {
+      const result = await getRevenueMetrics(ensurePublicDb(request));
       return reply.send(result);
     } catch (error) {
       return handleError(reply, error);

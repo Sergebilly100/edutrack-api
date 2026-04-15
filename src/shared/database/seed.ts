@@ -459,8 +459,7 @@ const main = async (): Promise<void> => {
       LIMIT 1
     `);
 
-    const currentMonth = formatDate(new Date()).slice(0, 7);
-    const monthDate = `${currentMonth}-01`;
+    const monthDate = '2025-01-01';
 
     await tx.execute(sql`
       INSERT INTO salary_records (

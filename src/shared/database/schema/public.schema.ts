@@ -22,6 +22,13 @@ export const tenantStatusEnum = pgEnum('tenant_status', [
   'cancelled',
 ]);
 
+export const teachingTypeEnum = pgEnum('teaching_type', [
+  'primaire',
+  'secondaire',
+  'superieur',
+  'mixte',
+]);
+
 export const subscriptionStatusEnum = pgEnum('subscription_status', [
   'active',
   'past_due',
@@ -49,6 +56,9 @@ export const tenants = pgTable('tenants', {
   schemaName: varchar('schema_name', { length: 100 }).notNull().unique(),
   plan: tenantPlanEnum('plan').notNull().default('essential'),
   status: tenantStatusEnum('status').notNull().default('trial'),
+  city: varchar('city', { length: 120 }),
+  teachingType: teachingTypeEnum('teaching_type'),
+  maxAdminPositions: integer('max_admin_positions').notNull().default(5),
   onboardingCompleted: boolean('onboarding_completed').notNull().default(false),
   trialEndsAt: timestamp('trial_ends_at', { withTimezone: true, mode: 'date' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })

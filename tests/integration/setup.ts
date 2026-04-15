@@ -358,17 +358,17 @@ const initApp = async (): Promise<FastifyInstance> => {
   const [
     { default: authController },
     { default: attendanceController },
+    { default: billingController },
     { default: scheduleController },
     { default: importExportController },
     { default: permissionsController },
-    { requirePermission },
   ] = await Promise.all([
     import('../../src/modules/auth/auth.controller.js'),
     import('../../src/modules/attendance/attendance.controller.js'),
+    import('../../src/modules/billing/billing.controller.js'),
     import('../../src/modules/schedule/schedule.controller.js'),
     import('../../src/modules/import-export/import.controller.js'),
     import('../../src/modules/permissions/permissions.controller.js'),
-    import('../../src/shared/middleware/auth.middleware.js'),
   ]);
 
   const testApp = Fastify({ logger: false });
@@ -380,14 +380,10 @@ const initApp = async (): Promise<FastifyInstance> => {
 
   testApp.register(authController);
   testApp.register(attendanceController);
+  testApp.register(billingController);
   testApp.register(scheduleController);
   testApp.register(importExportController);
   testApp.register(permissionsController);
-  testApp.post(
-    '/api/v1/billing/salary/compute',
-    { preHandler: requirePermission('salary.compute') },
-    async () => ({ ok: true })
-  );
 
   await testApp.ready();
   return testApp;
