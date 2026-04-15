@@ -189,19 +189,6 @@ const dayOfWeekFromDate = (date: Date): number => {
   return day === 0 ? 7 : day;
 };
 
-const getCurrentWeekBounds = (): { monday: string; friday: string } => {
-  const now = new Date();
-  const day = dayOfWeekFromDate(now);
-  const daysSinceMonday = (day + 6) % 7;
-  const mondayDate = addDays(now, -daysSinceMonday);
-  const fridayDate = addDays(mondayDate, 4);
-
-  return {
-    monday: formatDate(mondayDate),
-    friday: formatDate(fridayDate),
-  };
-};
-
 const getLastTwoSchoolWeeksDates = (): string[] => {
   const today = new Date();
   const dates: string[] = [];
@@ -241,7 +228,6 @@ const buildStudents = (classId: string, classIndex: number) => {
 };
 
 const main = async (): Promise<void> => {
-  const week = getCurrentWeekBounds();
   const periodValidFrom = formatDate(addDays(new Date(), -21));
   const periodValidTo = formatDate(addDays(new Date(), 21));
   const lastTwoSchoolWeeks = getLastTwoSchoolWeeksDates();
