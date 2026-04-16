@@ -311,7 +311,7 @@ export class BillingRepository {
         status = ${input.status}::salary_status,
         notes = CASE WHEN ${input.notes !== undefined} THEN ${input.notes ?? null} ELSE notes END,
         paid_at = CASE WHEN ${input.status === 'paid'} THEN NOW() ELSE NULL END,
-        paid_by = CASE WHEN ${input.status === 'paid'} THEN ${input.paidBy ?? null} ELSE NULL END
+        paid_by = CASE WHEN ${input.status === 'paid'} THEN ${input.paidBy ?? null}::uuid ELSE NULL END
       WHERE id = ${input.recordId}
       RETURNING
         id,
