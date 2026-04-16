@@ -16,6 +16,7 @@ const TENANT = {
 } as const;
 
 const DIRECTOR_EMAIL = 'directeur@sainte-marie.ci';
+const SUPER_ADMIN_EMAIL = 'admin@edutrack.ci';
 const DEFAULT_PASSWORD = 'Test1234!';
 
 const TIME_SLOTS = [
@@ -233,6 +234,7 @@ const main = async (): Promise<void> => {
   const lastTwoSchoolWeeks = getLastTwoSchoolWeeksDates();
   const teacherPasswordHash = await argon2.hash(DEFAULT_PASSWORD);
   const directorPasswordHash = await argon2.hash(DEFAULT_PASSWORD);
+  const superAdminPasswordHash = await argon2.hash(DEFAULT_PASSWORD);
 
   console.info('[seed] Creating tenant schema and applying tenant migrations...');
   await createTenantSchema(TENANT.schemaName);
@@ -325,6 +327,23 @@ const main = async (): Promise<void> => {
     const secretaryId = secretaryUser.rows[0]?.id;
     if (!secretaryId) {
       throw new Error('[seed] Failed to create secretary user');
+    }
+
+    const superAdminUser = await tx.execute<IdRow>(sql`
+      INSERT INTO users (role, name, phone, email, password_hash, is_active)
+      VALUES (
+        'super_admin',
+        'Super Admin EduTrack',
+        '+225070777777',
+        ${SUPER_ADMIN_EMAIL},
+        ${superAdminPasswordHash},
+        true
+      )
+      RETURNING id
+    `);
+    const superAdminId = superAdminUser.rows[0]?.id;
+    if (!superAdminId) {
+      throw new Error('[seed] Failed to create super admin user');
     }
 
     console.info('[seed] Inserting teachers (vacataires) with stable check-in tokens...');
@@ -797,6 +816,9 @@ const main = async (): Promise<void> => {
   console.info('[seed] Seed completed successfully');
   console.info(`[seed] Tenant: ${TENANT.subdomain} (${TENANT.schemaName})`);
   console.info(`[seed] Director login ready: ${DIRECTOR_EMAIL} / ${DEFAULT_PASSWORD}`);
+  console.info(
+    `[seed] Super admin login ready: ${SUPER_ADMIN_EMAIL} / ${DEFAULT_PASSWORD} (schema: ${TENANT.schemaName})`
+  );
 };
 
 void main().catch((error) => {

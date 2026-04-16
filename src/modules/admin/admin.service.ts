@@ -191,8 +191,17 @@ const parseNumeric = (value: unknown): number => {
   return 0;
 };
 
-const formatDateTime = (value: Date | null): string | null => {
-  return value ? value.toISOString() : null;
+const formatDateTime = (value: Date | string | null): string | null => {
+  if (!value) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 };
 
 const mapWithConcurrency = async <TInput, TOutput>(
@@ -953,8 +962,8 @@ export const getSchoolDetails = async (
       city: tenant.city,
       teachingType: tenant.teaching_type,
       maxAdminPositions: tenant.max_admin_positions,
-      createdAt: tenant.created_at.toISOString(),
-      updatedAt: tenant.updated_at.toISOString(),
+      createdAt: formatDateTime(tenant.created_at) ?? new Date(0).toISOString(),
+      updatedAt: formatDateTime(tenant.updated_at) ?? new Date(0).toISOString(),
     },
     usageStats: {
       nbUsers: usage.nbUsers,
