@@ -68,4 +68,29 @@ describe('billing integration (real db)', () => {
     expect(response.status).toBe(200);
     expect(response.body).toHaveProperty('jobId');
   });
+
+  it('POST /api/v1/billing/salary/export/bulk + GET /api/v1/jobs/:jobId/status retourne pending', async () => {
+    const headers = await getAuthHeaders('director');
+    const response = await request()
+      .post('/api/v1/billing/salary/export/bulk')
+      .set(headers)
+      .send({
+        periodFrom: currentMonth,
+        periodTo: currentMonth,
+        teacherId: null,
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveProperty('jobId');
+
+    const status = await request()
+      .get(`/api/v1/jobs/${response.body.jobId as string}/status`)
+      .set(headers);
+
+    expect(status.status).toBe(200);
+    expect(status.body).toMatchObject({
+      jobId: response.body.jobId,
+      status: expect.stringMatching(/pending|processing|done/),
+    });
+  });
 });
