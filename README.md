@@ -1,4 +1,4 @@
-# EduTrack API
+# EduTrack API (APP version V.0 stable - test E2E & GitHub Actions ok sans tests manuelle)
 
 [![CI](https://github.com/Sergebilly100/edutrack-api/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Sergebilly100/edutrack-api/actions/workflows/ci.yml)
 
