@@ -2,10 +2,12 @@ import argon2 from 'argon2';
 import { importPKCS8, importSPKI, jwtVerify, SignJWT, type JWTPayload } from 'jose';
 
 import {
+  invalidateRefreshTokenIfSupported,
   findUserByEmail,
   findUserByPhone,
   findUserByUsername,
   findUserProfileById,
+  updateUserPasswordHash,
   updateLastLoginAt,
   type AuthUser,
   type QueryExecutor,
@@ -45,6 +47,13 @@ export type LoginResult = {
 };
 
 export type TenantDb = QueryExecutor;
+
+type ChangePasswordInput = {
+  userId: string;
+  role: AuthUser['role'];
+  currentPassword: string;
+  newPassword: string;
+};
 
 const normalizePem = (value: string): string => value.replace(/\\n/g, '\n');
 
@@ -192,4 +201,60 @@ export const getMe = async (db: TenantDb, userId: string) => {
 export const getMeFromToken = async (db: TenantDb, token: string) => {
   const claims = await verifyAccessToken(token);
   return getMe(db, claims.sub);
+};
+
+export const refreshAccessToken = async (db: TenantDb, refreshToken: string) => {
+  const payload = await verifyRefreshToken(refreshToken);
+
+  const profile = await findUserProfileById(db, payload.sub);
+  if (!profile || !profile.isActive) {
+    throw new Error('Invalid credentials');
+  }
+
+  const claims = buildClaims(profile, payload.schemaName);
+  const accessToken = await signAccessToken(claims);
+
+  return {
+    accessToken,
+    tokenType: 'Bearer' as const,
+    expiresIn: process.env.JWT_EXPIRY ?? '15m',
+  };
+};
+
+export const logout = async (db: TenantDb, refreshToken?: string): Promise<void> => {
+  if (!refreshToken) {
+    return;
+  }
+
+  try {
+    const payload = await verifyRefreshToken(refreshToken);
+    await invalidateRefreshTokenIfSupported(db, {
+      refreshToken,
+      userId: payload.sub,
+    });
+  } catch {
+    // No-op by design: logout must stay idempotent and never fail on invalid refresh tokens.
+  }
+};
+
+export const changePassword = async (
+  db: TenantDb,
+  input: ChangePasswordInput
+): Promise<void> => {
+  if (input.role !== 'director' && input.role !== 'super_admin') {
+    throw new Error('Modification de mot de passe non autorisée pour ce rôle');
+  }
+
+  const profile = await findUserProfileById(db, input.userId);
+  if (!profile || !profile.isActive) {
+    throw new Error('Invalid credentials');
+  }
+
+  const isCurrentPasswordValid = await argon2.verify(profile.passwordHash, input.currentPassword);
+  if (!isCurrentPasswordValid) {
+    throw new Error('Current password is incorrect');
+  }
+
+  const passwordHash = await argon2.hash(input.newPassword);
+  await updateUserPasswordHash(db, profile.userId, passwordHash);
 };

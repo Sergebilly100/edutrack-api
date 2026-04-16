@@ -8,17 +8,13 @@ const mocks = vi.hoisted(() => ({
   verifyAccessToken: vi.fn(),
   getMe: vi.fn(),
   verifyRefreshToken: vi.fn(),
-  findUserProfileById: vi.fn(),
-  buildClaims: vi.fn(),
-  signAccessToken: vi.fn(),
+  refreshAccessToken: vi.fn(),
+  logout: vi.fn(),
+  changePassword: vi.fn(),
 }));
 
 vi.mock('../../src/shared/database/db.js', () => ({
   withTenantSchema: mocks.withTenantSchema,
-}));
-
-vi.mock('../../src/modules/auth/auth.repository.js', () => ({
-  findUserProfileById: mocks.findUserProfileById,
 }));
 
 vi.mock('../../src/modules/auth/auth.service.js', () => ({
@@ -27,8 +23,9 @@ vi.mock('../../src/modules/auth/auth.service.js', () => ({
   verifyAccessToken: mocks.verifyAccessToken,
   getMe: mocks.getMe,
   verifyRefreshToken: mocks.verifyRefreshToken,
-  buildClaims: mocks.buildClaims,
-  signAccessToken: mocks.signAccessToken,
+  refreshAccessToken: mocks.refreshAccessToken,
+  logout: mocks.logout,
+  changePassword: mocks.changePassword,
 }));
 
 import authController from '../../src/modules/auth/auth.controller.js';
@@ -85,27 +82,13 @@ beforeEach(() => {
     schemaName: 'tenant_demo',
     type: 'refresh',
   });
-
-  mocks.findUserProfileById.mockResolvedValue({
-    userId: 'user-1',
-    role: 'teacher',
-    name: 'Prof Test',
-    phone: null,
-    email: 'prof@test.ci',
-    passwordHash: 'hash',
-    isActive: true,
-    teacherId: 'teacher-1',
-    username: 'diallo.ibra',
+  mocks.refreshAccessToken.mockResolvedValue({
+    accessToken: 'new-access-token',
+    tokenType: 'Bearer',
+    expiresIn: '15m',
   });
-
-  mocks.buildClaims.mockReturnValue({
-    sub: 'user-1',
-    role: 'teacher',
-    schemaName: 'tenant_demo',
-    username: 'diallo.ibra',
-  });
-
-  mocks.signAccessToken.mockResolvedValue('new-access-token');
+  mocks.logout.mockResolvedValue(undefined);
+  mocks.changePassword.mockResolvedValue(undefined);
 });
 
 describe('auth routes', () => {
@@ -235,6 +218,21 @@ describe('auth routes', () => {
     await app.close();
   });
 
+  it('POST /api/v1/auth/refresh — body refreshToken valide → 200 + accessToken', async () => {
+    const app = await buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/refresh',
+      payload: { refreshToken: 'valid-refresh-token' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = parseBody(response.body) as { accessToken: string };
+    expect(body.accessToken).toBe('new-access-token');
+    await app.close();
+  });
+
   it('POST /api/v1/auth/refresh — sans cookie → 401', async () => {
     const app = await buildApp();
 
@@ -244,6 +242,72 @@ describe('auth routes', () => {
     });
 
     expect(response.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it('POST /api/v1/auth/logout — retourne success true', async () => {
+    const app = await buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/logout',
+      payload: { refreshToken: 'valid-refresh-token' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(parseBody(response.body)).toEqual({ success: true });
+    await app.close();
+  });
+
+  it('POST /api/v1/auth/change-password — directeur autorisé → 200', async () => {
+    mocks.verifyAccessToken.mockResolvedValue({
+      sub: 'director-1',
+      role: 'director',
+      schemaName: 'tenant_demo',
+    });
+    const app = await buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/change-password',
+      headers: { authorization: 'Bearer valid-token' },
+      payload: {
+        currentPassword: 'director2024',
+        newPassword: 'SecurePass1',
+        confirmPassword: 'SecurePass1',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(parseBody(response.body)).toEqual({ success: true });
+    await app.close();
+  });
+
+  it('POST /api/v1/auth/change-password — secrétaire interdit → 403', async () => {
+    mocks.verifyAccessToken.mockResolvedValue({
+      sub: 'secretary-1',
+      role: 'secretary',
+      schemaName: 'tenant_demo',
+    });
+    mocks.changePassword.mockRejectedValue(
+      new Error('Modification de mot de passe non autorisée pour ce rôle')
+    );
+    const app = await buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/change-password',
+      headers: { authorization: 'Bearer valid-token' },
+      payload: {
+        currentPassword: 'secretary2024',
+        newPassword: 'SecurePass1',
+        confirmPassword: 'SecurePass1',
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    const body = parseBody(response.body) as { code: string };
+    expect(body.code).toBe('FORBIDDEN');
     await app.close();
   });
 });

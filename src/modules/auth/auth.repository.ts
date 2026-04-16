@@ -49,6 +49,32 @@ const getRows = (result: unknown): AuthUserRow[] => {
   return Array.isArray(rows) ? rows : [];
 };
 
+type ColumnRow = {
+  column_name: string;
+};
+
+type RegclassRow = {
+  table_name: string | null;
+};
+
+const getColumnRows = (result: unknown): ColumnRow[] => {
+  if (typeof result !== 'object' || result === null || !('rows' in result)) {
+    return [];
+  }
+
+  const rows = (result as { rows: ColumnRow[] }).rows;
+  return Array.isArray(rows) ? rows : [];
+};
+
+const getRegclassRows = (result: unknown): RegclassRow[] => {
+  if (typeof result !== 'object' || result === null || !('rows' in result)) {
+    return [];
+  }
+
+  const rows = (result as { rows: RegclassRow[] }).rows;
+  return Array.isArray(rows) ? rows : [];
+};
+
 const baseSelect = sql`
   SELECT
     u.id AS user_id,
@@ -129,4 +155,86 @@ export const updateLastLoginAt = async (
     SET last_login_at = NOW()
     WHERE id = ${userId}
   `);
+};
+
+export const updateUserPasswordHash = async (
+  db: QueryExecutor,
+  userId: string,
+  passwordHash: string
+): Promise<void> => {
+  await db.execute(sql`
+    UPDATE users
+    SET password_hash = ${passwordHash}
+    WHERE id = ${userId}
+  `);
+};
+
+type InvalidateRefreshTokenInput = {
+  refreshToken?: string;
+  userId?: string;
+};
+
+export const invalidateRefreshTokenIfSupported = async (
+  db: QueryExecutor,
+  input: InvalidateRefreshTokenInput
+): Promise<void> => {
+  const tableExistsResult = await db.execute(sql`
+    SELECT to_regclass('refresh_tokens')::text AS table_name
+  `);
+
+  const tableRows = getRegclassRows(tableExistsResult);
+  const refreshTokensTableExists = tableRows.length > 0 && tableRows[0]?.table_name !== null;
+  if (!refreshTokensTableExists) {
+    return;
+  }
+
+  const columnsResult = await db.execute(sql`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'refresh_tokens'
+  `);
+  const columns = new Set(getColumnRows(columnsResult).map((row) => row.column_name));
+  if (!columns.has('is_active')) {
+    return;
+  }
+
+  const hasUpdatedAt = columns.has('updated_at');
+  const hasRevokedAt = columns.has('revoked_at');
+
+  const setClauses = ['is_active = false'];
+  if (hasUpdatedAt) {
+    setClauses.push('updated_at = NOW()');
+  }
+  if (hasRevokedAt) {
+    setClauses.push('revoked_at = NOW()');
+  }
+
+  const setSql = sql.raw(setClauses.join(', '));
+
+  if (columns.has('token') && input.refreshToken) {
+    await db.execute(sql`
+      UPDATE refresh_tokens
+      SET ${setSql}
+      WHERE token = ${input.refreshToken}
+    `);
+    return;
+  }
+
+  if (columns.has('refresh_token') && input.refreshToken) {
+    await db.execute(sql`
+      UPDATE refresh_tokens
+      SET ${setSql}
+      WHERE refresh_token = ${input.refreshToken}
+    `);
+    return;
+  }
+
+  if (columns.has('user_id') && input.userId) {
+    await db.execute(sql`
+      UPDATE refresh_tokens
+      SET ${setSql}
+      WHERE user_id = ${input.userId}
+    `);
+  }
 };
