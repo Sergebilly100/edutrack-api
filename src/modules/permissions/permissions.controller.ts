@@ -147,6 +147,7 @@ export default async function permissionsController(app: FastifyInstance): Promi
             positionId: params.id,
             userId: body.userId,
             assignedBy: claims.sub,
+            schemaName: claims.schemaName,
           });
         });
 

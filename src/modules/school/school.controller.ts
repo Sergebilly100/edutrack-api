@@ -8,6 +8,11 @@ import { authenticateRequest, requireDirectorOrSecretary } from '../../shared/mi
 type TenantInfoRow = {
   id: string;
   name: string;
+  subdomain: string;
+  plan: 'essential' | 'pro' | 'establishment';
+  city: string | null;
+  teaching_type: 'primaire' | 'secondaire' | 'superieur' | 'mixte' | null;
+  max_users: number;
   onboarding_completed: boolean;
 };
 
@@ -65,7 +70,7 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
 
 const fetchSchoolInfoBySchema = async (schemaName: string) => {
   const tenantResult = await db.execute<TenantInfoRow>(sql`
-    SELECT id, name, onboarding_completed
+    SELECT id, name, subdomain, plan, city, teaching_type, max_users, onboarding_completed
     FROM public.tenants
     WHERE schema_name = ${schemaName}
     LIMIT 1
@@ -76,22 +81,39 @@ const fetchSchoolInfoBySchema = async (schemaName: string) => {
     throw new Error('Tenant not found');
   }
 
-  const directorPhone = await withTenantSchema(schemaName, async (tenantDb) => {
-    const directorResult = await tenantDb.execute<DirectorPhoneRow>(sql`
-      SELECT phone
-      FROM users
-      WHERE role = 'director'
-      ORDER BY created_at ASC
-      LIMIT 1
-    `);
-    return getRows<DirectorPhoneRow>(directorResult)[0]?.phone ?? null;
+  const tenantMetrics = await withTenantSchema(schemaName, async (tenantDb) => {
+    const [directorResult, usersCountResult] = await Promise.all([
+      tenantDb.execute<DirectorPhoneRow>(sql`
+        SELECT phone
+        FROM users
+        WHERE role = 'director'
+        ORDER BY created_at ASC
+        LIMIT 1
+      `),
+      tenantDb.execute<{ count: number }>(sql`
+        SELECT COUNT(*)::int AS count
+        FROM users
+        WHERE is_active = true
+      `),
+    ]);
+
+    return {
+      directorPhone: getRows<DirectorPhoneRow>(directorResult)[0]?.phone ?? null,
+      currentUsers: getRows<{ count: number }>(usersCountResult)[0]?.count ?? 0,
+    };
   });
 
   return {
     id: tenant.id,
     name: tenant.name,
+    subdomain: tenant.subdomain,
+    plan: tenant.plan,
+    city: tenant.city,
+    teaching_type: tenant.teaching_type,
+    max_users: tenant.max_users,
+    current_users: tenantMetrics.currentUsers,
     address: '',
-    phone: directorPhone,
+    phone: tenantMetrics.directorPhone,
     onboarding_completed: tenant.onboarding_completed,
   };
 };

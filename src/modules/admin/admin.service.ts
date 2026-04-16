@@ -131,6 +131,11 @@ type ImpersonationResult = {
 const DEFAULT_TRIAL_DAYS = 14;
 const SCHEMA_NAME_REGEX = /^[a-z][a-z0-9_]{2,63}$/;
 const TENANT_METRICS_CONCURRENCY = 10;
+const MAX_USERS_BY_PLAN: Record<TenantListItem['plan'], number> = {
+  essential: 5,
+  pro: 20,
+  establishment: 50,
+};
 
 const normalizePem = (value: string): string => value.replace(/\\n/g, '\n');
 
@@ -385,6 +390,7 @@ export const createTenant = async (
       schema_name,
       plan,
       status,
+      max_users,
       trial_ends_at
     )
     VALUES (
@@ -393,6 +399,7 @@ export const createTenant = async (
       ${schemaName},
       ${payload.plan},
       'trial',
+      ${MAX_USERS_BY_PLAN[payload.plan]},
       ${trialEndsAt}
     )
     RETURNING id, schema_name
@@ -779,6 +786,7 @@ export const createSchool = async (
       city,
       teaching_type,
       max_admin_positions,
+      max_users,
       trial_ends_at
     )
     VALUES (
@@ -790,6 +798,7 @@ export const createSchool = async (
       ${payload.city},
       ${payload.teaching_type},
       ${payload.max_admin_positions},
+      ${MAX_USERS_BY_PLAN[payload.plan]},
       ${trialEndsAt}
     )
     RETURNING id, schema_name

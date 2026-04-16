@@ -362,6 +362,7 @@ const initApp = async (): Promise<FastifyInstance> => {
     { default: scheduleController },
     { default: importExportController },
     { default: permissionsController },
+    { default: teachersController },
   ] = await Promise.all([
     import('../../src/modules/auth/auth.controller.js'),
     import('../../src/modules/attendance/attendance.controller.js'),
@@ -369,6 +370,7 @@ const initApp = async (): Promise<FastifyInstance> => {
     import('../../src/modules/schedule/schedule.controller.js'),
     import('../../src/modules/import-export/import.controller.js'),
     import('../../src/modules/permissions/permissions.controller.js'),
+    import('../../src/modules/teachers/teachers.controller.js'),
   ]);
 
   const testApp = Fastify({ logger: false });
@@ -384,6 +386,7 @@ const initApp = async (): Promise<FastifyInstance> => {
   testApp.register(scheduleController);
   testApp.register(importExportController);
   testApp.register(permissionsController);
+  testApp.register(teachersController);
 
   await testApp.ready();
   return testApp;

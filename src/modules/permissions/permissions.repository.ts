@@ -62,6 +62,17 @@ const mapPosition = (row: PositionListRow) => ({
 export class PermissionsRepository {
   constructor(private readonly db: QueryExecutor) {}
 
+  async countActiveUsers(): Promise<number> {
+    const result = await this.db.execute<AssignmentCountRow>(sql`
+      SELECT COUNT(*)::int AS count
+      FROM users
+      WHERE is_active = true
+    `);
+
+    const [row] = getRows(result);
+    return row ? toNumber(row.count) : 0;
+  }
+
   async listPositions(): Promise<Array<ReturnType<typeof mapPosition>>> {
     const result = await this.db.execute<PositionListRow>(sql`
       SELECT

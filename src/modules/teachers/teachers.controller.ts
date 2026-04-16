@@ -93,7 +93,7 @@ export default async function teachersController(app: FastifyInstance): Promise<
 
       const created = await withTenantSchema(claims.schemaName, async (tenantDb) => {
         const service = buildTeachersService(tenantDb);
-        return service.createTeacher(input);
+        return service.createTeacher(input, { schemaName: claims.schemaName });
       });
 
       return reply.code(201).send(created);

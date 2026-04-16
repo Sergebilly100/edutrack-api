@@ -15,6 +15,12 @@ const TENANT = {
   status: 'active',
 } as const;
 
+const MAX_USERS_BY_PLAN = {
+  essential: 5,
+  pro: 20,
+  establishment: 50,
+} as const;
+
 const DIRECTOR_EMAIL = 'directeur@sainte-marie.ci';
 const SUPER_ADMIN_EMAIL = 'admin@edutrack.ci';
 const DEFAULT_PASSWORD = 'Test1234!';
@@ -241,14 +247,23 @@ const main = async (): Promise<void> => {
 
   console.info('[seed] Upserting tenant in public schema...');
   const tenantResult = await db.execute<{ id: string }>(sql`
-    INSERT INTO public.tenants (name, subdomain, schema_name, plan, status, onboarding_completed)
-    VALUES (${TENANT.name}, ${TENANT.subdomain}, ${TENANT.schemaName}, ${TENANT.plan}, ${TENANT.status}, true)
+    INSERT INTO public.tenants (name, subdomain, schema_name, plan, status, max_users, onboarding_completed)
+    VALUES (
+      ${TENANT.name},
+      ${TENANT.subdomain},
+      ${TENANT.schemaName},
+      ${TENANT.plan},
+      ${TENANT.status},
+      ${MAX_USERS_BY_PLAN[TENANT.plan]},
+      true
+    )
     ON CONFLICT (subdomain)
     DO UPDATE SET
       name = EXCLUDED.name,
       schema_name = EXCLUDED.schema_name,
       plan = EXCLUDED.plan,
       status = EXCLUDED.status,
+      max_users = EXCLUDED.max_users,
       onboarding_completed = true,
       updated_at = NOW()
     RETURNING id

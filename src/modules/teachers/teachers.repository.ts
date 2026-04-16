@@ -27,6 +27,7 @@ type TeacherRow = {
 type TotalRow = { total: string | number };
 
 type IdRow = { id: string };
+type CountRow = { count: string | number };
 
 const getRows = <T>(result: unknown): T[] => {
   if (typeof result !== 'object' || result === null || !('rows' in result)) {
@@ -83,6 +84,17 @@ const makeWhereClause = (conditions: SQL[]): SQL => {
 
 export class TeachersRepository {
   constructor(private readonly db: QueryExecutor) {}
+
+  async countActiveUsers(): Promise<number> {
+    const result = await this.db.execute(sql`
+      SELECT COUNT(*) AS count
+      FROM users
+      WHERE is_active = true
+    `);
+
+    const [row] = getRows<CountRow>(result);
+    return toTotal({ total: row?.count ?? 0 });
+  }
 
   async listTeachers(query: TeachersListQuery): Promise<{ rows: TeacherRow[]; total: number }> {
     const offset = (query.page - 1) * query.limit;

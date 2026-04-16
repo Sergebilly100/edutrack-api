@@ -50,6 +50,13 @@
       "when": 1776272400000,
       "tag": "0006_admin_v3_public_tenants",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1776355200000,
+      "tag": "0007_g5_users_limit",
+      "breakpoints": true
     }
   ]
 }

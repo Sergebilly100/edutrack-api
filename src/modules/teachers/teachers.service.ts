@@ -1,5 +1,9 @@
 import type { CreateTeacherInput, TeachersListQuery, UpdateTeacherInput } from './teachers.types.js';
 import { TeachersRepository } from './teachers.repository.js';
+import {
+  buildUsersLimitReachedMessage,
+  getMaxUsersBySchemaName,
+} from '../../shared/utils/users-limit.js';
 
 export class TeachersModuleError extends Error {
   constructor(
@@ -74,7 +78,20 @@ export class TeachersService {
     };
   }
 
-  async createTeacher(input: CreateTeacherInput) {
+  async createTeacher(input: CreateTeacherInput, context: { schemaName: string }) {
+    const [currentCount, maxUsers] = await Promise.all([
+      this.repository.countActiveUsers(),
+      getMaxUsersBySchemaName(context.schemaName),
+    ]);
+
+    if (currentCount >= maxUsers) {
+      throw new TeachersModuleError(
+        buildUsersLimitReachedMessage(currentCount, maxUsers),
+        403,
+        'USERS_LIMIT_REACHED'
+      );
+    }
+
     const created = await this.repository.createTeacher(input);
     return {
       id: created.id,

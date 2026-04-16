@@ -59,6 +59,7 @@ export const tenants = pgTable('tenants', {
   city: varchar('city', { length: 120 }),
   teachingType: teachingTypeEnum('teaching_type'),
   maxAdminPositions: integer('max_admin_positions').notNull().default(5),
+  maxUsers: integer('max_users').notNull().default(10),
   onboardingCompleted: boolean('onboarding_completed').notNull().default(false),
   trialEndsAt: timestamp('trial_ends_at', { withTimezone: true, mode: 'date' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
