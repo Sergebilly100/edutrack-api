@@ -58,7 +58,7 @@ const runTenantMigrations = async (
           await client.query(statement);
         } catch (error) {
           const pgError = error as { code?: string };
-          const duplicateCodes = new Set(['42P06', '42P07', '42710']);
+          const duplicateCodes = new Set(['42P06', '42P07', '42710', '42701']);
 
           if (pgError.code && duplicateCodes.has(pgError.code)) {
             continue;
