@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   service: {
     listStudents: vi.fn(),
     createStudent: vi.fn(),
+    getStudentDetail: vi.fn(),
     updateStudent: vi.fn(),
     softDeleteStudent: vi.fn(),
     bulkMarkAbsences: vi.fn(),
@@ -99,6 +100,28 @@ beforeEach(() => {
   });
 
   mocks.service.listTodayAbsences.mockResolvedValue([]);
+  mocks.service.getStudentDetail.mockResolvedValue({
+    id: 'student-1',
+    firstName: 'Awa',
+    lastName: 'Kouassi',
+    className: '3eme A',
+    classId: 'class-1',
+    isActive: true,
+    parentPhone: '2250700000011',
+    parentPhone2: null,
+    parentName: 'Maman Awa',
+    parentName2: null,
+    note: null,
+    createdAt: '2026-04-13T10:00:00.000Z',
+    absenceSummary: {
+      total: 2,
+      thisMonth: 1,
+      thisWeek: 1,
+    },
+    recentAbsences: [],
+    documents: [],
+    parentSms: [],
+  });
 });
 
 describe('students routes', () => {
@@ -167,6 +190,23 @@ describe('students routes', () => {
 
     expect(response.statusCode).toBe(200);
     expect(mocks.service.bulkMarkAbsences).toHaveBeenCalledTimes(1);
+
+    await app.close();
+  });
+
+  it('GET /api/v1/students/:id retourne le détail élève', async () => {
+    const app = await buildApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/students/66f048d8-d053-48e2-b4a8-7fce3ebc3ed8',
+      headers: { authorization: 'Bearer valid-token' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.service.getStudentDetail).toHaveBeenCalledWith(
+      '66f048d8-d053-48e2-b4a8-7fce3ebc3ed8'
+    );
 
     await app.close();
   });

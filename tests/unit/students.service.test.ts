@@ -5,6 +5,7 @@ import { StudentsService } from '../../src/modules/students/students.service.js'
 const repository = {
   listStudents: vi.fn(),
   createStudent: vi.fn(),
+  findStudentDetailById: vi.fn(),
   updateStudent: vi.fn(),
   softDeleteStudent: vi.fn(),
   findScheduleById: vi.fn(),
@@ -137,6 +138,33 @@ describe('students.service', () => {
       code: 'STUDENT_NOT_FOUND',
       statusCode: 404,
     });
+  });
+
+  it('getStudentDetail() retourne les données complètes', async () => {
+    repository.findStudentDetailById.mockResolvedValue({
+      id: 'student-1',
+      firstName: 'Awa',
+      lastName: 'Kouassi',
+      className: '6e A',
+      classId: 'class-1',
+      isActive: true,
+      parentPhone: '2250700000001',
+      parentPhone2: null,
+      parentName: 'Maman Awa',
+      parentName2: null,
+      note: 'RAS',
+      createdAt: '2026-04-13T10:00:00.000Z',
+      absenceSummary: { total: 3, thisMonth: 1, thisWeek: 0 },
+      recentAbsences: [],
+      documents: [],
+      parentSms: [],
+    });
+
+    const service = new StudentsService(repository as never, { eventEmitter });
+    const result = await service.getStudentDetail('student-1');
+
+    expect(result.id).toBe('student-1');
+    expect(repository.findStudentDetailById).toHaveBeenCalledWith('student-1');
   });
 
   it('bulkMarkAbsences() lève INVALID_ABSENCE_STUDENT_IDS si un ID est hors classe', async () => {

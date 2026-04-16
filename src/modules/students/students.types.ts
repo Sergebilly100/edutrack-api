@@ -30,6 +30,13 @@ const parentPhoneSchema = z
   .regex(PHONE_CI_REGEX, 'parent_phone must match 225 followed by 10 digits')
   .nullable();
 
+const parentNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .nullable();
+
 const parentPhone2Schema = z
   .string()
   .regex(PHONE_CI_REGEX, 'parent_phone_2 must match 225 followed by 10 digits')
@@ -39,8 +46,11 @@ export const createStudentBodySchema = z.object({
   class_id: z.uuid(),
   first_name: z.string().trim().min(1).max(100),
   last_name: z.string().trim().min(1).max(100),
+  parent_name: parentNameSchema.optional().default(null),
   parent_phone: parentPhoneSchema.default(null),
+  parent_name_2: parentNameSchema.optional().default(null),
   parent_phone_2: parentPhone2Schema.optional().default(null),
+  notes: z.string().trim().max(5000).nullable().optional().default(null),
   is_active: z.boolean().optional().default(true),
 });
 
@@ -53,8 +63,11 @@ export const updateStudentBodySchema = z
     class_id: z.uuid().optional(),
     first_name: z.string().trim().min(1).max(100).optional(),
     last_name: z.string().trim().min(1).max(100).optional(),
+    parent_name: parentNameSchema.optional(),
     parent_phone: parentPhoneSchema.optional(),
+    parent_name_2: parentNameSchema.optional(),
     parent_phone_2: parentPhone2Schema.optional(),
+    notes: z.string().trim().max(5000).nullable().optional(),
     is_active: z.boolean().optional(),
   })
   .refine((payload) => Object.keys(payload).length > 0, {
@@ -103,10 +116,58 @@ export type StudentRecord = {
   className: string;
   firstName: string;
   lastName: string;
+  parentName?: string | null;
   parentPhone: string | null;
+  parentName2?: string | null;
   parentPhone2: string | null;
+  note?: string | null;
   isActive: boolean;
   createdAt: string;
+};
+
+export type StudentRecentAbsence = {
+  date: string;
+  subject: string;
+  teacherName: string;
+  smsStatus: 'sent' | 'failed' | 'not_sent' | null;
+};
+
+export type StudentDocumentRecord = {
+  id: string;
+  fileName: string;
+  fileUrl: string;
+  uploadedAt: string;
+};
+
+export type StudentParentSmsRecord = {
+  id: string;
+  date: string;
+  reason: string;
+  recipientPhone: string;
+  status: 'queued' | 'sent' | 'failed' | 'delivered';
+};
+
+export type StudentDetailRecord = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  className: string;
+  classId: string;
+  isActive: boolean;
+  parentPhone: string | null;
+  parentPhone2: string | null;
+  parentName: string | null;
+  parentName2: string | null;
+  note: string | null;
+  createdAt: string;
+  absenceSummary: {
+    total: number;
+    thisMonth: number;
+    thisWeek: number;
+  };
+  recentAbsences: StudentRecentAbsence[];
+  documents: StudentDocumentRecord[];
+  parentSms: StudentParentSmsRecord[];
 };
 
 export type AttendanceStudentRecord = {

@@ -82,6 +82,22 @@ export default async function studentsController(app: FastifyInstance): Promise<
     }
   });
 
+  app.get('/api/v1/students/:id', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const params = updateStudentParamsSchema.parse(request.params ?? {});
+
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildStudentsService(tenantDb);
+        return service.getStudentDetail(params.id);
+      });
+
+      return reply.send({ data: result });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
   app.put('/api/v1/students/:id', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
     try {
       const claims = request.claims!;

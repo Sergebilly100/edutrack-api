@@ -9,6 +9,7 @@ import type {
   BulkAttendanceInput,
   CreateStudentInput,
   PaginationMeta,
+  StudentDetailRecord,
   StudentRecord,
   StudentsListQuery,
   TodayAbsenceGroup,
@@ -116,6 +117,15 @@ export class StudentsService {
 
   async softDeleteStudent(studentId: string): Promise<StudentRecord> {
     const student = await this.repository.softDeleteStudent(studentId);
+    if (!student) {
+      throw new StudentsModuleError('Student not found', 404, 'STUDENT_NOT_FOUND');
+    }
+
+    return student;
+  }
+
+  async getStudentDetail(studentId: string): Promise<StudentDetailRecord> {
+    const student = await this.repository.findStudentDetailById(studentId);
     if (!student) {
       throw new StudentsModuleError('Student not found', 404, 'STUDENT_NOT_FOUND');
     }
