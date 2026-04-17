@@ -446,7 +446,7 @@ export default async function billingController(app: FastifyInstance): Promise<v
     }
   });
 
-  app.get('/api/v1/jobs/:jobId/download', { preHandler: requirePermission('salary.export') }, async (request, reply) => {
+  app.get('/api/v1/jobs/:jobId/download', async (request, reply) => {
     try {
       const params = jobParamsSchema.parse(request.params ?? {});
       const query = jobDownloadQuerySchema.parse(request.query ?? {});

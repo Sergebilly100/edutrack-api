@@ -58,22 +58,34 @@ const loadMaintenanceState = async (): Promise<{ mode: boolean; message: string 
     return { mode: maintenanceCache.mode, message: maintenanceCache.message };
   }
 
-  const result = await db.execute<{
-    maintenance_mode: boolean;
-    maintenance_message: string;
-  }>(sql.raw(`
-    SELECT maintenance_mode, maintenance_message
-    FROM public.app_settings
-    ORDER BY updated_at DESC
-    LIMIT 1
-  `));
+  try {
+    const result = await db.execute<{
+      maintenance_mode: boolean;
+      maintenance_message: string;
+    }>(sql.raw(`
+      SELECT maintenance_mode, maintenance_message
+      FROM public.app_settings
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `));
 
-  const row = result.rows?.[0];
-  maintenanceCache = {
-    fetchedAt: now,
-    mode: row?.maintenance_mode ?? false,
-    message: row?.maintenance_message ?? 'Mise à jour en cours',
-  };
+    const row = result.rows?.[0];
+    maintenanceCache = {
+      fetchedAt: now,
+      mode: row?.maintenance_mode ?? false,
+      message: row?.maintenance_message ?? 'Mise à jour en cours',
+    };
+  } catch (error) {
+    app.log.warn(
+      { err: error instanceof Error ? error.message : 'unknown' },
+      '[maintenance] fallback disabled (app_settings unavailable)'
+    );
+    maintenanceCache = {
+      fetchedAt: now,
+      mode: false,
+      message: 'Mise à jour en cours',
+    };
+  }
 
   return { mode: maintenanceCache.mode, message: maintenanceCache.message };
 };
@@ -93,7 +105,11 @@ app.register(multipart, {
 
 app.addHook('onRequest', async (request, reply) => {
   const path = request.url.split('?')[0] ?? '';
-  if (path.startsWith('/api/v1/admin') || path === '/health') {
+  if (
+    path.startsWith('/api/v1/admin') ||
+    path.startsWith('/api/v1/auth') ||
+    path === '/health'
+  ) {
     return;
   }
 

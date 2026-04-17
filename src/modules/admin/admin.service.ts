@@ -763,40 +763,52 @@ const getSchoolUsageMetrics = async (
   schemaName: string
 ): Promise<SchoolUsageMetrics> => {
   const schema = quoteIdentifier(schemaName);
-  const result = await publicDb.execute<{
-    nb_users: number;
-    last_connection: Date | null;
-    active_users_7d: number;
-    teachers_count: number;
-    students_count: number;
-    attendance_records_30d: number;
-  }>(sql.raw(`
-    SELECT
-      (SELECT COUNT(*)::int FROM ${schema}.users) AS nb_users,
-      (SELECT MAX(last_login_at) FROM ${schema}.users) AS last_connection,
-      (SELECT COUNT(*)::int FROM ${schema}.users WHERE last_login_at >= NOW() - INTERVAL '7 days') AS active_users_7d,
-      (SELECT COUNT(*)::int FROM ${schema}.teachers) AS teachers_count,
-      (SELECT COUNT(*)::int FROM ${schema}.students) AS students_count,
-      (SELECT COUNT(*)::int FROM ${schema}.attendances_teacher WHERE date >= CURRENT_DATE - INTERVAL '29 days') AS attendance_records_30d
-  `));
+  try {
+    const result = await publicDb.execute<{
+      nb_users: number;
+      last_connection: Date | null;
+      active_users_7d: number;
+      teachers_count: number;
+      students_count: number;
+      attendance_records_30d: number;
+    }>(sql.raw(`
+      SELECT
+        (SELECT COUNT(*)::int FROM ${schema}.users) AS nb_users,
+        (SELECT MAX(last_login_at) FROM ${schema}.users) AS last_connection,
+        (SELECT COUNT(*)::int FROM ${schema}.users WHERE last_login_at >= NOW() - INTERVAL '7 days') AS active_users_7d,
+        (SELECT COUNT(*)::int FROM ${schema}.teachers) AS teachers_count,
+        (SELECT COUNT(*)::int FROM ${schema}.students) AS students_count,
+        (SELECT COUNT(*)::int FROM ${schema}.attendances_teacher WHERE date >= CURRENT_DATE - INTERVAL '29 days') AS attendance_records_30d
+    `));
 
-  const [row] = getRows<{
-    nb_users: number;
-    last_connection: Date | null;
-    active_users_7d: number;
-    teachers_count: number;
-    students_count: number;
-    attendance_records_30d: number;
-  }>(result);
+    const [row] = getRows<{
+      nb_users: number;
+      last_connection: Date | null;
+      active_users_7d: number;
+      teachers_count: number;
+      students_count: number;
+      attendance_records_30d: number;
+    }>(result);
 
-  return {
-    nbUsers: parseNumeric(row?.nb_users),
-    lastConnection: formatDateTime(row?.last_connection ?? null),
-    activeUsers7d: parseNumeric(row?.active_users_7d),
-    teachersCount: parseNumeric(row?.teachers_count),
-    studentsCount: parseNumeric(row?.students_count),
-    attendanceRecords30d: parseNumeric(row?.attendance_records_30d),
-  };
+    return {
+      nbUsers: parseNumeric(row?.nb_users),
+      lastConnection: formatDateTime(row?.last_connection ?? null),
+      activeUsers7d: parseNumeric(row?.active_users_7d),
+      teachersCount: parseNumeric(row?.teachers_count),
+      studentsCount: parseNumeric(row?.students_count),
+      attendanceRecords30d: parseNumeric(row?.attendance_records_30d),
+    };
+  } catch {
+    // Keep admin school listing resilient when a tenant schema is partially provisioned or corrupted.
+    return {
+      nbUsers: 0,
+      lastConnection: null,
+      activeUsers7d: 0,
+      teachersCount: 0,
+      studentsCount: 0,
+      attendanceRecords30d: 0,
+    };
+  }
 };
 
 const getSchoolConnectionHistory30d = async (
