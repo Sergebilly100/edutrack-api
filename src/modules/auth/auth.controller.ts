@@ -118,7 +118,8 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
     message === 'Missing refresh token' ||
     message === 'Invalid refresh token' ||
     message === 'Invalid access token' ||
-    message === 'Current password is incorrect';
+    message === 'Current password is incorrect' ||
+    (error instanceof Error && error.name === 'JWTExpired');
   const isForbidden = message === 'Modification de mot de passe non autorisée pour ce rôle';
 
   const statusCode = isUnauthorized ? 401 : isForbidden ? 403 : 400;

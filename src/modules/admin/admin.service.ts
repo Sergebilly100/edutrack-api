@@ -1,7 +1,6 @@
 import { randomBytes } from 'node:crypto';
 
 import argon2 from 'argon2';
-import { SignJWT, importPKCS8 } from 'jose';
 import { sql } from 'drizzle-orm';
 
 import {
@@ -28,6 +27,7 @@ import {
 } from './admin.types.js';
 import { withTenantSchema, type TenantDb } from '../../shared/database/db.js';
 import { createTenantSchema } from '../../shared/database/tenant-init.js';
+import { signJwtRs256 } from '../../shared/auth/jwt.js';
 
 type TenantRow = {
   id: string;
@@ -237,7 +237,7 @@ const getPrivateKey = async () => {
     throw new Error('[admin] JWT_PRIVATE_KEY environment variable is required');
   }
 
-  return importPKCS8(normalizePem(privateKey), 'RS256');
+  return normalizePem(privateKey);
 };
 
 const generateTemporaryPassword = (): string => {
@@ -1697,19 +1697,18 @@ export const createImpersonationToken = async (
   const tenant = await getTenantById(publicDb, tenantId);
   const privateKey = await getPrivateKey();
 
-  const token = await new SignJWT({
-    sub: adminId,
-    role: 'super_admin',
-    schemaName: tenant.schema_name,
-    tenantId: tenant.id,
-    readOnly: true,
-    impersonation: true,
-  })
-    .setProtectedHeader({ alg: 'RS256' })
-    .setSubject(adminId)
-    .setIssuedAt()
-    .setExpirationTime('1h')
-    .sign(privateKey);
+  const token = signJwtRs256({
+    payload: {
+      sub: adminId,
+      role: 'super_admin',
+      schemaName: tenant.schema_name,
+      tenantId: tenant.id,
+      readOnly: true,
+      impersonation: true,
+    },
+    privateKeyPem: privateKey,
+    expiresIn: '1h',
+  });
 
   return {
     token,

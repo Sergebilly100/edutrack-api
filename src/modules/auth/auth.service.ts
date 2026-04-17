@@ -1,5 +1,4 @@
 import argon2 from 'argon2';
-import { importPKCS8, importSPKI, jwtVerify, SignJWT, type JWTPayload } from 'jose';
 
 import {
   invalidateRefreshTokenIfSupported,
@@ -12,6 +11,11 @@ import {
   type AuthUser,
   type QueryExecutor,
 } from './auth.repository.js';
+import {
+  signJwtRs256,
+  verifyJwtRs256,
+  type JwtPayload,
+} from '../../shared/auth/jwt.js';
 
 type LoginInput = {
   identifier: string;
@@ -19,14 +23,14 @@ type LoginInput = {
   schemaName: string;
 };
 
-export type AccessTokenClaims = JWTPayload & {
+export type AccessTokenClaims = JwtPayload & {
   sub: string;
   role: AuthUser['role'];
   schemaName: string;
   username?: string;
 };
 
-type RefreshTokenClaims = JWTPayload & {
+type RefreshTokenClaims = JwtPayload & {
   sub: string;
   schemaName: string;
   type: 'refresh';
@@ -72,7 +76,7 @@ const getPrivateKey = async () => {
     throw new Error('[auth] JWT_PRIVATE_KEY environment variable is required');
   }
 
-  return importPKCS8(normalizePem(privateKey), 'RS256');
+  return normalizePem(privateKey);
 };
 
 export const getPublicKey = async () => {
@@ -81,7 +85,7 @@ export const getPublicKey = async () => {
     throw new Error('[auth] JWT_PUBLIC_KEY environment variable is required');
   }
 
-  return importSPKI(normalizePem(publicKey), 'RS256');
+  return normalizePem(publicKey);
 };
 
 export const buildClaims = (user: AuthUser, schemaName: string): AccessTokenClaims => ({
@@ -95,12 +99,11 @@ export const signAccessToken = async (claims: AccessTokenClaims): Promise<string
   const privateKey = await getPrivateKey();
   const expiry = process.env.JWT_EXPIRY ?? '15m';
 
-  return new SignJWT(claims)
-    .setProtectedHeader({ alg: 'RS256' })
-    .setSubject(claims.sub)
-    .setIssuedAt()
-    .setExpirationTime(expiry)
-    .sign(privateKey);
+  return signJwtRs256({
+    payload: claims,
+    privateKeyPem: privateKey,
+    expiresIn: expiry,
+  });
 };
 
 export const signRefreshToken = async (
@@ -110,20 +113,19 @@ export const signRefreshToken = async (
   const privateKey = await getPrivateKey();
   const expiry = process.env.JWT_REFRESH_EXPIRY ?? '30d';
 
-  return new SignJWT({ sub: userId, schemaName, type: 'refresh' })
-    .setProtectedHeader({ alg: 'RS256' })
-    .setIssuedAt()
-    .setExpirationTime(expiry)
-    .sign(privateKey);
+  return signJwtRs256({
+    payload: { sub: userId, schemaName, type: 'refresh' },
+    privateKeyPem: privateKey,
+    expiresIn: expiry,
+  });
 };
 
 export const verifyAccessToken = async (token: string): Promise<AccessTokenClaims> => {
   const publicKey = await getPublicKey();
-  const verified = await jwtVerify(token, publicKey, {
-    algorithms: ['RS256'],
-  });
-
-  const payload = verified.payload as AccessTokenClaims;
+  const payload = verifyJwtRs256({
+    token,
+    publicKeyPem: publicKey,
+  }) as AccessTokenClaims;
   if (!payload.sub || !payload.role || !payload.schemaName) {
     throw new Error('Invalid access token');
   }
@@ -133,11 +135,10 @@ export const verifyAccessToken = async (token: string): Promise<AccessTokenClaim
 
 export const verifyRefreshToken = async (token: string): Promise<RefreshTokenClaims> => {
   const publicKey = await getPublicKey();
-  const verified = await jwtVerify(token, publicKey, {
-    algorithms: ['RS256'],
-  });
-
-  const payload = verified.payload as RefreshTokenClaims;
+  const payload = verifyJwtRs256({
+    token,
+    publicKeyPem: publicKey,
+  }) as RefreshTokenClaims;
   if (
     payload.type !== 'refresh' ||
     !payload.sub ||
