@@ -45,19 +45,11 @@ jobs:
 
       - name: Prepare JWT keys for CI
         run: |
-          if [ -n "${JWT_PRIVATE_KEY}" ] && [ -n "${JWT_PUBLIC_KEY}" ]; then
-            echo "Using JWT_*_TEST secrets."
-            {
-              echo "JWT_PRIVATE_KEY<<EOF"
-              echo "${JWT_PRIVATE_KEY}"
-              echo "EOF"
-              echo "JWT_PUBLIC_KEY<<EOF"
-              echo "${JWT_PUBLIC_KEY}"
-              echo "EOF"
-            } >> "$GITHUB_ENV"
-          else
-            echo "Generating ephemeral RSA key pair via Node.js for jose v6 compatibility."
+          if [ -z "${JWT_PRIVATE_KEY}" ] || [ -z "${JWT_PUBLIC_KEY}" ]; then
+            echo "Secrets absents, génération d'une paire éphémère..."
             node ./generate-jwt-keys.mjs
+          else
+            echo "Secrets JWT présents (longueur clé privée: ${#JWT_PRIVATE_KEY} chars)"
           fi
 
       - name: Start PostgreSQL and Redis

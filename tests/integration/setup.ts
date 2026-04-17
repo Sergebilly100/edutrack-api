@@ -70,8 +70,12 @@ export const queryTenant = async <TRow extends QueryResultRow = QueryResultRow>(
   return result.rows;
 };
 
-const normalizePem = (value: string): string => value.replace(/\\n/g, '\n');
-
+const normalizePem = (value: string): string =>
+  value
+    .replace(/\\n/g, '\n')   // \n littéraux → vrais sauts de ligne
+    .replace(/\r\n/g, '\n')  // CRLF → LF
+    .trim();                  // espaces/sauts de ligne en début/fin
+    
 const getPrivateKey = async (): Promise<Awaited<ReturnType<typeof importPKCS8>>> => {
   if (privateKeyPromise) {
     return privateKeyPromise;
