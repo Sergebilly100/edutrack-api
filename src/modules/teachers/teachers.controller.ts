@@ -64,6 +64,7 @@ const toCreateInput = (payload: unknown): CreateTeacherInput => {
 };
 
 export default async function teachersController(app: FastifyInstance): Promise<void> {
+  // ─── GET /api/v1/teachers ─────────────────────────────────────────────────
   app.get('/api/v1/teachers', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
     try {
       const claims = request.claims!;
@@ -86,6 +87,27 @@ export default async function teachersController(app: FastifyInstance): Promise<
     }
   });
 
+  // ─── GET /api/v1/teachers/:id ─────────────────────────────────────────────
+  // Route dédiée — retourne le prof même s'il est bloqué ou inactif.
+  // Évite le pagination-scan côté frontend et le TEACHER_NOT_FOUND spurieux
+  // qui déclenchait le toast d'erreur après un blocage réussi.
+  app.get('/api/v1/teachers/:id', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const params = teacherParamsSchema.parse(request.params ?? {});
+
+      const teacher = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildTeachersService(tenantDb);
+        return service.getTeacherById(params.id);
+      });
+
+      return reply.send(teacher);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  // ─── POST /api/v1/teachers ────────────────────────────────────────────────
   app.post('/api/v1/teachers', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
     try {
       const claims = request.claims!;
@@ -102,12 +124,13 @@ export default async function teachersController(app: FastifyInstance): Promise<
     }
   });
 
+  // ─── PUT /api/v1/teachers/:id ─────────────────────────────────────────────
   app.put('/api/v1/teachers/:id', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const params = teacherParamsSchema.parse(request.params ?? {});
       const payload = updateTeacherBodySchema.parse(request.body ?? {});
-
+   
       const updated = await withTenantSchema(claims.schemaName, async (tenantDb) => {
         const service = buildTeachersService(tenantDb);
         return service.updateTeacher(params.id, payload);
@@ -119,6 +142,7 @@ export default async function teachersController(app: FastifyInstance): Promise<
     }
   });
 
+  // ─── DELETE /api/v1/teachers/:id ──────────────────────────────────────────
   app.delete('/api/v1/teachers/:id', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
     try {
       const claims = request.claims!;
@@ -135,6 +159,7 @@ export default async function teachersController(app: FastifyInstance): Promise<
     }
   });
 
+  // ─── GET /api/v1/teachers/:id/stats ──────────────────────────────────────
   app.get(
     '/api/v1/teachers/:id/stats',
     { preHandler: requireDirectorOrSecretary },
@@ -155,4 +180,4 @@ export default async function teachersController(app: FastifyInstance): Promise<
       }
     }
   );
-}
+}   

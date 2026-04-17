@@ -45,7 +45,11 @@ export const updateTeacherBodySchema = z
     type: teacherTypeSchema.optional(),
     subjects: z.array(z.string().trim().min(1).max(100)).optional(),
     hourly_rate: z.number().int().min(0).nullable().optional(),
+    // Champ is_active : désactive l'accès au compte (users.is_active) — distinct du blocage
     is_active: z.boolean().optional(),
+    // Champ de blocage métier — opère sur teachers.is_blocked + teachers.blocked_reason
+    is_blocked: z.boolean().optional(),
+    blocked_reason: z.string().trim().max(500).nullable().optional(),
   })
   .refine((payload) => Object.keys(payload).length > 0, {
     message: 'At least one field is required',

@@ -1,5 +1,5 @@
 import argon2 from 'argon2';
-import { sql, type SQL } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 
 import { generateUsername } from '../../shared/utils/username.js';
 
@@ -9,6 +9,9 @@ export type QueryExecutor = {
   execute: (query: ReturnType<typeof sql>) => Promise<unknown>;
 };
 
+// Forme brute renvoyée par PostgreSQL (snake_case).
+// is_blocked, blocked_reason et blocked_at sont sur la table teachers.
+// is_active est sur la table users (accès au compte).
 type TeacherRow = {
   id: string;
   name: string;
@@ -19,13 +22,15 @@ type TeacherRow = {
   subjects: string[];
   hourly_rate: number | null;
   is_active: boolean;
+  is_blocked: boolean;
+  blocked_reason: string | null;
+  blocked_at: Date | null;
   username: string;
   user_id: string;
   created_at: Date;
 };
 
 type TotalRow = { total: string | number };
-
 type IdRow = { id: string };
 type CountRow = { count: string | number };
 
@@ -33,7 +38,6 @@ const getRows = <T>(result: unknown): T[] => {
   if (typeof result !== 'object' || result === null || !('rows' in result)) {
     return [];
   }
-
   const rows = (result as { rows?: T[] }).rows;
   return Array.isArray(rows) ? rows : [];
 };
@@ -44,8 +48,8 @@ const toTotal = (row: TotalRow | undefined): number => {
   return Number.isFinite(value) ? value : 0;
 };
 
-const buildWhere = (query: TeachersListQuery): SQL[] => {
-  const where: SQL[] = [];
+const buildWhere = (query: TeachersListQuery): ReturnType<typeof sql>[] => {
+  const where: ReturnType<typeof sql>[] = [];
 
   if (query.type) {
     where.push(sql`t.type = ${query.type}`);
@@ -77,10 +81,33 @@ const buildWhere = (query: TeachersListQuery): SQL[] => {
   return where;
 };
 
-const makeWhereClause = (conditions: SQL[]): SQL => {
+const makeWhereClause = (conditions: ReturnType<typeof sql>[]): ReturnType<typeof sql> => {
   if (conditions.length === 0) return sql``;
   return sql`WHERE ${sql.join(conditions, sql` AND `)}`;
 };
+
+// Fragment SELECT partagé — liste tous les champs utiles de teachers + users.
+// Centralise la sélection pour éviter toute désynchronisation entre les méthodes.
+const TEACHER_SELECT = sql`
+  SELECT
+    t.id,
+    u.name,
+    split_part(u.name, ' ', 1)                                               AS first_name,
+    trim(substring(u.name FROM length(split_part(u.name, ' ', 1)) + 1))     AS last_name,
+    u.phone,
+    t.type::text                                                              AS type,
+    t.subjects,
+    t.hourly_rate,
+    u.is_active,
+    t.is_blocked,
+    t.blocked_reason,
+    t.blocked_at,
+    t.username,
+    t.user_id,
+    t.created_at
+  FROM teachers t
+  INNER JOIN users u ON u.id = t.user_id
+`;
 
 export class TeachersRepository {
   constructor(private readonly db: QueryExecutor) {}
@@ -91,7 +118,6 @@ export class TeachersRepository {
       FROM users
       WHERE is_active = true
     `);
-
     const [row] = getRows<CountRow>(result);
     return toTotal({ total: row?.count ?? 0 });
   }
@@ -102,21 +128,7 @@ export class TeachersRepository {
 
     const [items, total] = await Promise.all([
       this.db.execute(sql`
-        SELECT
-          t.id,
-          u.name,
-          split_part(u.name, ' ', 1) AS first_name,
-          trim(substring(u.name FROM length(split_part(u.name, ' ', 1)) + 1)) AS last_name,
-          u.phone,
-          t.type::text AS type,
-          t.subjects,
-          t.hourly_rate,
-          u.is_active,
-          t.username,
-          t.user_id,
-          t.created_at
-        FROM teachers t
-        INNER JOIN users u ON u.id = t.user_id
+        ${TEACHER_SELECT}
         ${where}
         ORDER BY t.created_at DESC
         LIMIT ${query.limit}
@@ -136,27 +148,15 @@ export class TeachersRepository {
     };
   }
 
+  // Route dédiée — ne dépend pas du filtre is_active, retourne toujours le prof
+  // qu'il soit actif ou bloqué. Indispensable pour rafraîchir la page de détail
+  // après un blocage sans déclencher TEACHER_NOT_FOUND.
   async getTeacherById(teacherId: string): Promise<TeacherRow | null> {
     const result = await this.db.execute(sql`
-      SELECT
-        t.id,
-        u.name,
-        split_part(u.name, ' ', 1) AS first_name,
-        trim(substring(u.name FROM length(split_part(u.name, ' ', 1)) + 1)) AS last_name,
-        u.phone,
-        t.type::text AS type,
-        t.subjects,
-        t.hourly_rate,
-        u.is_active,
-        t.username,
-        t.user_id,
-        t.created_at
-      FROM teachers t
-      INNER JOIN users u ON u.id = t.user_id
+      ${TEACHER_SELECT}
       WHERE t.id = ${teacherId}
       LIMIT 1
     `);
-
     return getRows<TeacherRow>(result)[0] ?? null;
   }
 
@@ -174,43 +174,24 @@ export class TeachersRepository {
 
     const userResult = await this.db.execute(sql`
       INSERT INTO users (role, name, phone, email, password_hash, is_active)
-      VALUES (
-        'teacher',
-        ${input.name},
-        ${input.phone},
-        null,
-        ${passwordHash},
-        true
-      )
+      VALUES ('teacher', ${input.name}, ${input.phone}, null, ${passwordHash}, true)
       RETURNING id
     `);
 
     const user = getRows<IdRow>(userResult)[0];
-    if (!user) {
-      throw new Error('Failed to create teacher user');
-    }
+    if (!user) throw new Error('Failed to create teacher user');
 
     const teacherResult = await this.db.execute(sql`
-      INSERT INTO teachers (user_id, username, type, subjects, hourly_rate)
-      VALUES (
-        ${user.id},
-        ${username},
-        ${input.type},
-        ${input.subjects},
-        ${input.hourly_rate}
-      )
+      INSERT INTO teachers (user_id, username, type, subjects, hourly_rate, is_blocked)
+      VALUES (${user.id}, ${username}, ${input.type}, ${input.subjects}, ${input.hourly_rate}, false)
       RETURNING id
     `);
 
     const teacher = getRows<IdRow>(teacherResult)[0];
-    if (!teacher) {
-      throw new Error('Failed to create teacher');
-    }
+    if (!teacher) throw new Error('Failed to create teacher');
 
     const created = await this.getTeacherById(teacher.id);
-    if (!created) {
-      throw new Error('Failed to load created teacher');
-    }
+    if (!created) throw new Error('Failed to load created teacher');
 
     return created;
   }
@@ -219,6 +200,7 @@ export class TeachersRepository {
     const current = await this.getTeacherById(teacherId);
     if (!current) return null;
 
+    // ── Mise à jour users (infos personnelles + is_active) ────────────────────
     const nextFirstName = input.first_name ?? current.first_name;
     const nextLastName = input.last_name ?? current.last_name ?? '';
     const nextFullName = `${nextFirstName} ${nextLastName}`.trim();
@@ -226,26 +208,60 @@ export class TeachersRepository {
     await this.db.execute(sql`
       UPDATE users
       SET
-        name = ${nextFullName},
-        phone = ${input.phone === undefined ? current.phone : input.phone},
+        name      = ${nextFullName},
+        phone     = ${input.phone === undefined ? current.phone : input.phone},
         is_active = ${input.is_active ?? current.is_active}
       WHERE id = ${current.user_id}
     `);
 
+    // ── Mise à jour teachers (données pédagogiques + blocage métier) ──────────
+    //
+    // Logique blocage :
+    //   is_blocked = true  → stocker blocked_reason + horodatage NOW()
+    //   is_blocked = false → effacer blocked_reason et blocked_at
+    //   is_blocked absent  → conserver l'état courant
+    const nextIsBlocked = input.is_blocked ?? current.is_blocked;
+
+    let blockedReasonSql: ReturnType<typeof sql>;
+    let blockedAtSql: ReturnType<typeof sql>;
+
+    if (input.is_blocked === true) {
+      // Blocage : persiste le motif (peut être null si absent)
+      blockedReasonSql = sql`${input.blocked_reason ?? null}`;
+      blockedAtSql = sql`NOW()`;
+    } else if (input.is_blocked === false) {
+      // Déblocage : efface le motif et l'horodatage
+      blockedReasonSql = sql`NULL`;
+      blockedAtSql = sql`NULL`;
+    } else {
+      // Pas de changement de statut de blocage :
+      // si blocked_reason est fourni on le met à jour, sinon on conserve
+      blockedReasonSql =
+        input.blocked_reason !== undefined
+          ? sql`${input.blocked_reason}`
+          : sql`${current.blocked_reason}`;
+      blockedAtSql = sql`${current.blocked_at}`;
+    }
+    // concertis la matière en un tableau pour ne pas bloquer la requête
+    const pgArrayFormat = `{${(input.subjects ?? current.subjects ?? []).join(',')}}`;
+
     await this.db.execute(sql`
       UPDATE teachers
       SET
-        type = ${input.type ?? current.type},
-        subjects = ${input.subjects ?? current.subjects},
-        hourly_rate = ${
-          input.hourly_rate === undefined ? current.hourly_rate : input.hourly_rate
-        }
+        type           = ${input.type ?? current.type},
+        subjects       = ${pgArrayFormat},
+        hourly_rate    = ${input.hourly_rate === undefined ? current.hourly_rate : input.hourly_rate},
+        is_blocked     = ${nextIsBlocked},
+        blocked_reason = ${blockedReasonSql},
+        blocked_at     = ${blockedAtSql}
       WHERE id = ${teacherId}
     `);
 
     return this.getTeacherById(teacherId);
   }
 
+  // softDeleteTeacher : désactivation de compte (users.is_active → false).
+  // N'est pas la même opération que le blocage métier (teachers.is_blocked).
   async softDeleteTeacher(teacherId: string): Promise<TeacherRow | null> {
     const current = await this.getTeacherById(teacherId);
     if (!current) return null;
@@ -288,7 +304,8 @@ export class TeachersRepository {
           SUM(
             CASE
               WHEN at.status IN ('present', 'late', 'excused') THEN
-                (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0) * COALESCE(t.hourly_rate, 0)
+                (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0)
+                * COALESCE(t.hourly_rate, 0)
               ELSE 0
             END
           ),

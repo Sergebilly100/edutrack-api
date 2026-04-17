@@ -16,59 +16,66 @@ export class TeachersModuleError extends Error {
   }
 }
 
+// DTO partagé pour toutes les réponses du module teachers.
+// Expose les deux dimensions distinctes :
+//   • is_active    → accès au compte (table users)
+//   • is_blocked   → blocage métier avec motif (table teachers)
+type TeacherDTO = {
+  id: string;
+  name: string;
+  first_name: string;
+  last_name: string;
+  phone: string | null;
+  type: 'vacataire' | 'permanent';
+  subjects: string[];
+  hourly_rate: number | null;
+  is_active: boolean;
+  is_blocked: boolean;
+  blocked_reason: string | null;
+  blocked_at: Date | null;
+  username: string;
+};
+
+const toDTO = (row: {
+  id: string;
+  name: string;
+  first_name: string;
+  last_name: string;
+  phone: string | null;
+  type: 'vacataire' | 'permanent';
+  subjects: string[];
+  hourly_rate: number | null;
+  is_active: boolean;
+  is_blocked: boolean;
+  blocked_reason: string | null;
+  blocked_at: Date | null;
+  username: string;
+}): TeacherDTO => ({
+  id: row.id,
+  name: row.name,
+  first_name: row.first_name,
+  last_name: row.last_name,
+  phone: row.phone,
+  type: row.type,
+  subjects: row.subjects,
+  hourly_rate: row.hourly_rate,
+  is_active: row.is_active,
+  is_blocked: row.is_blocked,
+  blocked_reason: row.blocked_reason,
+  blocked_at: row.blocked_at,
+  username: row.username,
+});
+
 export class TeachersService {
   constructor(private readonly repository: TeachersRepository) {}
 
-  async listTeachers(query: TeachersListQuery): Promise<
-    | {
-        data: Array<{
-          id: string;
-          name: string;
-          first_name: string;
-          last_name: string;
-          phone: string | null;
-          type: 'vacataire' | 'permanent';
-          subjects: string[];
-          hourly_rate: number | null;
-          is_active: boolean;
-          username: string;
-        }>;
-        pagination: {
-          page: number;
-          limit: number;
-          total: number;
-          totalPages: number;
-        };
-      }
-    | Array<{
-        id: string;
-        name: string;
-        first_name: string;
-        last_name: string;
-        phone: string | null;
-        type: 'vacataire' | 'permanent';
-        subjects: string[];
-        hourly_rate: number | null;
-        is_active: boolean;
-        username: string;
-      }>
-  > {
+  async listTeachers(query: TeachersListQuery): Promise<{
+    data: TeacherDTO[];
+    pagination: { page: number; limit: number; total: number; totalPages: number };
+  }> {
     const result = await this.repository.listTeachers(query);
-    const rows = result.rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      first_name: row.first_name,
-      last_name: row.last_name,
-      phone: row.phone,
-      type: row.type,
-      subjects: row.subjects,
-      hourly_rate: row.hourly_rate,
-      is_active: row.is_active,
-      username: row.username,
-    }));
-
     return {
-      data: rows,
+      data: result.rows.map(toDTO),
       pagination: {
         page: query.page,
         limit: query.limit,
@@ -76,6 +83,14 @@ export class TeachersService {
         totalPages: Math.ceil(result.total / query.limit) || 1,
       },
     };
+  }
+
+  async getTeacherById(teacherId: string): Promise<TeacherDTO> {
+    const row = await this.repository.getTeacherById(teacherId);
+    if (!row) {
+      throw new TeachersModuleError('Teacher not found', 404, 'TEACHER_NOT_FOUND');
+    }
+    return toDTO(row);
   }
 
   async createTeacher(input: CreateTeacherInput, context: { schemaName: string }) {
@@ -93,18 +108,7 @@ export class TeachersService {
     }
 
     const created = await this.repository.createTeacher(input);
-    return {
-      id: created.id,
-      name: created.name,
-      first_name: created.first_name,
-      last_name: created.last_name,
-      phone: created.phone,
-      type: created.type,
-      subjects: created.subjects,
-      hourly_rate: created.hourly_rate,
-      is_active: created.is_active,
-      username: created.username,
-    };
+    return toDTO(created);
   }
 
   async updateTeacher(teacherId: string, input: UpdateTeacherInput) {
@@ -112,19 +116,7 @@ export class TeachersService {
     if (!updated) {
       throw new TeachersModuleError('Teacher not found', 404, 'TEACHER_NOT_FOUND');
     }
-
-    return {
-      id: updated.id,
-      name: updated.name,
-      first_name: updated.first_name,
-      last_name: updated.last_name,
-      phone: updated.phone,
-      type: updated.type,
-      subjects: updated.subjects,
-      hourly_rate: updated.hourly_rate,
-      is_active: updated.is_active,
-      username: updated.username,
-    };
+    return toDTO(updated);
   }
 
   async softDeleteTeacher(teacherId: string) {
@@ -132,19 +124,7 @@ export class TeachersService {
     if (!deleted) {
       throw new TeachersModuleError('Teacher not found', 404, 'TEACHER_NOT_FOUND');
     }
-
-    return {
-      id: deleted.id,
-      name: deleted.name,
-      first_name: deleted.first_name,
-      last_name: deleted.last_name,
-      phone: deleted.phone,
-      type: deleted.type,
-      subjects: deleted.subjects,
-      hourly_rate: deleted.hourly_rate,
-      is_active: deleted.is_active,
-      username: deleted.username,
-    };
+    return toDTO(deleted);
   }
 
   async getTeacherStats(teacherId: string, dateFrom: string, dateTo: string) {
@@ -152,7 +132,6 @@ export class TeachersService {
     if (!stats) {
       throw new TeachersModuleError('Teacher not found', 404, 'TEACHER_NOT_FOUND');
     }
-
     return stats;
   }
 }
