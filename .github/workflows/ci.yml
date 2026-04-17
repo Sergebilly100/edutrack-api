@@ -45,11 +45,10 @@ jobs:
 
       - name: Prepare JWT keys for CI
         run: |
-          if [ -z "${JWT_PRIVATE_KEY}" ] || [ -z "${JWT_PUBLIC_KEY}" ]; then
-            echo "Secrets absents, génération d'une paire éphémère..."
-            node ./generate-jwt-keys.mjs
+          if [ -n "${JWT_PRIVATE_KEY}" ] && [ -n "${JWT_PUBLIC_KEY}" ]; then
+            echo "✅ Secrets JWT présents (${#JWT_PRIVATE_KEY} chars)"
           else
-            echo "Secrets JWT présents (longueur clé privée: ${#JWT_PRIVATE_KEY} chars)"
+            echo "⚠️  Secrets absents — les tests généreront une paire éphémère in-process"
           fi
 
       - name: Start PostgreSQL and Redis
@@ -90,6 +89,12 @@ jobs:
 
       - name: Run unit tests
         run: npm run test:unit
+
+      - name: Debug JWT env
+        run: |
+          echo "JWT_PRIVATE_KEY length: ${#JWT_PRIVATE_KEY}"
+          echo "JWT_PUBLIC_KEY length: ${#JWT_PUBLIC_KEY}"
+          node -e "console.log('Node sees JWT_PRIVATE_KEY:', process.env.JWT_PRIVATE_KEY?.slice(0,40))"
 
       - name: Run integration tests
         run: npm run test:integration

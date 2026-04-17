@@ -5,10 +5,11 @@ import { randomBytes } from 'node:crypto';
 import multipart from '@fastify/multipart';
 import argon2 from 'argon2';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { importPKCS8, SignJWT } from 'jose';
+import { importPKCS8, SignJWT, importSPKI } from 'jose';
 import { Pool, type QueryResultRow } from 'pg';
 import supertest from 'supertest';
 import { afterAll, afterEach, beforeAll } from 'vitest';
+import { generateKeyPairSync } from 'node:crypto';
 
 type TestRole = 'teacher' | 'director' | 'secretary' | 'super_admin';
 
@@ -75,18 +76,51 @@ const normalizePem = (value: string): string =>
     .replace(/\\n/g, '\n')   // \n littéraux → vrais sauts de ligne
     .replace(/\r\n/g, '\n')  // CRLF → LF
     .trim();                  // espaces/sauts de ligne en début/fin
-    
+
+// const getPrivateKey = async (): Promise<Awaited<ReturnType<typeof importPKCS8>>> => {
+//   if (privateKeyPromise) {
+//     return privateKeyPromise;
+//   }
+
+//   const rawPrivateKey = process.env.JWT_PRIVATE_KEY;
+//   if (!rawPrivateKey) {
+//     throw new Error('[integration] JWT_PRIVATE_KEY is required');
+//   }
+
+//   privateKeyPromise = importPKCS8(normalizePem(rawPrivateKey), 'RS256');
+//   return privateKeyPromise;
+// };
+
+// Génération/chargement des clés une seule fois pour tout le run
+const resolveKeys = (): { privatePem: string; publicPem: string } => {
+  const fromEnv = process.env.JWT_PRIVATE_KEY;
+  if (fromEnv && fromEnv.includes('BEGIN')) {
+    return {
+      privatePem: fromEnv.replace(/\\n/g, '\n').trim(),
+      publicPem: process.env.JWT_PUBLIC_KEY!.replace(/\\n/g, '\n').trim(),
+    };
+  }
+
+  // Fallback : génération éphémère in-process
+  console.warn('[integration] JWT_PRIVATE_KEY absent → génération éphémère');
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  });
+
+  // Injecter la clé publique pour que le serveur Fastify puisse vérifier les tokens
+  process.env.JWT_PUBLIC_KEY = publicKey;
+  process.env.JWT_PRIVATE_KEY = privateKey;
+
+  return { privatePem: privateKey, publicPem: publicKey };
+};
+
+const { privatePem } = resolveKeys(); // appelé au module load, avant beforeAll
+
 const getPrivateKey = async (): Promise<Awaited<ReturnType<typeof importPKCS8>>> => {
-  if (privateKeyPromise) {
-    return privateKeyPromise;
-  }
-
-  const rawPrivateKey = process.env.JWT_PRIVATE_KEY;
-  if (!rawPrivateKey) {
-    throw new Error('[integration] JWT_PRIVATE_KEY is required');
-  }
-
-  privateKeyPromise = importPKCS8(normalizePem(rawPrivateKey), 'RS256');
+  if (privateKeyPromise) return privateKeyPromise;
+  privateKeyPromise = importPKCS8(privatePem, 'RS256');
   return privateKeyPromise;
 };
 
