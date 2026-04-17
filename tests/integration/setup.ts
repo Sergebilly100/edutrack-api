@@ -1,11 +1,10 @@
 import 'dotenv/config';
 
-import { generateKeyPairSync, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 
 import multipart from '@fastify/multipart';
 import argon2 from 'argon2';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { importPKCS8, SignJWT } from 'jose';
 import { Pool, type QueryResultRow } from 'pg';
 import supertest from 'supertest';
 import { afterAll, afterEach, beforeAll } from 'vitest';
@@ -46,7 +45,6 @@ const pool = new Pool({
 
 let app: FastifyInstance | null = null;
 let seedContext: SeedContext | null = null;
-let privateKeyPromise: Promise<Awaited<ReturnType<typeof importPKCS8>>> | null = null;
 
 const IDENTIFIER_REGEX = /^[a-z_][a-z0-9_]*$/;
 
@@ -70,38 +68,6 @@ export const queryTenant = async <TRow extends QueryResultRow = QueryResultRow>(
   return result.rows;
 };
 
-const normalizePem = (value: string): string => value.replace(/\\n/g, '\n');
-
-const ensureJwtKeysForIntegration = (): void => {
-  if (process.env.JWT_PRIVATE_KEY && process.env.JWT_PUBLIC_KEY) {
-    return;
-  }
-
-  const { privateKey, publicKey } = generateKeyPairSync('rsa', {
-    modulusLength: 2048,
-    publicKeyEncoding: { type: 'spki', format: 'pem' },
-    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-  });
-
-  process.env.JWT_PRIVATE_KEY = privateKey;
-  process.env.JWT_PUBLIC_KEY = publicKey;
-};
-
-const getPrivateKey = async (): Promise<Awaited<ReturnType<typeof importPKCS8>>> => {
-  if (privateKeyPromise) {
-    return privateKeyPromise;
-  }
-
-  ensureJwtKeysForIntegration();
-  const rawPrivateKey = process.env.JWT_PRIVATE_KEY;
-  if (!rawPrivateKey) {
-    throw new Error('[integration] JWT_PRIVATE_KEY is required');
-  }
-
-  privateKeyPromise = importPKCS8(normalizePem(rawPrivateKey), 'RS256');
-  return privateKeyPromise;
-};
-
 const getContext = (): SeedContext => {
   if (!seedContext) {
     throw new Error('[integration] Seed context is not initialized');
@@ -112,29 +78,49 @@ const getContext = (): SeedContext => {
 
 export const getSeedContext = (): SeedContext => getContext();
 
+const getLoginCredentials = (
+  role: TestRole,
+  context: SeedContext
+): { identifier: string; password: string } => {
+  if (role === 'teacher') {
+    return {
+      identifier: context.teacherUsername,
+      password: context.teacherPassword,
+    };
+  }
+
+  if (role === 'director') {
+    return {
+      identifier: '2250701234567',
+      password: context.directorPassword,
+    };
+  }
+
+  if (role === 'secretary') {
+    return {
+      identifier: '2250702345678',
+      password: context.secretaryPassword,
+    };
+  }
+
+  throw new Error(`[integration] Unsupported role for tenant auth: ${role}`);
+};
+
 export const getToken = async (role: TestRole): Promise<string> => {
   const context = getContext();
-  const privateKey = await getPrivateKey();
+  const credentials = getLoginCredentials(role, context);
+  const loginResponse = await request()
+    .post('/api/v1/auth/login/teacher')
+    .set('x-tenant-schema', TEST_SCHEMA_NAME)
+    .send(credentials);
 
-  const subject =
-    role === 'teacher'
-      ? context.teacherUserId
-      : role === 'secretary'
-        ? context.secretaryUserId
-        : context.directorUserId;
-  const payload = {
-    sub: subject,
-    role,
-    schemaName: context.schemaName,
-    ...(role === 'teacher' ? { username: context.teacherUsername } : {}),
-  };
+  if (loginResponse.status !== 200 || typeof loginResponse.body?.accessToken !== 'string') {
+    throw new Error(
+      `[integration] Unable to fetch access token for role=${role} (status=${loginResponse.status})`
+    );
+  }
 
-  return new SignJWT(payload)
-    .setProtectedHeader({ alg: 'RS256' })
-    .setSubject(subject)
-    .setIssuedAt()
-    .setExpirationTime(process.env.JWT_EXPIRY ?? '15m')
-    .sign(privateKey);
+  return loginResponse.body.accessToken;
 };
 
 export const getAuthHeaders = async (role: TestRole): Promise<Record<string, string>> => {
