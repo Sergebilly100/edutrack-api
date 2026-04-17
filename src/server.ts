@@ -2,6 +2,7 @@ import 'dotenv/config';
 
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
+import { sql } from 'drizzle-orm';
 import Fastify from 'fastify';
 import { Redis } from 'ioredis';
 
@@ -25,6 +26,7 @@ import schoolController from './modules/school/school.controller.js';
 import studentsController from './modules/students/students.controller.js';
 import scheduleController from './modules/schedule/schedule.controller.js';
 import teachersController from './modules/teachers/teachers.controller.js';
+import { db } from './shared/database/db.js';
 
 const app = Fastify({ logger: true });
 const port = Number(process.env.PORT || 3000);
@@ -40,6 +42,41 @@ const notificationsWorker = createNotificationsWorker(notificationsRedis, {
 const notificationsService = new NotificationsService({
   smsQueue: notificationsQueue,
 });
+let maintenanceCache: {
+  fetchedAt: number;
+  mode: boolean;
+  message: string;
+} = {
+  fetchedAt: 0,
+  mode: false,
+  message: 'Mise à jour en cours',
+};
+
+const loadMaintenanceState = async (): Promise<{ mode: boolean; message: string }> => {
+  const now = Date.now();
+  if (now - maintenanceCache.fetchedAt < 15000) {
+    return { mode: maintenanceCache.mode, message: maintenanceCache.message };
+  }
+
+  const result = await db.execute<{
+    maintenance_mode: boolean;
+    maintenance_message: string;
+  }>(sql.raw(`
+    SELECT maintenance_mode, maintenance_message
+    FROM public.app_settings
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `));
+
+  const row = result.rows?.[0];
+  maintenanceCache = {
+    fetchedAt: now,
+    mode: row?.maintenance_mode ?? false,
+    message: row?.maintenance_message ?? 'Mise à jour en cours',
+  };
+
+  return { mode: maintenanceCache.mode, message: maintenanceCache.message };
+};
 
 notificationsService.start();
 
@@ -52,6 +89,24 @@ app.register(multipart, {
   limits: {
     fileSize: 10 * 1024 * 1024,
   },
+});
+
+app.addHook('onRequest', async (request, reply) => {
+  const path = request.url.split('?')[0] ?? '';
+  if (path.startsWith('/api/v1/admin') || path === '/health') {
+    return;
+  }
+
+  const state = await loadMaintenanceState();
+  if (!state.mode) {
+    return;
+  }
+
+  reply.code(503).send({
+    error: state.message,
+    code: 'MAINTENANCE_MODE',
+    statusCode: 503,
+  });
 });
 
 app.register(authController);

@@ -13,6 +13,11 @@ type TenantInfoRow = {
   city: string | null;
   teaching_type: 'primaire' | 'secondaire' | 'superieur' | 'mixte' | null;
   max_users: number;
+  student_label: string | null;
+  director_title: string | null;
+  max_sms_per_month: number | null;
+  can_edit_sms_template: boolean | null;
+  can_export_data: boolean | null;
   onboarding_completed: boolean;
 };
 
@@ -70,7 +75,13 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
 
 const fetchSchoolInfoBySchema = async (schemaName: string) => {
   const tenantResult = await db.execute<TenantInfoRow>(sql`
-    SELECT id, name, subdomain, plan, city, teaching_type, max_users, onboarding_completed
+    SELECT id, name, subdomain, plan, city, teaching_type, max_users,
+           COALESCE(student_label, 'Élève') AS student_label,
+           COALESCE(director_title, 'Directeur') AS director_title,
+           COALESCE(max_sms_per_month, 2000) AS max_sms_per_month,
+           COALESCE(can_edit_sms_template, false) AS can_edit_sms_template,
+           COALESCE(can_export_data, true) AS can_export_data,
+           onboarding_completed
     FROM public.tenants
     WHERE schema_name = ${schemaName}
     LIMIT 1
@@ -111,6 +122,11 @@ const fetchSchoolInfoBySchema = async (schemaName: string) => {
     city: tenant.city,
     teaching_type: tenant.teaching_type,
     max_users: tenant.max_users,
+    student_label: tenant.student_label,
+    director_title: tenant.director_title,
+    max_sms_per_month: tenant.max_sms_per_month ?? 2000,
+    can_edit_sms_template: tenant.can_edit_sms_template ?? false,
+    can_export_data: tenant.can_export_data ?? true,
     current_users: tenantMetrics.currentUsers,
     address: '',
     phone: tenantMetrics.directorPhone,

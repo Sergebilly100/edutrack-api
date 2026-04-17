@@ -3,8 +3,10 @@ import { z } from 'zod';
 export const IMPORT_PHONE_REGEX = /^225\d{10}$/;
 
 export const importTypeSchema = z.enum(['students', 'teachers', 'schedule']);
+export const importModeSchema = z.enum(['merge', 'replace']).default('merge');
 
 export type ImportType = z.infer<typeof importTypeSchema>;
+export type ImportMode = z.infer<typeof importModeSchema>;
 
 export const importTypeParamsSchema = z.object({
   type: importTypeSchema,
@@ -15,12 +17,30 @@ export type ImportError = {
   column: string;
   message: string;
   value: string;
+  sheet?: string;
+};
+
+export type DiffPreviewItem = {
+  key: string;
+  displayName: string;
+  changes?: Record<string, { before: string | null; after: string | null }>;
 };
 
 export type DryRunReport = {
   valid: number;
   errors: ImportError[];
   preview: Record<string, string>[];
+  toAdd?: DiffPreviewItem[];
+  toUpdate?: DiffPreviewItem[];
+  toDelete?: DiffPreviewItem[];
+  unchanged?: number;
+  importMode?: ImportMode;
+  conflicts?: Array<{
+    periodName: string;
+    weekStart: string;
+    weekEnd: string;
+    message: string;
+  }>;
 };
 
 export type ConfirmReport = {
@@ -28,6 +48,8 @@ export type ConfirmReport = {
   updated: number;
   errors: ImportError[];
   preview: Record<string, string>[];
+  deactivated?: number;
+  importMode?: ImportMode;
 };
 
 export type StudentImportRow = {
@@ -53,4 +75,9 @@ export type ScheduleImportRow = {
   dayOfWeek: number;
   slotLabel: string;
   roomName: string;
+};
+
+export type SchedulePeriodInput = {
+  weekStart: string;
+  weekEnd: string;
 };

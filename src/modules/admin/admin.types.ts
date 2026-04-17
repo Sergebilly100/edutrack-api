@@ -77,12 +77,28 @@ export const listSchoolsQuerySchema = z.object({
 export const updateSchoolConfigBodySchema = z
   .object({
     max_admin_positions: z.coerce.number().int().min(1).max(50).optional(),
+    max_users: z.coerce.number().int().min(1).max(500).optional(),
+    max_sms_per_month: z.coerce.number().int().min(0).max(200000).optional(),
+    city: z.string().trim().min(1).max(120).optional(),
+    teaching_type: z.enum(TEACHING_TYPE_VALUES).optional(),
+    student_label: z.string().trim().min(1).max(120).optional(),
+    director_title: z.string().trim().min(1).max(120).optional(),
+    can_edit_sms_template: z.boolean().optional(),
+    can_export_data: z.boolean().optional(),
     plan: z.enum(TENANT_PLAN_VALUES).optional(),
     status: z.enum(TENANT_STATUS_VALUES).optional(),
   })
   .refine(
     (value) =>
       value.max_admin_positions !== undefined ||
+      value.max_users !== undefined ||
+      value.max_sms_per_month !== undefined ||
+      value.city !== undefined ||
+      value.teaching_type !== undefined ||
+      value.student_label !== undefined ||
+      value.director_title !== undefined ||
+      value.can_edit_sms_template !== undefined ||
+      value.can_export_data !== undefined ||
       value.plan !== undefined ||
       value.status !== undefined,
     {
@@ -177,6 +193,12 @@ export type SchoolDetailsResult = {
     city: string | null;
     teachingType: TeachingType | null;
     maxAdminPositions: number;
+    maxUsers: number;
+    maxSmsPerMonth: number;
+    studentLabel: string | null;
+    directorTitle: string | null;
+    canEditSmsTemplate: boolean;
+    canExportData: boolean;
     createdAt: string;
     updatedAt: string;
   };
@@ -214,3 +236,87 @@ export type RevenueMetricsResult = Array<{
   mrr_fcfa: number;
   payments_count: number;
 }>;
+
+export type RevenueSummaryResult = {
+  cards: {
+    mrrTotalFcfa: number;
+    arrFcfa: number;
+    newSubscriptionsThisMonth: number;
+    churnThisMonth: number;
+  };
+  monthly: Array<{
+    month: string;
+    mrr_fcfa: number;
+    new_fcfa: number;
+    churn_fcfa: number;
+  }>;
+  schools: Array<{
+    tenantId: string;
+    school: string;
+    plan: TenantPlan;
+    status: TenantStatus;
+    amountPerMonth: number;
+    lastDueDate: string | null;
+    paymentMode: string | null;
+  }>;
+};
+
+export type SmsTemplateType =
+  | 'teacher_absent_director'
+  | 'student_absent_parent'
+  | 'payment_reminder'
+  | 'teacher_late_director'
+  | 'custom';
+
+export type SmsTemplateItem = {
+  id: string;
+  tenantId: string | null;
+  type: SmsTemplateType;
+  messageTemplate: string;
+  variables: string[];
+  updatedAt: string;
+};
+
+export type SmsDashboardResult = {
+  sentThisMonth: number;
+  deliveryRate: number;
+  activeSchools: number;
+  estimatedCostFcfa: number;
+  bySchool: Array<{
+    tenantId: string;
+    school: string;
+    sent: number;
+    quota: number;
+    usedPct: number;
+  }>;
+  history: Array<{
+    id: string;
+    date: string;
+    school: string;
+    type: string;
+    recipientMasked: string;
+    status: string;
+    message: string;
+  }>;
+};
+
+export const smsTemplateTypeSchema = z.enum([
+  'teacher_absent_director',
+  'student_absent_parent',
+  'payment_reminder',
+  'teacher_late_director',
+  'custom',
+]);
+
+export const updateSmsTemplateBodySchema = z.object({
+  message_template: z.string().trim().min(5).max(500),
+  variables: z.array(z.string().trim().min(1).max(60)).default([]),
+});
+
+export const maintenanceConfigSchema = z.object({
+  maintenance_mode: z.boolean(),
+  maintenance_message: z.string().trim().min(3).max(500),
+});
+
+export type UpdateSmsTemplateBody = z.infer<typeof updateSmsTemplateBodySchema>;
+export type MaintenanceConfigBody = z.infer<typeof maintenanceConfigSchema>;

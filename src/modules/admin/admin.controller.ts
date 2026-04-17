@@ -1,27 +1,39 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { ZodError } from 'zod';
+import { ZodError, z } from 'zod';
 
 import {
   createSchoolBodySchema,
   createTenantBodySchema,
   listSchoolsQuerySchema,
   listTenantsQuerySchema,
+  maintenanceConfigSchema,
   schoolTenantIdParamsSchema,
+  smsTemplateTypeSchema,
   tenantParamsSchema,
+  updateSmsTemplateBodySchema,
   updateSchoolConfigBodySchema,
   updateTenantBodySchema,
   updateTenantParamsSchema,
 } from './admin.types.js';
 import {
+  addManualPayment,
   createImpersonationToken,
   createSchool,
   createTenant,
+  deleteTenantSmsTemplate,
   getAdminMetrics,
+  getMaintenanceConfig,
   getRevenueMetrics,
+  getRevenueSummary,
   getSchoolDetails,
+  getSmsDashboard,
   getTenantStats,
+  listSchoolPayments,
+  listSmsTemplates,
   listSchools,
   listTenants,
+  updateMaintenanceConfig,
+  upsertSmsTemplate,
   updateSchoolConfig,
   updateTenant,
 } from './admin.service.js';
@@ -107,6 +119,15 @@ export default async function adminController(app: FastifyInstance): Promise<voi
     return request.db;
   };
 
+  const manualPaymentBodySchema = z.object({
+    date: z.string().min(10),
+    amount_fcfa: z.coerce.number().int().min(1),
+    provider: z.enum(['manual', 'mtn_momo', 'orange_money']).default('manual'),
+    reference: z.string().optional(),
+    period_from: z.string().optional(),
+    period_to: z.string().optional(),
+  });
+
   app.get('/api/v1/admin/tenants', { preHandler: preHandlers }, async (request, reply) => {
     try {
       const query = listTenantsQuerySchema.parse(request.query);
@@ -162,6 +183,35 @@ export default async function adminController(app: FastifyInstance): Promise<voi
     }
   );
 
+  app.get(
+    '/api/v1/admin/schools/:tenantId/payments',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+        const data = await listSchoolPayments(ensurePublicDb(request), tenantId);
+        return reply.send({ items: data });
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/admin/schools/:tenantId/payments',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+        const payload = manualPaymentBodySchema.parse(request.body);
+        await addManualPayment(ensurePublicDb(request), tenantId, payload);
+        return reply.code(201).send({ success: true });
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
   app.get('/api/v1/admin/metrics', { preHandler: preHandlers }, async (request, reply) => {
     try {
       const result = await getAdminMetrics(ensurePublicDb(request));
@@ -174,6 +224,126 @@ export default async function adminController(app: FastifyInstance): Promise<voi
   app.get('/api/v1/admin/metrics/revenue', { preHandler: preHandlers }, async (request, reply) => {
     try {
       const result = await getRevenueMetrics(ensurePublicDb(request));
+      return reply.send(result);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/admin/sms/dashboard', { preHandler: preHandlers }, async (request, reply) => {
+    try {
+      const result = await getSmsDashboard(ensurePublicDb(request));
+      return reply.send(result);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/admin/sms/templates', { preHandler: preHandlers }, async (request, reply) => {
+    try {
+      const templates = await listSmsTemplates(ensurePublicDb(request));
+      return reply.send({ items: templates });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.put(
+    '/api/v1/admin/sms/templates/:type',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const type = smsTemplateTypeSchema.parse((request.params as { type?: string })?.type);
+        const body = updateSmsTemplateBodySchema.parse(request.body);
+        await upsertSmsTemplate(ensurePublicDb(request), {
+          tenantId: null,
+          type,
+          body,
+          adminId: request.auth?.sub,
+        });
+        return reply.send({ success: true });
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.get(
+    '/api/v1/admin/sms/templates/:tenantId',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+        const templates = await listSmsTemplates(ensurePublicDb(request), tenantId);
+        return reply.send({ items: templates });
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.put(
+    '/api/v1/admin/sms/templates/:tenantId/:type',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId } = schoolTenantIdParamsSchema.parse({ tenantId: (request.params as { tenantId?: string }).tenantId });
+        const type = smsTemplateTypeSchema.parse((request.params as { type?: string }).type);
+        const body = updateSmsTemplateBodySchema.parse(request.body);
+        await upsertSmsTemplate(ensurePublicDb(request), {
+          tenantId,
+          type,
+          body,
+          adminId: request.auth?.sub,
+        });
+        return reply.send({ success: true });
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.delete(
+    '/api/v1/admin/sms/templates/:tenantId/:type',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId } = schoolTenantIdParamsSchema.parse({ tenantId: (request.params as { tenantId?: string }).tenantId });
+        const type = smsTemplateTypeSchema.parse((request.params as { type?: string }).type);
+        await deleteTenantSmsTemplate(ensurePublicDb(request), tenantId, type);
+        return reply.send({ success: true });
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.get('/api/v1/admin/maintenance', { preHandler: preHandlers }, async (request, reply) => {
+    try {
+      const config = await getMaintenanceConfig(ensurePublicDb(request));
+      return reply.send(config);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.patch('/api/v1/admin/maintenance', { preHandler: preHandlers }, async (request, reply) => {
+    try {
+      const payload = maintenanceConfigSchema.parse(request.body);
+      await updateMaintenanceConfig(ensurePublicDb(request), payload);
+      return reply.send({ success: true });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.delete('/api/v1/admin/cache', { preHandler: preHandlers }, async (_request, reply) => {
+    return reply.send({ success: true });
+  });
+
+  app.get('/api/v1/admin/revenue/summary', { preHandler: preHandlers }, async (request, reply) => {
+    try {
+      const result = await getRevenueSummary(ensurePublicDb(request));
       return reply.send(result);
     } catch (error) {
       return handleError(reply, error);

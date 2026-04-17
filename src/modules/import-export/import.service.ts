@@ -11,9 +11,12 @@ import {
 } from './import.repository.js';
 import type {
   ConfirmReport,
+  DiffPreviewItem,
   DryRunReport,
   ImportError,
+  ImportMode,
   ImportType,
+  SchedulePeriodInput,
   ScheduleImportRow,
   StudentImportRow,
   TeacherImportRow,
@@ -25,6 +28,7 @@ const TEACHERS_HEADERS = ['Nom*', 'Prénom*', 'Type*', 'Matières*', 'Taux horai
 const SCHEDULE_HEADERS = ['Nom professeur*', 'Classe*', 'Matière*', 'Jour*', 'Créneau*', 'Salle'] as const;
 
 const PREVIEW_LIMIT = 5;
+const STUDENT_IGNORE_SHEETS = ['README', 'readme', 'Info', 'INSTRUCTIONS', 'Salles (référence)'];
 
 const DAY_MAP: Record<string, number> = {
   lundi: 1,
@@ -47,8 +51,14 @@ export class ImportModuleError extends Error {
   }
 }
 
-type ParsedSheet = {
-  rows: Record<string, string>[];
+type ParsedWorkbookRow = {
+  sheetName: string;
+  line: number;
+  values: Record<string, string>;
+};
+
+type ParsedWorkbook = {
+  rows: ParsedWorkbookRow[];
 };
 
 type StudentValidation = {
@@ -84,40 +94,69 @@ const makeError = (params: {
   value: params.value ?? '',
 });
 
-const parseWorkbook = (fileBuffer: Buffer): ParsedSheet => {
+const parseWorkbook = (
+  fileBuffer: Buffer,
+  params?: {
+    mode?: 'single-sheet' | 'multi-sheet';
+    ignoreSheets?: string[];
+  }
+): ParsedWorkbook => {
   const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
-  const sheetName = workbook.SheetNames[0];
 
-  if (!sheetName) {
+  if (workbook.SheetNames.length === 0) {
     throw new ImportModuleError('Le fichier Excel est vide', 400, 'IMPORT_EMPTY_FILE');
   }
 
-  const sheet = workbook.Sheets[sheetName];
-  if (!sheet) {
-    throw new ImportModuleError('Impossible de lire la feuille Excel', 400, 'IMPORT_INVALID_FILE');
+  const mode = params?.mode ?? 'single-sheet';
+  const ignoreSet = new Set((params?.ignoreSheets ?? []).map((value) => value.toLowerCase()));
+  const selectedSheets =
+    mode === 'single-sheet'
+      ? workbook.SheetNames.slice(0, 1)
+      : workbook.SheetNames.filter((name) => !ignoreSet.has(name.toLowerCase()));
+
+  if (selectedSheets.length === 0) {
+    throw new ImportModuleError(
+      'Aucune feuille de données trouvée dans le fichier Excel.',
+      400,
+      'IMPORT_EMPTY_FILE'
+    );
   }
 
-  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
-    defval: '',
-    raw: false,
-  });
-
-  const normalized = rows.map((row) => {
-    const mapped: Record<string, string> = {};
-    for (const [key, value] of Object.entries(row)) {
-      mapped[String(key).trim()] = normalizeCell(value);
+  const rows: ParsedWorkbookRow[] = [];
+  for (const sheetName of selectedSheets) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) {
+      continue;
     }
-    return mapped;
-  });
 
-  return { rows: normalized };
+    const parsedRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+      defval: '',
+      raw: false,
+    });
+
+    parsedRows.forEach((row, index) => {
+      const mapped: Record<string, string> = {};
+      for (const [key, value] of Object.entries(row)) {
+        mapped[String(key).trim()] = normalizeCell(value);
+      }
+
+      if (Object.values(mapped).every((value) => value.length === 0)) {
+        return;
+      }
+
+      rows.push({
+        sheetName,
+        line: index + 2,
+        values: mapped,
+      });
+    });
+  }
+
+  return { rows };
 };
 
-const ensureRequiredHeaders = (
-  rows: Record<string, string>[],
-  headers: readonly string[]
-): void => {
-  const first = rows[0] ?? {};
+const ensureRequiredHeaders = (rows: ParsedWorkbookRow[], headers: readonly string[]): void => {
+  const first = rows[0]?.values ?? {};
   const missing = headers.filter((header) => !(header in first));
 
   if (missing.length > 0) {
@@ -129,8 +168,11 @@ const ensureRequiredHeaders = (
   }
 };
 
-const previewRows = (rows: Record<string, string>[]): Record<string, string>[] => {
-  return rows.slice(0, PREVIEW_LIMIT);
+const previewWorkbookRows = (rows: ParsedWorkbookRow[]): Record<string, string>[] => {
+  return rows.slice(0, PREVIEW_LIMIT).map((row) => ({
+    Feuille: row.sheetName,
+    ...row.values,
+  }));
 };
 
 const normalizeKey = (value: string): string => normalizeCell(value).toLowerCase();
@@ -141,6 +183,58 @@ const parseSubjects = (value: string): string[] => {
     .map((item) => normalizeCell(item))
     .filter((item) => item.length > 0);
 };
+
+const isMonday = (isoDate: string): boolean => {
+  const parsed = new Date(`${isoDate}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    return false;
+  }
+
+  return parsed.getUTCDay() === 1;
+};
+
+const validateSchedulePeriodInput = (period?: SchedulePeriodInput): SchedulePeriodInput | undefined => {
+  if (!period) {
+    return undefined;
+  }
+
+  if (!period.weekStart || !period.weekEnd) {
+    throw new ImportModuleError(
+      'Période EDT invalide: weekStart et weekEnd sont requis.',
+      400,
+      'IMPORT_INVALID_PERIOD'
+    );
+  }
+
+  if (!isMonday(period.weekStart) || !isMonday(period.weekEnd) || period.weekStart > period.weekEnd) {
+    throw new ImportModuleError(
+      `Impossible de laisser une semaine sans EDT entre ${period.weekStart} et ${period.weekEnd}`,
+      400,
+      'IMPORT_INVALID_PERIOD_RANGE'
+    );
+  }
+
+  const start = new Date(`${period.weekStart}T00:00:00.000Z`);
+  const end = new Date(`${period.weekEnd}T00:00:00.000Z`);
+  const diffMs = end.getTime() - start.getTime();
+  if (diffMs % (7 * 24 * 60 * 60 * 1000) !== 0) {
+    throw new ImportModuleError(
+      `Impossible de laisser une semaine sans EDT entre ${period.weekStart} et ${period.weekEnd}`,
+      400,
+      'IMPORT_INVALID_PERIOD_RANGE'
+    );
+  }
+
+  return period;
+};
+
+const normalizeSubjectsForCompare = (subjects: string[]): string =>
+  [...subjects]
+    .map((item) => normalizeKey(item))
+    .sort()
+    .join(',');
+
+const toDiffItem = (input: DiffPreviewItem): DiffPreviewItem => input;
 
 const resolveTeacherUsername = (
   params: {
@@ -186,36 +280,46 @@ export class ImportService {
   async dryRun(
     type: ImportType,
     fileBuffer: Buffer,
-    db: QueryExecutor
+    db: QueryExecutor,
+    options?: {
+      mode?: ImportMode;
+      schedulePeriod?: SchedulePeriodInput;
+    }
   ): Promise<DryRunReport> {
+    const mode = options?.mode ?? 'merge';
     if (type === 'students') {
-      return (await this.validateStudents(fileBuffer, db)).report;
+      return (await this.validateStudents(fileBuffer, db, mode)).report;
     }
 
     if (type === 'teachers') {
-      return (await this.validateTeachers(fileBuffer, db)).report;
+      return (await this.validateTeachers(fileBuffer, db, mode)).report;
     }
 
-    return (await this.validateSchedule(fileBuffer, db)).report;
+    return (await this.validateSchedule(fileBuffer, db, options?.schedulePeriod)).report;
   }
 
   async confirm(
     type: ImportType,
     fileBuffer: Buffer,
-    db: QueryExecutor
+    db: QueryExecutor,
+    options?: {
+      mode?: ImportMode;
+      schedulePeriod?: SchedulePeriodInput;
+    }
   ): Promise<ConfirmReport> {
+    const mode = options?.mode ?? 'merge';
     if (type === 'students') {
-      const validation = await this.validateStudents(fileBuffer, db);
-      return this.confirmStudents(validation, db);
+      const validation = await this.validateStudents(fileBuffer, db, mode);
+      return this.confirmStudents(validation, db, mode);
     }
 
     if (type === 'teachers') {
-      const validation = await this.validateTeachers(fileBuffer, db);
-      return this.confirmTeachers(validation, db);
+      const validation = await this.validateTeachers(fileBuffer, db, mode);
+      return this.confirmTeachers(validation, db, mode);
     }
 
-    const validation = await this.validateSchedule(fileBuffer, db);
-    return this.confirmSchedule(validation, db);
+    const validation = await this.validateSchedule(fileBuffer, db, options?.schedulePeriod);
+    return this.confirmSchedule(validation, db, options?.schedulePeriod);
   }
 
   async listHistory(
@@ -240,83 +344,170 @@ export class ImportService {
     }));
   }
 
-  private async validateStudents(fileBuffer: Buffer, db: QueryExecutor): Promise<StudentValidation> {
-    const parsed = parseWorkbook(fileBuffer);
+  private async validateStudents(
+    fileBuffer: Buffer,
+    db: QueryExecutor,
+    importMode: ImportMode
+  ): Promise<StudentValidation> {
+    const parsed = parseWorkbook(fileBuffer, {
+      mode: 'multi-sheet',
+      ignoreSheets: STUDENT_IGNORE_SHEETS,
+    });
     ensureRequiredHeaders(parsed.rows, STUDENTS_HEADERS);
 
     const classes = await this.repository.listClasses(db);
     const classesByName = new Map(classes.map((item) => [normalizeKey(item.name), item.id]));
+    const existingStudents = await this.repository.listExistingStudents(db);
+    const existingByKey = new Map(existingStudents.map((item) => [item.key, item]));
 
     const errors: ImportError[] = [];
     const validRows: StudentImportRow[] = [];
+    const parsedKeySet = new Set<string>();
+    const toAdd: DiffPreviewItem[] = [];
+    const toUpdate: DiffPreviewItem[] = [];
 
-    parsed.rows.forEach((row, index) => {
-      const line = index + 2;
-      const firstName = normalizeCell(row['Prénom*']);
-      const lastName = normalizeCell(row['Nom*']);
-      const className = normalizeCell(row['Classe*']);
-      const parentPhoneRaw = normalizeCell(row['Téléphone parent']);
+    parsed.rows.forEach((sheetRow) => {
+      const line = sheetRow.line;
+      const firstName = normalizeCell(sheetRow.values['Prénom*']);
+      const lastName = normalizeCell(sheetRow.values['Nom*']);
+      const className = normalizeCell(sheetRow.values['Classe*']);
+      const parentPhoneRaw = normalizeCell(sheetRow.values['Téléphone parent']);
+      const rowKey = normalizeKey(`${className}::${firstName}::${lastName}`);
 
       if (!firstName) {
-        errors.push(makeError({ row: line, column: 'Prénom*', message: 'Prénom requis' }));
+        errors.push({
+          ...makeError({ row: line, column: 'Prénom*', message: 'Prénom requis' }),
+          sheet: sheetRow.sheetName,
+        });
       }
 
       if (!lastName) {
-        errors.push(makeError({ row: line, column: 'Nom*', message: 'Nom requis' }));
+        errors.push({
+          ...makeError({ row: line, column: 'Nom*', message: 'Nom requis' }),
+          sheet: sheetRow.sheetName,
+        });
       }
 
       if (!className) {
-        errors.push(makeError({ row: line, column: 'Classe*', message: 'Classe requise' }));
+        errors.push({
+          ...makeError({ row: line, column: 'Classe*', message: 'Classe requise' }),
+          sheet: sheetRow.sheetName,
+        });
       } else if (!classesByName.has(normalizeKey(className))) {
         errors.push(
-          makeError({
-            row: line,
-            column: 'Classe*',
-            message: 'Classe introuvable en base',
-            value: className,
-          })
+          {
+            ...makeError({
+              row: line,
+              column: 'Classe*',
+              message: `Feuille '${sheetRow.sheetName}' ligne ${line} : classe introuvable`,
+              value: className,
+            }),
+            sheet: sheetRow.sheetName,
+          }
         );
       }
 
       if (parentPhoneRaw && !IMPORT_PHONE_REGEX.test(parentPhoneRaw)) {
         errors.push(
-          makeError({
-            row: line,
-            column: 'Téléphone parent',
-            message: 'Format invalide, attendu 225 suivi de 10 chiffres',
-            value: parentPhoneRaw,
-          })
+          {
+            ...makeError({
+              row: line,
+              column: 'Téléphone parent',
+              message: 'Format invalide, attendu 225 suivi de 10 chiffres',
+              value: parentPhoneRaw,
+            }),
+            sheet: sheetRow.sheetName,
+          }
         );
       }
 
-      const hasRowError = errors.some((error) => error.row === line);
+      const hasRowError = errors.some((error) => error.row === line && error.sheet === sheetRow.sheetName);
       if (hasRowError) {
         return;
       }
 
+      parsedKeySet.add(rowKey);
       validRows.push({
         firstName,
         lastName,
         className,
         parentPhone: parentPhoneRaw || null,
       });
+
+      const existing = existingByKey.get(rowKey);
+      if (!existing) {
+        toAdd.push(
+          toDiffItem({
+            key: rowKey,
+            displayName: `${lastName} ${firstName} (${className})`,
+          })
+        );
+        return;
+      }
+
+      const changes: DiffPreviewItem['changes'] = {};
+      if ((existing.parentPhone ?? '') !== (parentPhoneRaw || null)) {
+        changes.parentPhone = {
+          before: existing.parentPhone,
+          after: parentPhoneRaw || null,
+        };
+      }
+
+      if (!existing.isActive) {
+        changes.isActive = { before: 'false', after: 'true' };
+      }
+
+      if (changes && Object.keys(changes).length > 0) {
+        toUpdate.push(
+          toDiffItem({
+            key: rowKey,
+            displayName: `${lastName} ${firstName} (${className})`,
+            changes,
+          })
+        );
+      }
     });
+
+    const toDelete =
+      importMode === 'replace'
+        ? existingStudents
+            .filter((item) => !parsedKeySet.has(item.key) && item.isActive)
+            .map((item) =>
+              toDiffItem({
+                key: item.key,
+                displayName: `${item.lastName} ${item.firstName} (${item.className})`,
+              })
+            )
+        : [];
+
+    const unchanged = Math.max(0, validRows.length - toAdd.length - toUpdate.length);
 
     return {
       rows: validRows,
       report: {
         valid: validRows.length,
         errors,
-        preview: previewRows(parsed.rows),
+        preview: previewWorkbookRows(parsed.rows),
+        toAdd,
+        toUpdate,
+        toDelete,
+        unchanged,
+        importMode,
       },
     };
   }
 
-  private async validateTeachers(fileBuffer: Buffer, db: QueryExecutor): Promise<TeacherValidation> {
+  private async validateTeachers(
+    fileBuffer: Buffer,
+    db: QueryExecutor,
+    importMode: ImportMode
+  ): Promise<TeacherValidation> {
     const parsed = parseWorkbook(fileBuffer);
     ensureRequiredHeaders(parsed.rows, TEACHERS_HEADERS);
 
     const directory = await this.repository.listTeacherDirectory(db);
+    const existingTeachers = await this.repository.listExistingTeachers(db);
+    const existingByName = new Map(existingTeachers.map((item) => [normalizeKey(item.name), item]));
     const existingUsernames = directory.map((item) => item.username);
     const byName = new Map<string, string[]>();
     for (const item of directory) {
@@ -329,14 +520,17 @@ export class ImportService {
     const errors: ImportError[] = [];
     const validRows: TeacherImportRow[] = [];
     const batchAssignedUsernames = new Set<string>();
+    const parsedTeacherKeySet = new Set<string>();
+    const toAdd: DiffPreviewItem[] = [];
+    const toUpdate: DiffPreviewItem[] = [];
 
-    parsed.rows.forEach((row, index) => {
-      const line = index + 2;
-      const lastName = normalizeCell(row['Nom*']);
-      const firstName = normalizeCell(row['Prénom*']);
-      const type = normalizeKey(row['Type*']);
-      const subjectsRaw = normalizeCell(row['Matières*']);
-      const hourlyRateRaw = normalizeCell(row['Taux horaire FCFA']);
+    parsed.rows.forEach((sheetRow) => {
+      const line = sheetRow.line;
+      const lastName = normalizeCell(sheetRow.values['Nom*']);
+      const firstName = normalizeCell(sheetRow.values['Prénom*']);
+      const type = normalizeKey(sheetRow.values['Type*']);
+      const subjectsRaw = normalizeCell(sheetRow.values['Matières*']);
+      const hourlyRateRaw = normalizeCell(sheetRow.values['Taux horaire FCFA']);
 
       if (!lastName) {
         errors.push(makeError({ row: line, column: 'Nom*', message: 'Nom requis' }));
@@ -352,7 +546,7 @@ export class ImportService {
             row: line,
             column: 'Type*',
             message: 'Type invalide (vacataire|permanent)',
-            value: normalizeCell(row['Type*']),
+            value: normalizeCell(sheetRow.values['Type*']),
           })
         );
       }
@@ -420,41 +614,104 @@ export class ImportService {
         hourlyRate,
         username: resolvedUsername,
       });
+
+      const teacherKey = normalizeKey(fullName);
+      parsedTeacherKeySet.add(teacherKey);
+
+      const existing = existingByName.get(teacherKey);
+      if (!existing) {
+        toAdd.push(
+          toDiffItem({
+            key: teacherKey,
+            displayName: fullName,
+          })
+        );
+        return;
+      }
+
+      const changes: DiffPreviewItem['changes'] = {};
+      if (existing.type !== (type as 'vacataire' | 'permanent')) {
+        changes.type = { before: existing.type, after: type };
+      }
+
+      if (normalizeSubjectsForCompare(existing.subjects) !== normalizeSubjectsForCompare(subjects)) {
+        changes.subjects = {
+          before: existing.subjects.join(', '),
+          after: subjects.join(', '),
+        };
+      }
+
+      if ((existing.hourlyRate ?? null) !== (hourlyRate ?? null)) {
+        changes.hourlyRate = {
+          before: existing.hourlyRate === null ? null : String(existing.hourlyRate),
+          after: hourlyRate === null ? null : String(hourlyRate),
+        };
+      }
+
+      if (!existing.isActive) {
+        changes.isActive = { before: 'false', after: 'true' };
+      }
+
+      if (changes && Object.keys(changes).length > 0) {
+        toUpdate.push(
+          toDiffItem({
+            key: teacherKey,
+            displayName: fullName,
+            changes,
+          })
+        );
+      }
     });
+
+    const toDelete =
+      importMode === 'replace'
+        ? existingTeachers
+            .filter((teacher) => !parsedTeacherKeySet.has(teacher.key) && teacher.isActive)
+            .map((teacher) =>
+              toDiffItem({
+                key: teacher.key,
+                displayName: teacher.name,
+              })
+            )
+        : [];
+
+    const unchanged = Math.max(0, validRows.length - toAdd.length - toUpdate.length);
 
     return {
       rows: validRows,
       report: {
         valid: validRows.length,
         errors,
-        preview: previewRows(parsed.rows),
+        preview: previewWorkbookRows(parsed.rows),
+        toAdd,
+        toUpdate,
+        toDelete,
+        unchanged,
+        importMode,
       },
     };
   }
 
-  private async validateSchedule(fileBuffer: Buffer, db: QueryExecutor): Promise<ScheduleValidation> {
+  private async validateSchedule(
+    fileBuffer: Buffer,
+    db: QueryExecutor,
+    schedulePeriod?: SchedulePeriodInput
+  ): Promise<ScheduleValidation> {
     const parsed = parseWorkbook(fileBuffer);
     ensureRequiredHeaders(parsed.rows, SCHEDULE_HEADERS);
 
-    const [classes, teacherDirectory, timeSlots, rooms, activePeriodId] = await Promise.all([
+    const period = validateSchedulePeriodInput(schedulePeriod);
+
+    const [classes, teacherDirectory, timeSlots, rooms] = await Promise.all([
       this.repository.listClasses(db),
       this.repository.listTeacherDirectory(db),
       this.repository.listTimeSlots(db),
       this.repository.listRooms(db),
-      this.repository.findActiveSchedulePeriodId(db, new Date().toISOString().slice(0, 10)),
     ]);
 
     const classesByName = new Map(classes.map((item) => [normalizeKey(item.name), item.id]));
     const slotsByLabel = new Map(timeSlots.map((item) => [normalizeKey(item.label), item.id]));
     const roomsByName = new Map(rooms.map((item) => [normalizeKey(item.name), item.id]));
-
-    if (!activePeriodId) {
-      throw new ImportModuleError(
-        'Aucune période active couvrant la date du jour',
-        400,
-        'IMPORT_NO_ACTIVE_PERIOD'
-      );
-    }
 
     const teachersByName = new Map<string, string[]>();
     for (const teacher of teacherDirectory) {
@@ -467,14 +724,14 @@ export class ImportService {
     const errors: ImportError[] = [];
     const validRows: ScheduleImportRow[] = [];
 
-    parsed.rows.forEach((row, index) => {
-      const line = index + 2;
-      const teacherName = normalizeCell(row['Nom professeur*']);
-      const className = normalizeCell(row['Classe*']);
-      const subject = normalizeCell(row['Matière*']);
-      const day = normalizeKey(row['Jour*']);
-      const slotLabel = normalizeCell(row['Créneau*']);
-      const roomName = normalizeCell(row['Salle']);
+    parsed.rows.forEach((sheetRow) => {
+      const line = sheetRow.line;
+      const teacherName = normalizeCell(sheetRow.values['Nom professeur*']);
+      const className = normalizeCell(sheetRow.values['Classe*']);
+      const subject = normalizeCell(sheetRow.values['Matière*']);
+      const day = normalizeKey(sheetRow.values['Jour*']);
+      const slotLabel = normalizeCell(sheetRow.values['Créneau*']);
+      const roomName = normalizeCell(sheetRow.values['Salle']);
 
       if (!teacherName) {
         errors.push(makeError({ row: line, column: 'Nom professeur*', message: 'Professeur requis' }));
@@ -524,7 +781,7 @@ export class ImportService {
             row: line,
             column: 'Jour*',
             message: 'Jour invalide (Lundi..Samedi)',
-            value: normalizeCell(row['Jour*']),
+            value: normalizeCell(sheetRow.values['Jour*']),
           })
         );
       }
@@ -577,12 +834,28 @@ export class ImportService {
       });
     });
 
+    let conflicts: DryRunReport['conflicts'] = [];
+    if (period) {
+      const overlapping = await this.repository.findOverlappingSchedulePeriods(
+        db,
+        period.weekStart,
+        period.weekEnd
+      );
+      conflicts = overlapping.map((item) => ({
+        periodName: item.name,
+        weekStart: item.valid_from,
+        weekEnd: item.valid_to,
+        message: `L'EDT "${item.name}" est déjà défini pour la semaine du ${item.valid_from}`,
+      }));
+    }
+
     return {
       rows: validRows,
       report: {
         valid: validRows.length,
         errors,
-        preview: previewRows(parsed.rows),
+        preview: previewWorkbookRows(parsed.rows),
+        conflicts,
       },
     };
   }
@@ -597,13 +870,15 @@ export class ImportService {
 
   private async confirmStudents(
     validation: StudentValidation,
-    db: QueryExecutor
+    db: QueryExecutor,
+    mode: ImportMode
   ): Promise<ConfirmReport> {
     this.ensureNoValidationErrors(validation.report);
 
     const run = async (executor: QueryExecutor): Promise<ConfirmReport> => {
       let imported = 0;
       let updated = 0;
+      let deactivated = 0;
 
       for (const row of validation.rows) {
         const result = await this.repository.upsertStudent(executor, row);
@@ -612,6 +887,17 @@ export class ImportService {
         } else {
           updated += 1;
         }
+      }
+
+      if (mode === 'replace') {
+        const existing = await this.repository.listExistingStudents(executor);
+        const importedKeys = new Set(
+          validation.rows.map((row) => normalizeKey(`${row.className}::${row.firstName}::${row.lastName}`))
+        );
+        const toDeactivateIds = existing
+          .filter((item) => !importedKeys.has(item.key) && item.isActive)
+          .map((item) => item.id);
+        deactivated = await this.repository.deactivateStudentsByIds(executor, toDeactivateIds);
       }
 
       await this.repository.createImportHistory(executor, {
@@ -625,6 +911,8 @@ export class ImportService {
         updated,
         errors: [],
         preview: validation.report.preview,
+        deactivated,
+        importMode: mode,
       };
     };
 
@@ -633,7 +921,8 @@ export class ImportService {
 
   private async confirmTeachers(
     validation: TeacherValidation,
-    db: QueryExecutor
+    db: QueryExecutor,
+    mode: ImportMode
   ): Promise<ConfirmReport> {
     this.ensureNoValidationErrors(validation.report);
 
@@ -650,6 +939,7 @@ export class ImportService {
     const run = async (executor: QueryExecutor): Promise<ConfirmReport> => {
       let imported = 0;
       let updated = 0;
+      let deactivated = 0;
 
       for (const row of validation.rows) {
         const displayName = `${row.firstName} ${row.lastName}`.trim();
@@ -665,6 +955,17 @@ export class ImportService {
         }
       }
 
+      if (mode === 'replace') {
+        const existing = await this.repository.listExistingTeachers(executor);
+        const importedKeys = new Set(
+          validation.rows.map((row) => normalizeKey(`${row.firstName} ${row.lastName}`))
+        );
+        const toDeactivateUserIds = existing
+          .filter((item) => !importedKeys.has(item.key) && item.isActive)
+          .map((item) => item.userId);
+        deactivated = await this.repository.deactivateTeachersByIds(executor, toDeactivateUserIds);
+      }
+
       await this.repository.createImportHistory(executor, {
         importType: 'teachers',
         importedCount: imported,
@@ -676,6 +977,8 @@ export class ImportService {
         updated,
         errors: [],
         preview: validation.report.preview,
+        deactivated,
+        importMode: mode,
       };
     };
 
@@ -684,25 +987,25 @@ export class ImportService {
 
   private async confirmSchedule(
     validation: ScheduleValidation,
-    db: QueryExecutor
+    db: QueryExecutor,
+    schedulePeriod?: SchedulePeriodInput
   ): Promise<ConfirmReport> {
     this.ensureNoValidationErrors(validation.report);
+    const period = validateSchedulePeriodInput(schedulePeriod);
+    const periodStart = period?.weekStart ?? new Date().toISOString().slice(0, 10);
+    const periodEnd = period?.weekEnd ?? periodStart;
 
-    const [classes, teacherDirectory, timeSlots, rooms, schedulePeriodId] = await Promise.all([
+    const [classes, teacherDirectory, timeSlots, rooms] = await Promise.all([
       this.repository.listClasses(db),
       this.repository.listTeacherDirectory(db),
       this.repository.listTimeSlots(db),
       this.repository.listRooms(db),
-      this.repository.findActiveSchedulePeriodId(db, new Date().toISOString().slice(0, 10)),
     ]);
-
-    if (!schedulePeriodId) {
-      throw new ImportModuleError(
-        'Aucune période active disponible pour importer les cours',
-        400,
-        'IMPORT_NO_ACTIVE_PERIOD'
-      );
-    }
+    const schedulePeriodId = await this.repository.findOrCreateSchedulePeriod(db, {
+      name: `Import EDT ${periodStart} - ${periodEnd}`,
+      validFrom: periodStart,
+      validTo: periodEnd,
+    });
 
     const classIdByName = new Map(classes.map((item) => [normalizeKey(item.name), item.id]));
     const slotIdByLabel = new Map(timeSlots.map((item) => [normalizeKey(item.label), item.id]));
@@ -757,6 +1060,7 @@ export class ImportService {
         updated,
         errors: [],
         preview: validation.report.preview,
+        importMode: 'merge',
       };
     };
 

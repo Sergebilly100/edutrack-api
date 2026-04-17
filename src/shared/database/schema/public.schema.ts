@@ -4,6 +4,7 @@ import {
   integer,
   pgEnum,
   pgTable,
+  text,
   timestamp,
   uuid,
   varchar,
@@ -69,6 +70,11 @@ export const tenants = pgTable('tenants', {
     .notNull()
     .defaultNow()
     .$onUpdate(() => new Date()),
+  studentLabel: varchar('student_label', { length: 120 }).default('Élève'),
+  directorTitle: varchar('director_title', { length: 120 }).default('Directeur'),
+  maxSmsPerMonth: integer('max_sms_per_month').default(2000),
+  canEditSmsTemplate: boolean('can_edit_sms_template').default(false),
+  canExportData: boolean('can_export_data').default(true),
 });
 
 export const subscriptions = pgTable('subscriptions', {
@@ -116,4 +122,21 @@ export const adminAccessLog = pgTable('admin_access_log', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
     .notNull()
     .defaultNow(),
+});
+
+export const smsTemplates = pgTable('sms_templates', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  tenantId: uuid('tenant_id').references(() => tenants.id, { onDelete: 'cascade' }),
+  type: varchar('type', { length: 50 }).notNull(),
+  messageTemplate: text('message_template').notNull(),
+  variables: text('variables').array().notNull().default([]),
+  createdBy: uuid('created_by'),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+});
+
+export const appSettings = pgTable('app_settings', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  maintenanceMode: boolean('maintenance_mode').notNull().default(false),
+  maintenanceMessage: text('maintenance_message').notNull().default('Mise à jour en cours'),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
 });

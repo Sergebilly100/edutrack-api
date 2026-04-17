@@ -11,13 +11,18 @@ import {
   type ListTenantsQuery,
   type ListSchoolsQuery,
   type RevenueMetricsResult,
+  type RevenueSummaryResult,
   type SchoolDetailsResult,
   type SchoolListItem,
   type SchoolListResult,
+  type SmsDashboardResult,
+  type SmsTemplateItem,
+  type SmsTemplateType,
   type TeachingType,
   type TenantListItem,
   type TenantListResult,
   type TenantStatsResult,
+  type UpdateSmsTemplateBody,
   type UpdateSchoolConfigBody,
   type UpdateTenantBody,
 } from './admin.types.js';
@@ -75,6 +80,12 @@ type SchoolLookupRow = {
   city: string | null;
   teaching_type: TeachingType | null;
   max_admin_positions: number;
+  max_users: number;
+  max_sms_per_month: number;
+  student_label: string | null;
+  director_title: string | null;
+  can_edit_sms_template: boolean;
+  can_export_data: boolean;
   created_at: Date;
   updated_at: Date;
 };
@@ -88,6 +99,50 @@ type SchoolRevenueRow = {
   month: string;
   mrr_fcfa: number;
   payments_count: number;
+};
+
+type RevenueSummaryRow = {
+  month: string;
+  mrr_fcfa: number;
+  new_fcfa: number;
+  churn_fcfa: number;
+};
+
+type RevenueSchoolRow = {
+  tenant_id: string;
+  school: string;
+  plan: TenantListItem['plan'];
+  status: TenantListItem['status'];
+  amount_per_month: number;
+  last_due_date: string | null;
+  payment_mode: string | null;
+};
+
+type SmsTemplateRow = {
+  id: string;
+  tenant_id: string | null;
+  type: SmsTemplateType;
+  message_template: string;
+  variables: string[] | null;
+  updated_at: Date | string;
+};
+
+type SmsStatsBySchoolRow = {
+  tenant_id: string;
+  school: string;
+  sent: number;
+  quota: number;
+  used_pct: number;
+};
+
+type SmsHistoryRow = {
+  id: string;
+  date: string;
+  school: string;
+  type: string;
+  recipient_phone: string;
+  status: string;
+  message: string;
 };
 
 type DirectorInsertRow = { id: string };
@@ -194,6 +249,52 @@ const parseNumeric = (value: unknown): number => {
   }
 
   return 0;
+};
+
+const ensureAdminPublicInfrastructure = async (publicDb: TenantDb): Promise<void> => {
+  await publicDb.execute(sql.raw(`
+    ALTER TABLE public.tenants
+      ADD COLUMN IF NOT EXISTS student_label varchar(120) DEFAULT 'Élève',
+      ADD COLUMN IF NOT EXISTS director_title varchar(120) DEFAULT 'Directeur',
+      ADD COLUMN IF NOT EXISTS max_sms_per_month integer DEFAULT 2000,
+      ADD COLUMN IF NOT EXISTS can_edit_sms_template boolean DEFAULT false,
+      ADD COLUMN IF NOT EXISTS can_export_data boolean DEFAULT true;
+  `));
+
+  await publicDb.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS public.sms_templates (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+      tenant_id uuid REFERENCES public.tenants(id) ON DELETE CASCADE,
+      type varchar(50) NOT NULL,
+      message_template text NOT NULL,
+      variables text[] NOT NULL DEFAULT '{}',
+      created_by uuid,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE(tenant_id, type)
+    );
+  `));
+
+  await publicDb.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS public.app_settings (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+      maintenance_mode boolean NOT NULL DEFAULT false,
+      maintenance_message text NOT NULL DEFAULT 'Mise à jour en cours',
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+  `));
+
+  await publicDb.execute(sql.raw(`
+    INSERT INTO public.app_settings (maintenance_mode, maintenance_message)
+    SELECT false, 'Mise à jour en cours'
+    WHERE NOT EXISTS (SELECT 1 FROM public.app_settings);
+  `));
+};
+
+const maskPhone = (phone: string): string => {
+  if (phone.length <= 5) {
+    return phone;
+  }
+  return `${phone.slice(0, 3)}XXXX${phone.slice(-3)}`;
 };
 
 const formatDateTime = (value: Date | string | null): string | null => {
@@ -888,6 +989,12 @@ export const listSchools = async (
       t.city,
       t.teaching_type,
       t.max_admin_positions,
+      t.max_users,
+      COALESCE(t.max_sms_per_month, 2000) AS max_sms_per_month,
+      COALESCE(t.student_label, 'Élève') AS student_label,
+      COALESCE(t.director_title, 'Directeur') AS director_title,
+      COALESCE(t.can_edit_sms_template, false) AS can_edit_sms_template,
+      COALESCE(t.can_export_data, true) AS can_export_data,
       t.created_at,
       t.updated_at
     FROM public.tenants t
@@ -942,6 +1049,12 @@ export const getSchoolDetails = async (
       t.city,
       t.teaching_type,
       t.max_admin_positions,
+      t.max_users,
+      COALESCE(t.max_sms_per_month, 2000) AS max_sms_per_month,
+      COALESCE(t.student_label, 'Élève') AS student_label,
+      COALESCE(t.director_title, 'Directeur') AS director_title,
+      COALESCE(t.can_edit_sms_template, false) AS can_edit_sms_template,
+      COALESCE(t.can_export_data, true) AS can_export_data,
       t.created_at,
       t.updated_at
     FROM public.tenants t
@@ -971,6 +1084,12 @@ export const getSchoolDetails = async (
       city: tenant.city,
       teachingType: tenant.teaching_type,
       maxAdminPositions: tenant.max_admin_positions,
+      maxUsers: tenant.max_users,
+      maxSmsPerMonth: tenant.max_sms_per_month,
+      studentLabel: tenant.student_label,
+      directorTitle: tenant.director_title,
+      canEditSmsTemplate: tenant.can_edit_sms_template,
+      canExportData: tenant.can_export_data,
       createdAt: formatDateTime(tenant.created_at) ?? new Date(0).toISOString(),
       updatedAt: formatDateTime(tenant.updated_at) ?? new Date(0).toISOString(),
     },
@@ -992,16 +1111,40 @@ export const updateSchoolConfig = async (
   tenantId: string,
   payload: UpdateSchoolConfigBody
 ): Promise<void> => {
+  await ensureAdminPublicInfrastructure(publicDb);
+
   const result = await publicDb.execute<{ id: string }>(sql`
     UPDATE public.tenants
     SET
       plan = CASE WHEN ${payload.plan !== undefined} THEN ${payload.plan ?? null}::tenant_plan ELSE plan END,
       status = CASE WHEN ${payload.status !== undefined} THEN ${payload.status ?? null}::tenant_status ELSE status END,
+      city = CASE WHEN ${payload.city !== undefined} THEN ${payload.city ?? null} ELSE city END,
+      teaching_type = CASE WHEN ${payload.teaching_type !== undefined}
+        THEN ${payload.teaching_type ?? null}::teaching_type
+        ELSE teaching_type END,
+      student_label = CASE WHEN ${payload.student_label !== undefined}
+        THEN ${payload.student_label ?? null}
+        ELSE student_label END,
+      director_title = CASE WHEN ${payload.director_title !== undefined}
+        THEN ${payload.director_title ?? null}
+        ELSE director_title END,
+      max_users = CASE WHEN ${payload.max_users !== undefined}
+        THEN ${payload.max_users ?? null}::integer
+        ELSE max_users END,
       max_admin_positions = CASE
         WHEN ${payload.max_admin_positions !== undefined}
           THEN ${payload.max_admin_positions ?? null}::integer
         ELSE max_admin_positions
       END,
+      max_sms_per_month = CASE WHEN ${payload.max_sms_per_month !== undefined}
+        THEN ${payload.max_sms_per_month ?? null}::integer
+        ELSE max_sms_per_month END,
+      can_edit_sms_template = CASE WHEN ${payload.can_edit_sms_template !== undefined}
+        THEN ${payload.can_edit_sms_template ?? null}::boolean
+        ELSE can_edit_sms_template END,
+      can_export_data = CASE WHEN ${payload.can_export_data !== undefined}
+        THEN ${payload.can_export_data ?? null}::boolean
+        ELSE can_export_data END,
       updated_at = NOW()
     WHERE id = ${tenantId}
     RETURNING id
@@ -1024,6 +1167,12 @@ export const getAdminMetrics = async (publicDb: TenantDb): Promise<AdminMetricsR
       t.city,
       t.teaching_type,
       t.max_admin_positions,
+      t.max_users,
+      COALESCE(t.max_sms_per_month, 2000) AS max_sms_per_month,
+      COALESCE(t.student_label, 'Élève') AS student_label,
+      COALESCE(t.director_title, 'Directeur') AS director_title,
+      COALESCE(t.can_edit_sms_template, false) AS can_edit_sms_template,
+      COALESCE(t.can_export_data, true) AS can_export_data,
       t.created_at,
       t.updated_at
     FROM public.tenants t
@@ -1117,6 +1266,402 @@ export const getRevenueMetrics = async (publicDb: TenantDb): Promise<RevenueMetr
     mrr_fcfa: parseNumeric(row.mrr_fcfa),
     payments_count: parseNumeric(row.payments_count),
   }));
+};
+
+export const getRevenueSummary = async (publicDb: TenantDb): Promise<RevenueSummaryResult> => {
+  await ensureAdminPublicInfrastructure(publicDb);
+
+  const [mrrResult, monthlyResult, schoolsResult, cardsResult] = await Promise.all([
+    publicDb.execute<{ total_mrr: number }>(sql`
+      SELECT COALESCE(SUM(s.mrr_fcfa), 0)::int AS total_mrr
+      FROM public.subscriptions s
+      WHERE s.status IN ('active', 'past_due')
+    `),
+    publicDb.execute<RevenueSummaryRow>(sql`
+      WITH months AS (
+        SELECT to_char(date_trunc('month', CURRENT_DATE) - (gs || ' months')::interval, 'YYYY-MM') AS month_key
+        FROM generate_series(11, 0, -1) gs
+      ),
+      metrics AS (
+        SELECT
+          to_char(date_trunc('month', pe.created_at), 'YYYY-MM') AS month_key,
+          COALESCE(SUM(CASE WHEN pe.status = 'success' THEN pe.amount_fcfa ELSE 0 END), 0)::int AS mrr_fcfa,
+          COALESCE(SUM(CASE WHEN pe.status = 'success' THEN pe.amount_fcfa ELSE 0 END), 0)::int AS new_fcfa,
+          COALESCE(SUM(CASE WHEN pe.status = 'failed' THEN pe.amount_fcfa ELSE 0 END), 0)::int AS churn_fcfa
+        FROM public.payment_events pe
+        WHERE pe.created_at >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months'
+        GROUP BY 1
+      )
+      SELECT
+        m.month_key AS month,
+        COALESCE(mt.mrr_fcfa, 0)::int AS mrr_fcfa,
+        COALESCE(mt.new_fcfa, 0)::int AS new_fcfa,
+        COALESCE(mt.churn_fcfa, 0)::int AS churn_fcfa
+      FROM months m
+      LEFT JOIN metrics mt ON mt.month_key = m.month_key
+      ORDER BY m.month_key ASC
+    `),
+    publicDb.execute<RevenueSchoolRow>(sql`
+      SELECT
+        t.id AS tenant_id,
+        t.name AS school,
+        t.plan,
+        t.status,
+        COALESCE(s.mrr_fcfa, 0)::int AS amount_per_month,
+        s.current_period_end::text AS last_due_date,
+        COALESCE(s.momo_phone, 'manual') AS payment_mode
+      FROM public.tenants t
+      LEFT JOIN LATERAL (
+        SELECT mrr_fcfa, current_period_end, momo_phone
+        FROM public.subscriptions
+        WHERE tenant_id = t.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) s ON true
+      ORDER BY t.name ASC
+    `),
+    publicDb.execute<{
+      new_subscriptions: number;
+      churn: number;
+    }>(sql`
+      SELECT
+        (
+          SELECT COUNT(*)::int
+          FROM public.subscriptions s
+          WHERE date_trunc('month', s.created_at) = date_trunc('month', CURRENT_DATE)
+        ) AS new_subscriptions,
+        (
+          SELECT COUNT(*)::int
+          FROM public.subscriptions s
+          WHERE s.status = 'cancelled'
+            AND date_trunc('month', s.created_at) = date_trunc('month', CURRENT_DATE)
+        ) AS churn
+    `),
+  ]);
+
+  const mrr = parseNumeric(getRows<{ total_mrr: number }>(mrrResult)[0]?.total_mrr);
+  const cards = getRows<{ new_subscriptions: number; churn: number }>(cardsResult)[0];
+
+  return {
+    cards: {
+      mrrTotalFcfa: mrr,
+      arrFcfa: mrr * 12,
+      newSubscriptionsThisMonth: parseNumeric(cards?.new_subscriptions),
+      churnThisMonth: parseNumeric(cards?.churn),
+    },
+    monthly: getRows<RevenueSummaryRow>(monthlyResult).map((row) => ({
+      month: row.month,
+      mrr_fcfa: parseNumeric(row.mrr_fcfa),
+      new_fcfa: parseNumeric(row.new_fcfa),
+      churn_fcfa: parseNumeric(row.churn_fcfa),
+    })),
+    schools: getRows<RevenueSchoolRow>(schoolsResult).map((row) => ({
+      tenantId: row.tenant_id,
+      school: row.school,
+      plan: row.plan,
+      status: row.status,
+      amountPerMonth: parseNumeric(row.amount_per_month),
+      lastDueDate: row.last_due_date,
+      paymentMode: row.payment_mode,
+    })),
+  };
+};
+
+export const listSchoolPayments = async (
+  publicDb: TenantDb,
+  tenantId: string
+): Promise<
+  Array<{
+    id: string;
+    date: string;
+    amountFcfa: number;
+    provider: string;
+    reference: string | null;
+    status: string;
+  }>
+> => {
+  const result = await publicDb.execute<{
+    id: string;
+    date: string;
+    amount_fcfa: number;
+    provider: string;
+    provider_ref: string | null;
+    status: string;
+  }>(sql`
+    SELECT
+      pe.id::text AS id,
+      pe.created_at::text AS date,
+      pe.amount_fcfa,
+      pe.provider::text AS provider,
+      pe.provider_ref,
+      pe.status::text AS status
+    FROM public.payment_events pe
+    INNER JOIN public.subscriptions s ON s.id = pe.subscription_id
+    WHERE s.tenant_id = ${tenantId}
+    ORDER BY pe.created_at DESC
+    LIMIT 100
+  `);
+
+  return getRows<{
+    id: string;
+    date: string;
+    amount_fcfa: number;
+    provider: string;
+    provider_ref: string | null;
+    status: string;
+  }>(result).map((row) => ({
+    id: row.id,
+    date: row.date,
+    amountFcfa: parseNumeric(row.amount_fcfa),
+    provider: row.provider,
+    reference: row.provider_ref,
+    status: row.status,
+  }));
+};
+
+export const addManualPayment = async (
+  publicDb: TenantDb,
+  tenantId: string,
+  payload: {
+    date: string;
+    amount_fcfa: number;
+    provider: 'manual' | 'mtn_momo' | 'orange_money';
+    reference?: string;
+    period_from?: string;
+    period_to?: string;
+  }
+): Promise<void> => {
+  const subscriptionResult = await publicDb.execute<{ id: string }>(sql`
+    SELECT id
+    FROM public.subscriptions
+    WHERE tenant_id = ${tenantId}
+    ORDER BY created_at DESC
+    LIMIT 1
+  `);
+  const subscriptionId = getRows<{ id: string }>(subscriptionResult)[0]?.id;
+  if (!subscriptionId) {
+    throw new Error('Tenant not found');
+  }
+
+  await publicDb.execute(sql`
+    INSERT INTO public.payment_events (subscription_id, amount_fcfa, provider, provider_ref, status, created_at)
+    VALUES (
+      ${subscriptionId},
+      ${payload.amount_fcfa},
+      ${payload.provider},
+      ${payload.reference ?? null},
+      'success',
+      ${payload.date}
+    )
+  `);
+
+  if (payload.period_from && payload.period_to) {
+    await publicDb.execute(sql`
+      UPDATE public.subscriptions
+      SET current_period_start = ${payload.period_from},
+          current_period_end = ${payload.period_to},
+          status = 'active'
+      WHERE id = ${subscriptionId}
+    `);
+  }
+};
+
+export const getSmsDashboard = async (publicDb: TenantDb): Promise<SmsDashboardResult> => {
+  await ensureAdminPublicInfrastructure(publicDb);
+
+  const tenantsResult = await publicDb.execute<{ id: string; name: string; schema_name: string; max_sms_per_month: number }>(sql`
+    SELECT id, name, schema_name, COALESCE(max_sms_per_month, 2000)::int AS max_sms_per_month
+    FROM public.tenants
+    ORDER BY name ASC
+  `);
+  const tenants = getRows<{
+    id: string;
+    name: string;
+    schema_name: string;
+    max_sms_per_month: number;
+  }>(tenantsResult);
+
+  const bySchool: SmsStatsBySchoolRow[] = [];
+  const history: SmsHistoryRow[] = [];
+  let sentThisMonth = 0;
+  let delivered = 0;
+  let total = 0;
+
+  for (const tenant of tenants) {
+    const schema = quoteIdentifier(tenant.schema_name);
+    const escapedSchoolName = tenant.name.replace(/'/g, "''");
+    const statsResult = await publicDb.execute<{ sent: number; delivered: number; total: number }>(sql.raw(`
+      SELECT
+        COUNT(*) FILTER (WHERE nl.status IN ('sent', 'delivered')
+          AND date_trunc('month', COALESCE(nl.sent_at, nl.created_at)) = date_trunc('month', CURRENT_DATE))::int AS sent,
+        COUNT(*) FILTER (WHERE nl.status = 'delivered')::int AS delivered,
+        COUNT(*)::int AS total
+      FROM ${schema}.notifications_log nl
+    `));
+    const stats = getRows<{ sent: number; delivered: number; total: number }>(statsResult)[0] ?? {
+      sent: 0,
+      delivered: 0,
+      total: 0,
+    };
+    sentThisMonth += parseNumeric(stats.sent);
+    delivered += parseNumeric(stats.delivered);
+    total += parseNumeric(stats.total);
+
+    const usedPct = tenant.max_sms_per_month > 0
+      ? Math.min(100, Math.round((parseNumeric(stats.sent) / tenant.max_sms_per_month) * 100))
+      : 0;
+
+    bySchool.push({
+      tenant_id: tenant.id,
+      school: tenant.name,
+      sent: parseNumeric(stats.sent),
+      quota: tenant.max_sms_per_month,
+      used_pct: usedPct,
+    });
+
+    const historyResult = await publicDb.execute<SmsHistoryRow>(sql.raw(`
+      SELECT
+        nl.id::text AS id,
+        COALESCE(nl.sent_at, nl.created_at)::text AS date,
+        '${escapedSchoolName}'::text AS school,
+        nl.type::text AS type,
+        nl.recipient_phone,
+        nl.status::text AS status,
+        nl.message
+      FROM ${schema}.notifications_log nl
+      ORDER BY COALESCE(nl.sent_at, nl.created_at) DESC
+      LIMIT 20
+    `));
+    history.push(...getRows<SmsHistoryRow>(historyResult));
+  }
+
+  history.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  return {
+    sentThisMonth,
+    deliveryRate: total > 0 ? Number(((delivered / total) * 100).toFixed(2)) : 0,
+    activeSchools: bySchool.filter((row) => row.sent > 0).length,
+    estimatedCostFcfa: sentThisMonth * 12,
+    bySchool: bySchool.map((row) => ({
+      tenantId: row.tenant_id,
+      school: row.school,
+      sent: row.sent,
+      quota: row.quota,
+      usedPct: row.used_pct,
+    })),
+    history: history.slice(0, 200).map((row) => ({
+      id: row.id,
+      date: row.date,
+      school: row.school,
+      type: row.type,
+      recipientMasked: maskPhone(row.recipient_phone),
+      status: row.status,
+      message: row.message,
+    })),
+  };
+};
+
+export const listSmsTemplates = async (
+  publicDb: TenantDb,
+  tenantId?: string
+): Promise<SmsTemplateItem[]> => {
+  await ensureAdminPublicInfrastructure(publicDb);
+  const result = await publicDb.execute<SmsTemplateRow>(sql`
+    SELECT id::text, tenant_id::text, type::text, message_template, variables, updated_at
+    FROM public.sms_templates
+    WHERE (${tenantId ?? null}::uuid IS NULL AND tenant_id IS NULL)
+       OR (${tenantId ?? null}::uuid IS NOT NULL AND tenant_id = ${tenantId ?? null}::uuid)
+    ORDER BY type ASC
+  `);
+
+  return getRows<SmsTemplateRow>(result).map((row) => ({
+    id: row.id,
+    tenantId: row.tenant_id,
+    type: row.type,
+    messageTemplate: row.message_template,
+    variables: row.variables ?? [],
+    updatedAt: formatDateTime(row.updated_at) ?? new Date().toISOString(),
+  }));
+};
+
+export const upsertSmsTemplate = async (
+  publicDb: TenantDb,
+  params: {
+    tenantId: string | null;
+    type: SmsTemplateType;
+    body: UpdateSmsTemplateBody;
+    adminId?: string;
+  }
+): Promise<void> => {
+  await ensureAdminPublicInfrastructure(publicDb);
+  await publicDb.execute(sql`
+    INSERT INTO public.sms_templates (tenant_id, type, message_template, variables, created_by, updated_at)
+    VALUES (
+      ${params.tenantId},
+      ${params.type},
+      ${params.body.message_template},
+      ${params.body.variables},
+      ${params.adminId ?? null},
+      NOW()
+    )
+    ON CONFLICT (tenant_id, type)
+    DO UPDATE SET
+      message_template = EXCLUDED.message_template,
+      variables = EXCLUDED.variables,
+      updated_at = NOW()
+  `);
+};
+
+export const deleteTenantSmsTemplate = async (
+  publicDb: TenantDb,
+  tenantId: string,
+  type: SmsTemplateType
+): Promise<void> => {
+  await ensureAdminPublicInfrastructure(publicDb);
+  await publicDb.execute(sql`
+    DELETE FROM public.sms_templates
+    WHERE tenant_id = ${tenantId}
+      AND type = ${type}
+  `);
+};
+
+export const getMaintenanceConfig = async (
+  publicDb: TenantDb
+): Promise<{ maintenanceMode: boolean; maintenanceMessage: string; updatedAt: string }> => {
+  await ensureAdminPublicInfrastructure(publicDb);
+  const result = await publicDb.execute<{
+    maintenance_mode: boolean;
+    maintenance_message: string;
+    updated_at: string;
+  }>(sql`
+    SELECT maintenance_mode, maintenance_message, updated_at::text
+    FROM public.app_settings
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `);
+  const row = getRows<{
+    maintenance_mode: boolean;
+    maintenance_message: string;
+    updated_at: string;
+  }>(result)[0];
+  return {
+    maintenanceMode: row?.maintenance_mode ?? false,
+    maintenanceMessage: row?.maintenance_message ?? 'Mise à jour en cours',
+    updatedAt: row?.updated_at ?? new Date().toISOString(),
+  };
+};
+
+export const updateMaintenanceConfig = async (
+  publicDb: TenantDb,
+  payload: { maintenance_mode: boolean; maintenance_message: string }
+): Promise<void> => {
+  await ensureAdminPublicInfrastructure(publicDb);
+  await publicDb.execute(sql`
+    UPDATE public.app_settings
+    SET maintenance_mode = ${payload.maintenance_mode},
+        maintenance_message = ${payload.maintenance_message},
+        updated_at = NOW()
+  `);
 };
 
 export const createImpersonationToken = async (

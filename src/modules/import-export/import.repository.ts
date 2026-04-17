@@ -20,6 +20,7 @@ type TeacherDirectoryRow = { teacher_id: string; user_id: string; name: string; 
 type RoomRow = { id: string; name: string };
 type TimeSlotRow = { id: string; label: string };
 type SchedulePeriodRow = { id: string };
+type SchedulePeriodConflictRow = { id: string; name: string; valid_from: string; valid_to: string };
 type ExistingStudentRow = { id: string };
 type ExistingTeacherRow = { id: string; user_id: string };
 type UserInsertRow = { id: string };
@@ -70,6 +71,45 @@ export type ImportRepository = {
   listRooms: (db: QueryExecutor) => Promise<RoomRow[]>;
   listTimeSlots: (db: QueryExecutor) => Promise<TimeSlotRow[]>;
   findActiveSchedulePeriodId: (db: QueryExecutor, date: string) => Promise<string | null>;
+  findOverlappingSchedulePeriods: (
+    db: QueryExecutor,
+    weekStart: string,
+    weekEnd: string
+  ) => Promise<SchedulePeriodConflictRow[]>;
+  findOrCreateSchedulePeriod: (
+    db: QueryExecutor,
+    params: { name: string; validFrom: string; validTo: string }
+  ) => Promise<string>;
+  listExistingStudents: (
+    db: QueryExecutor
+  ) => Promise<
+    Array<{
+      id: string;
+      key: string;
+      firstName: string;
+      lastName: string;
+      className: string;
+      parentPhone: string | null;
+      isActive: boolean;
+    }>
+  >;
+  deactivateStudentsByIds: (db: QueryExecutor, ids: string[]) => Promise<number>;
+  listExistingTeachers: (
+    db: QueryExecutor
+  ) => Promise<
+    Array<{
+      id: string;
+      userId: string;
+      key: string;
+      name: string;
+      username: string;
+      type: 'vacataire' | 'permanent';
+      subjects: string[];
+      hourlyRate: number | null;
+      isActive: boolean;
+    }>
+  >;
+  deactivateTeachersByIds: (db: QueryExecutor, ids: string[]) => Promise<number>;
   upsertStudent: (db: QueryExecutor, row: StudentImportRow) => Promise<'inserted' | 'updated'>;
   upsertTeacher: (
     db: QueryExecutor,
@@ -152,6 +192,161 @@ export const defaultImportRepository: ImportRepository = {
     `);
 
     return getRows<SchedulePeriodRow>(result)[0]?.id ?? null;
+  },
+
+  async findOverlappingSchedulePeriods(db, weekStart, weekEnd) {
+    const result = await db.execute(sql`
+      SELECT id, name, valid_from::text, valid_to::text
+      FROM schedule_periods
+      WHERE is_active = true
+        AND valid_from <= ${weekEnd}
+        AND valid_to >= ${weekStart}
+      ORDER BY valid_from ASC, created_at ASC
+    `);
+
+    return getRows<SchedulePeriodConflictRow>(result);
+  },
+
+  async findOrCreateSchedulePeriod(db, params) {
+    const existing = await db.execute(sql`
+      SELECT id
+      FROM schedule_periods
+      WHERE valid_from = ${params.validFrom}
+        AND valid_to = ${params.validTo}
+      ORDER BY created_at DESC
+      LIMIT 1
+    `);
+    const existingId = getRows<SchedulePeriodRow>(existing)[0]?.id;
+    if (existingId) {
+      return existingId;
+    }
+
+    const created = await db.execute(sql`
+      INSERT INTO schedule_periods (name, valid_from, valid_to, is_active)
+      VALUES (${params.name}, ${params.validFrom}, ${params.validTo}, true)
+      RETURNING id
+    `);
+
+    const createdId = getRows<SchedulePeriodRow>(created)[0]?.id;
+    if (!createdId) {
+      throw new Error('Unable to create schedule period');
+    }
+
+    return createdId;
+  },
+
+  async listExistingStudents(db) {
+    const result = await db.execute(sql`
+      SELECT
+        s.id,
+        LOWER(CONCAT(c.name, '::', s.first_name, '::', s.last_name)) AS key,
+        s.first_name,
+        s.last_name,
+        c.name AS class_name,
+        s.parent_phone,
+        s.is_active
+      FROM students s
+      INNER JOIN classes c ON c.id = s.class_id
+    `);
+
+    return getRows<{
+      id: string;
+      key: string;
+      first_name: string;
+      last_name: string;
+      class_name: string;
+      parent_phone: string | null;
+      is_active: boolean;
+    }>(result).map((row) => ({
+      id: row.id,
+      key: row.key,
+      firstName: row.first_name,
+      lastName: row.last_name,
+      className: row.class_name,
+      parentPhone: row.parent_phone,
+      isActive: row.is_active,
+    }));
+  },
+
+  async deactivateStudentsByIds(db, ids) {
+    if (ids.length === 0) {
+      return 0;
+    }
+
+    const result = await db.execute(sql`
+      WITH updated AS (
+        UPDATE students
+        SET is_active = false
+        WHERE id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+          AND is_active = true
+        RETURNING id
+      )
+      SELECT COUNT(*)::int AS count FROM updated
+    `);
+
+    const row = getRows<{ count: string | number }>(result)[0];
+    const value = row ? Number(row.count) : 0;
+    return Number.isFinite(value) ? value : 0;
+  },
+
+  async listExistingTeachers(db) {
+    const result = await db.execute(sql`
+      SELECT
+        t.id,
+        t.user_id,
+        LOWER(u.name) AS key,
+        u.name,
+        t.username,
+        t.type,
+        t.subjects,
+        t.hourly_rate,
+        u.is_active
+      FROM teachers t
+      INNER JOIN users u ON u.id = t.user_id
+    `);
+
+    return getRows<{
+      id: string;
+      user_id: string;
+      key: string;
+      name: string;
+      username: string;
+      type: 'vacataire' | 'permanent';
+      subjects: string[] | null;
+      hourly_rate: number | null;
+      is_active: boolean;
+    }>(result).map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      key: row.key,
+      name: row.name,
+      username: row.username,
+      type: row.type,
+      subjects: row.subjects ?? [],
+      hourlyRate: row.hourly_rate,
+      isActive: row.is_active,
+    }));
+  },
+
+  async deactivateTeachersByIds(db, ids) {
+    if (ids.length === 0) {
+      return 0;
+    }
+
+    const result = await db.execute(sql`
+      WITH updated AS (
+        UPDATE users
+        SET is_active = false
+        WHERE id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+          AND is_active = true
+        RETURNING id
+      )
+      SELECT COUNT(*)::int AS count FROM updated
+    `);
+
+    const row = getRows<{ count: string | number }>(result)[0];
+    const value = row ? Number(row.count) : 0;
+    return Number.isFinite(value) ? value : 0;
   },
 
   async upsertStudent(db, row) {
