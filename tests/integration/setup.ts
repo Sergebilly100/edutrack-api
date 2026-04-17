@@ -93,6 +93,19 @@ const getContext = (): SeedContext => {
 
 export const getSeedContext = (): SeedContext => getContext();
 
+const getJwtDebugSnapshot = (): string => {
+  const privateKey = process.env.JWT_PRIVATE_KEY ?? '';
+  const publicKey = process.env.JWT_PUBLIC_KEY ?? '';
+  return JSON.stringify({
+    hasPrivateKey: privateKey.length > 0,
+    hasPublicKey: publicKey.length > 0,
+    privateKeyLength: privateKey.length,
+    publicKeyLength: publicKey.length,
+    privateKeyPrefix: privateKey.slice(0, 30),
+    publicKeyPrefix: publicKey.slice(0, 30),
+  });
+};
+
 const getLoginCredentials = (
   role: TestRole,
   context: SeedContext
@@ -131,7 +144,7 @@ export const getToken = async (role: TestRole): Promise<string> => {
 
   if (loginResponse.status !== 200 || typeof loginResponse.body?.accessToken !== 'string') {
     throw new Error(
-      `[integration] Unable to fetch access token for role=${role} (status=${loginResponse.status})`
+      `[integration] Unable to fetch access token for role=${role} (status=${loginResponse.status}) body=${JSON.stringify(loginResponse.body)} jwt=${getJwtDebugSnapshot()}`
     );
   }
 
@@ -409,11 +422,43 @@ const initApp = async (): Promise<FastifyInstance> => {
   return testApp;
 };
 
+const assertBootstrapLogin = async (): Promise<void> => {
+  const context = getContext();
+
+  const runLogin = async () =>
+    request()
+      .post('/api/v1/auth/login/teacher')
+      .set({
+        'x-tenant-schema': TEST_SCHEMA_NAME,
+      })
+      .send({
+        identifier: context.teacherUsername,
+        password: context.teacherPassword,
+      });
+
+  let loginResponse = await runLogin();
+  if (loginResponse.status === 200) {
+    return;
+  }
+
+  // Retry once with a fresh keypair in case CI injected malformed keys.
+  ensureJwtKeysForIntegration();
+  loginResponse = await runLogin();
+  if (loginResponse.status === 200) {
+    return;
+  }
+
+  throw new Error(
+    `[integration] bootstrap login failed status=${loginResponse.status} body=${JSON.stringify(loginResponse.body)} jwt=${getJwtDebugSnapshot()}`
+  );
+};
+
 beforeAll(async () => {
   const { createTenantSchema } = await import('../../src/shared/database/tenant-init.js');
   await createTenantSchema(TEST_SCHEMA_NAME);
   seedContext = await seedTenantData();
   app = await initApp();
+  await assertBootstrapLogin();
 });
 
 afterEach(async () => {
