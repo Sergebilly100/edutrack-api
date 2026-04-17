@@ -1,7 +1,7 @@
 import { generateKeyPair, exportPKCS8, exportSPKI } from 'jose';
 import { appendFileSync } from 'fs';
 
-const { privateKey, publicKey } = await generateKeyPair('RS256', { modulusLength: 2048 });
+const { privateKey, publicKey } = await generateKeyPair('RS256', { modulusLength: 2048, extractable: true });
 const privatePem = await exportPKCS8(privateKey);
 const publicPem = await exportSPKI(publicKey);
 
