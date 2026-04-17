@@ -34,10 +34,8 @@ if (!DATABASE_URL_TEST) {
 }
 
 const ensureJwtKeysForIntegration = (): void => {
-  if (process.env.JWT_PRIVATE_KEY && process.env.JWT_PUBLIC_KEY) {
-    return;
-  }
-
+  // Always use a fresh keypair for integration tests to avoid CI env formatting issues
+  // (quoted PEM, escaped newlines, multiline export edge cases).
   const { privateKey, publicKey } = generateKeyPairSync('rsa', {
     modulusLength: 2048,
     publicKeyEncoding: { type: 'spki', format: 'pem' },
