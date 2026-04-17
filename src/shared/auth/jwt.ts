@@ -3,7 +3,7 @@ import { createSign, createVerify } from 'node:crypto';
 type JwtValue = string | number | boolean | null | JwtValue[] | { [key: string]: JwtValue };
 
 export type JwtPayload = {
-  [key: string]: JwtValue;
+  [key: string]: JwtValue | undefined;
   sub?: string;
   iat?: number;
   exp?: number;
