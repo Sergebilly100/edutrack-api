@@ -701,13 +701,12 @@ export class ImportService {
     ensureRequiredHeaders(parsed.rows, SCHEDULE_HEADERS);
 
     const period = validateSchedulePeriodInput(schedulePeriod);
-
-    // ✅ AJOUT : guard période active (uniquement en mode "période courante")
     if (!period) {
-      const activePeriodId = await this.repository.findActiveSchedulePeriodId(db,  new Date().toISOString().slice(0, 10));
+      const today = new Date().toISOString().slice(0, 10);
+      const activePeriodId = await this.repository.findActiveSchedulePeriodId(db, today);
       if (!activePeriodId) {
         throw new ImportModuleError(
-          'Aucune période EDT active trouvée',
+          'Aucune période EDT active trouvée. Sélectionnez une période avant import.',
           400,
           'IMPORT_NO_ACTIVE_PERIOD'
         );
@@ -1004,7 +1003,8 @@ export class ImportService {
   ): Promise<ConfirmReport> {
     this.ensureNoValidationErrors(validation.report);
     const period = validateSchedulePeriodInput(schedulePeriod);
-    const periodStart = period?.weekStart ?? new Date().toISOString().slice(0, 10);
+    const today = new Date().toISOString().slice(0, 10);
+    const periodStart = period?.weekStart ?? today;
     const periodEnd = period?.weekEnd ?? periodStart;
 
     const [classes, teacherDirectory, timeSlots, rooms] = await Promise.all([
@@ -1013,11 +1013,24 @@ export class ImportService {
       this.repository.listTimeSlots(db),
       this.repository.listRooms(db),
     ]);
-    const schedulePeriodId = await this.repository.findOrCreateSchedulePeriod(db, {
-      name: `Import EDT ${periodStart} - ${periodEnd}`,
-      validFrom: periodStart,
-      validTo: periodEnd,
-    });
+    let schedulePeriodId: string;
+    if (period) {
+      schedulePeriodId = await this.repository.findOrCreateSchedulePeriod(db, {
+        name: `Import EDT ${periodStart} - ${periodEnd}`,
+        validFrom: periodStart,
+        validTo: periodEnd,
+      });
+    } else {
+      const activePeriodId = await this.repository.findActiveSchedulePeriodId(db, today);
+      if (!activePeriodId) {
+        throw new ImportModuleError(
+          'Aucune période EDT active trouvée. Sélectionnez une période avant import.',
+          400,
+          'IMPORT_NO_ACTIVE_PERIOD'
+        );
+      }
+      schedulePeriodId = activePeriodId;
+    }
 
     const classIdByName = new Map(classes.map((item) => [normalizeKey(item.name), item.id]));
     const slotIdByLabel = new Map(timeSlots.map((item) => [normalizeKey(item.label), item.id]));

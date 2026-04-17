@@ -9,12 +9,12 @@ const repository = {
   listRooms: vi.fn(),
   listTimeSlots: vi.fn(),
   findActiveSchedulePeriodId: vi.fn(),
-  listExistingStudents: vi.fn(),            // ← AJOUT
-  listExistingTeachers: vi.fn(),            // ← AJOUT
-  findOrCreateSchedulePeriod: vi.fn(),      // ← AJOUT
-  findOverlappingSchedulePeriods: vi.fn(),  // ← AJOUT
-  deactivateStudentsByIds: vi.fn(),         // ← AJOUT
-  deactivateTeachersByIds: vi.fn(),         // ← AJOUT
+  findOverlappingSchedulePeriods: vi.fn(),
+  findOrCreateSchedulePeriod: vi.fn(),
+  listExistingStudents: vi.fn(),
+  deactivateStudentsByIds: vi.fn(),
+  listExistingTeachers: vi.fn(),
+  deactivateTeachersByIds: vi.fn(),
   upsertStudent: vi.fn(),
   upsertTeacher: vi.fn(),
   upsertSchedule: vi.fn(),
@@ -52,18 +52,17 @@ beforeEach(() => {
   repository.listRooms.mockResolvedValue([{ id: 'room-1', name: 'Salle A1' }]);
   repository.listTimeSlots.mockResolvedValue([{ id: 'slot-1', label: '7h30 - 9h00' }]);
   repository.findActiveSchedulePeriodId.mockResolvedValue('period-1');
+  repository.findOverlappingSchedulePeriods.mockResolvedValue([]);
+  repository.findOrCreateSchedulePeriod.mockResolvedValue('period-1');
+  repository.listExistingStudents.mockResolvedValue([]);
+  repository.deactivateStudentsByIds.mockResolvedValue(0);
+  repository.listExistingTeachers.mockResolvedValue([]);
+  repository.deactivateTeachersByIds.mockResolvedValue(0);
   repository.upsertStudent.mockResolvedValue('inserted');
   repository.upsertTeacher.mockResolvedValue('inserted');
   repository.upsertSchedule.mockResolvedValue('inserted');
   repository.createImportHistory.mockResolvedValue(undefined);
   repository.listImportHistory.mockResolvedValue([]);
-  //AJOUT
-  repository.listExistingStudents.mockResolvedValue([]);
-  repository.listExistingTeachers.mockResolvedValue([]);
-  repository.findOrCreateSchedulePeriod.mockResolvedValue('period-1');
-  repository.findOverlappingSchedulePeriods.mockResolvedValue([]);
-  repository.deactivateStudentsByIds.mockResolvedValue(0);
-  repository.deactivateTeachersByIds.mockResolvedValue(0);
 });
 
 describe('import.service', () => {

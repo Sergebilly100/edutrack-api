@@ -55,7 +55,16 @@ type ChangePasswordInput = {
   newPassword: string;
 };
 
-const normalizePem = (value: string): string => value.replace(/\\n/g, '\n');
+const normalizePem = (value: string): string => {
+  const trimmed = value.trim();
+  const unquoted =
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+      ? trimmed.slice(1, -1)
+      : trimmed;
+
+  return unquoted.replace(/\\n/g, '\n').replace(/\r\n/g, '\n');
+};
 
 const getPrivateKey = async () => {
   const privateKey = process.env.JWT_PRIVATE_KEY;

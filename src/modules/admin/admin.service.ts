@@ -192,7 +192,16 @@ const MAX_USERS_BY_PLAN: Record<TenantListItem['plan'], number> = {
   establishment: 50,
 };
 
-const normalizePem = (value: string): string => value.replace(/\\n/g, '\n');
+const normalizePem = (value: string): string => {
+  const trimmed = value.trim();
+  const unquoted =
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+      ? trimmed.slice(1, -1)
+      : trimmed;
+
+  return unquoted.replace(/\\n/g, '\n').replace(/\r\n/g, '\n');
+};
 
 const getRows = <T>(result: unknown): T[] => {
   if (typeof result !== 'object' || result === null || !('rows' in result)) {
