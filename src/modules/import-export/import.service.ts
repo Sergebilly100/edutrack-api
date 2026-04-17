@@ -702,6 +702,18 @@ export class ImportService {
 
     const period = validateSchedulePeriodInput(schedulePeriod);
 
+    // ✅ AJOUT : guard période active (uniquement en mode "période courante")
+    if (!period) {
+      const activePeriodId = await this.repository.findActiveSchedulePeriodId(db,  new Date().toISOString().slice(0, 10));
+      if (!activePeriodId) {
+        throw new ImportModuleError(
+          'Aucune période EDT active trouvée',
+          400,
+          'IMPORT_NO_ACTIVE_PERIOD'
+        );
+      }
+    }
+
     const [classes, teacherDirectory, timeSlots, rooms] = await Promise.all([
       this.repository.listClasses(db),
       this.repository.listTeacherDirectory(db),

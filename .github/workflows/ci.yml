@@ -56,17 +56,20 @@ jobs:
               echo "EOF"
             } >> "$GITHUB_ENV"
           else
-            echo "JWT_*_TEST secrets not found. Generating ephemeral RSA key pair for CI."
-            openssl genpkey -algorithm RSA -out private.pem -pkeyopt rsa_keygen_bits:2048
-            openssl rsa -pubout -in private.pem -out public.pem
-            {
-              echo "JWT_PRIVATE_KEY<<EOF"
-              cat private.pem
-              echo "EOF"
-              echo "JWT_PUBLIC_KEY<<EOF"
-              cat public.pem
-              echo "EOF"
-            } >> "$GITHUB_ENV"
+            echo "Generating ephemeral RSA key pair via Node.js for jose v6 compatibility."
+            node --input-type=module <<'NODESCRIPT'
+              import { generateKeyPair, exportPKCS8, exportSPKI } from 'jose';
+              import { appendFileSync } from 'fs';
+
+              const { privateKey, publicKey } = await generateKeyPair('RS256', { modulusLength: 2048 });
+              const privatePem = await exportPKCS8(privateKey);
+              const publicPem = await exportSPKI(publicKey);
+
+              const envFile = process.env.GITHUB_ENV;
+              appendFileSync(envFile, `JWT_PRIVATE_KEY<<EOF\n${privatePem}\nEOF\n`);
+              appendFileSync(envFile, `JWT_PUBLIC_KEY<<EOF\n${publicPem}\nEOF\n`);
+              console.log('JWT keys generated successfully.');
+            NODESCRIPT
           fi
 
       - name: Start PostgreSQL and Redis

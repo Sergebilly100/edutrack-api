@@ -9,6 +9,12 @@ const repository = {
   listRooms: vi.fn(),
   listTimeSlots: vi.fn(),
   findActiveSchedulePeriodId: vi.fn(),
+  listExistingStudents: vi.fn(),            // ← AJOUT
+  listExistingTeachers: vi.fn(),            // ← AJOUT
+  findOrCreateSchedulePeriod: vi.fn(),      // ← AJOUT
+  findOverlappingSchedulePeriods: vi.fn(),  // ← AJOUT
+  deactivateStudentsByIds: vi.fn(),         // ← AJOUT
+  deactivateTeachersByIds: vi.fn(),         // ← AJOUT
   upsertStudent: vi.fn(),
   upsertTeacher: vi.fn(),
   upsertSchedule: vi.fn(),
@@ -51,6 +57,13 @@ beforeEach(() => {
   repository.upsertSchedule.mockResolvedValue('inserted');
   repository.createImportHistory.mockResolvedValue(undefined);
   repository.listImportHistory.mockResolvedValue([]);
+  //AJOUT
+  repository.listExistingStudents.mockResolvedValue([]);
+  repository.listExistingTeachers.mockResolvedValue([]);
+  repository.findOrCreateSchedulePeriod.mockResolvedValue('period-1');
+  repository.findOverlappingSchedulePeriods.mockResolvedValue([]);
+  repository.deactivateStudentsByIds.mockResolvedValue(0);
+  repository.deactivateTeachersByIds.mockResolvedValue(0);
 });
 
 describe('import.service', () => {
