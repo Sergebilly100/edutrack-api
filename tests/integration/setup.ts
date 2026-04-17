@@ -1,6 +1,6 @@
 import 'dotenv/config';
 
-import { randomBytes } from 'node:crypto';
+import { generateKeyPairSync, randomBytes } from 'node:crypto';
 
 import multipart from '@fastify/multipart';
 import argon2 from 'argon2';
@@ -32,6 +32,23 @@ if (!DATABASE_URL_TEST) {
     '[integration] DATABASE_URL_TEST is required (or DATABASE_URL as fallback).'
   );
 }
+
+const ensureJwtKeysForIntegration = (): void => {
+  if (process.env.JWT_PRIVATE_KEY && process.env.JWT_PUBLIC_KEY) {
+    return;
+  }
+
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  });
+
+  process.env.JWT_PRIVATE_KEY = privateKey;
+  process.env.JWT_PUBLIC_KEY = publicKey;
+};
+
+ensureJwtKeysForIntegration();
 
 // Force all app DB imports to point to the isolated test database.
 process.env.DATABASE_URL = DATABASE_URL_TEST;
