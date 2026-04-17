@@ -57,7 +57,7 @@ jobs:
             } >> "$GITHUB_ENV"
           else
             echo "Generating ephemeral RSA key pair via Node.js for jose v6 compatibility."
-            node --input-type=module ./generate-jwt-keys.mjs
+            node ./generate-jwt-keys.mjs
           fi
 
       - name: Start PostgreSQL and Redis
