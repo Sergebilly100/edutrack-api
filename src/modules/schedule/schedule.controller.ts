@@ -15,7 +15,6 @@ import {
   deleteScheduleById,
   findTeacherIdByUserId,
   listSchedulePeriods,
-  type ScheduleMutationInput,
   updateSchedule,
   updateSchedulePeriod,
 } from './schedule.repository.js';
@@ -24,6 +23,7 @@ import {
   duplicatePeriod,
   getActiveSchedulesForDate,
   getWeeklySchedulesForDate,
+  resolveTimeSlotId,
 } from './schedule.service.js';
 import {
   periodDuplicatePayloadSchema,
@@ -32,32 +32,28 @@ import {
   schedulePayloadSchema,
 } from './schedule.schemas.js';
 
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+
 const paramsIdSchema = z.object({
   id: z.string().uuid(),
+});
+
+/**
+ * BUG 1 — Schéma de validation du querystring `?date=YYYY-MM-DD`.
+ * Sans ce schéma, `request.query` est typé `unknown` et la valeur ignorée.
+ */
+const dateQuerySchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
 const pgErrorCodeSchema = z.object({
   code: z.string(),
 });
 
-const mapSchedulePayload = (
-  payload: z.infer<typeof schedulePayloadSchema>
-): ScheduleMutationInput => ({
-  schedulePeriodId: payload.schedule_period_id,
-  teacherId: payload.teacher_id,
-  classId: payload.class_id,
-  roomId: payload.room_id,
-  timeSlotId: payload.time_slot_id,
-  dayOfWeek: payload.day_of_week,
-  subject: payload.subject,
-  isActive: payload.is_active,
-});
-
 const ensureTenantDb = (request: FastifyRequest) => {
   if (!request.db) {
     throw new Error('Tenant database not initialized');
   }
-
   return request.db;
 };
 
@@ -90,7 +86,6 @@ const handleError = (
         statusCode: 409,
       });
     }
-
     if (code === '23503') {
       return reply.code(400).send({
         error: 'Referenced resource does not exist',
@@ -103,35 +98,22 @@ const handleError = (
   const message = error instanceof Error ? error.message : 'Unexpected error';
 
   if (unauthorizedMessages.has(message)) {
-    return reply.code(401).send({
-      error: message,
-      code: 'UNAUTHORIZED',
-      statusCode: 401,
-    });
+    return reply.code(401).send({ error: message, code: 'UNAUTHORIZED', statusCode: 401 });
   }
-
   if (message === 'Source schedule period not found') {
-    return reply.code(404).send({
-      error: message,
-      code: 'NOT_FOUND',
-      statusCode: 404,
-    });
+    return reply.code(404).send({ error: message, code: 'NOT_FOUND', statusCode: 404 });
   }
-
   if (message === 'Teacher profile not found') {
-    return reply.code(404).send({
-      error: message,
-      code: 'NOT_FOUND',
-      statusCode: 404,
-    });
+    return reply.code(404).send({ error: message, code: 'NOT_FOUND', statusCode: 404 });
   }
-
+  if (
+    message === 'Either timeSlotId or both startTime and endTime must be provided' ||
+    message === 'startTime must be before endTime'
+  ) {
+    return reply.code(400).send({ error: message, code: 'BAD_REQUEST', statusCode: 400 });
+  }
   if (message === 'Invalid or missing x-tenant-schema header') {
-    return reply.code(400).send({
-      error: message,
-      code: 'BAD_REQUEST',
-      statusCode: 400,
-    });
+    return reply.code(400).send({ error: message, code: 'BAD_REQUEST', statusCode: 400 });
   }
 
   request.log.error({ error }, '[schedule] unhandled error');
@@ -141,6 +123,25 @@ const handleError = (
     statusCode: 500,
   });
 };
+
+/**
+ * BUG 1 — Résout la date à utiliser pour les requêtes de planning.
+ *
+ * Priorité : querystring `?date=YYYY-MM-DD` > date du jour.
+ * Le frontend envoie toujours le lundi de la semaine sélectionnée,
+ * ce qui permet au service de résoudre la période active correcte.
+ */
+const resolveDateParam = (query: unknown): Date => {
+  const parsed = dateQuerySchema.safeParse(query);
+  if (parsed.success && parsed.data.date) {
+    // Forcer UTC pour éviter les décalages de fuseau horaire
+    const d = new Date(`${parsed.data.date}T00:00:00.000Z`);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  return new Date();
+};
+
+// ─── Controller ────────────────────────────────────────────────────────────────
 
 export default async function scheduleController(app: FastifyInstance): Promise<void> {
   app.addHook('onResponse', async (request) => {
@@ -166,14 +167,12 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     async (request, reply) => {
       try {
         const body = periodPayloadSchema.parse(request.body);
-
         const period = await createPeriodFromInput(ensureTenantDb(request), {
           name: body.name,
           validFrom: body.valid_from,
           validTo: body.valid_to,
           createdBy: request.user?.userId ?? null,
         });
-
         return reply.code(201).send({ period });
       } catch (error) {
         return handleError(request, reply, error);
@@ -188,14 +187,12 @@ export default async function scheduleController(app: FastifyInstance): Promise<
       try {
         const { id } = paramsIdSchema.parse(request.params);
         const body = periodUpdatePayloadSchema.parse(request.body);
-
         const period = await updateSchedulePeriod(ensureTenantDb(request), id, {
           name: body.name,
           validFrom: body.valid_from,
           validTo: body.valid_to,
           isActive: body.is_active,
         });
-
         if (!period) {
           return reply.code(404).send({
             error: 'Schedule period not found',
@@ -203,7 +200,6 @@ export default async function scheduleController(app: FastifyInstance): Promise<
             statusCode: 404,
           });
         }
-
         return reply.send({ period });
       } catch (error) {
         return handleError(request, reply, error);
@@ -218,14 +214,12 @@ export default async function scheduleController(app: FastifyInstance): Promise<
       try {
         const { id } = paramsIdSchema.parse(request.params);
         const body = periodDuplicatePayloadSchema.parse(request.body);
-
         const duplicated = await duplicatePeriod(ensureTenantDb(request), id, {
           newName: body.new_name,
           newValidFrom: body.new_valid_from,
           newValidTo: body.new_valid_to,
           createdBy: request.user?.userId ?? null,
         });
-
         return reply.code(201).send({
           period: duplicated.period,
           copied_schedules_count: duplicated.copiedCount,
@@ -241,7 +235,9 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     { preHandler: [requireTeacherOrDirectorOrSecretary, attachTenantDb] },
     async (request, reply) => {
       try {
-        const active = await getActiveSchedulesForDate(ensureTenantDb(request), new Date());
+        // BUG 1 — Utiliser la date du querystring si fournie
+        const date = resolveDateParam(request.query);
+        const active = await getActiveSchedulesForDate(ensureTenantDb(request), date);
         return reply.send(active);
       } catch (error) {
         return handleError(request, reply, error);
@@ -254,7 +250,13 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     { preHandler: [requireTeacherOrDirectorOrSecretary, attachTenantDb] },
     async (request, reply) => {
       try {
-        const weekly = await getWeeklySchedulesForDate(ensureTenantDb(request), new Date());
+        // BUG 1 — La clé du bug : `new Date()` ignorait le `?date=` du frontend.
+        // Le frontend envoie le lundi de la semaine sélectionnée.
+        // Le service résout ensuite la période active pour CETTE date,
+        // pas pour aujourd'hui. Sans ça, naviguer sur n'importe quelle semaine
+        // retournait toujours les créneaux de la période active aujourd'hui.
+        const date = resolveDateParam(request.query);
+        const weekly = await getWeeklySchedulesForDate(ensureTenantDb(request), date);
         return reply.send({
           date: weekly.date,
           period: weekly.period,
@@ -283,13 +285,12 @@ export default async function scheduleController(app: FastifyInstance): Promise<
             statusCode: 401,
           });
         }
-
         const tenantDb = ensureTenantDb(request);
         const teacherId = await findTeacherIdByUserId(tenantDb, userId);
         if (!teacherId) {
           throw new Error('Teacher profile not found');
         }
-
+        // /teacher/me retourne toujours les cours du jour — pas de ?date= ici
         const payload = await getActiveSchedulesForDate(tenantDb, new Date(), teacherId);
         return reply.send(payload);
       } catch (error) {
@@ -304,7 +305,24 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     async (request, reply) => {
       try {
         const body = schedulePayloadSchema.parse(request.body);
-        const created = await createSchedule(ensureTenantDb(request), mapSchedulePayload(body));
+        const db = ensureTenantDb(request);
+
+        const timeSlotId = await resolveTimeSlotId(db, {
+          timeSlotId: body.time_slot_id,
+          startTime: body.start_time,
+          endTime: body.end_time,
+        });
+
+        const created = await createSchedule(db, {
+          schedulePeriodId: body.schedule_period_id,
+          teacherId: body.teacher_id,
+          classId: body.class_id,
+          roomId: body.room_id,
+          timeSlotId,
+          dayOfWeek: body.day_of_week,
+          subject: body.subject,
+          isActive: body.is_active,
+        });
 
         return reply.code(201).send({ schedule: created });
       } catch (error) {
@@ -320,7 +338,24 @@ export default async function scheduleController(app: FastifyInstance): Promise<
       try {
         const { id } = paramsIdSchema.parse(request.params);
         const body = schedulePayloadSchema.parse(request.body);
-        const updated = await updateSchedule(ensureTenantDb(request), id, mapSchedulePayload(body));
+        const db = ensureTenantDb(request);
+
+        const timeSlotId = await resolveTimeSlotId(db, {
+          timeSlotId: body.time_slot_id,
+          startTime: body.start_time,
+          endTime: body.end_time,
+        });
+
+        const updated = await updateSchedule(db, id, {
+          schedulePeriodId: body.schedule_period_id,
+          teacherId: body.teacher_id,
+          classId: body.class_id,
+          roomId: body.room_id,
+          timeSlotId,
+          dayOfWeek: body.day_of_week,
+          subject: body.subject,
+          isActive: body.is_active,
+        });
 
         if (!updated) {
           return reply.code(404).send({
@@ -344,7 +379,6 @@ export default async function scheduleController(app: FastifyInstance): Promise<
       try {
         const { id } = paramsIdSchema.parse(request.params);
         const deleted = await deleteScheduleById(ensureTenantDb(request), id);
-
         if (!deleted) {
           return reply.code(404).send({
             error: 'Schedule not found',
@@ -352,12 +386,10 @@ export default async function scheduleController(app: FastifyInstance): Promise<
             statusCode: 404,
           });
         }
-
         return reply.code(204).send();
       } catch (error) {
         return handleError(request, reply, error);
       }
     }
   );
-
 }

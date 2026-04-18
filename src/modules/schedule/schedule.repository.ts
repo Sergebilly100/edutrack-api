@@ -96,12 +96,16 @@ type TeacherCatalogRow = {
   id: string;
   name: string;
   username: string;
+  is_blocked?: boolean;
+  subjects: string[];
 };
 
 export type TeacherCatalogItem = {
   id: string;
   name: string;
   username: string;
+  isBlocked?: boolean;
+  subjects: string[];
 };
 
 type ClassCatalogRow = {
@@ -199,6 +203,8 @@ const mapTeacherCatalogItem = (row: TeacherCatalogRow): TeacherCatalogItem => ({
   id: row.id,
   name: row.name,
   username: row.username,
+  isBlocked: row.is_blocked,
+  subjects: row.subjects ?? [],
 });
 
 const mapClassCatalogItem = (row: ClassCatalogRow): ClassCatalogItem => ({
@@ -500,14 +506,21 @@ export const listTeachersCatalog = async (
   db: QueryExecutor
 ): Promise<TeacherCatalogItem[]> => {
   const result = await db.execute<TeacherCatalogRow>(sql`
-    SELECT t.id, u.name, t.username
+    SELECT t.id, u.name, t.username, t.is_blocked, t.subjects
     FROM teachers t
     INNER JOIN users u ON u.id = t.user_id
     WHERE u.is_active = true
     ORDER BY u.name ASC
   `);
 
-  return getRows<TeacherCatalogRow>(result).map(mapTeacherCatalogItem);
+    return getRows<TeacherCatalogRow>(result).map(mapTeacherCatalogItem);
+    // return getRows(result).map((row) => ({
+    //   id: row.id,
+    //   name: row.name,
+    //   username: row.username,
+    //   isBlocked: row.is_blocked,
+    //   subjects: row.subjects ?? [],   // ← text[] PostgreSQL
+    // }));
 };
 
 export const listClassesCatalog = async (
@@ -689,4 +702,81 @@ export const findRoomById = async (db: QueryExecutor, roomId: string): Promise<R
 
   const [row] = getRows<RoomRow>(result);
   return row ? mapRoom(row) : null;
+};
+
+/**
+ * Calcule le sort_order depuis une heure "HH:MM" (minutes depuis minuit).
+ * Permet un tri naturel même pour des créneaux créés à la volée.
+ */
+const timeToSortOrder = (time: string): number => {
+  const [h, m] = time.split(':').map(Number);
+  return (h ?? 0) * 60 + (m ?? 0);
+};
+
+/**
+ * Génère le label affiché dans l'UI : "08:00 – 09:30"
+ */
+const buildTimeSlotLabel = (startTime: string, endTime: string): string =>
+  `${startTime} – ${endTime}`;
+
+export const findOrCreateTimeSlot = async (
+  db: QueryExecutor,
+  input: { startTime: string; endTime: string }
+): Promise<TimeSlotCatalogItem> => {
+  const label = buildTimeSlotLabel(input.startTime, input.endTime);
+  const sortOrder = timeToSortOrder(input.startTime);
+
+  // Upsert idempotent :
+  // - ON CONFLICT sur (start_time, end_time) → DO NOTHING
+  // - On récupère toujours la ligne via le SELECT final
+  //
+  // Note : la table time_slots a une contrainte UNIQUE sur `label`.
+  // On utilise start_time + end_time comme clé naturelle de déduplication.
+  // Si un label identique existe déjà avec des horaires différents, on le
+  // distingue en suffixant — mais en pratique "08:00 – 09:30" est unique.
+  const result = await db.execute<{
+    id: string;
+    label: string;
+    start_time: string;
+    end_time: string;
+    sort_order: number;
+  }>(sql`
+    WITH inserted AS (
+      INSERT INTO time_slots (label, start_time, end_time, sort_order)
+      VALUES (
+        ${label},
+        ${input.startTime}::time,
+        ${input.endTime}::time,
+        ${sortOrder}
+      )
+      ON CONFLICT (label) DO NOTHING
+      RETURNING id, label, start_time::text AS start_time, end_time::text AS end_time, sort_order
+    )
+    SELECT id, label, start_time::text AS start_time, end_time::text AS end_time, sort_order
+    FROM inserted
+
+    UNION ALL
+
+    SELECT id, label, start_time::text AS start_time, end_time::text AS end_time, sort_order
+    FROM time_slots
+    WHERE start_time = ${input.startTime}::time
+      AND end_time = ${input.endTime}::time
+
+    LIMIT 1
+  `);
+
+  const [row] = result.rows;
+  if (!row) {
+    throw new Error(
+      `findOrCreateTimeSlot: failed to upsert time_slot ${input.startTime}-${input.endTime}`
+    );
+  }
+
+  return {
+    id: row.id,
+    label: row.label,
+    startTime: row.start_time,
+    endTime: row.end_time,
+    sortOrder: Number(row.sort_order),
+  };
 };
