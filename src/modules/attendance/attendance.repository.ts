@@ -16,6 +16,7 @@ type ScheduleContextRow = {
   schedule_id: string;
   teacher_id: string;
   teacher_name: string;
+  class_id: string;
   class_name: string;
   subject: string;
   planned_room_id: string;
@@ -56,6 +57,20 @@ type ActiveAttendanceRow = {
   checked_in_at: string | null;
 };
 
+// ── Type élève minimal pour l'appel ──────────────────────────────────────────
+type StudentIdRow = {
+  id: string;
+};
+
+// ── Nouveau type pour getTeacherAttendanceByDate ──────────────────────────────
+type TeacherAttendanceByDateRow = {
+  id: string;
+  schedule_id: string;
+  status: 'present' | 'absent' | 'late' | 'excused';
+  late_minutes: number | null;
+  date: string;
+};
+
 type DirectorTodayCourseRow = {
   schedule_id: string;
   teacher_name: string;
@@ -87,6 +102,7 @@ const mapScheduleContext = (row: ScheduleContextRow): AttendanceScheduleContext 
   scheduleId: row.schedule_id,
   teacherId: row.teacher_id,
   teacherName: row.teacher_name,
+  classId: row.class_id,
   className: row.class_name,
   subject: row.subject,
   plannedRoomId: row.planned_room_id,
@@ -123,6 +139,7 @@ export class AttendanceRepository {
         s.id AS schedule_id,
         s.teacher_id,
         u.name AS teacher_name,
+        c.id AS class_id,
         c.name AS class_name,
         s.subject,
         s.room_id AS planned_room_id,
@@ -281,6 +298,89 @@ export class AttendanceRepository {
         AND schedule_id = ${params.scheduleId}
         AND date = ${params.date}
     `);
+  }
+
+  // ── NOUVEAU — statuts de pointage prof pour une date (TeacherSchedulePage) ──
+  async getTeacherAttendanceByDate(params: {
+    teacherId: string;
+    date: string;
+  }): Promise<TeacherAttendanceByDateRow[]> {
+    const result = await this.db.execute<TeacherAttendanceByDateRow>(sql`
+      SELECT
+        at.id::text AS id,
+        at.schedule_id::text AS schedule_id,
+        at.status::text AS status,
+        at.late_minutes,
+        at.date::text AS date
+      FROM attendances_teacher at
+      WHERE at.teacher_id = ${params.teacherId}
+        AND at.date = ${params.date}
+    `);
+
+    return getRows(result);
+  }
+
+  // ── NOUVEAU — appel élèves en masse par le prof ───────────────────────────
+  async bulkUpsertStudentAttendance(params: {
+    scheduleId: string;
+    date: string;
+    absentStudentIds: string[];
+    markedByUserId: string;
+    allStudentIds: string[];
+  }): Promise<{ upsertedCount: number }> {
+    if (params.allStudentIds.length === 0) {
+      return { upsertedCount: 0 };
+    }
+
+    const absentSet = new Set(params.absentStudentIds);
+
+    // Construire les valeurs à insérer pour chaque élève de la classe
+    // Statut : 'absent' si dans absentStudentIds, sinon 'present'
+    const values = params.allStudentIds.map((studentId) => ({
+      studentId,
+      status: absentSet.has(studentId) ? 'absent' : 'present',
+    }));
+
+    // Upsert par batch — PostgreSQL VALUES list via sql template
+    // On construit dynamiquement la liste VALUES
+    let upsertedCount = 0;
+    for (const { studentId, status } of values) {
+      await this.db.execute(sql`
+        INSERT INTO attendances_student (
+          student_id,
+          schedule_id,
+          date,
+          status,
+          marked_by
+        )
+        VALUES (
+          ${studentId},
+          ${params.scheduleId},
+          ${params.date},
+          ${status},
+          ${params.markedByUserId}
+        )
+        ON CONFLICT (student_id, schedule_id, date)
+        DO UPDATE SET
+          status = EXCLUDED.status,
+          marked_by = EXCLUDED.marked_by
+      `);
+      upsertedCount += 1;
+    }
+
+    return { upsertedCount };
+  }
+
+  // ── NOUVEAU — liste des IDs élèves d'une classe ───────────────────────────
+  async listStudentsByClass(classId: string): Promise<StudentIdRow[]> {
+    const result = await this.db.execute<StudentIdRow>(sql`
+      SELECT id::text AS id
+      FROM students
+      WHERE class_id = ${classId}
+        AND is_active = true
+    `);
+
+    return getRows(result);
   }
 
   async listActiveAttendanceForTeacher(params: {

@@ -5,7 +5,12 @@ import { withTenantSchema } from '../../shared/database/db.js';
 import { requireDirector, requireTeacher } from '../../shared/middleware/auth.middleware.js';
 
 import { AttendanceModuleError, buildAttendanceService } from './attendance.service.js';
-import { checkInBodySchema, qrScanBodySchema } from './attendance.types.js';
+import {
+  bulkStudentsBodySchema,
+  checkInBodySchema,
+  qrScanBodySchema,
+  teacherAttendanceDateQuerySchema,
+} from './attendance.types.js';
 
 const handleError = (
   request: FastifyRequest,
@@ -111,6 +116,54 @@ export default async function attendanceController(app: FastifyInstance): Promis
     }
   });
 
+  // ── NOUVEAU — statuts de pointage du prof pour une date ───────────────────
+  // Utilisé par TeacherSchedulePage pour afficher les badges de présence
+  // GET /api/v1/attendance/teacher/me?date=YYYY-MM-DD
+  app.get('/api/v1/attendance/teacher/me', { preHandler: requireTeacher }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const query = teacherAttendanceDateQuerySchema.parse(request.query ?? {});
+
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildAttendanceService(tenantDb);
+        return service.getTeacherAttendanceByDate(
+          { date: query.date },
+          { schemaName: claims.schemaName, userId: claims.sub }
+        );
+      });
+
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  // ── NOUVEAU — appel élèves par le prof ────────────────────────────────────
+  // POST /api/v1/attendance/students/bulk
+  // body: { schedule_id, date, absent_student_ids[] }
+  app.post('/api/v1/attendance/students/bulk', { preHandler: requireTeacher }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const body = bulkStudentsBodySchema.parse(request.body ?? {});
+
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildAttendanceService(tenantDb);
+        return service.submitStudentAttendance(
+          {
+            scheduleId: body.schedule_id,
+            date: body.date,
+            absentStudentIds: body.absent_student_ids,
+          },
+          { schemaName: claims.schemaName, userId: claims.sub }
+        );
+      });
+
+      return reply.send({ data: result });
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
   app.get('/api/v1/attendance/today', { preHandler: requireDirector }, async (request, reply) => {
     try {
       const claims = request.claims!;
@@ -141,4 +194,20 @@ export default async function attendanceController(app: FastifyInstance): Promis
       return handleError(request, reply, error);
     }
   });
+
+  // app.get('/api/v1/attendance/students', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  //   try {
+  //     const claims = request.claims!;
+  //     const query = attendanceHistoryQuerySchema.parse(request.query ?? {});
+
+  //     const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+  //       const service = buildStudentsService(tenantDb);
+  //       return service.listAttendanceHistory(query);
+  //     });
+
+  //     return reply.send(result);
+  //   } catch (error) {
+  //     return handleError(reply, error);
+  //   }
+  // });
 }

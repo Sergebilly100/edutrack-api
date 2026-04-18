@@ -209,6 +209,70 @@ export class AttendanceService {
     return { date, items };
   }
 
+  // ── NOUVEAU — statuts de pointage pour une date (TeacherSchedulePage) ──────
+  async getTeacherAttendanceByDate(
+    input: { date: string },
+    context: ServiceContext
+  ): Promise<Array<{
+    id: string;
+    schedule_id: string;
+    status: 'present' | 'absent' | 'late' | 'excused';
+    late_minutes: number | null;
+    date: string;
+  }>> {
+    const teacher = await this.repository.findTeacherByUserId(context.userId);
+    if (!teacher) {
+      throw new AttendanceModuleError('Teacher profile not found', 404, 'TEACHER_NOT_FOUND');
+    }
+
+    return this.repository.getTeacherAttendanceByDate({
+      teacherId: teacher.id,
+      date: input.date,
+    });
+  }
+
+  // ── NOUVEAU — appel élèves par le prof ────────────────────────────────────
+  async submitStudentAttendance(
+    input: {
+      scheduleId: string;
+      date: string;
+      absentStudentIds: string[];
+    },
+    context: ServiceContext
+  ): Promise<{ upsertedCount: number }> {
+    const teacher = await this.repository.findTeacherByUserId(context.userId);
+    if (!teacher) {
+      throw new AttendanceModuleError('Teacher profile not found', 404, 'TEACHER_NOT_FOUND');
+    }
+
+    // Vérifier que ce schedule appartient bien au prof
+    const schedule = await this.repository.findScheduleContextForTeacher(
+      input.scheduleId,
+      teacher.id
+    );
+    if (!schedule) {
+      throw new AttendanceModuleError('Schedule not found', 404, 'SCHEDULE_NOT_FOUND');
+    }
+
+    // Récupérer la liste complète des élèves de la classe
+    const allStudents = await this.repository.listStudentsByClass(schedule.classId ?? '');
+
+    if (allStudents.length === 0) {
+      // Pas d'élèves dans la classe — on accepte quand même (classe vide ou pas encore importée)
+      return { upsertedCount: 0 };
+    }
+
+    const allStudentIds = allStudents.map((s) => s.id);
+
+    return this.repository.bulkUpsertStudentAttendance({
+      scheduleId: input.scheduleId,
+      date: input.date,
+      absentStudentIds: input.absentStudentIds,
+      markedByUserId: context.userId,
+      allStudentIds,
+    });
+  }
+
   async detectMissingQrScans(context: { schemaName: string; date?: string }): Promise<number> {
     const date = context.date ?? currentDateIso();
     const missing = await this.repository.listMissingQrScans({ date });

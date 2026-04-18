@@ -14,10 +14,23 @@ export const qrScanBodySchema = z.object({
   date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format').optional(),
 });
 
+// ── NOUVEAU ──────────────────────────────────────────────────────────────────
+export const bulkStudentsBodySchema = z.object({
+  schedule_id: z.string().uuid(),
+  date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format'),
+  absent_student_ids: z.array(z.string().uuid()),
+});
+
+export const teacherAttendanceDateQuerySchema = z.object({
+  date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format'),
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
 export type AttendanceScheduleContext = {
   scheduleId: string;
   teacherId: string;
   teacherName: string;
+  classId: string;        // ← ajouté (nécessaire pour submitStudentAttendance)
   className: string;
   subject: string;
   plannedRoomId: string;

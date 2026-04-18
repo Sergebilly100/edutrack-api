@@ -131,42 +131,7 @@ export default async function studentsController(app: FastifyInstance): Promise<
     }
   });
 
-  app.post('/api/v1/attendance/students/bulk', { preHandler: requireTeacherOrDirectorOrSecretary }, async (request, reply) => {
-    try {
-      const claims = request.claims!;
-      const body = bulkAttendanceBodySchema.parse(request.body ?? {});
-
-      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-        const service = buildStudentsService(tenantDb);
-        return service.bulkMarkAbsences(body, {
-          userId: claims.sub,
-          schemaName: claims.schemaName,
-        });
-      });
-
-      return reply.send({ data: result });
-    } catch (error) {
-      return handleError(reply, error);
-    }
-  });
-
-  app.get('/api/v1/attendance/students', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
-    try {
-      const claims = request.claims!;
-      const query = attendanceHistoryQuerySchema.parse(request.query ?? {});
-
-      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-        const service = buildStudentsService(tenantDb);
-        return service.listAttendanceHistory(query);
-      });
-
-      return reply.send(result);
-    } catch (error) {
-      return handleError(reply, error);
-    }
-  });
-
-  app.get('/api/v1/attendance/students/today', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+    app.get('/api/v1/attendance/students/today', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
     try {
       const claims = request.claims!;
 
