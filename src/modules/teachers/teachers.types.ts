@@ -5,7 +5,7 @@ export const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
 export const teachersListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(10),
+  limit: z.coerce.number().int().min(1).max(200).default(10),
   type: z.enum(['vacataire', 'permanent']).optional(),
   is_active: z
     .enum(['true', 'false'])

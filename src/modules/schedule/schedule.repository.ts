@@ -612,9 +612,23 @@ export const deleteScheduleById = async (
   scheduleId: string
 ): Promise<boolean> => {
   const result = await db.execute<{ id: string }>(sql`
-    DELETE FROM schedules
-    WHERE id = ${scheduleId}
-    RETURNING id
+    WITH clear_teacher_attendance AS (
+      UPDATE attendances_teacher
+      SET schedule_id = NULL
+      WHERE schedule_id = ${scheduleId}
+    ),
+    clear_student_attendance AS (
+      UPDATE attendances_student
+      SET schedule_id = NULL
+      WHERE schedule_id = ${scheduleId}
+    ),
+    deleted_schedule AS (
+      DELETE FROM schedules
+      WHERE id = ${scheduleId}
+      RETURNING id
+    )
+    SELECT id
+    FROM deleted_schedule
   `);
 
   return getRows<{ id: string }>(result).length > 0;
