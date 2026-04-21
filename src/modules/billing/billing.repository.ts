@@ -17,6 +17,9 @@ type SalaryMetricRow = {
   salary_record_id: string | null;
   salary_status: SalaryRecordStatus | null;
   paid_at: string | null;
+  paid_by: string | null;
+  paid_by_name: string | null;
+  hours_done_since_paid: string | number;
   notes: string | null;
 };
 
@@ -128,6 +131,9 @@ export class BillingRepository {
         sr.id AS salary_record_id,
         sr.status::text AS salary_status,
         sr.paid_at::text AS paid_at,
+        sr.paid_by,
+        up.name AS paid_by_name,
+        COALESCE(done_after_payment.hours_done_since_paid, 0)::numeric(8,2) AS hours_done_since_paid,
         sr.notes
       FROM teachers t
       INNER JOIN users u ON u.id = t.user_id
@@ -136,6 +142,22 @@ export class BillingRepository {
       LEFT JOIN salary_records sr
         ON sr.teacher_id = t.id
        AND sr.period_month = ${monthStart}::date
+      LEFT JOIN users up ON up.id = sr.paid_by
+      LEFT JOIN LATERAL (
+        SELECT
+          COALESCE(
+            SUM(EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0),
+            0
+          )::numeric(8,2) AS hours_done_since_paid
+        FROM attendances_teacher at
+        INNER JOIN schedules s ON s.id = at.schedule_id
+        INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+        WHERE at.teacher_id = t.id
+          AND sr.paid_at IS NOT NULL
+          AND at.date BETWEEN ${monthStart}::date AND ${monthEnd}::date
+          AND at.status IN ('present', 'late', 'excused')
+          AND ((at.date::timestamp + ts.end_time)::timestamptz > sr.paid_at)
+      ) done_after_payment ON true
       WHERE u.is_active = true
       ORDER BY u.name ASC
     `);

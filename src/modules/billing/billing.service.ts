@@ -27,6 +27,11 @@ const monthToBounds = (month: string): { monthStart: string; monthEnd: string } 
 };
 
 const roundHours = (value: number): number => Math.round(value * 100) / 100;
+const toIsoDateTime = (date: string, time: string): Date | null => {
+  const normalizedTime = time.slice(0, 5);
+  const value = new Date(`${date}T${normalizedTime}:00Z`);
+  return Number.isNaN(value.getTime()) ? null : value;
+};
 
 export class BillingService {
   constructor(private readonly repository: BillingRepository) {}
@@ -55,8 +60,13 @@ export class BillingService {
           totalFcfa: null,
           status: 'Salaire fixe',
           salaryRecordId: row.salary_record_id,
+          isPartiallyPaid: false,
+          paidAt: row.paid_at,
         };
       }
+
+      const hoursDoneSincePaid = BillingRepository.toNumber(row.hours_done_since_paid);
+      const isPartiallyPaid = row.salary_status === 'paid' && roundHours(hoursDoneSincePaid) > 0;
 
       return {
         teacherId: row.teacher_id,
@@ -68,6 +78,8 @@ export class BillingService {
         totalFcfa,
         status: row.salary_status ?? 'pending',
         salaryRecordId: row.salary_record_id,
+        isPartiallyPaid,
+        paidAt: row.paid_at,
       };
     });
 
@@ -132,13 +144,61 @@ export class BillingService {
       (acc, row) => {
         acc.hoursPlanned += row.hoursPlanned;
         acc.hoursDone += row.hoursDone;
+        if (row.attendanceStatus === 'absent') {
+          acc.absenceHours += row.hoursPlanned;
+        }
         return acc;
       },
-      { hoursPlanned: 0, hoursDone: 0 }
+      { hoursPlanned: 0, hoursDone: 0, absenceHours: 0 }
     );
 
     const hourlyRate = teacher.hourly_rate;
     const totalFcfa = hourlyRate === null ? null : Math.round(totals.hoursDone * hourlyRate);
+    const teacherMonthlyRecord = teacherMetrics?.salary_record_id
+      ? await this.repository.getSalaryRecordById(teacherMetrics.salary_record_id)
+      : null;
+    const paidAt = teacherMetrics?.paid_at ?? null;
+    const paidAtDate = paidAt ? new Date(paidAt) : null;
+    const isPaidAtValid = paidAtDate !== null && !Number.isNaN(paidAtDate.getTime());
+    const paidHours = isPaidAtValid
+      ? rows.reduce((acc, row) => {
+          const rowEndDate = toIsoDateTime(row.date, row.endTime);
+          const countedAsDone =
+            row.attendanceStatus === 'present' ||
+            row.attendanceStatus === 'late' ||
+            row.attendanceStatus === 'excused';
+          if (!countedAsDone || rowEndDate === null || paidAtDate === null || rowEndDate > paidAtDate) {
+            return acc;
+          }
+          return acc + row.hoursPlanned;
+        }, 0)
+      : 0;
+    const earnedHoursAfterLastPayment = Math.max(0, totals.hoursDone - paidHours);
+    const absenceHours = roundHours(totals.absenceHours);
+    const remainingPlannedHours = roundHours(
+      Math.max(0, totals.hoursPlanned - totals.hoursDone - totals.absenceHours)
+    );
+    const currentEarnedAmount = hourlyRate === null ? null : Math.round(totals.hoursDone * hourlyRate);
+    const amountAlreadyPaid =
+      hourlyRate === null
+        ? null
+        : teacherMetrics?.salary_status === 'paid'
+          ? Math.max(0, Math.round(totals.hoursDone * hourlyRate) - Math.round(earnedHoursAfterLastPayment * hourlyRate))
+          : 0;
+    const amountRemainingToPayNow =
+      hourlyRate === null
+        ? null
+        : teacherMetrics?.salary_status === 'paid'
+          ? Math.round(earnedHoursAfterLastPayment * hourlyRate)
+          : Math.round(totals.hoursDone * hourlyRate);
+    const remainingPotentialAmount =
+      hourlyRate === null ? null : Math.round(remainingPlannedHours * hourlyRate);
+    const absenceAmount = hourlyRate === null ? null : Math.round(absenceHours * hourlyRate);
+    const isPartiallyPaid =
+      teacher.teacher_type !== 'permanent' &&
+      hourlyRate !== null &&
+      (teacherMetrics?.salary_status ?? 'pending') === 'paid' &&
+      roundHours(earnedHoursAfterLastPayment) > 0;
 
     return {
       month,
@@ -156,6 +216,20 @@ export class BillingService {
           teacher.teacher_type === 'permanent' || hourlyRate === null
             ? 'Salaire fixe'
             : (teacherMetrics?.salary_status ?? 'pending'),
+        absenceHours,
+        remainingPlannedHours,
+        currentEarnedAmount,
+        amountAlreadyPaid,
+        amountRemainingToPayNow,
+        remainingPotentialAmount,
+        absenceAmount,
+        isPartiallyPaid,
+      },
+      payment: {
+        paidAt: teacherMetrics?.paid_at ?? null,
+        paidBy: teacherMetrics?.paid_by ?? null,
+        paidByName: teacherMetrics?.paid_by_name ?? null,
+        notes: teacherMonthlyRecord?.notes ?? teacherMetrics?.notes ?? null,
       },
       rows,
     };
