@@ -1,8 +1,4 @@
 import type { AccessTokenClaims } from '../auth/auth.service.js';
-import {
-  buildUsersLimitReachedMessage,
-  getMaxUsersBySchemaName,
-} from '../../shared/utils/users-limit.js';
 
 import { PermissionsRepository } from './permissions.repository.js';
 import { PERMISSION_KEYS, SECRETARY_BASE_PERMISSIONS } from './permissions.types.js';
@@ -97,7 +93,6 @@ export class PermissionsService {
     positionId: string;
     userId: string;
     assignedBy: string;
-    schemaName: string;
   }) {
     const [position, userExists] = await Promise.all([
       this.repository.findPositionById(input.positionId),
@@ -110,18 +105,6 @@ export class PermissionsService {
 
     if (!userExists) {
       throw new PermissionsModuleError('User not found', 404, 'USER_NOT_FOUND');
-    }
-
-    const [currentCount, maxUsers] = await Promise.all([
-      this.repository.countActiveUsers(),
-      getMaxUsersBySchemaName(input.schemaName),
-    ]);
-    if (currentCount >= maxUsers) {
-      throw new PermissionsModuleError(
-        buildUsersLimitReachedMessage(currentCount, maxUsers),
-        403,
-        'USERS_LIMIT_REACHED'
-      );
     }
 
     await this.repository.assignPosition({

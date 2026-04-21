@@ -14,6 +14,8 @@ import {
   createSchedule,
   deleteScheduleById,
   findScheduleConflicts,
+  findSchedulePeriodById,
+  findTimeSlotById,
   findTeacherIdByUserId,
   hasPastOccurrences,
   listSchedulePeriods,
@@ -25,6 +27,7 @@ import {
   duplicatePeriod,
   getActiveSchedulesForDate,
   getWeeklySchedulesForDate,
+  hasFutureOccurrenceInPeriod,
   resolveTimeSlotId,
 } from './schedule.service.js';
 import {
@@ -117,6 +120,12 @@ const handleError = (
   if (message === 'Invalid or missing x-tenant-schema header') {
     return reply.code(400).send({ error: message, code: 'BAD_REQUEST', statusCode: 400 });
   }
+  if (message === 'Schedule period not found' || message === 'Time slot not found') {
+    return reply.code(404).send({ error: message, code: 'NOT_FOUND', statusCode: 404 });
+  }
+  if (message === 'Schedule must target a future date/time') {
+    return reply.code(400).send({ error: message, code: 'BAD_REQUEST', statusCode: 400 });
+  }
   if (message === 'Schedule has past occurrences and cannot be edited or deleted') {
     return reply.code(409).send({
       error: message,
@@ -169,6 +178,31 @@ const resolveDateParam = (query: unknown): Date => {
     if (!Number.isNaN(d.getTime())) return d;
   }
   return new Date();
+};
+
+const assertScheduleTargetsFutureDateTime = async (
+  db: NonNullable<FastifyRequest['db']>,
+  input: {
+    schedulePeriodId: string;
+    dayOfWeek: number;
+    startTime: string;
+  }
+): Promise<void> => {
+  const period = await findSchedulePeriodById(db, input.schedulePeriodId);
+  if (!period) {
+    throw new Error('Schedule period not found');
+  }
+
+  const hasFuture = hasFutureOccurrenceInPeriod({
+    validFrom: period.valid_from,
+    validTo: period.valid_to,
+    dayOfWeek: input.dayOfWeek,
+    startTime: input.startTime,
+  });
+
+  if (!hasFuture) {
+    throw new Error('Schedule must target a future date/time');
+  }
 };
 
 // ─── Controller ────────────────────────────────────────────────────────────────
@@ -342,6 +376,16 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           startTime: body.start_time,
           endTime: body.end_time,
         });
+        const resolvedStartTime = body.start_time ?? (await findTimeSlotById(db, timeSlotId))?.startTime;
+        if (!resolvedStartTime) {
+          throw new Error('Time slot not found');
+        }
+
+        await assertScheduleTargetsFutureDateTime(db, {
+          schedulePeriodId: body.schedule_period_id,
+          dayOfWeek: body.day_of_week,
+          startTime: resolvedStartTime,
+        });
 
         const conflicts = await findScheduleConflicts(db, {
           schedulePeriodId: body.schedule_period_id,
@@ -394,6 +438,16 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           timeSlotId: body.time_slot_id,
           startTime: body.start_time,
           endTime: body.end_time,
+        });
+        const resolvedStartTime = body.start_time ?? (await findTimeSlotById(db, timeSlotId))?.startTime;
+        if (!resolvedStartTime) {
+          throw new Error('Time slot not found');
+        }
+
+        await assertScheduleTargetsFutureDateTime(db, {
+          schedulePeriodId: body.schedule_period_id,
+          dayOfWeek: body.day_of_week,
+          startTime: resolvedStartTime,
         });
 
         const lockedForHistory = await hasPastOccurrences(db, id, new Date().toISOString().slice(0, 10));

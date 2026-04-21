@@ -18,8 +18,8 @@ export type TransactionalQueryExecutor = QueryExecutor & {
 type ClassRow = { id: string; name: string };
 type TeacherDirectoryRow = { teacher_id: string; user_id: string; name: string; username: string };
 type RoomRow = { id: string; name: string; building: string | null; capacity: number | null; is_active: boolean };
-type TimeSlotRow = { id: string; label: string };
-type SchedulePeriodRow = { id: string };
+type TimeSlotRow = { id: string; label: string; start_time: string; end_time: string };
+type SchedulePeriodRow = { id: string; valid_from?: string; valid_to?: string };
 type SchedulePeriodConflictRow = { id: string; name: string; valid_from: string; valid_to: string };
 type ExistingStudentRow = { id: string; matricule: string | null };
 type ExistingTeacherRow = { id: string; user_id: string };
@@ -75,6 +75,10 @@ export type ImportRepository = {
   ) => Promise<{ id: string; name: string }>;
   listTimeSlots: (db: QueryExecutor) => Promise<TimeSlotRow[]>;
   findActiveSchedulePeriodId: (db: QueryExecutor, date: string) => Promise<string | null>;
+  findSchedulePeriodById: (
+    db: QueryExecutor,
+    periodId: string
+  ) => Promise<{ id: string; valid_from: string; valid_to: string } | null>;
   findOverlappingSchedulePeriods: (
     db: QueryExecutor,
     weekStart: string,
@@ -203,7 +207,7 @@ export const defaultImportRepository: ImportRepository = {
 
   async listTimeSlots(db) {
     const result = await db.execute(sql`
-      SELECT id, label
+      SELECT id, label, start_time::text AS start_time, end_time::text AS end_time
       FROM time_slots
     `);
 
@@ -222,6 +226,18 @@ export const defaultImportRepository: ImportRepository = {
     `);
 
     return getRows<SchedulePeriodRow>(result)[0]?.id ?? null;
+  },
+
+  async findSchedulePeriodById(db, periodId) {
+    const result = await db.execute(sql`
+      SELECT id, valid_from::text AS valid_from, valid_to::text AS valid_to
+      FROM schedule_periods
+      WHERE id = ${periodId}
+      LIMIT 1
+    `);
+
+    const row = getRows<{ id: string; valid_from: string; valid_to: string }>(result)[0];
+    return row ?? null;
   },
 
   async findOverlappingSchedulePeriods(db, weekStart, weekEnd) {

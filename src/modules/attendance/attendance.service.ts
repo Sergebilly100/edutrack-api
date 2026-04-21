@@ -219,6 +219,8 @@ export class AttendanceService {
     status: 'present' | 'absent' | 'late' | 'excused';
     late_minutes: number | null;
     date: string;
+    room_scan_start_at: string | null;
+    room_scan_end_at: string | null;
   }>> {
     const teacher = await this.repository.findTeacherByUserId(context.userId);
     if (!teacher) {

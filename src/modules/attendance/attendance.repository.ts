@@ -69,6 +69,8 @@ type TeacherAttendanceByDateRow = {
   status: 'present' | 'absent' | 'late' | 'excused';
   late_minutes: number | null;
   date: string;
+  room_scan_start_at: string | null;
+  room_scan_end_at: string | null;
 };
 
 type DirectorTodayCourseRow = {
@@ -349,7 +351,9 @@ export class AttendanceRepository {
         at.schedule_id::text AS schedule_id,
         at.status::text AS status,
         at.late_minutes,
-        at.date::text AS date
+        at.date::text AS date,
+        at.room_scan_start_at::text AS room_scan_start_at,
+        at.room_scan_end_at::text AS room_scan_end_at
       FROM attendances_teacher at
       WHERE at.teacher_id = ${params.teacherId}
         AND at.date = ${params.date}

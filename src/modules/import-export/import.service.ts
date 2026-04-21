@@ -40,6 +40,48 @@ const DAY_MAP: Record<string, number> = {
   samedi: 6,
 };
 
+const parseUtcDate = (date: string): Date => new Date(`${date}T00:00:00.000Z`);
+
+const formatUtcDate = (value: Date): string => value.toISOString().slice(0, 10);
+
+const dayOfWeekFromDate = (date: Date): number => {
+  const day = date.getUTCDay();
+  return day === 0 ? 7 : day;
+};
+
+const nextIsoDayOnOrAfter = (base: Date, dayOfWeek: number): Date => {
+  const baseIso = dayOfWeekFromDate(base);
+  const delta = (dayOfWeek - baseIso + 7) % 7;
+  const next = new Date(base);
+  next.setUTCDate(next.getUTCDate() + delta);
+  return next;
+};
+
+const hasFutureOccurrenceInPeriod = (input: {
+  validFrom: string;
+  validTo: string;
+  dayOfWeek: number;
+  startTime: string;
+  now?: Date;
+}): boolean => {
+  const now = input.now ?? new Date();
+  const nowDateIso = formatUtcDate(now);
+  const baseDateIso = input.validFrom > nowDateIso ? input.validFrom : nowDateIso;
+  const periodEnd = parseUtcDate(input.validTo);
+  let candidate = nextIsoDayOnOrAfter(parseUtcDate(baseDateIso), input.dayOfWeek);
+
+  while (candidate <= periodEnd) {
+    const candidateIso = formatUtcDate(candidate);
+    const candidateDateTime = new Date(`${candidateIso}T${input.startTime}.000Z`);
+    if (candidateDateTime > now) {
+      return true;
+    }
+    candidate.setUTCDate(candidate.getUTCDate() + 7);
+  }
+
+  return false;
+};
+
 export class ImportModuleError extends Error {
   constructor(
     message: string,
@@ -927,6 +969,7 @@ export class ImportService {
     ensureRequiredHeaders(parsed.rows, SCHEDULE_HEADERS);
 
     const period = validateSchedulePeriodInput(schedulePeriod);
+    let resolvedPeriodBounds: { validFrom: string; validTo: string } | null = null;
     if (!period) {
       const today = new Date().toISOString().slice(0, 10);
       const activePeriodId = await this.repository.findActiveSchedulePeriodId(db, today);
@@ -937,6 +980,23 @@ export class ImportService {
           'IMPORT_NO_ACTIVE_PERIOD'
         );
       }
+      const activePeriod = await this.repository.findSchedulePeriodById(db, activePeriodId);
+      if (!activePeriod) {
+        throw new ImportModuleError(
+          'Période EDT active introuvable.',
+          400,
+          'IMPORT_NO_ACTIVE_PERIOD'
+        );
+      }
+      resolvedPeriodBounds = {
+        validFrom: activePeriod.valid_from,
+        validTo: activePeriod.valid_to,
+      };
+    } else {
+      resolvedPeriodBounds = {
+        validFrom: period.weekStart,
+        validTo: period.weekEnd,
+      };
     }
 
     const [classes, teacherDirectory, timeSlots] = await Promise.all([
@@ -946,7 +1006,12 @@ export class ImportService {
     ]);
 
     const classesByName = new Map(classes.map((item) => [normalizeKey(item.name), item.id]));
-    const slotsByLabel = new Map(timeSlots.map((item) => [normalizeKey(item.label), item.id]));
+    const slotsByLabel = new Map(
+      timeSlots.map((item) => [
+        normalizeKey(item.label),
+        { id: item.id, startTime: item.start_time, endTime: item.end_time },
+      ])
+    );
     const teachersByName = new Map<string, string[]>();
     for (const teacher of teacherDirectory) {
       const key = normalizeKey(teacher.name);
@@ -1061,6 +1126,28 @@ export class ImportService {
             value: roomName,
           })
         );
+      }
+
+      if (resolvedPeriodBounds && day in DAY_MAP && slotLabel) {
+        const slotInfo = slotsByLabel.get(normalizeKey(slotLabel));
+        if (slotInfo) {
+          const hasFuture = hasFutureOccurrenceInPeriod({
+            validFrom: resolvedPeriodBounds.validFrom,
+            validTo: resolvedPeriodBounds.validTo,
+            dayOfWeek: DAY_MAP[day],
+            startTime: slotInfo.startTime,
+          });
+          if (!hasFuture) {
+            errors.push(
+              makeError({
+                row: line,
+                column: 'Jour*',
+                message: "Impossible d'ajouter un créneau sur une date/heure passée",
+                value: `${sheetRow.values['Jour*']} ${slotLabel}`,
+              })
+            );
+          }
+        }
       }
 
       const hasRowError = errors.some((error) => error.row === line);

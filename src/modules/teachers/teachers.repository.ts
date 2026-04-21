@@ -414,6 +414,7 @@ export class TeachersRepository {
           d.date,
           s.subject,
           s.class_id,
+          ts.end_time AS slot_end_time,
           EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600 AS slot_hours
         FROM dates d
         INNER JOIN active_period ap ON true
@@ -436,7 +437,14 @@ export class TeachersRepository {
         sc.subjects,
         COUNT(sc.schedule_id)::int AS total_scheduled,
         COUNT(CASE WHEN at.status IN ('present', 'late', 'excused') THEN 1 END)::int AS present_count,
-        COUNT(CASE WHEN at.status = 'absent' THEN 1 END)::int AS absent_count,
+        COUNT(
+          CASE
+            WHEN at.status = 'absent' THEN 1
+            WHEN at.id IS NULL
+              AND ((sc.date::timestamp + sc.slot_end_time)::timestamp <= (NOW() AT TIME ZONE 'Africa/Abidjan'))
+            THEN 1
+          END
+        )::int AS absent_count,
         COUNT(CASE WHEN at.status = 'late' THEN 1 END)::int AS late_count,
         COUNT(CASE WHEN at.room_mismatch = true THEN 1 END)::int AS room_mismatch_count,
         COUNT(CASE WHEN rollcall.has_rollcall = true THEN 1 END)::int AS rollcall_done_count,
@@ -472,7 +480,14 @@ export class TeachersRepository {
       HAVING
         CASE
           WHEN ${statusFilter} = 'absent'
-            THEN COUNT(CASE WHEN at.status = 'absent' THEN 1 END) > 0
+            THEN COUNT(
+              CASE
+                WHEN at.status = 'absent' THEN 1
+                WHEN at.id IS NULL
+                  AND ((sc.date::timestamp + sc.slot_end_time)::timestamp <= (NOW() AT TIME ZONE 'Africa/Abidjan'))
+                THEN 1
+              END
+            ) > 0
           WHEN ${statusFilter} = 'room_mismatch'
             THEN COUNT(CASE WHEN at.room_mismatch = true THEN 1 END) > 0
           WHEN ${statusFilter} = 'rollcall_missing'

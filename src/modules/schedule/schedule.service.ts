@@ -89,6 +89,46 @@ export const dayOfWeekFromDate = (date: Date): number => {
   return jsDay === 0 ? 7 : jsDay;
 };
 
+const parseUtcDate = (date: string): Date => new Date(`${date}T00:00:00.000Z`);
+
+const formatUtcDate = (value: Date): string => value.toISOString().slice(0, 10);
+
+const nextIsoDayOnOrAfter = (base: Date, dayOfWeek: number): Date => {
+  const baseIsoDay = dayOfWeekFromDate(base);
+  const delta = (dayOfWeek - baseIsoDay + 7) % 7;
+  const next = new Date(base);
+  next.setUTCDate(next.getUTCDate() + delta);
+  return next;
+};
+
+export const hasFutureOccurrenceInPeriod = (input: {
+  validFrom: string;
+  validTo: string;
+  dayOfWeek: number;
+  startTime: string;
+  now?: Date;
+}): boolean => {
+  const now = input.now ?? new Date();
+  const nowDateIso = formatUtcDate(now);
+  const baseDateIso = input.validFrom > nowDateIso ? input.validFrom : nowDateIso;
+  const periodEnd = parseUtcDate(input.validTo);
+  let candidateDate = nextIsoDayOnOrAfter(parseUtcDate(baseDateIso), input.dayOfWeek);
+
+  while (candidateDate <= periodEnd) {
+    const candidateIsoDate = formatUtcDate(candidateDate);
+    const candidateDateTime = new Date(`${candidateIsoDate}T${input.startTime}.000Z`);
+    if (candidateDateTime > now) {
+      return true;
+    }
+
+    const nextWeek = new Date(candidateDate);
+    nextWeek.setUTCDate(nextWeek.getUTCDate() + 7);
+    candidateDate = nextWeek;
+  }
+
+  return false;
+};
+
 export const getActiveSchedulesForDate = async (
   db: QueryExecutor,
   dateInput: string | Date,

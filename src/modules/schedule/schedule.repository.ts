@@ -126,6 +126,12 @@ type TimeSlotCatalogRow = {
   sort_order: number;
 };
 
+type TimeSlotByIdRow = {
+  id: string;
+  start_time: string;
+  end_time: string;
+};
+
 export type TimeSlotCatalogItem = {
   id: string;
   label: string;
@@ -589,6 +595,29 @@ export const listTimeSlotsCatalog = async (
   `);
 
   return getRows<TimeSlotCatalogRow>(result).map(mapTimeSlotCatalogItem);
+};
+
+export const findTimeSlotById = async (
+  db: QueryExecutor,
+  timeSlotId: string
+): Promise<{ id: string; startTime: string; endTime: string } | null> => {
+  const result = await db.execute<TimeSlotByIdRow>(sql`
+    SELECT id, start_time::text AS start_time, end_time::text AS end_time
+    FROM time_slots
+    WHERE id = ${timeSlotId}
+    LIMIT 1
+  `);
+
+  const [row] = getRows<TimeSlotByIdRow>(result);
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    startTime: row.start_time,
+    endTime: row.end_time,
+  };
 };
 
 export const createSchedule = async (
