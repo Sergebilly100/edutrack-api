@@ -49,6 +49,17 @@ const attendanceHistoryQuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(30).default(7),
 });
 
+const historyDetailQuerySchema = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  to: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .refine(
+      (to) => true,
+      'to must be >= from'
+    ),
+});
+
 const weekScheduleQuerySchema = z.object({
   date: z
     .string()
@@ -195,6 +206,23 @@ export default async function attendanceController(app: FastifyInstance): Promis
       const rows = await withTenantSchema(claims.schemaName, async (tenantDb) => {
         const service = buildAttendanceService(tenantDb);
         return service.getHistoryForDirector(query.days);
+      });
+      return reply.send(rows);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.get('/api/v1/attendance/history/detail', { preHandler: requireDirector }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const query = historyDetailQuerySchema.parse(request.query ?? {});
+      const rows = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildAttendanceService(tenantDb);
+        return service.getHistoryDetailForDirector({
+          from: query.from,
+          to: query.to,
+        });
       });
       return reply.send(rows);
     } catch (error) {

@@ -344,7 +344,12 @@ export class AttendanceService {
       late_minutes: number | null;
       room_mismatch: boolean;
       room_scanned_name: string | null;
+      room_scanned_at: string | null;
       checked_in_at: string | null;
+      student_rollcall_done: boolean;
+      student_present_count: number;
+      student_absent_count: number;
+      student_total_count: number;
     }>;
   }> {
     const today = await this.repository.listTodayForDirector();
@@ -391,6 +396,38 @@ export class AttendanceService {
       absent: row.absent_count,
       not_checked: row.not_checked_count,
     }));
+  }
+
+  async getHistoryDetailForDirector(input: { from: string; to: string }): Promise<
+    Array<{
+      date: string;
+      schedule_id: string;
+      teacher_name: string;
+      subject: string;
+      class_name: string;
+      room_name: string;
+      start_time: string;
+      end_time: string;
+      attendance_status: 'present' | 'absent' | 'late' | 'excused' | null;
+      late_minutes: number | null;
+      checked_in_at: string | null;
+      room_mismatch: boolean;
+      room_scanned_name: string | null;
+      room_scanned_at: string | null;
+      student_rollcall_done: boolean;
+      student_present_count: number;
+      student_absent_count: number;
+      student_total_count: number;
+    }>
+  > {
+    if (input.from > input.to) {
+      throw new AttendanceModuleError('to must be >= from', 400, 'INVALID_DATE_RANGE');
+    }
+
+    return this.repository.listHistoryDetailForDirector({
+      from: input.from,
+      to: input.to,
+    });
   }
 }
 

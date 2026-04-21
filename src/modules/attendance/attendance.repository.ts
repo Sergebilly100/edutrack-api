@@ -82,9 +82,14 @@ type DirectorTodayCourseRow = {
   end_time: string;
   attendance_status: 'present' | 'absent' | 'late' | 'excused' | null;
   late_minutes: number | null;
-  room_mismatch: boolean | null;
+  room_mismatch: boolean;
   room_scanned_name: string | null;
+  room_scanned_at: string | null;
   checked_in_at: string | null;
+  student_rollcall_done: boolean;
+  student_present_count: number;
+  student_absent_count: number;
+  student_total_count: number;
 };
 
 type DirectorHistoryRow = {
@@ -94,6 +99,27 @@ type DirectorHistoryRow = {
   not_checked_count: number;
   total_count: number;
   attendance_rate: number;
+};
+
+type DirectorHistoryDetailRow = {
+  date: string;
+  schedule_id: string;
+  teacher_name: string;
+  subject: string;
+  class_name: string;
+  room_name: string;
+  start_time: string;
+  end_time: string;
+  attendance_status: 'present' | 'absent' | 'late' | 'excused' | null;
+  late_minutes: number | null;
+  checked_in_at: string | null;
+  room_mismatch: boolean;
+  room_scanned_name: string | null;
+  room_scanned_at: string | null;
+  student_rollcall_done: boolean;
+  student_present_count: number;
+  student_absent_count: number;
+  student_total_count: number;
 };
 
 type schex = {
@@ -580,9 +606,17 @@ export class AttendanceRepository {
         ts.end_time::text AS end_time,
         at.status::text AS attendance_status,
         at.late_minutes,
-        at.room_mismatch,
+        COALESCE(at.room_mismatch, false) AS room_mismatch,
         scanned_room.name AS room_scanned_name,
-        at.checked_in_at::text AS checked_in_at
+        at.room_scan_start_at::text AS room_scanned_at,
+        at.checked_in_at::text AS checked_in_at,
+        CASE
+          WHEN COUNT(ast.id) > 0 THEN true
+          ELSE false
+        END AS student_rollcall_done,
+        COUNT(CASE WHEN ast.status = 'present' THEN 1 END)::int AS student_present_count,
+        COUNT(CASE WHEN ast.status = 'absent' THEN 1 END)::int AS student_absent_count,
+        COUNT(ast.id)::int AS student_total_count
       FROM schedules s
       INNER JOIN active_period ap ON ap.id = s.schedule_period_id
       INNER JOIN teachers t ON t.id = s.teacher_id
@@ -594,8 +628,27 @@ export class AttendanceRepository {
         ON at.schedule_id = s.id
        AND at.date = ${today}
       LEFT JOIN rooms scanned_room ON scanned_room.id = at.room_scanned_id
+      LEFT JOIN attendances_student ast
+        ON ast.schedule_id = s.id
+       AND ast.date = ${today}
       WHERE s.day_of_week = ${dayOfWeek}
         AND s.is_active = true
+      GROUP BY
+        s.id,
+        u.name,
+        s.subject,
+        c.name,
+        r.name,
+        ts.label,
+        ts.start_time,
+        ts.end_time,
+        ts.sort_order,
+        at.status,
+        at.late_minutes,
+        at.room_mismatch,
+        scanned_room.name,
+        at.room_scan_start_at,
+        at.checked_in_at
       ORDER BY ts.sort_order ASC, ts.start_time ASC, c.name ASC
     `);
 
@@ -694,6 +747,73 @@ export class AttendanceRepository {
        AND at.date = sbd.date
       GROUP BY sbd.date
       ORDER BY sbd.date ASC
+    `);
+
+    return getRows(result);
+  }
+
+  async listHistoryDetailForDirector(params: {
+    from: string;
+    to: string;
+  }): Promise<DirectorHistoryDetailRow[]> {
+    const result = await this.db.execute<DirectorHistoryDetailRow>(sql`
+      WITH active_period AS (
+        SELECT id
+        FROM schedule_periods
+        WHERE is_active = true
+          AND valid_from <= ${params.to}::date
+          AND valid_to   >= ${params.from}::date
+        ORDER BY created_at DESC
+        LIMIT 1
+      ),
+      dates AS (
+        SELECT generate_series(
+          ${params.from}::date,
+          ${params.to}::date,
+          INTERVAL '1 day'
+        )::date AS date
+      )
+      SELECT
+        d.date::text,
+        s.id::text AS schedule_id,
+        u.name AS teacher_name,
+        s.subject,
+        c.name AS class_name,
+        r.name AS room_name,
+        ts.start_time::text,
+        ts.end_time::text,
+        at.status::text AS attendance_status,
+        at.late_minutes,
+        at.checked_in_at::text,
+        COALESCE(at.room_mismatch, false) AS room_mismatch,
+        scanned_room.name AS room_scanned_name,
+        at.room_scan_start_at::text AS room_scanned_at,
+        CASE WHEN COUNT(ast.id) > 0 THEN true ELSE false END AS student_rollcall_done,
+        COUNT(CASE WHEN ast.status = 'present' THEN 1 END)::int AS student_present_count,
+        COUNT(CASE WHEN ast.status = 'absent'  THEN 1 END)::int AS student_absent_count,
+        COUNT(ast.id)::int AS student_total_count
+      FROM dates d
+      INNER JOIN active_period ap ON true
+      INNER JOIN schedules s
+        ON s.schedule_period_id = ap.id
+       AND s.day_of_week = EXTRACT(ISODOW FROM d.date)::int
+       AND s.is_active = true
+      INNER JOIN teachers t    ON t.id = s.teacher_id
+      INNER JOIN users u       ON u.id = t.user_id
+      INNER JOIN classes c     ON c.id = s.class_id
+      INNER JOIN rooms r       ON r.id = s.room_id
+      INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+      LEFT JOIN attendances_teacher at
+        ON at.schedule_id = s.id AND at.date = d.date
+      LEFT JOIN rooms scanned_room ON scanned_room.id = at.room_scanned_id
+      LEFT JOIN attendances_student ast
+        ON ast.schedule_id = s.id AND ast.date = d.date
+      GROUP BY
+        d.date, s.id, u.name, s.subject, c.name, r.name,
+        ts.start_time, ts.end_time,
+        at.status, at.late_minutes, at.checked_in_at,
+        at.room_mismatch, scanned_room.name, at.room_scan_start_at
+      ORDER BY d.date DESC, ts.start_time ASC
     `);
 
     return getRows(result);
