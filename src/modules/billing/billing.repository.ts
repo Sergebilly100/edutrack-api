@@ -40,6 +40,8 @@ type TeacherDailyRow = {
   attendance_status: 'present' | 'absent' | 'late' | 'excused' | null;
   checked_in_at: string | null;
   late_minutes: number | null;
+  room_mismatch: boolean | null;
+  has_rollcall: boolean | null;
 };
 
 type SalaryRecordRow = {
@@ -178,7 +180,9 @@ export class BillingRepository {
         (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0)::numeric(8,2) AS hours_planned,
         at.status::text AS attendance_status,
         at.checked_in_at::text,
-        at.late_minutes
+        at.late_minutes,
+        at.room_mismatch,
+        rollcall.has_rollcall
       FROM month_days md
       INNER JOIN schedule_periods sp
         ON sp.is_active = true
@@ -194,6 +198,13 @@ export class BillingRepository {
         ON at.schedule_id = s.id
        AND at.teacher_id = s.teacher_id
        AND at.date = md.d
+      LEFT JOIN LATERAL (
+        SELECT true AS has_rollcall
+        FROM attendances_student ast
+        WHERE ast.schedule_id = s.id
+          AND ast.date = md.d
+        LIMIT 1
+      ) rollcall ON true
       ORDER BY md.d ASC, ts.start_time ASC
     `);
 

@@ -22,6 +22,10 @@ const documentParamsSchema = z.object({
   id: z.string().regex(UUID_REGEX),
 });
 
+const downloadQuerySchema = z.object({
+  raw: z.enum(['true', 'false']).optional(),
+});
+
 type UploadPayload = {
   type: string;
   name: string;
@@ -251,6 +255,7 @@ export default async function documentsController(app: FastifyInstance): Promise
     try {
       const claims = request.claims!;
       const params = documentParamsSchema.parse(request.params ?? {});
+      const query = downloadQuerySchema.parse(request.query ?? {});
 
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
         const service = buildDocumentsService(tenantDb);
@@ -258,6 +263,16 @@ export default async function documentsController(app: FastifyInstance): Promise
         const metadata = await service.getDocumentMetadata(params.id);
         if (!ensureDocumentsPermission(request, reply, metadata.entityType)) {
           return null;
+        }
+
+        if (query.raw === 'true') {
+          return service.getDownloadPayload({
+            schemaName: claims.schemaName,
+            documentId: params.id,
+            adminId: claims.sub,
+            ipAddress: request.ip,
+            baseUrl: resolveBaseUrl(request),
+          });
         }
 
         return service.createDownloadUrl({
@@ -271,6 +286,13 @@ export default async function documentsController(app: FastifyInstance): Promise
 
       if (!result) {
         return;
+      }
+
+      if (query.raw === 'true' && 'buffer' in result) {
+        const safeFileName = result.fileName.replace(/"/g, '');
+        reply.header('Content-Type', result.contentType);
+        reply.header('Content-Disposition', `attachment; filename="${safeFileName}"`);
+        return reply.send(result.buffer);
       }
 
       return reply.send(result);

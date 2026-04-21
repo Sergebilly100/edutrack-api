@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -93,6 +94,13 @@ type DownloadInput = {
 
 type DeleteInput = {
   documentId: string;
+};
+
+export type DocumentDownloadPayload = {
+  id: string;
+  fileName: string;
+  contentType: string;
+  buffer: Buffer;
 };
 
 export type DocumentItem = {
@@ -315,6 +323,55 @@ export class DocumentsService {
     });
   }
 
+  private async getObjectContent(key: string): Promise<{ buffer: Buffer; contentType: string | null }> {
+    if (!this.isR2Enabled()) {
+      const absolutePath = DocumentsService.buildSafeLocalPath(this.deps.localStorageRoot, key);
+      const buffer = await readFile(absolutePath);
+      const extension = path.extname(absolutePath).toLowerCase();
+      return {
+        buffer,
+        contentType: CONTENT_TYPE_BY_EXTENSION[extension] ?? 'application/octet-stream',
+      };
+    }
+
+    if (!this.s3Client) {
+      throw new DocumentsModuleError('R2 client not initialized', 500, 'R2_NOT_INITIALIZED');
+    }
+
+    const response = await this.s3Client.send(
+      new GetObjectCommand({
+        Bucket: this.deps.r2Bucket,
+        Key: key,
+      })
+    );
+
+    const body = response.Body;
+    if (!body) {
+      throw new DocumentsModuleError('Document content not found', 404, 'DOCUMENT_CONTENT_NOT_FOUND');
+    }
+
+    if (typeof (body as { transformToByteArray?: () => Promise<Uint8Array> }).transformToByteArray === 'function') {
+      const bytes = await (body as { transformToByteArray: () => Promise<Uint8Array> }).transformToByteArray();
+      return {
+        buffer: Buffer.from(bytes),
+        contentType: response.ContentType ?? 'application/octet-stream',
+      };
+    }
+
+    if (body instanceof Readable) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of body) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      return {
+        buffer: Buffer.concat(chunks),
+        contentType: response.ContentType ?? 'application/octet-stream',
+      };
+    }
+
+    throw new DocumentsModuleError('Unsupported document stream', 500, 'DOCUMENT_STREAM_UNSUPPORTED');
+  }
+
   private toDocumentItem(row: DocumentRow, url: string): DocumentItem {
     return {
       id: row.id,
@@ -414,6 +471,31 @@ export class DocumentsService {
     return {
       id: document.id,
       url,
+    };
+  }
+
+  async getDownloadPayload(input: DownloadInput): Promise<DocumentDownloadPayload> {
+    const document = await this.repository.findDocumentById(input.documentId);
+    if (!document) {
+      throw new DocumentsModuleError('Document not found', 404, 'DOCUMENT_NOT_FOUND');
+    }
+
+    const tenantId = await this.repository.findTenantIdBySchemaName(input.schemaName);
+    if (tenantId) {
+      await this.repository.logAdminAccess({
+        adminId: input.adminId,
+        tenantId,
+        action: DocumentsService.safeAction(`GET /api/v1/documents/${input.documentId}/download?raw=true`),
+        ipAddress: input.ipAddress,
+      });
+    }
+
+    const content = await this.getObjectContent(document.r2_key);
+    return {
+      id: document.id,
+      fileName: document.name,
+      contentType: content.contentType ?? 'application/octet-stream',
+      buffer: content.buffer,
     };
   }
 

@@ -92,10 +92,22 @@ export class BillingService {
     ).find((row) => row.teacher_id === teacherId);
 
     const daily = await this.repository.listTeacherDailyBreakdown(teacherId, monthStart, monthEnd);
+    const now = new Date();
+    const todayIso = now.toISOString().slice(0, 10);
+    const currentTime = now.toISOString().slice(11, 16);
 
     const rows = daily.map((row) => {
       const hoursPlanned = BillingRepository.toNumber(row.hours_planned);
-      const countedAsDone = row.attendance_status === 'present' || row.attendance_status === 'late';
+      const rowEndTime = row.end_time.slice(0, 5);
+      const hasExplicitStatus = row.attendance_status !== null;
+      const shouldAutoAbsent =
+        !hasExplicitStatus &&
+        (row.date < todayIso || (row.date === todayIso && rowEndTime < currentTime));
+      const attendanceStatus = row.attendance_status ?? (shouldAutoAbsent ? 'absent' : 'not_marked');
+      const countedAsDone =
+        attendanceStatus === 'present' || attendanceStatus === 'late' || attendanceStatus === 'excused';
+      const hasRollcall = row.has_rollcall === true;
+
       return {
         date: row.date,
         scheduleId: row.schedule_id,
@@ -105,9 +117,12 @@ export class BillingService {
         slotLabel: row.slot_label,
         startTime: row.start_time,
         endTime: row.end_time,
-        attendanceStatus: row.attendance_status ?? 'not_marked',
+        attendanceStatus,
         checkedInAt: row.checked_in_at,
         lateMinutes: row.late_minutes,
+        roomMismatch: row.room_mismatch === true,
+        rollcallDone: hasRollcall,
+        rollcallMissing: !hasRollcall && row.checked_in_at !== null,
         hoursPlanned: roundHours(hoursPlanned),
         hoursDone: roundHours(countedAsDone ? hoursPlanned : 0),
       };
