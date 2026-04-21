@@ -3,15 +3,19 @@ import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
 import {
+  requireDirector,
   requireDirectorOrSecretary,
   requireTeacherOrDirectorOrSecretary,
 } from '../../shared/middleware/auth.middleware.js';
 
 import { StudentsModuleError, buildStudentsService } from './students.service.js';
 import {
+  absenceStatsQuerySchema,
   attendanceHistoryQuerySchema,
   bulkAttendanceBodySchema,
   createStudentBodySchema,
+  studentAbsencesParamsSchema,
+  studentAbsencesQuerySchema,
   studentsListQuerySchema,
   updateStudentBodySchema,
   updateStudentParamsSchema,
@@ -77,6 +81,39 @@ export default async function studentsController(app: FastifyInstance): Promise<
       });
 
       return reply.code(201).send({ data: result });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/students/absence-stats', { preHandler: requireDirector }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const query = absenceStatsQuerySchema.parse(request.query ?? {});
+
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildStudentsService(tenantDb);
+        return service.getAbsenceStats(query);
+      });
+
+      return reply.send(result);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/students/:studentId/absences', { preHandler: requireDirector }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const params = studentAbsencesParamsSchema.parse(request.params ?? {});
+      const query = studentAbsencesQuerySchema.parse(request.query ?? {});
+
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildStudentsService(tenantDb);
+        return service.getStudentAbsences(params.studentId, query);
+      });
+
+      return reply.send(result);
     } catch (error) {
       return handleError(reply, error);
     }

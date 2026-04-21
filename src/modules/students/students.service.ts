@@ -4,13 +4,17 @@ import type { StudentAbsentPayload } from '../../shared/events/events.types.js';
 
 import { StudentsRepository } from './students.repository.js';
 import type {
+  AbsenceStatsQuery,
   AttendanceStudentRecord,
   AttendanceHistoryQuery,
   BulkAttendanceInput,
   CreateStudentInput,
   PaginationMeta,
+  StudentAbsenceDetailRecord,
+  StudentAbsenceStatRecord,
   StudentDetailRecord,
   StudentRecord,
+  StudentAbsencesQuery,
   StudentsListQuery,
   TodayAbsenceGroup,
   UpdateStudentInput,
@@ -236,6 +240,7 @@ export class StudentsService {
           studentLastName: row.studentLastName,
           scheduleId: row.scheduleId,
           date: row.date,
+          createdAt: row.createdAt,
           smsStatus: row.smsStatus,
           smsNotified: row.smsNotified,
         });
@@ -252,6 +257,7 @@ export class StudentsService {
             studentLastName: row.studentLastName,
             scheduleId: row.scheduleId,
             date: row.date,
+            createdAt: row.createdAt,
             smsStatus: row.smsStatus,
             smsNotified: row.smsNotified,
           },
@@ -260,6 +266,17 @@ export class StudentsService {
     }
 
     return Array.from(grouped.values());
+  }
+
+  async getAbsenceStats(query: AbsenceStatsQuery): Promise<StudentAbsenceStatRecord[]> {
+    return this.repository.getStudentAbsenceStats(query);
+  }
+
+  async getStudentAbsences(
+    studentId: string,
+    query: StudentAbsencesQuery
+  ): Promise<StudentAbsenceDetailRecord[]> {
+    return this.repository.getStudentAbsenceDetails(studentId, query);
   }
 }
 

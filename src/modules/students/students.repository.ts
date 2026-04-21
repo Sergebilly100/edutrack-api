@@ -1,14 +1,18 @@
 import { sql, type SQL } from 'drizzle-orm';
 
 import type {
+  AbsenceStatsQuery,
   AttendanceHistoryQuery,
   AttendanceStudentRecord,
   BulkAttendanceInput,
   CreateStudentInput,
+  StudentAbsenceDetailRecord,
+  StudentAbsenceStatRecord,
   StudentDetailRecord,
   StudentDocumentRecord,
   StudentParentSmsRecord,
   StudentRecentAbsence,
+  StudentAbsencesQuery,
   StudentRecord,
   StudentsListQuery,
   TodayAbsenceRow,
@@ -84,6 +88,7 @@ type TodayAbsenceDbRow = {
   student_last_name: string;
   schedule_id: string | null;
   date: string;
+  created_at: Date;
   sms_status: 'queued' | 'sent' | 'failed' | 'delivered' | null;
 };
 
@@ -101,6 +106,9 @@ type StudentRecentAbsenceRow = {
   date: string;
   subject: string | null;
   teacher_name: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  room_name: string | null;
   sms_status: 'queued' | 'sent' | 'failed' | 'delivered' | null;
 };
 
@@ -116,6 +124,33 @@ type StudentParentSmsRow = {
   reason: string;
   recipient_phone: string;
   status: 'queued' | 'sent' | 'failed' | 'delivered';
+};
+
+type StudentAbsenceStatsDbRow = {
+  student_id: string;
+  student_name: string;
+  class_name: string;
+  class_id: string;
+  parent_phone: string | null;
+  parent_phone_2: string | null;
+  absence_count: string | number;
+  total_scheduled: string | number;
+  absence_rate: string | number | null;
+  sms_summary: 'all_sent' | 'partial' | 'none';
+};
+
+type StudentAbsenceDetailDbRow = {
+  date: string;
+  subject: string;
+  class_name: string;
+  start_time: string;
+  end_time: string;
+  phone_1: string | null;
+  phone_2: string | null;
+  sms1_status: 'queued' | 'sent' | 'failed' | 'delivered' | null;
+  sms1_sent_at: string | null;
+  sms2_status: 'queued' | 'sent' | 'failed' | 'delivered' | null;
+  sms2_sent_at: string | null;
 };
 
 const getRows = <T>(result: unknown): T[] => {
@@ -178,6 +213,33 @@ const toTotal = (row: TotalRow | undefined): number => {
 
   const value = typeof row.total === 'string' ? Number(row.total) : row.total;
   return Number.isFinite(value) ? value : 0;
+};
+
+const toNumber = (value: string | number | null | undefined): number => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  return 0;
+};
+
+const toSmsStatus = (
+  value: 'queued' | 'sent' | 'failed' | 'delivered' | null
+): 'sent' | 'failed' | 'not_sent' => {
+  if (value === 'sent' || value === 'delivered') {
+    return 'sent';
+  }
+
+  if (value === 'failed') {
+    return 'failed';
+  }
+
+  return 'not_sent';
 };
 
 const buildStudentsWhere = (query: StudentsListQuery): SQL[] => {
@@ -521,10 +583,15 @@ export class StudentsRepository {
             a.date::text AS date,
             sch.subject,
             u.name AS teacher_name,
+            ts.start_time::text AS start_time,
+            ts.end_time::text AS end_time,
+            r.name AS room_name,
             sms_log.status::text AS sms_status
           FROM attendances_student a
           INNER JOIN students s ON s.id = a.student_id
           LEFT JOIN schedules sch ON sch.id = a.schedule_id
+          LEFT JOIN time_slots ts ON ts.id = sch.time_slot_id
+          LEFT JOIN rooms r ON r.id = sch.room_id
           LEFT JOIN teachers t ON t.id = sch.teacher_id
           LEFT JOIN users u ON u.id = t.user_id
           LEFT JOIN LATERAL (
@@ -574,6 +641,9 @@ export class StudentsRepository {
         date: row.date,
         subject: row.subject ?? 'Matière non renseignée',
         teacherName: row.teacher_name ?? 'Professeur non renseigné',
+        startTime: row.start_time,
+        endTime: row.end_time,
+        roomName: row.room_name,
         smsStatus: toRecentSmsStatus(row.sms_status),
       })
     );
@@ -778,6 +848,7 @@ export class StudentsRepository {
         s.last_name AS student_last_name,
         a.schedule_id,
         a.date::text AS date,
+        a.created_at,
         sms_log.status::text AS sms_status
       FROM attendances_student a
       INNER JOIN students s ON s.id = a.student_id
@@ -794,7 +865,7 @@ export class StudentsRepository {
       ) sms_log ON true
       WHERE a.status = 'absent'
         AND a.date = COALESCE(${date ?? null}::date, CURRENT_DATE)
-      ORDER BY c.name ASC, s.last_name ASC, s.first_name ASC
+      ORDER BY a.created_at DESC, s.last_name ASC, s.first_name ASC
     `);
 
     return getRows<TodayAbsenceDbRow>(result).map((row) => ({
@@ -805,8 +876,189 @@ export class StudentsRepository {
       studentLastName: row.student_last_name,
       scheduleId: row.schedule_id,
       date: row.date,
+      createdAt: toIsoDateTime(row.created_at),
       smsStatus: row.sms_status,
       smsNotified: row.sms_status === 'sent' || row.sms_status === 'delivered',
+    }));
+  }
+
+  async getStudentAbsenceStats(query: AbsenceStatsQuery): Promise<StudentAbsenceStatRecord[]> {
+    const filters: SQL[] = [sql`st.is_active = true`, sql`sa.absence_count >= ${query.min_absences}`];
+
+    if (query.class_id) {
+      filters.push(sql`st.class_id = ${query.class_id}::uuid`);
+    }
+
+    if (query.sms_status === 'sent') {
+      filters.push(sql`sa.sms_sent_count = sa.absence_count`);
+    } else if (query.sms_status === 'not_sent') {
+      filters.push(sql`sa.sms_sent_count = 0`);
+    } else if (query.sms_status === 'failed') {
+      filters.push(sql`sa.has_failed = true`);
+    }
+
+    const subjectScheduledFilter = query.subject ? sql`AND s.subject = ${query.subject}` : sql``;
+    const subjectAbsenceFilter = query.subject ? sql`AND s.subject = ${query.subject}` : sql``;
+
+    const result = await this.db.execute(sql`
+      WITH active_period AS (
+        SELECT id
+        FROM schedule_periods
+        WHERE is_active = true
+          AND valid_from <= ${query.to}::date
+          AND valid_to >= ${query.from}::date
+        ORDER BY created_at DESC
+        LIMIT 1
+      ),
+      dates AS (
+        SELECT generate_series(${query.from}::date, ${query.to}::date, INTERVAL '1 day')::date AS date
+      ),
+      class_scheduled AS (
+        SELECT s.class_id, COUNT(*)::int AS total
+        FROM dates d
+        INNER JOIN active_period ap ON true
+        INNER JOIN schedules s
+          ON s.schedule_period_id = ap.id
+         AND s.day_of_week = EXTRACT(ISODOW FROM d.date)::int
+         AND s.is_active = true
+        ${subjectScheduledFilter}
+        GROUP BY s.class_id
+      ),
+      absence_rows AS (
+        SELECT
+          ast.student_id,
+          CASE WHEN COALESCE(nl.sent_count, 0) > 0 THEN 1 ELSE 0 END AS has_sent,
+          CASE WHEN COALESCE(nl.failed_count, 0) > 0 THEN 1 ELSE 0 END AS has_failed
+        FROM attendances_student ast
+        INNER JOIN schedules s ON s.id = ast.schedule_id
+        INNER JOIN students st ON st.id = ast.student_id
+        LEFT JOIN LATERAL (
+          SELECT
+            COUNT(*) FILTER (WHERE n.status IN ('sent', 'delivered'))::int AS sent_count,
+            COUNT(*) FILTER (WHERE n.status = 'failed')::int AS failed_count
+          FROM notifications_log n
+          WHERE n.related_id = ast.id
+            AND n.type = 'student_absent_parent'
+            AND n.recipient_phone IN (st.parent_phone, st.parent_phone_2)
+        ) nl ON true
+        WHERE ast.status = 'absent'
+          AND ast.date BETWEEN ${query.from}::date AND ${query.to}::date
+          ${subjectAbsenceFilter}
+      ),
+      student_absences AS (
+        SELECT
+          student_id,
+          COUNT(*)::int AS absence_count,
+          COUNT(*) FILTER (WHERE has_sent = 1)::int AS sms_sent_count,
+          BOOL_OR(has_failed = 1) AS has_failed
+        FROM absence_rows
+        GROUP BY student_id
+      )
+      SELECT
+        st.id::text AS student_id,
+        (st.first_name || ' ' || st.last_name) AS student_name,
+        c.name AS class_name,
+        c.id::text AS class_id,
+        st.parent_phone,
+        st.parent_phone_2,
+        sa.absence_count,
+        COALESCE(cs.total, 0) AS total_scheduled,
+        ROUND(
+          100.0 * sa.absence_count::numeric / NULLIF(COALESCE(cs.total, 0), 0),
+          2
+        )::float AS absence_rate,
+        CASE
+          WHEN sa.sms_sent_count = sa.absence_count THEN 'all_sent'
+          WHEN sa.sms_sent_count > 0 THEN 'partial'
+          ELSE 'none'
+        END AS sms_summary
+      FROM student_absences sa
+      INNER JOIN students st ON st.id = sa.student_id
+      INNER JOIN classes c ON c.id = st.class_id
+      LEFT JOIN class_scheduled cs ON cs.class_id = st.class_id
+      WHERE ${sql.join(filters, sql` AND `)}
+      ORDER BY sa.absence_count DESC, student_name ASC
+    `);
+
+    return getRows<StudentAbsenceStatsDbRow>(result).map((row) => ({
+      student_id: row.student_id,
+      student_name: row.student_name,
+      class_name: row.class_name,
+      class_id: row.class_id,
+      parent_phone: row.parent_phone,
+      parent_phone_2: row.parent_phone_2,
+      absence_count: toNumber(row.absence_count),
+      total_scheduled: toNumber(row.total_scheduled),
+      absence_rate: toNumber(row.absence_rate),
+      sms_summary: row.sms_summary,
+    }));
+  }
+
+  async getStudentAbsenceDetails(
+    studentId: string,
+    query: StudentAbsencesQuery
+  ): Promise<StudentAbsenceDetailRecord[]> {
+    const subjectFilter = query.subject ? sql`AND s.subject = ${query.subject}` : sql``;
+
+    const result = await this.db.execute(sql`
+      SELECT
+        ast.date::text AS date,
+        s.subject,
+        c.name AS class_name,
+        ts.start_time::text AS start_time,
+        ts.end_time::text AS end_time,
+        st.parent_phone AS phone_1,
+        st.parent_phone_2 AS phone_2,
+        nl1.status::text AS sms1_status,
+        nl1.sent_at::text AS sms1_sent_at,
+        nl2.status::text AS sms2_status,
+        nl2.sent_at::text AS sms2_sent_at
+      FROM attendances_student ast
+      INNER JOIN students st ON st.id = ast.student_id
+      INNER JOIN schedules s ON s.id = ast.schedule_id
+      INNER JOIN classes c ON c.id = s.class_id
+      INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+      LEFT JOIN LATERAL (
+        SELECT n.status, n.sent_at
+        FROM notifications_log n
+        WHERE n.related_id = ast.id
+          AND n.type = 'student_absent_parent'
+          AND n.recipient_phone = st.parent_phone
+        ORDER BY COALESCE(n.sent_at, n.created_at) DESC, n.created_at DESC
+        LIMIT 1
+      ) nl1 ON true
+      LEFT JOIN LATERAL (
+        SELECT n.status, n.sent_at
+        FROM notifications_log n
+        WHERE n.related_id = ast.id
+          AND n.type = 'student_absent_parent'
+          AND n.recipient_phone = st.parent_phone_2
+        ORDER BY COALESCE(n.sent_at, n.created_at) DESC, n.created_at DESC
+        LIMIT 1
+      ) nl2 ON true
+      WHERE ast.student_id = ${studentId}::uuid
+        AND ast.status = 'absent'
+        AND ast.date BETWEEN ${query.from}::date AND ${query.to}::date
+        ${subjectFilter}
+      ORDER BY ast.date DESC
+    `);
+
+    return getRows<StudentAbsenceDetailDbRow>(result).map((row) => ({
+      date: row.date,
+      subject: row.subject,
+      class_name: row.class_name,
+      start_time: row.start_time,
+      end_time: row.end_time,
+      sms_phone_1: {
+        phone: row.phone_1,
+        status: toSmsStatus(row.sms1_status),
+        sent_at: row.sms1_sent_at,
+      },
+      sms_phone_2: {
+        phone: row.phone_2,
+        status: toSmsStatus(row.sms2_status),
+        sent_at: row.sms2_sent_at,
+      },
     }));
   }
 

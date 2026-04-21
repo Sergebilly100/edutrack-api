@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
     bulkMarkAbsences: vi.fn(),
     listAttendanceHistory: vi.fn(),
     listTodayAbsences: vi.fn(),
+    getAbsenceStats: vi.fn(),
+    getStudentAbsences: vi.fn(),
   },
 }));
 
@@ -100,6 +102,8 @@ beforeEach(() => {
   });
 
   mocks.service.listTodayAbsences.mockResolvedValue([]);
+  mocks.service.getAbsenceStats.mockResolvedValue([]);
+  mocks.service.getStudentAbsences.mockResolvedValue([]);
   mocks.service.getStudentDetail.mockResolvedValue({
     id: 'student-1',
     firstName: 'Awa',
@@ -206,6 +210,47 @@ describe('students routes', () => {
     expect(response.statusCode).toBe(200);
     expect(mocks.service.getStudentDetail).toHaveBeenCalledWith(
       '66f048d8-d053-48e2-b4a8-7fce3ebc3ed8'
+    );
+
+    await app.close();
+  });
+
+  it('GET /api/v1/students/absence-stats appelle le service stats (route statique prioritaire)', async () => {
+    const app = await buildApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/students/absence-stats?from=2026-04-01&to=2026-04-21&min_absences=2',
+      headers: { authorization: 'Bearer valid-token' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.service.getAbsenceStats).toHaveBeenCalledWith({
+      from: '2026-04-01',
+      to: '2026-04-21',
+      class_id: undefined,
+      subject: undefined,
+      sms_status: undefined,
+      min_absences: 2,
+    });
+    expect(mocks.service.getStudentDetail).not.toHaveBeenCalledWith('absence-stats');
+
+    await app.close();
+  });
+
+  it('GET /api/v1/students/:studentId/absences appelle le service détail absences', async () => {
+    const app = await buildApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/students/66f048d8-d053-48e2-b4a8-7fce3ebc3ed8/absences?from=2026-04-01&to=2026-04-21&subject=Math',
+      headers: { authorization: 'Bearer valid-token' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.service.getStudentAbsences).toHaveBeenCalledWith(
+      '66f048d8-d053-48e2-b4a8-7fce3ebc3ed8',
+      { from: '2026-04-01', to: '2026-04-21', subject: 'Math' }
     );
 
     await app.close();
