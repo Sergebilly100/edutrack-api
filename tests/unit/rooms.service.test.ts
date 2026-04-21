@@ -15,7 +15,7 @@ const baseRoom = {
 
 const mockRepo = {
   findRoomById: vi.fn(),
-  hasFutureActiveSchedules: vi.fn(),
+  hasAnyActiveSchedules: vi.fn(),
   softDeleteRoom: vi.fn(),
   createRoom: vi.fn(),
   updateRoom: vi.fn(),
@@ -42,20 +42,20 @@ describe('rooms.service', () => {
     });
   });
 
-  it('deleteRoom -> 409 ROOM_HAS_FUTURE_SCHEDULES si future schedules actives', async () => {
+  it('deleteRoom -> 409 ROOM_HAS_SCHEDULES si la salle est liée à des créneaux', async () => {
     mockRepo.findRoomById.mockResolvedValue(baseRoom);
-    mockRepo.hasFutureActiveSchedules.mockResolvedValue(true);
+    mockRepo.hasAnyActiveSchedules.mockResolvedValue(true);
 
     await expect(service.deleteRoom('room-1')).rejects.toMatchObject<Partial<RoomsModuleError>>({
-      message: 'Room has active future schedules and cannot be deleted',
+      message: 'Room is used in schedule slots and cannot be deleted',
       statusCode: 409,
-      code: 'ROOM_HAS_FUTURE_SCHEDULES',
+      code: 'ROOM_HAS_SCHEDULES',
     });
   });
 
   it('deleteRoom -> soft delete et retourne room sans qrToken', async () => {
     mockRepo.findRoomById.mockResolvedValue(baseRoom);
-    mockRepo.hasFutureActiveSchedules.mockResolvedValue(false);
+    mockRepo.hasAnyActiveSchedules.mockResolvedValue(false);
     mockRepo.softDeleteRoom.mockResolvedValue({ ...baseRoom, isActive: false });
 
     const result = await service.deleteRoom('room-1');

@@ -159,6 +159,12 @@ export type ScheduleMutationInput = {
   isActive?: boolean;
 };
 
+export type ScheduleConflictResult = {
+  teacherConflict: boolean;
+  roomConflict: boolean;
+  classConflict: boolean;
+};
+
 export type RoomInsertInput = {
   name: string;
   qrToken: string;
@@ -340,6 +346,25 @@ export const findActiveSchedulePeriodByDate = async (
   return row ? mapPeriod(row) : null;
 };
 
+export const findActiveSchedulePeriodByWeek = async (
+  db: QueryExecutor,
+  weekStart: string,
+  weekEnd: string
+): Promise<SchedulePeriod | null> => {
+  const result = await db.execute<SchedulePeriodRow>(sql`
+    SELECT id, name, valid_from, valid_to, is_active, created_by, created_at
+    FROM schedule_periods
+    WHERE is_active = true
+      AND valid_from <= ${weekEnd}
+      AND valid_to >= ${weekStart}
+    ORDER BY created_at DESC
+    LIMIT 1
+  `);
+
+  const [row] = getRows<SchedulePeriodRow>(result);
+  return row ? mapPeriod(row) : null;
+};
+
 export const duplicatePeriodWithSchedules = async (
   db: QueryExecutor,
   sourcePeriodId: string,
@@ -462,8 +487,25 @@ export const listSchedulesForPeriod = async (
   params: {
     periodId: string;
     date: string;
+    weekStart?: string;
+    weekEnd?: string;
   }
 ): Promise<ActiveSchedule[]> => {
+  const dayFilter =
+    params.weekStart && params.weekEnd
+      ? sql`
+        AND s.day_of_week IN (
+          SELECT DISTINCT EXTRACT(ISODOW FROM d)::int
+          FROM generate_series(
+            GREATEST(sp.valid_from, ${params.weekStart}::date),
+            LEAST(sp.valid_to, ${params.weekEnd}::date),
+            interval '1 day'
+          ) AS d
+          WHERE EXTRACT(ISODOW FROM d)::int BETWEEN 1 AND 6
+        )
+      `
+      : sql``;
+
   const result = await db.execute<ActiveScheduleRow>(sql`
     SELECT
       s.id,
@@ -492,10 +534,12 @@ export const listSchedulesForPeriod = async (
     INNER JOIN classes c ON c.id = s.class_id
     INNER JOIN rooms r ON r.id = s.room_id
     INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+    INNER JOIN schedule_periods sp ON sp.id = s.schedule_period_id
     LEFT JOIN attendances_teacher at ON at.schedule_id = s.id AND at.date = ${params.date}
     WHERE s.schedule_period_id = ${params.periodId}
       AND s.day_of_week BETWEEN 1 AND 6
       AND s.is_active = true
+      ${dayFilter}
     ORDER BY s.day_of_week ASC, ts.sort_order ASC, ts.start_time ASC, u.name ASC
   `);
 
@@ -647,6 +691,99 @@ export const findTeacherIdByUserId = async (
 
   const [row] = getRows<{ id: string }>(result);
   return row?.id ?? null;
+};
+
+export const findScheduleConflicts = async (
+  db: QueryExecutor,
+  input: ScheduleMutationInput & { excludeScheduleId?: string }
+): Promise<ScheduleConflictResult> => {
+  const result = await db.execute<{
+    teacher_conflict: boolean;
+    room_conflict: boolean;
+    class_conflict: boolean;
+  }>(sql`
+    WITH target_period AS (
+      SELECT valid_from, valid_to
+      FROM schedule_periods
+      WHERE id = ${input.schedulePeriodId}
+      LIMIT 1
+    ),
+    overlapping_periods AS (
+      SELECT sp.id
+      FROM schedule_periods sp
+      CROSS JOIN target_period tp
+      WHERE sp.is_active = true
+        AND sp.valid_from <= tp.valid_to
+        AND sp.valid_to >= tp.valid_from
+    )
+    SELECT
+      EXISTS (
+        SELECT 1
+        FROM schedules s
+        WHERE s.is_active = true
+          AND s.schedule_period_id IN (SELECT id FROM overlapping_periods)
+          AND s.day_of_week = ${input.dayOfWeek}
+          AND s.time_slot_id = ${input.timeSlotId}
+          AND s.teacher_id = ${input.teacherId}
+          AND (${input.excludeScheduleId ?? null}::uuid IS NULL OR s.id <> ${input.excludeScheduleId ?? null}::uuid)
+      ) AS teacher_conflict,
+      EXISTS (
+        SELECT 1
+        FROM schedules s
+        WHERE s.is_active = true
+          AND s.schedule_period_id IN (SELECT id FROM overlapping_periods)
+          AND s.day_of_week = ${input.dayOfWeek}
+          AND s.time_slot_id = ${input.timeSlotId}
+          AND s.room_id = ${input.roomId}
+          AND (${input.excludeScheduleId ?? null}::uuid IS NULL OR s.id <> ${input.excludeScheduleId ?? null}::uuid)
+      ) AS room_conflict,
+      EXISTS (
+        SELECT 1
+        FROM schedules s
+        WHERE s.is_active = true
+          AND s.schedule_period_id IN (SELECT id FROM overlapping_periods)
+          AND s.day_of_week = ${input.dayOfWeek}
+          AND s.time_slot_id = ${input.timeSlotId}
+          AND s.class_id = ${input.classId}
+          AND (${input.excludeScheduleId ?? null}::uuid IS NULL OR s.id <> ${input.excludeScheduleId ?? null}::uuid)
+      ) AS class_conflict
+  `);
+
+  const [row] = getRows(result);
+  return {
+    teacherConflict: row?.teacher_conflict ?? false,
+    roomConflict: row?.room_conflict ?? false,
+    classConflict: row?.class_conflict ?? false,
+  };
+};
+
+export const hasPastOccurrences = async (
+  db: QueryExecutor,
+  scheduleId: string,
+  today: string
+): Promise<boolean> => {
+  const result = await db.execute<{ has_past_occurrence: boolean }>(sql`
+    SELECT EXISTS (
+      SELECT 1
+      FROM schedules s
+      INNER JOIN schedule_periods sp ON sp.id = s.schedule_period_id
+      WHERE s.id = ${scheduleId}
+        AND s.is_active = true
+        AND sp.valid_from < ${today}::date
+        AND EXISTS (
+          SELECT 1
+          FROM generate_series(
+            sp.valid_from,
+            LEAST(sp.valid_to, ${today}::date - interval '1 day'),
+            interval '1 day'
+          ) AS d
+          WHERE EXTRACT(ISODOW FROM d)::int = s.day_of_week
+        )
+    ) AS has_past_occurrence
+  `);
+
+  const [row] = getRows(result);
+  return row?.has_past_occurrence ?? false;
 };
 
 export const listRooms = async (db: QueryExecutor): Promise<Room[]> => {

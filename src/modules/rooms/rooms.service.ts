@@ -108,18 +108,17 @@ export class RoomsService {
   }
 
   async deleteRoom(roomId: string): Promise<PublicRoom> {
-    const today = todayIso();
     const room = await this.repository.findRoomById(roomId);
     if (!room) {
       throw new RoomsModuleError('Room not found', 404, 'ROOM_NOT_FOUND');
     }
 
-    const blocked = await this.repository.hasFutureActiveSchedules(roomId, today);
+    const blocked = await this.repository.hasAnyActiveSchedules(roomId);
     if (blocked) {
       throw new RoomsModuleError(
-        'Room has active future schedules and cannot be deleted',
+        'Room is used in schedule slots and cannot be deleted',
         409,
-        'ROOM_HAS_FUTURE_SCHEDULES'
+        'ROOM_HAS_SCHEDULES'
       );
     }
 

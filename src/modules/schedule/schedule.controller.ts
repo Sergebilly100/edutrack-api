@@ -13,7 +13,9 @@ import {
 import {
   createSchedule,
   deleteScheduleById,
+  findScheduleConflicts,
   findTeacherIdByUserId,
+  hasPastOccurrences,
   listSchedulePeriods,
   updateSchedule,
   updateSchedulePeriod,
@@ -114,6 +116,34 @@ const handleError = (
   }
   if (message === 'Invalid or missing x-tenant-schema header') {
     return reply.code(400).send({ error: message, code: 'BAD_REQUEST', statusCode: 400 });
+  }
+  if (message === 'Schedule has past occurrences and cannot be edited or deleted') {
+    return reply.code(409).send({
+      error: message,
+      code: 'SCHEDULE_PAST_LOCKED',
+      statusCode: 409,
+    });
+  }
+  if (message === 'Teacher already has a course at the same time') {
+    return reply.code(409).send({
+      error: message,
+      code: 'TEACHER_SCHEDULE_CONFLICT',
+      statusCode: 409,
+    });
+  }
+  if (message === 'Room already has a course at the same time') {
+    return reply.code(409).send({
+      error: message,
+      code: 'ROOM_SCHEDULE_CONFLICT',
+      statusCode: 409,
+    });
+  }
+  if (message === 'Class already has a course at the same time') {
+    return reply.code(409).send({
+      error: message,
+      code: 'CLASS_SCHEDULE_CONFLICT',
+      statusCode: 409,
+    });
   }
 
   request.log.error({ error }, '[schedule] unhandled error');
@@ -313,6 +343,26 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           endTime: body.end_time,
         });
 
+        const conflicts = await findScheduleConflicts(db, {
+          schedulePeriodId: body.schedule_period_id,
+          teacherId: body.teacher_id,
+          classId: body.class_id,
+          roomId: body.room_id,
+          timeSlotId,
+          dayOfWeek: body.day_of_week,
+          subject: body.subject,
+          isActive: body.is_active,
+        });
+        if (conflicts.teacherConflict) {
+          throw new Error('Teacher already has a course at the same time');
+        }
+        if (conflicts.roomConflict) {
+          throw new Error('Room already has a course at the same time');
+        }
+        if (conflicts.classConflict) {
+          throw new Error('Class already has a course at the same time');
+        }
+
         const created = await createSchedule(db, {
           schedulePeriodId: body.schedule_period_id,
           teacherId: body.teacher_id,
@@ -346,6 +396,32 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           endTime: body.end_time,
         });
 
+        const lockedForHistory = await hasPastOccurrences(db, id, new Date().toISOString().slice(0, 10));
+        if (lockedForHistory) {
+          throw new Error('Schedule has past occurrences and cannot be edited or deleted');
+        }
+
+        const conflicts = await findScheduleConflicts(db, {
+          schedulePeriodId: body.schedule_period_id,
+          teacherId: body.teacher_id,
+          classId: body.class_id,
+          roomId: body.room_id,
+          timeSlotId,
+          dayOfWeek: body.day_of_week,
+          subject: body.subject,
+          isActive: body.is_active,
+          excludeScheduleId: id,
+        });
+        if (conflicts.teacherConflict) {
+          throw new Error('Teacher already has a course at the same time');
+        }
+        if (conflicts.roomConflict) {
+          throw new Error('Room already has a course at the same time');
+        }
+        if (conflicts.classConflict) {
+          throw new Error('Class already has a course at the same time');
+        }
+
         const updated = await updateSchedule(db, id, {
           schedulePeriodId: body.schedule_period_id,
           teacherId: body.teacher_id,
@@ -378,6 +454,14 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     async (request, reply) => {
       try {
         const { id } = paramsIdSchema.parse(request.params);
+        const lockedForHistory = await hasPastOccurrences(
+          ensureTenantDb(request),
+          id,
+          new Date().toISOString().slice(0, 10)
+        );
+        if (lockedForHistory) {
+          throw new Error('Schedule has past occurrences and cannot be edited or deleted');
+        }
         const deleted = await deleteScheduleById(ensureTenantDb(request), id);
         if (!deleted) {
           return reply.code(404).send({

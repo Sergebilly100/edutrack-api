@@ -13,6 +13,7 @@ import {
   createSchedulePeriod,
   duplicatePeriodWithSchedules,
   findActiveSchedulePeriodByDate,
+  findActiveSchedulePeriodByWeek,
   findSchedulePeriodById,
   listSchedulesForPeriodAndDay,
   type ActiveSchedule,
@@ -128,9 +129,16 @@ export const getWeeklySchedulesForDate = async (
 ): Promise<WeeklySchedulesResult> => {
   const date = parseDateInput(dateInput);
   const isoDate = formatDate(date);
+  const weekStartDate = new Date(date);
+  const currentIsoDay = dayOfWeekFromDate(weekStartDate);
+  weekStartDate.setUTCDate(weekStartDate.getUTCDate() - (currentIsoDay - 1));
+  const weekEndDate = new Date(weekStartDate);
+  weekEndDate.setUTCDate(weekEndDate.getUTCDate() + 5);
+  const weekStart = formatDate(weekStartDate);
+  const weekEnd = formatDate(weekEndDate);
 
   const [period, teachers, classes, rooms, timeSlots] = await Promise.all([
-    findActiveSchedulePeriodByDate(db, isoDate),
+    findActiveSchedulePeriodByWeek(db, weekStart, weekEnd),
     listTeachersCatalog(db),
     listClassesCatalog(db),
     listRooms(db),
@@ -152,6 +160,8 @@ export const getWeeklySchedulesForDate = async (
   const schedules = await listSchedulesForPeriod(db, {
     periodId: period.id,
     date: isoDate,
+    weekStart,
+    weekEnd,
   });
 
   return {

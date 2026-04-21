@@ -6,7 +6,7 @@ import type { RoomEntity, RoomEntityRow, RoomStatsRow } from './rooms.types.js';
 
 export type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
 
-type FutureUsageRow = { has_future_active_schedule: boolean };
+type ActiveUsageRow = { has_active_schedule: boolean };
 
 const getRows = <TRow extends QueryResultRow>(result: QueryResult<TRow>): TRow[] => result.rows;
 
@@ -135,21 +135,18 @@ export class RoomsRepository {
     return row ? mapRoomEntity(row) : null;
   }
 
-  async hasFutureActiveSchedules(roomId: string, date: string): Promise<boolean> {
-    const result = await this.db.execute<FutureUsageRow>(sql`
+  async hasAnyActiveSchedules(roomId: string): Promise<boolean> {
+    const result = await this.db.execute<ActiveUsageRow>(sql`
       SELECT EXISTS (
         SELECT 1
         FROM schedules s
-        INNER JOIN schedule_periods sp ON sp.id = s.schedule_period_id
         WHERE s.room_id = ${roomId}
           AND s.is_active = true
-          AND sp.is_active = true
-          AND sp.valid_to >= ${date}
-      ) AS has_future_active_schedule
+      ) AS has_active_schedule
     `);
 
     const [row] = getRows(result);
-    return row?.has_future_active_schedule ?? false;
+    return row?.has_active_schedule ?? false;
   }
 
   async softDeleteRoom(roomId: string): Promise<RoomEntity | null> {
