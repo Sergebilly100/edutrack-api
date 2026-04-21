@@ -96,6 +96,18 @@ type DirectorHistoryRow = {
   attendance_rate: number;
 };
 
+type schex = {
+  id: string;
+  class_id: string;
+  class_name: string;
+  subject: string;
+  room_id: string;
+  room_name: string;
+  day_of_week: number;
+  start_time: string;
+  end_time: string;
+};
+
 const getRows = <TRow extends QueryResultRow>(result: QueryResult<TRow>): TRow[] => result.rows;
 
 const mapScheduleContext = (row: ScheduleContextRow): AttendanceScheduleContext => ({
@@ -381,6 +393,54 @@ export class AttendanceRepository {
     `);
 
     return getRows(result);
+  }
+
+  async getWeekScheduleForTeacher(userId: string, date: string): Promise<schex[]> {
+    const result = await this.db.execute<schex>(sql`
+          WITH active_period AS (
+            -- Résolution de la période active POUR LA DATE DEMANDÉE,
+            -- pas pour aujourd'hui. Si aucune période ne couvre cette date,
+            -- le CTE est vide et la query retourne [].
+            SELECT id
+            FROM schedule_periods
+            WHERE is_active = true
+              AND valid_from <= ${date}::date
+              AND valid_to   >= ${date}::date
+            ORDER BY created_at DESC
+            LIMIT 1
+          )
+          SELECT
+            s.id::text          AS id,
+            s.class_id::text    AS class_id,
+            c.name              AS class_name,
+            s.subject,
+            s.room_id::text     AS room_id,
+            r.name              AS room_name,
+            s.day_of_week,
+            ts.start_time::text AS start_time,
+            ts.end_time::text   AS end_time
+          FROM schedules s
+          INNER JOIN active_period ap ON ap.id = s.schedule_period_id
+          INNER JOIN teachers t  ON t.id  = s.teacher_id
+          INNER JOIN classes  c  ON c.id  = s.class_id
+          INNER JOIN rooms    r  ON r.id  = s.room_id
+          INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+          WHERE t.user_id = ${userId}
+            AND s.is_active = true
+          ORDER BY s.day_of_week ASC, ts.sort_order ASC, ts.start_time ASC
+    `);
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      class_id: row.class_id,
+      class_name: row.class_name,
+      subject: row.subject,
+      room_id: row.room_id,
+      room_name: row.room_name,
+      day_of_week: Number(row.day_of_week),
+      start_time: row.start_time,
+      end_time: row.end_time,
+    }));
   }
 
   async listActiveAttendanceForTeacher(params: {

@@ -231,6 +231,28 @@ export class AttendanceService {
     });
   }
 
+  async getWeekScheduleForTeacher(
+    userId: string,
+    date: string,
+  ): Promise<Array<{
+    id: string;
+    class_id: string;
+    class_name: string;
+    subject: string;
+    room_id: string;
+    room_name: string;
+    day_of_week: number;
+    start_time: string;
+    end_time: string;
+  }>> {
+    const scheduleForWeek = await this.repository.getWeekScheduleForTeacher(userId, date);
+    if (!scheduleForWeek) {
+      throw new AttendanceModuleError('Teacher Week schedule not found', 404, 'TEACHER_NOT_FOUND');
+    }
+
+    return scheduleForWeek;
+  }
+
   // ── NOUVEAU — appel élèves par le prof ────────────────────────────────────
   async submitStudentAttendance(
     input: {

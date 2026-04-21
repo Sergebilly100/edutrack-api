@@ -45,6 +45,17 @@ const handleError = (
   });
 };
 
+const attendanceHistoryQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(30).default(7),
+});
+
+const weekScheduleQuerySchema = z.object({
+  date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'date must use YYYY-MM-DD format')
+    .default(() => new Date().toISOString().slice(0, 10)),
+})
+
 export default async function attendanceController(app: FastifyInstance): Promise<void> {
   app.post('/api/v1/attendance/check-in', { preHandler: requireTeacher }, async (request, reply) => {
     try {
@@ -177,10 +188,6 @@ export default async function attendanceController(app: FastifyInstance): Promis
     }
   });
 
-  const attendanceHistoryQuerySchema = z.object({
-    days: z.coerce.number().int().min(1).max(30).default(7),
-  });
-
   app.get('/api/v1/attendance/history', { preHandler: requireDirector }, async (request, reply) => {
     try {
       const claims = request.claims!;
@@ -195,19 +202,32 @@ export default async function attendanceController(app: FastifyInstance): Promis
     }
   });
 
-  // app.get('/api/v1/attendance/students', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
-  //   try {
-  //     const claims = request.claims!;
-  //     const query = attendanceHistoryQuerySchema.parse(request.query ?? {});
+  app.get(
+    '/api/v1/schedule/teacher/me/week',
+    { preHandler: requireTeacher },
+    async (request, reply) => {
+      try {
+          const claims = request.claims!
+          const userId = claims.sub; 
 
-  //     const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-  //       const service = buildStudentsService(tenantDb);
-  //       return service.listAttendanceHistory(query);
-  //     });
+          // date = n'importe quel jour de la semaine affichée côté frontend
+          // (on utilise typiquement le lundi de la semaine, mais n'importe quel
+          //  jour de cette semaine convient — le backend retourne tous les day_of_week)
+          const query = weekScheduleQuerySchema.parse(request.query ?? {})
 
-  //     return reply.send(result);
-  //   } catch (error) {
-  //     return handleError(reply, error);
-  //   }
-  // });
+          const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+            // Réutilise la même logique que /me mais sans filtre day_of_week
+            // La query ci-dessous retourne tous les créneaux de la période active
+          const service = buildAttendanceService(tenantDb);
+          // pour ce prof (tous les jours lundi→samedi)
+          const rows = await service.getWeekScheduleForTeacher(userId, query.date);
+          return rows;
+        })
+
+        return reply.send(result)
+      } catch (error) {
+        return handleError(request, reply, error)
+      }
+    }
+  )
 }
