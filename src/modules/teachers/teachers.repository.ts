@@ -3,7 +3,12 @@ import { sql } from 'drizzle-orm';
 
 import { generateUsername } from '../../shared/utils/username.js';
 
-import type { CreateTeacherInput, TeachersListQuery, UpdateTeacherInput } from './teachers.types.js';
+import type {
+  CreateTeacherInput,
+  TeacherAttendanceStatsQuery,
+  TeachersListQuery,
+  UpdateTeacherInput,
+} from './teachers.types.js';
 
 export type QueryExecutor = {
   execute: (query: ReturnType<typeof sql>) => Promise<unknown>;
@@ -33,6 +38,22 @@ type TeacherRow = {
 type TotalRow = { total: string | number };
 type IdRow = { id: string };
 type CountRow = { count: string | number };
+type TeacherAttendanceStatsRow = {
+  teacher_id: string;
+  teacher_name: string;
+  teacher_type: 'vacataire' | 'permanent' | string;
+  subjects: string[] | null;
+  total_scheduled: string | number;
+  present_count: string | number;
+  absent_count: string | number;
+  late_count: string | number;
+  room_mismatch_count: string | number;
+  rollcall_done_count: string | number;
+  rollcall_missing_count: string | number;
+  attendance_rate: string | number | null;
+  hours_scheduled: string | number;
+  hours_done: string | number;
+};
 
 const getRows = <T>(result: unknown): T[] => {
   if (typeof result !== 'object' || result === null || !('rows' in result)) {
@@ -46,6 +67,15 @@ const toTotal = (row: TotalRow | undefined): number => {
   if (!row) return 0;
   const value = typeof row.total === 'string' ? Number(row.total) : row.total;
   return Number.isFinite(value) ? value : 0;
+};
+
+const toNumber = (value: string | number | null | undefined): number => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
 };
 
 const buildWhere = (query: TeachersListQuery): ReturnType<typeof sql>[] => {
@@ -336,5 +366,145 @@ export class TeachersRepository {
       hours_worked: row?.hours_worked ?? 0,
       amount_due: row?.amount_due ?? 0,
     };
+  }
+
+  async getAttendanceStats(params: TeacherAttendanceStatsQuery): Promise<
+    Array<{
+      teacher_id: string;
+      teacher_name: string;
+      teacher_type: 'vacataire' | 'permanent';
+      subjects: string[];
+      total_scheduled: number;
+      present_count: number;
+      absent_count: number;
+      late_count: number;
+      room_mismatch_count: number;
+      rollcall_done_count: number;
+      rollcall_missing_count: number;
+      attendance_rate: number;
+      hours_scheduled: number;
+      hours_done: number;
+    }>
+  > {
+    const subjectFilter = params.subject ? sql`AND s.subject = ${params.subject}` : sql``;
+    const classFilter = params.class_id ? sql`AND s.class_id = ${params.class_id}::uuid` : sql``;
+    const teacherFilter = params.teacher_id ? sql`AND s.teacher_id = ${params.teacher_id}::uuid` : sql``;
+    const statusFilter = params.status_filter ?? null;
+
+    const result = await this.db.execute(sql`
+      WITH active_period AS (
+        SELECT id
+        FROM schedule_periods
+        WHERE is_active = true
+          AND valid_from <= ${params.to}::date
+          AND valid_to >= ${params.from}::date
+        ORDER BY created_at DESC
+        LIMIT 1
+      ),
+      dates AS (
+        SELECT generate_series(${params.from}::date, ${params.to}::date, INTERVAL '1 day')::date AS date
+      ),
+      scheduled AS (
+        SELECT
+          t.id AS teacher_id,
+          u.name AS teacher_name,
+          t.type AS teacher_type,
+          t.subjects,
+          s.id AS schedule_id,
+          d.date,
+          s.subject,
+          s.class_id,
+          EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600 AS slot_hours
+        FROM dates d
+        INNER JOIN active_period ap ON true
+        INNER JOIN schedules s
+          ON s.schedule_period_id = ap.id
+          AND s.day_of_week = EXTRACT(ISODOW FROM d.date)::int
+          AND s.is_active = true
+        INNER JOIN teachers t ON t.id = s.teacher_id
+        INNER JOIN users u ON u.id = t.user_id
+        INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+        WHERE 1=1
+        ${subjectFilter}
+        ${classFilter}
+        ${teacherFilter}
+      )
+      SELECT
+        sc.teacher_id::text AS teacher_id,
+        sc.teacher_name,
+        sc.teacher_type::text AS teacher_type,
+        sc.subjects,
+        COUNT(sc.schedule_id)::int AS total_scheduled,
+        COUNT(CASE WHEN at.status IN ('present', 'late', 'excused') THEN 1 END)::int AS present_count,
+        COUNT(CASE WHEN at.status = 'absent' THEN 1 END)::int AS absent_count,
+        COUNT(CASE WHEN at.status = 'late' THEN 1 END)::int AS late_count,
+        COUNT(CASE WHEN at.room_mismatch = true THEN 1 END)::int AS room_mismatch_count,
+        COUNT(CASE WHEN rollcall.has_rollcall = true THEN 1 END)::int AS rollcall_done_count,
+        COUNT(
+          CASE
+            WHEN rollcall.has_rollcall IS DISTINCT FROM true
+              AND at.checked_in_at IS NOT NULL
+            THEN 1
+          END
+        )::int AS rollcall_missing_count,
+        ROUND(
+          100.0 * COUNT(CASE WHEN at.status IN ('present', 'late', 'excused') THEN 1 END)::numeric
+          / NULLIF(COUNT(sc.schedule_id), 0),
+          2
+        )::float AS attendance_rate,
+        ROUND(SUM(sc.slot_hours)::numeric, 2)::float AS hours_scheduled,
+        ROUND(
+          SUM(CASE WHEN at.status IN ('present', 'late', 'excused') THEN sc.slot_hours ELSE 0 END)::numeric,
+          2
+        )::float AS hours_done
+      FROM scheduled sc
+      LEFT JOIN attendances_teacher at
+        ON at.schedule_id = sc.schedule_id
+        AND at.date = sc.date
+      LEFT JOIN LATERAL (
+        SELECT true AS has_rollcall
+        FROM attendances_student ast
+        WHERE ast.schedule_id = sc.schedule_id
+          AND ast.date = sc.date
+        LIMIT 1
+      ) rollcall ON true
+      GROUP BY sc.teacher_id, sc.teacher_name, sc.teacher_type, sc.subjects
+      HAVING
+        CASE
+          WHEN ${statusFilter} = 'absent'
+            THEN COUNT(CASE WHEN at.status = 'absent' THEN 1 END) > 0
+          WHEN ${statusFilter} = 'room_mismatch'
+            THEN COUNT(CASE WHEN at.room_mismatch = true THEN 1 END) > 0
+          WHEN ${statusFilter} = 'rollcall_missing'
+            THEN COUNT(
+              CASE
+                WHEN rollcall.has_rollcall IS DISTINCT FROM true
+                  AND at.checked_in_at IS NOT NULL
+                THEN 1
+              END
+            ) > 0
+          WHEN ${statusFilter} = 'late'
+            THEN COUNT(CASE WHEN at.status = 'late' THEN 1 END) > 0
+          ELSE true
+        END
+      ORDER BY sc.teacher_name ASC
+    `);
+
+    return getRows<TeacherAttendanceStatsRow>(result).map((row) => ({
+      teacher_id: row.teacher_id,
+      teacher_name: row.teacher_name,
+      teacher_type: row.teacher_type === 'permanent' ? 'permanent' : 'vacataire',
+      subjects: Array.isArray(row.subjects) ? row.subjects : [],
+      total_scheduled: toNumber(row.total_scheduled),
+      present_count: toNumber(row.present_count),
+      absent_count: toNumber(row.absent_count),
+      late_count: toNumber(row.late_count),
+      room_mismatch_count: toNumber(row.room_mismatch_count),
+      rollcall_done_count: toNumber(row.rollcall_done_count),
+      rollcall_missing_count: toNumber(row.rollcall_missing_count),
+      attendance_rate: toNumber(row.attendance_rate),
+      hours_scheduled: toNumber(row.hours_scheduled),
+      hours_done: toNumber(row.hours_done),
+    }));
   }
 }

@@ -64,8 +64,18 @@ export const teacherStatsQuerySchema = z.object({
   date_to: z.string().regex(ISO_DATE_REGEX),
 });
 
+export const teacherAttendanceStatsQuerySchema = z.object({
+  from: z.string().regex(ISO_DATE_REGEX),
+  to: z.string().regex(ISO_DATE_REGEX),
+  subject: z.string().trim().min(1).max(100).optional(),
+  class_id: z.uuid().optional(),
+  teacher_id: z.uuid().optional(),
+  status_filter: z.enum(['absent', 'room_mismatch', 'rollcall_missing', 'late']).optional(),
+});
+
 export type TeachersListQuery = z.infer<typeof teachersListQuerySchema>;
 export type CreateTeacherInput = z.infer<typeof fullPayloadSchema> & {
   name: string;
 };
 export type UpdateTeacherInput = z.infer<typeof updateTeacherBodySchema>;
+export type TeacherAttendanceStatsQuery = z.infer<typeof teacherAttendanceStatsQuerySchema>;

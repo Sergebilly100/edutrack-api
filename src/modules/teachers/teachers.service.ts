@@ -1,4 +1,9 @@
-import type { CreateTeacherInput, TeachersListQuery, UpdateTeacherInput } from './teachers.types.js';
+import type {
+  CreateTeacherInput,
+  TeacherAttendanceStatsQuery,
+  TeachersListQuery,
+  UpdateTeacherInput,
+} from './teachers.types.js';
 import { TeachersRepository } from './teachers.repository.js';
 import {
   buildUsersLimitReachedMessage,
@@ -133,6 +138,10 @@ export class TeachersService {
       throw new TeachersModuleError('Teacher not found', 404, 'TEACHER_NOT_FOUND');
     }
     return stats;
+  }
+
+  async getAttendanceStats(params: TeacherAttendanceStatsQuery) {
+    return this.repository.getAttendanceStats(params);
   }
 }
 

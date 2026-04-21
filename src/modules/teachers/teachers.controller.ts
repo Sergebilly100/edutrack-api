@@ -2,11 +2,12 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
-import { requireDirectorOrSecretary } from '../../shared/middleware/auth.middleware.js';
+import { requireDirector, requireDirectorOrSecretary } from '../../shared/middleware/auth.middleware.js';
 
 import { buildTeachersService, TeachersModuleError } from './teachers.service.js';
 import {
   createTeacherBodySchema,
+  teacherAttendanceStatsQuerySchema,
   teacherParamsSchema,
   teacherStatsQuerySchema,
   teachersListQuerySchema,
@@ -82,6 +83,23 @@ export default async function teachersController(app: FastifyInstance): Promise<
       }
 
       return reply.send(result);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  // ─── GET /api/v1/teachers/attendance-stats ───────────────────────────────
+  app.get('/api/v1/teachers/attendance-stats', { preHandler: requireDirector }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const query = teacherAttendanceStatsQuerySchema.parse(request.query ?? {});
+
+      const stats = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildTeachersService(tenantDb);
+        return service.getAttendanceStats(query);
+      });
+
+      return reply.send(stats);
     } catch (error) {
       return handleError(reply, error);
     }
