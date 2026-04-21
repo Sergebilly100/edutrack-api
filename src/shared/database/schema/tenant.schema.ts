@@ -98,9 +98,11 @@ export const teachers = tenant.table(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     username: varchar('username', { length: 50 }).notNull().unique(),
+    matricule: varchar('matricule', { length: 50 }).unique(),
     type: teacherTypeEnum('type').notNull(),
     subjects: text('subjects').array().notNull().default(sql`'{}'::text[]`),
     hourlyRate: integer('hourly_rate'),
+    monthlySalary: integer('monthly_salary'),
     isBlocked: boolean('is_blocked').notNull().default(false),
     blockedReason: text('blocked_reason'),
     blockedAt: timestamp('blocked_at', { withTimezone: true, mode: 'date' }),
@@ -131,8 +133,10 @@ export const students = tenant.table(
     classId: uuid('class_id')
       .notNull()
       .references(() => classes.id),
+    matricule: varchar('matricule', { length: 50 }).unique(),
     firstName: varchar('first_name', { length: 100 }).notNull(),
     lastName: varchar('last_name', { length: 100 }).notNull(),
+    birthDate: date('birth_date'),
     parentName: varchar('parent_name', { length: 255 }),
     parentPhone: varchar('parent_phone', { length: 20 }),
     parentName2: varchar('parent_name_2', { length: 255 }),

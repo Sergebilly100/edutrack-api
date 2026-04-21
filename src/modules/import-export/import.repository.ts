@@ -17,11 +17,11 @@ export type TransactionalQueryExecutor = QueryExecutor & {
 
 type ClassRow = { id: string; name: string };
 type TeacherDirectoryRow = { teacher_id: string; user_id: string; name: string; username: string };
-type RoomRow = { id: string; name: string };
+type RoomRow = { id: string; name: string; building: string | null; capacity: number | null; is_active: boolean };
 type TimeSlotRow = { id: string; label: string };
 type SchedulePeriodRow = { id: string };
 type SchedulePeriodConflictRow = { id: string; name: string; valid_from: string; valid_to: string };
-type ExistingStudentRow = { id: string };
+type ExistingStudentRow = { id: string; matricule: string | null };
 type ExistingTeacherRow = { id: string; user_id: string };
 type UserInsertRow = { id: string };
 type TeacherInsertRow = { id: string; user_id: string };
@@ -69,6 +69,10 @@ export type ImportRepository = {
   listClasses: (db: QueryExecutor) => Promise<ClassRow[]>;
   listTeacherDirectory: (db: QueryExecutor) => Promise<TeacherDirectoryRow[]>;
   listRooms: (db: QueryExecutor) => Promise<RoomRow[]>;
+  upsertRoom: (
+    db: QueryExecutor,
+    input: { name: string; qrToken: string; building?: string | null; capacity?: number | null }
+  ) => Promise<{ id: string; name: string }>;
   listTimeSlots: (db: QueryExecutor) => Promise<TimeSlotRow[]>;
   findActiveSchedulePeriodId: (db: QueryExecutor, date: string) => Promise<string | null>;
   findOverlappingSchedulePeriods: (
@@ -86,10 +90,15 @@ export type ImportRepository = {
     Array<{
       id: string;
       key: string;
+      matricule: string | null;
       firstName: string;
       lastName: string;
       className: string;
+      birthDate: string | null;
+      parentName: string | null;
       parentPhone: string | null;
+      parentName2: string | null;
+      parentPhone2: string | null;
       isActive: boolean;
     }>
   >;
@@ -103,9 +112,11 @@ export type ImportRepository = {
       key: string;
       name: string;
       username: string;
+      matricule: string | null;
       type: 'vacataire' | 'permanent';
       subjects: string[];
       hourlyRate: number | null;
+      monthlySalary: number | null;
       isActive: boolean;
     }>
   >;
@@ -163,12 +174,31 @@ export const defaultImportRepository: ImportRepository = {
 
   async listRooms(db) {
     const result = await db.execute(sql`
-      SELECT id, name
+      SELECT id, name, building, capacity, is_active
       FROM rooms
-      WHERE is_active = true
     `);
 
     return getRows<RoomRow>(result);
+  },
+
+  async upsertRoom(db, input) {
+    const result = await db.execute(sql`
+      INSERT INTO rooms (name, qr_token, building, capacity, is_active)
+      VALUES (${input.name}, ${input.qrToken}, ${input.building ?? null}, ${input.capacity ?? null}, true)
+      ON CONFLICT (name)
+      DO UPDATE SET
+        is_active = true,
+        building = COALESCE(EXCLUDED.building, rooms.building),
+        capacity = COALESCE(EXCLUDED.capacity, rooms.capacity)
+      RETURNING id, name
+    `);
+
+    const row = getRows<{ id: string; name: string }>(result)[0];
+    if (!row) {
+      throw new Error('Unable to upsert room');
+    }
+
+    return row;
   },
 
   async listTimeSlots(db) {
@@ -240,10 +270,15 @@ export const defaultImportRepository: ImportRepository = {
       SELECT
         s.id,
         LOWER(CONCAT(c.name, '::', s.first_name, '::', s.last_name)) AS key,
+        s.matricule,
         s.first_name,
         s.last_name,
         c.name AS class_name,
+        s.birth_date::text AS birth_date,
+        s.parent_name,
         s.parent_phone,
+        s.parent_name_2,
+        s.parent_phone_2,
         s.is_active
       FROM students s
       INNER JOIN classes c ON c.id = s.class_id
@@ -252,18 +287,28 @@ export const defaultImportRepository: ImportRepository = {
     return getRows<{
       id: string;
       key: string;
+      matricule: string | null;
       first_name: string;
       last_name: string;
       class_name: string;
+      birth_date: string | null;
+      parent_name: string | null;
       parent_phone: string | null;
+      parent_name_2: string | null;
+      parent_phone_2: string | null;
       is_active: boolean;
     }>(result).map((row) => ({
       id: row.id,
       key: row.key,
+      matricule: row.matricule,
       firstName: row.first_name,
       lastName: row.last_name,
       className: row.class_name,
+      birthDate: row.birth_date,
+      parentName: row.parent_name,
       parentPhone: row.parent_phone,
+      parentName2: row.parent_name_2,
+      parentPhone2: row.parent_phone_2,
       isActive: row.is_active,
     }));
   },
@@ -297,9 +342,11 @@ export const defaultImportRepository: ImportRepository = {
         LOWER(u.name) AS key,
         u.name,
         t.username,
+        t.matricule,
         t.type,
         t.subjects,
         t.hourly_rate,
+        t.monthly_salary,
         u.is_active
       FROM teachers t
       INNER JOIN users u ON u.id = t.user_id
@@ -311,9 +358,11 @@ export const defaultImportRepository: ImportRepository = {
       key: string;
       name: string;
       username: string;
+      matricule: string | null;
       type: 'vacataire' | 'permanent';
       subjects: string[] | null;
       hourly_rate: number | null;
+      monthly_salary: number | null;
       is_active: boolean;
     }>(result).map((row) => ({
       id: row.id,
@@ -321,9 +370,11 @@ export const defaultImportRepository: ImportRepository = {
       key: row.key,
       name: row.name,
       username: row.username,
+      matricule: row.matricule,
       type: row.type,
       subjects: row.subjects ?? [],
       hourlyRate: row.hourly_rate,
+      monthlySalary: row.monthly_salary,
       isActive: row.is_active,
     }));
   },
@@ -350,19 +401,26 @@ export const defaultImportRepository: ImportRepository = {
   },
 
   async upsertStudent(db, row) {
-    const existingResult = await db.execute(sql`
-      SELECT id
-      FROM students
-      WHERE class_id = (
-        SELECT c.id
-        FROM classes c
-        WHERE LOWER(c.name) = LOWER(${row.className})
-        LIMIT 1
-      )
-        AND LOWER(first_name) = LOWER(${row.firstName})
-        AND LOWER(last_name) = LOWER(${row.lastName})
-      LIMIT 1
-    `);
+    const existingResult = row.matricule
+      ? await db.execute(sql`
+          SELECT id, matricule
+          FROM students
+          WHERE LOWER(matricule) = LOWER(${row.matricule})
+          LIMIT 1
+        `)
+      : await db.execute(sql`
+          SELECT id, matricule
+          FROM students
+          WHERE class_id = (
+            SELECT c.id
+            FROM classes c
+            WHERE LOWER(c.name) = LOWER(${row.className})
+            LIMIT 1
+          )
+            AND LOWER(first_name) = LOWER(${row.firstName})
+            AND LOWER(last_name) = LOWER(${row.lastName})
+          LIMIT 1
+        `);
 
     const existing = getRows<ExistingStudentRow>(existingResult)[0];
 
@@ -370,7 +428,12 @@ export const defaultImportRepository: ImportRepository = {
       await db.execute(sql`
         UPDATE students
         SET
+          matricule = ${row.matricule},
+          birth_date = ${row.birthDate},
+          parent_name = ${row.parentName},
           parent_phone = ${row.parentPhone},
+          parent_name_2 = ${row.parentName2},
+          parent_phone_2 = ${row.parentPhone2},
           is_active = true
         WHERE id = ${existing.id}
       `);
@@ -381,9 +444,13 @@ export const defaultImportRepository: ImportRepository = {
     await db.execute(sql`
       INSERT INTO students (
         class_id,
+        matricule,
         first_name,
         last_name,
+        birth_date,
+        parent_name,
         parent_phone,
+        parent_name_2,
         parent_phone_2,
         is_active
       )
@@ -394,10 +461,14 @@ export const defaultImportRepository: ImportRepository = {
           WHERE LOWER(c.name) = LOWER(${row.className})
           LIMIT 1
         ),
+        ${row.matricule},
         ${row.firstName},
         ${row.lastName},
+        ${row.birthDate},
+        ${row.parentName},
         ${row.parentPhone},
-        null,
+        ${row.parentName2},
+        ${row.parentPhone2},
         true
       )
     `);
@@ -406,6 +477,11 @@ export const defaultImportRepository: ImportRepository = {
   },
 
   async upsertTeacher(db, row, params) {
+    const subjectsSql =
+      row.subjects.length > 0
+        ? sql`ARRAY[${sql.join(row.subjects.map((subject) => sql`${subject}`), sql`, `)}]::text[]`
+        : sql`'{}'::text[]`;
+
     const existingResult = await db.execute(sql`
       SELECT id, user_id
       FROM teachers
@@ -425,9 +501,11 @@ export const defaultImportRepository: ImportRepository = {
       await db.execute(sql`
         UPDATE teachers
         SET
+          matricule = ${row.matricule},
           type = ${row.type},
-          subjects = ${row.subjects},
-          hourly_rate = ${row.hourlyRate}
+          subjects = ${subjectsSql},
+          hourly_rate = ${row.hourlyRate},
+          monthly_salary = ${row.monthlySalary}
         WHERE id = ${existing.id}
       `);
 
@@ -463,22 +541,28 @@ export const defaultImportRepository: ImportRepository = {
       INSERT INTO teachers (
         user_id,
         username,
+        matricule,
         type,
         subjects,
-        hourly_rate
+        hourly_rate,
+        monthly_salary
       )
       VALUES (
         ${user.id},
         ${row.username},
+        ${row.matricule},
         ${row.type},
-        ${row.subjects},
-        ${row.hourlyRate}
+        ${subjectsSql},
+        ${row.hourlyRate},
+        ${row.monthlySalary}
       )
       ON CONFLICT (username)
       DO UPDATE SET
+        matricule = EXCLUDED.matricule,
         type = EXCLUDED.type,
         subjects = EXCLUDED.subjects,
-        hourly_rate = EXCLUDED.hourly_rate
+        hourly_rate = EXCLUDED.hourly_rate,
+        monthly_salary = EXCLUDED.monthly_salary
       RETURNING id, user_id
     `);
 

@@ -53,18 +53,25 @@ export type ConfirmReport = {
 };
 
 export type StudentImportRow = {
+  matricule: string | null;
   firstName: string;
   lastName: string;
   className: string;
+  birthDate: string | null;
+  parentName: string | null;
   parentPhone: string | null;
+  parentName2: string | null;
+  parentPhone2: string | null;
 };
 
 export type TeacherImportRow = {
+  matricule: string | null;
   lastName: string;
   firstName: string;
   type: 'vacataire' | 'permanent';
   subjects: string[];
   hourlyRate: number | null;
+  monthlySalary: number | null;
   username: string;
 };
 
@@ -75,6 +82,8 @@ export type ScheduleImportRow = {
   dayOfWeek: number;
   slotLabel: string;
   roomName: string;
+  roomBuilding: string | null;
+  roomCapacity: number | null;
 };
 
 export type SchedulePeriodInput = {

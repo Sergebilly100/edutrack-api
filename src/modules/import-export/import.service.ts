@@ -1,4 +1,5 @@
 import argon2 from 'argon2';
+import { randomBytes } from 'node:crypto';
 import * as XLSX from 'xlsx';
 
 import { generateUsername } from '../../shared/utils/username.js';
@@ -23,8 +24,8 @@ import type {
 } from './import.types.js';
 import { IMPORT_PHONE_REGEX } from './import.types.js';
 
-const STUDENTS_HEADERS = ['Prénom*', 'Nom*', 'Classe*', 'Téléphone parent'] as const;
-const TEACHERS_HEADERS = ['Nom*', 'Prénom*', 'Type*', 'Matières*', 'Taux horaire FCFA'] as const;
+const STUDENTS_REQUIRED_HEADERS = ['Prénom*', 'Nom*'] as const;
+const TEACHERS_REQUIRED_HEADERS = ['Nom*', 'Prénom*', 'Type*', 'Matières*'] as const;
 const SCHEDULE_HEADERS = ['Nom professeur*', 'Classe*', 'Matière*', 'Jour*', 'Créneau*', 'Salle'] as const;
 
 const PREVIEW_LIMIT = 5;
@@ -182,6 +183,38 @@ const parseSubjects = (value: string): string[] => {
     .split(',')
     .map((item) => normalizeCell(item))
     .filter((item) => item.length > 0);
+};
+
+const generateRoomQrToken = (): string => randomBytes(32).toString('hex');
+
+const parseDateToIso = (value: string): string | null => {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = normalizeCell(value);
+  if (!normalized) {
+    return null;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    return normalized;
+  }
+
+  const slashMatch = normalized.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (slashMatch) {
+    const day = slashMatch[1].padStart(2, '0');
+    const month = slashMatch[2].padStart(2, '0');
+    const year = slashMatch[3];
+    return `${year}-${month}-${day}`;
+  }
+
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return parsed.toISOString().slice(0, 10);
 };
 
 const isMonday = (isoDate: string): boolean => {
@@ -353,26 +386,57 @@ export class ImportService {
       mode: 'multi-sheet',
       ignoreSheets: STUDENT_IGNORE_SHEETS,
     });
-    ensureRequiredHeaders(parsed.rows, STUDENTS_HEADERS);
+    ensureRequiredHeaders(parsed.rows, STUDENTS_REQUIRED_HEADERS);
 
     const classes = await this.repository.listClasses(db);
     const classesByName = new Map(classes.map((item) => [normalizeKey(item.name), item.id]));
     const existingStudents = await this.repository.listExistingStudents(db);
     const existingByKey = new Map(existingStudents.map((item) => [item.key, item]));
+    const existingByMatricule = new Map(
+      existingStudents
+        .filter((item) => item.matricule)
+        .map((item) => [normalizeKey(item.matricule as string), item])
+    );
 
     const errors: ImportError[] = [];
     const validRows: StudentImportRow[] = [];
-    const parsedKeySet = new Set<string>();
+    const parsedIdentitySet = new Set<string>();
+    const batchStudentMatricules = new Map<string, number>();
     const toAdd: DiffPreviewItem[] = [];
     const toUpdate: DiffPreviewItem[] = [];
 
     parsed.rows.forEach((sheetRow) => {
       const line = sheetRow.line;
+      const matricule = normalizeCell(sheetRow.values['Matricule']);
       const firstName = normalizeCell(sheetRow.values['Prénom*']);
       const lastName = normalizeCell(sheetRow.values['Nom*']);
-      const className = normalizeCell(sheetRow.values['Classe*']);
+      const className = normalizeCell(sheetRow.values['Classe*']) || normalizeCell(sheetRow.sheetName);
+      const birthDateRaw = normalizeCell(sheetRow.values['Date de naissance']);
+      const birthDate = parseDateToIso(birthDateRaw);
+      const parentName = normalizeCell(sheetRow.values['Nom parent']) || null;
       const parentPhoneRaw = normalizeCell(sheetRow.values['Téléphone parent']);
+      const parentName2 = normalizeCell(sheetRow.values['Nom parent 2']) || null;
+      const parentPhone2Raw = normalizeCell(sheetRow.values['Téléphone parent 2']);
+      const normalizedMatricule = matricule ? normalizeKey(matricule) : null;
       const rowKey = normalizeKey(`${className}::${firstName}::${lastName}`);
+      const rowIdentity = normalizedMatricule ? `matricule::${normalizedMatricule}` : `name::${rowKey}`;
+
+      if (normalizedMatricule) {
+        const existingInBatch = batchStudentMatricules.get(normalizedMatricule);
+        if (existingInBatch) {
+          errors.push({
+            ...makeError({
+              row: line,
+              column: 'Matricule',
+              message: `Matricule dupliqué dans le fichier (déjà utilisé à la ligne ${existingInBatch})`,
+              value: matricule,
+            }),
+            sheet: sheetRow.sheetName,
+          });
+        } else {
+          batchStudentMatricules.set(normalizedMatricule, line);
+        }
+      }
 
       if (!firstName) {
         errors.push({
@@ -390,7 +454,7 @@ export class ImportService {
 
       if (!className) {
         errors.push({
-          ...makeError({ row: line, column: 'Classe*', message: 'Classe requise' }),
+          ...makeError({ row: line, column: 'Classe*', message: 'Classe requise (ou nom de feuille)' }),
           sheet: sheetRow.sheetName,
         });
       } else if (!classesByName.has(normalizeKey(className))) {
@@ -407,6 +471,18 @@ export class ImportService {
         );
       }
 
+      if (birthDateRaw && !birthDate) {
+        errors.push({
+          ...makeError({
+            row: line,
+            column: 'Date de naissance',
+            message: 'Date invalide (formats acceptés: YYYY-MM-DD ou JJ/MM/AAAA)',
+            value: birthDateRaw,
+          }),
+          sheet: sheetRow.sheetName,
+        });
+      }
+
       if (parentPhoneRaw && !IMPORT_PHONE_REGEX.test(parentPhoneRaw)) {
         errors.push(
           {
@@ -421,24 +497,45 @@ export class ImportService {
         );
       }
 
+      if (parentPhone2Raw && !IMPORT_PHONE_REGEX.test(parentPhone2Raw)) {
+        errors.push(
+          {
+            ...makeError({
+              row: line,
+              column: 'Téléphone parent 2',
+              message: 'Format invalide, attendu 225 suivi de 10 chiffres',
+              value: parentPhone2Raw,
+            }),
+            sheet: sheetRow.sheetName,
+          }
+        );
+      }
+
       const hasRowError = errors.some((error) => error.row === line && error.sheet === sheetRow.sheetName);
       if (hasRowError) {
         return;
       }
 
-      parsedKeySet.add(rowKey);
+      parsedIdentitySet.add(rowIdentity);
       validRows.push({
+        matricule: matricule || null,
         firstName,
         lastName,
         className,
+        birthDate,
+        parentName,
         parentPhone: parentPhoneRaw || null,
+        parentName2,
+        parentPhone2: parentPhone2Raw || null,
       });
 
-      const existing = existingByKey.get(rowKey);
+      const existing = normalizedMatricule
+        ? existingByMatricule.get(normalizedMatricule) ?? existingByKey.get(rowKey)
+        : existingByKey.get(rowKey);
       if (!existing) {
         toAdd.push(
           toDiffItem({
-            key: rowKey,
+            key: rowIdentity,
             displayName: `${lastName} ${firstName} (${className})`,
           })
         );
@@ -446,10 +543,45 @@ export class ImportService {
       }
 
       const changes: DiffPreviewItem['changes'] = {};
-      if ((existing.parentPhone ?? '') !== (parentPhoneRaw || null)) {
+      if ((existing.matricule ?? null) !== (matricule || null)) {
+        changes.matricule = {
+          before: existing.matricule,
+          after: matricule || null,
+        };
+      }
+
+      if ((existing.birthDate ?? null) !== (birthDate ?? null)) {
+        changes.birthDate = {
+          before: existing.birthDate ?? null,
+          after: birthDate ?? null,
+        };
+      }
+
+      if ((existing.parentName ?? null) !== (parentName ?? null)) {
+        changes.parentName = {
+          before: existing.parentName ?? null,
+          after: parentName ?? null,
+        };
+      }
+
+      if ((existing.parentPhone ?? null) !== (parentPhoneRaw || null)) {
         changes.parentPhone = {
-          before: existing.parentPhone,
+          before: existing.parentPhone ?? null,
           after: parentPhoneRaw || null,
+        };
+      }
+
+      if ((existing.parentName2 ?? null) !== (parentName2 ?? null)) {
+        changes.parentName2 = {
+          before: existing.parentName2 ?? null,
+          after: parentName2 ?? null,
+        };
+      }
+
+      if ((existing.parentPhone2 ?? null) !== (parentPhone2Raw || null)) {
+        changes.parentPhone2 = {
+          before: existing.parentPhone2 ?? null,
+          after: parentPhone2Raw || null,
         };
       }
 
@@ -460,7 +592,7 @@ export class ImportService {
       if (changes && Object.keys(changes).length > 0) {
         toUpdate.push(
           toDiffItem({
-            key: rowKey,
+            key: rowIdentity,
             displayName: `${lastName} ${firstName} (${className})`,
             changes,
           })
@@ -471,7 +603,12 @@ export class ImportService {
     const toDelete =
       importMode === 'replace'
         ? existingStudents
-            .filter((item) => !parsedKeySet.has(item.key) && item.isActive)
+            .filter((item) => {
+              const identity = item.matricule
+                ? `matricule::${normalizeKey(item.matricule)}`
+                : `name::${item.key}`;
+              return !parsedIdentitySet.has(identity) && item.isActive;
+            })
             .map((item) =>
               toDiffItem({
                 key: item.key,
@@ -503,11 +640,16 @@ export class ImportService {
     importMode: ImportMode
   ): Promise<TeacherValidation> {
     const parsed = parseWorkbook(fileBuffer);
-    ensureRequiredHeaders(parsed.rows, TEACHERS_HEADERS);
+    ensureRequiredHeaders(parsed.rows, TEACHERS_REQUIRED_HEADERS);
 
     const directory = await this.repository.listTeacherDirectory(db);
     const existingTeachers = await this.repository.listExistingTeachers(db);
     const existingByName = new Map(existingTeachers.map((item) => [normalizeKey(item.name), item]));
+    const existingByMatricule = new Map(
+      existingTeachers
+        .filter((item) => item.matricule)
+        .map((item) => [normalizeKey(item.matricule as string), item])
+    );
     const existingUsernames = directory.map((item) => item.username);
     const byName = new Map<string, string[]>();
     for (const item of directory) {
@@ -520,17 +662,37 @@ export class ImportService {
     const errors: ImportError[] = [];
     const validRows: TeacherImportRow[] = [];
     const batchAssignedUsernames = new Set<string>();
-    const parsedTeacherKeySet = new Set<string>();
+    const parsedTeacherIdentitySet = new Set<string>();
+    const batchTeacherMatricules = new Map<string, number>();
     const toAdd: DiffPreviewItem[] = [];
     const toUpdate: DiffPreviewItem[] = [];
 
     parsed.rows.forEach((sheetRow) => {
       const line = sheetRow.line;
+      const matricule = normalizeCell(sheetRow.values['Matricule']);
       const lastName = normalizeCell(sheetRow.values['Nom*']);
       const firstName = normalizeCell(sheetRow.values['Prénom*']);
       const type = normalizeKey(sheetRow.values['Type*']);
       const subjectsRaw = normalizeCell(sheetRow.values['Matières*']);
       const hourlyRateRaw = normalizeCell(sheetRow.values['Taux horaire FCFA']);
+      const monthlySalaryRaw = normalizeCell(sheetRow.values['Salaire mensuel FCFA']);
+      const normalizedMatricule = matricule ? normalizeKey(matricule) : null;
+
+      if (normalizedMatricule) {
+        const existingInBatch = batchTeacherMatricules.get(normalizedMatricule);
+        if (existingInBatch) {
+          errors.push(
+            makeError({
+              row: line,
+              column: 'Matricule',
+              message: `Matricule dupliqué dans le fichier (déjà utilisé à la ligne ${existingInBatch})`,
+              value: matricule,
+            })
+          );
+        } else {
+          batchTeacherMatricules.set(normalizedMatricule, line);
+        }
+      }
 
       if (!lastName) {
         errors.push(makeError({ row: line, column: 'Nom*', message: 'Nom requis' }));
@@ -575,12 +737,51 @@ export class ImportService {
         }
       }
 
+      let monthlySalary: number | null = null;
+      if (monthlySalaryRaw) {
+        const parsedSalary = Number(monthlySalaryRaw);
+        if (!Number.isInteger(parsedSalary) || parsedSalary < 0) {
+          errors.push(
+            makeError({
+              row: line,
+              column: 'Salaire mensuel FCFA',
+              message: 'Salaire mensuel invalide',
+              value: monthlySalaryRaw,
+            })
+          );
+        } else {
+          monthlySalary = parsedSalary;
+        }
+      }
+
+      if (type === 'permanent' && monthlySalary === null) {
+        errors.push(
+          makeError({
+            row: line,
+            column: 'Salaire mensuel FCFA',
+            message: 'Salaire mensuel requis pour un professeur permanent',
+          })
+        );
+      }
+
+      if (type === 'vacataire' && monthlySalary !== null) {
+        errors.push(
+          makeError({
+            row: line,
+            column: 'Salaire mensuel FCFA',
+            message: 'Le salaire mensuel est réservé aux professeurs permanents',
+            value: monthlySalaryRaw,
+          })
+        );
+      }
+
       const fullName = `${firstName} ${lastName}`.trim();
-      const username = resolveTeacherUsername(
-        { firstName, lastName, fullName },
-        byName,
-        existingUsernames
-      );
+      const existingByMatriculeMatch = normalizedMatricule
+        ? existingByMatricule.get(normalizedMatricule)
+        : null;
+      const username =
+        existingByMatriculeMatch?.username ??
+        resolveTeacherUsername({ firstName, lastName, fullName }, byName, existingUsernames);
 
       if (!username) {
         errors.push(
@@ -607,22 +808,27 @@ export class ImportService {
       batchAssignedUsernames.add(resolvedUsername);
 
       validRows.push({
+        matricule: matricule || null,
         lastName,
         firstName,
         type: type as 'vacataire' | 'permanent',
         subjects,
         hourlyRate,
+        monthlySalary: type === 'permanent' ? monthlySalary : null,
         username: resolvedUsername,
       });
 
       const teacherKey = normalizeKey(fullName);
-      parsedTeacherKeySet.add(teacherKey);
+      const teacherIdentity = normalizedMatricule
+        ? `matricule::${normalizedMatricule}`
+        : `name::${teacherKey}`;
+      parsedTeacherIdentitySet.add(teacherIdentity);
 
-      const existing = existingByName.get(teacherKey);
+      const existing = existingByMatriculeMatch ?? existingByName.get(teacherKey);
       if (!existing) {
         toAdd.push(
           toDiffItem({
-            key: teacherKey,
+            key: teacherIdentity,
             displayName: fullName,
           })
         );
@@ -630,6 +836,13 @@ export class ImportService {
       }
 
       const changes: DiffPreviewItem['changes'] = {};
+      if ((existing.matricule ?? null) !== (matricule || null)) {
+        changes.matricule = {
+          before: existing.matricule ?? null,
+          after: matricule || null,
+        };
+      }
+
       if (existing.type !== (type as 'vacataire' | 'permanent')) {
         changes.type = { before: existing.type, after: type };
       }
@@ -648,6 +861,14 @@ export class ImportService {
         };
       }
 
+      if ((existing.monthlySalary ?? null) !== ((type === 'permanent' ? monthlySalary : null) ?? null)) {
+        changes.monthlySalary = {
+          before: existing.monthlySalary === null ? null : String(existing.monthlySalary),
+          after:
+            type === 'permanent' && monthlySalary !== null ? String(monthlySalary) : null,
+        };
+      }
+
       if (!existing.isActive) {
         changes.isActive = { before: 'false', after: 'true' };
       }
@@ -655,7 +876,7 @@ export class ImportService {
       if (changes && Object.keys(changes).length > 0) {
         toUpdate.push(
           toDiffItem({
-            key: teacherKey,
+            key: teacherIdentity,
             displayName: fullName,
             changes,
           })
@@ -666,7 +887,12 @@ export class ImportService {
     const toDelete =
       importMode === 'replace'
         ? existingTeachers
-            .filter((teacher) => !parsedTeacherKeySet.has(teacher.key) && teacher.isActive)
+            .filter((teacher) => {
+              const identity = teacher.matricule
+                ? `matricule::${normalizeKey(teacher.matricule)}`
+                : `name::${teacher.key}`;
+              return !parsedTeacherIdentitySet.has(identity) && teacher.isActive;
+            })
             .map((teacher) =>
               toDiffItem({
                 key: teacher.key,
@@ -713,17 +939,14 @@ export class ImportService {
       }
     }
 
-    const [classes, teacherDirectory, timeSlots, rooms] = await Promise.all([
+    const [classes, teacherDirectory, timeSlots] = await Promise.all([
       this.repository.listClasses(db),
       this.repository.listTeacherDirectory(db),
       this.repository.listTimeSlots(db),
-      this.repository.listRooms(db),
     ]);
 
     const classesByName = new Map(classes.map((item) => [normalizeKey(item.name), item.id]));
     const slotsByLabel = new Map(timeSlots.map((item) => [normalizeKey(item.label), item.id]));
-    const roomsByName = new Map(rooms.map((item) => [normalizeKey(item.name), item.id]));
-
     const teachersByName = new Map<string, string[]>();
     for (const teacher of teacherDirectory) {
       const key = normalizeKey(teacher.name);
@@ -743,6 +966,25 @@ export class ImportService {
       const day = normalizeKey(sheetRow.values['Jour*']);
       const slotLabel = normalizeCell(sheetRow.values['Créneau*']);
       const roomName = normalizeCell(sheetRow.values['Salle']);
+      const roomBuilding = normalizeCell(sheetRow.values['Bâtiment salle']) || null;
+      const roomCapacityRaw = normalizeCell(sheetRow.values['Capacité salle']);
+      let roomCapacity: number | null = null;
+
+      if (roomCapacityRaw) {
+        const parsedCapacity = Number(roomCapacityRaw);
+        if (!Number.isInteger(parsedCapacity) || parsedCapacity < 0) {
+          errors.push(
+            makeError({
+              row: line,
+              column: 'Capacité salle',
+              message: 'Capacité salle invalide (entier positif attendu)',
+              value: roomCapacityRaw,
+            })
+          );
+        } else {
+          roomCapacity = parsedCapacity;
+        }
+      }
 
       if (!teacherName) {
         errors.push(makeError({ row: line, column: 'Nom professeur*', message: 'Professeur requis' }));
@@ -819,15 +1061,6 @@ export class ImportService {
             value: roomName,
           })
         );
-      } else if (!roomsByName.has(normalizeKey(roomName))) {
-        errors.push(
-          makeError({
-            row: line,
-            column: 'Salle',
-            message: 'Salle introuvable en base',
-            value: roomName,
-          })
-        );
       }
 
       const hasRowError = errors.some((error) => error.row === line);
@@ -842,6 +1075,8 @@ export class ImportService {
         dayOfWeek: DAY_MAP[day],
         slotLabel,
         roomName,
+        roomBuilding,
+        roomCapacity,
       });
     });
 
@@ -902,11 +1137,20 @@ export class ImportService {
 
       if (mode === 'replace') {
         const existing = await this.repository.listExistingStudents(executor);
-        const importedKeys = new Set(
-          validation.rows.map((row) => normalizeKey(`${row.className}::${row.firstName}::${row.lastName}`))
+        const importedIdentity = new Set(
+          validation.rows.map((row) =>
+            row.matricule
+              ? `matricule::${normalizeKey(row.matricule)}`
+              : `name::${normalizeKey(`${row.className}::${row.firstName}::${row.lastName}`)}`
+          )
         );
         const toDeactivateIds = existing
-          .filter((item) => !importedKeys.has(item.key) && item.isActive)
+          .filter((item) => {
+            const identity = item.matricule
+              ? `matricule::${normalizeKey(item.matricule)}`
+              : `name::${item.key}`;
+            return !importedIdentity.has(identity) && item.isActive;
+          })
           .map((item) => item.id);
         deactivated = await this.repository.deactivateStudentsByIds(executor, toDeactivateIds);
       }
@@ -968,11 +1212,20 @@ export class ImportService {
 
       if (mode === 'replace') {
         const existing = await this.repository.listExistingTeachers(executor);
-        const importedKeys = new Set(
-          validation.rows.map((row) => normalizeKey(`${row.firstName} ${row.lastName}`))
+        const importedIdentity = new Set(
+          validation.rows.map((row) =>
+            row.matricule
+              ? `matricule::${normalizeKey(row.matricule)}`
+              : `name::${normalizeKey(`${row.firstName} ${row.lastName}`)}`
+          )
         );
         const toDeactivateUserIds = existing
-          .filter((item) => !importedKeys.has(item.key) && item.isActive)
+          .filter((item) => {
+            const identity = item.matricule
+              ? `matricule::${normalizeKey(item.matricule)}`
+              : `name::${item.key}`;
+            return !importedIdentity.has(identity) && item.isActive;
+          })
           .map((item) => item.userId);
         deactivated = await this.repository.deactivateTeachersByIds(executor, toDeactivateUserIds);
       }
@@ -1036,6 +1289,39 @@ export class ImportService {
     const slotIdByLabel = new Map(timeSlots.map((item) => [normalizeKey(item.label), item.id]));
     const roomIdByName = new Map(rooms.map((item) => [normalizeKey(item.name), item.id]));
 
+    const resolveRoomId = async (
+      executor: QueryExecutor,
+      row: ScheduleImportRow
+    ): Promise<string> => {
+      const roomKey = normalizeKey(row.roomName);
+      const known = roomIdByName.get(roomKey);
+      if (known) {
+        return known;
+      }
+
+      // Retry on the very unlikely qr_token uniqueness collision.
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const created = await this.repository.upsertRoom(executor, {
+            name: row.roomName,
+            qrToken: generateRoomQrToken(),
+            building: row.roomBuilding,
+            capacity: row.roomCapacity,
+          });
+          roomIdByName.set(roomKey, created.id);
+          return created.id;
+        } catch (error) {
+          const code = (error as { code?: string }).code;
+          if (code === '23505' && attempt < 2) {
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      throw new ImportModuleError('Impossible de créer la salle automatiquement', 500, 'IMPORT_ROOM_CREATE_FAILED');
+    };
+
     const teacherByName = new Map<string, string>();
     for (const teacher of teacherDirectory) {
       teacherByName.set(normalizeKey(teacher.name), teacher.teacher_id);
@@ -1049,7 +1335,7 @@ export class ImportService {
         const classId = classIdByName.get(normalizeKey(row.className));
         const teacherId = teacherByName.get(normalizeKey(row.teacherName));
         const timeSlotId = slotIdByLabel.get(normalizeKey(row.slotLabel));
-        const roomId = roomIdByName.get(normalizeKey(row.roomName));
+        const roomId = await resolveRoomId(executor, row);
 
         if (!classId || !teacherId || !timeSlotId || !roomId) {
           throw new ImportModuleError(
