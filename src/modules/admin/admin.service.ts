@@ -9,12 +9,14 @@ import {
   type CreateSchoolBody,
   type CreateTenantBody,
   type ListTenantsQuery,
+  type PlanCatalogItem,
   type ListSchoolsQuery,
   type RevenueMetricsResult,
   type RevenueSummaryResult,
   type SchoolDetailsResult,
   type SchoolListItem,
   type SchoolListResult,
+  type SchoolUsersResult,
   type SmsDashboardResult,
   type SmsPlatformAuditItem,
   type SmsPlatformConfigResult,
@@ -25,6 +27,7 @@ import {
   type TenantListItem,
   type TenantListResult,
   type TenantStatsResult,
+  type UpdatePlanCatalogBody,
   type UpdateSmsPlatformConfigBody,
   type UpdateSmsTemplateBody,
   type UpdateSchoolConfigBody,
@@ -108,6 +111,17 @@ type SchoolRevenueRow = {
   payments_count: number;
 };
 
+type PlanCatalogRow = {
+  plan: TenantListItem['plan'];
+  monthly_price_fcfa: number;
+  annual_price_fcfa: number;
+  default_billing_cycle: 'monthly' | 'annual';
+  max_users: number;
+  max_admin_positions: number;
+  max_sms_per_month: number;
+  updated_at: string;
+};
+
 type RevenueSummaryRow = {
   month: string;
   mrr_fcfa: number;
@@ -179,6 +193,18 @@ type SmsPlatformAuditRow = {
   admin_id: string | null;
   created_at: string;
   details: unknown;
+};
+
+type SchoolUserRow = {
+  id: string;
+  role: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  username: string | null;
+  positions: string[] | null;
+  last_login_at: string | null;
+  is_active: boolean;
 };
 
 type DirectorInsertRow = { id: string };
@@ -361,6 +387,36 @@ const ensureAdminPublicInfrastructure = async (publicDb: TenantDb): Promise<void
     INSERT INTO public.app_settings (maintenance_mode, maintenance_message)
     SELECT false, 'Mise à jour en cours'
     WHERE NOT EXISTS (SELECT 1 FROM public.app_settings);
+  `));
+
+  await publicDb.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS public.plan_catalog (
+      plan tenant_plan PRIMARY KEY,
+      monthly_price_fcfa integer NOT NULL DEFAULT 0,
+      annual_price_fcfa integer NOT NULL DEFAULT 0,
+      default_billing_cycle billing_cycle NOT NULL DEFAULT 'monthly',
+      max_users integer NOT NULL DEFAULT 10,
+      max_admin_positions integer NOT NULL DEFAULT 5,
+      max_sms_per_month integer NOT NULL DEFAULT 2000,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+  `));
+
+  await publicDb.execute(sql.raw(`
+    INSERT INTO public.plan_catalog (
+      plan,
+      monthly_price_fcfa,
+      annual_price_fcfa,
+      default_billing_cycle,
+      max_users,
+      max_admin_positions,
+      max_sms_per_month
+    )
+    VALUES
+      ('essential', 15000, 162000, 'monthly', 5, 5, 2000),
+      ('pro', 30000, 324000, 'monthly', 20, 15, 6000),
+      ('establishment', 50000, 540000, 'monthly', 50, 30, 12000)
+    ON CONFLICT (plan) DO NOTHING;
   `));
 };
 
@@ -841,6 +897,12 @@ type SchoolUsageMetrics = {
 
 type SchoolSubscriptionSnapshot = {
   mrrFcfa: number;
+  subscriptionStartedAt: string | null;
+  currentPeriodStart: string | null;
+  currentPeriodEnd: string | null;
+  billingCycle: 'monthly' | 'annual' | null;
+  paidCurrentPeriodFcfa: number;
+  remainingCurrentPeriodFcfa: number;
   nextDueDate: string | null;
 };
 
@@ -963,19 +1025,55 @@ const getSchoolSubscriptionSnapshot = async (
   publicDb: TenantDb,
   tenantId: string
 ): Promise<SchoolSubscriptionSnapshot> => {
-  const result = await publicDb.execute<{ mrr_fcfa: number; next_due_date: string | null }>(sql`
+  const result = await publicDb.execute<{
+    mrr_fcfa: number;
+    subscription_started_at: string | null;
+    current_period_start: string | null;
+    current_period_end: string | null;
+    billing_cycle: 'monthly' | 'annual' | null;
+    next_due_date: string | null;
+    paid_current_period_fcfa: number;
+  }>(sql`
     SELECT
       COALESCE(s.mrr_fcfa, 0)::int AS mrr_fcfa,
-      s.current_period_end::text AS next_due_date
+      s.created_at::text AS subscription_started_at,
+      s.current_period_start::text AS current_period_start,
+      s.current_period_end::text AS current_period_end,
+      s.billing_cycle::text AS billing_cycle,
+      s.current_period_end::text AS next_due_date,
+      COALESCE((
+        SELECT SUM(pe.amount_fcfa)::int
+        FROM public.payment_events pe
+        WHERE pe.subscription_id = s.id
+          AND pe.status = 'success'
+          AND pe.created_at >= s.current_period_start
+          AND pe.created_at < (s.current_period_end + INTERVAL '1 day')
+      ), 0)::int AS paid_current_period_fcfa
     FROM public.subscriptions s
     WHERE s.tenant_id = ${tenantId}
     ORDER BY s.created_at DESC
     LIMIT 1
   `);
 
-  const row = getRows<{ mrr_fcfa: number; next_due_date: string | null }>(result)[0];
+  const row = getRows<{
+    mrr_fcfa: number;
+    subscription_started_at: string | null;
+    current_period_start: string | null;
+    current_period_end: string | null;
+    billing_cycle: 'monthly' | 'annual' | null;
+    next_due_date: string | null;
+    paid_current_period_fcfa: number;
+  }>(result)[0];
+  const mrr = parseNumeric(row?.mrr_fcfa);
+  const paidCurrentPeriodFcfa = parseNumeric(row?.paid_current_period_fcfa);
   return {
-    mrrFcfa: parseNumeric(row?.mrr_fcfa),
+    mrrFcfa: mrr,
+    subscriptionStartedAt: row?.subscription_started_at ?? null,
+    currentPeriodStart: row?.current_period_start ?? null,
+    currentPeriodEnd: row?.current_period_end ?? null,
+    billingCycle: row?.billing_cycle ?? null,
+    paidCurrentPeriodFcfa,
+    remainingCurrentPeriodFcfa: Math.max(0, mrr - paidCurrentPeriodFcfa),
     nextDueDate: row?.next_due_date ?? null,
   };
 };
@@ -1235,11 +1333,91 @@ export const getSchoolDetails = async (
       studentsCount: usage.studentsCount,
       attendanceRecords30d: usage.attendanceRecords30d,
       mrrFcfa: subscription.mrrFcfa,
+      subscriptionStartedAt: subscription.subscriptionStartedAt,
+      currentPeriodStart: subscription.currentPeriodStart,
+      currentPeriodEnd: subscription.currentPeriodEnd,
+      billingCycle: subscription.billingCycle,
+      paidCurrentPeriodFcfa: subscription.paidCurrentPeriodFcfa,
+      remainingCurrentPeriodFcfa: subscription.remainingCurrentPeriodFcfa,
       nextDueDate: subscription.nextDueDate,
       lastConnection: usage.lastConnection,
     },
     connectionHistory30d,
   };
+};
+
+export const getSchoolUsers = async (
+  publicDb: TenantDb,
+  tenantId: string
+): Promise<SchoolUsersResult> => {
+  const toSchoolRole = (
+    role: string
+  ): 'director' | 'secretary' | 'teacher' | 'staff' | null => {
+    if (role === 'director' || role === 'secretary' || role === 'teacher' || role === 'staff') {
+      return role;
+    }
+    return null;
+  };
+
+  const tenantResult = await publicDb.execute<TenantLookupRow>(sql`
+    SELECT id, schema_name
+    FROM public.tenants
+    WHERE id = ${tenantId}
+    LIMIT 1
+  `);
+  const tenant = getRows<TenantLookupRow>(tenantResult)[0];
+  if (!tenant) {
+    throw new Error('Tenant not found');
+  }
+
+  const rows = await withTenantSchema(tenant.schema_name, async (tenantDb) => {
+    const result = await tenantDb.execute<SchoolUserRow>(sql`
+      SELECT
+        u.id::text,
+        u.role::text,
+        u.name,
+        u.phone,
+        u.email,
+        t.username,
+        COALESCE(ARRAY_REMOVE(ARRAY_AGG(DISTINCT ap.name), NULL), '{}')::text[] AS positions,
+        u.last_login_at::text,
+        u.is_active
+      FROM users u
+      LEFT JOIN teachers t ON t.user_id = u.id
+      LEFT JOIN position_assignments pa ON pa.user_id = u.id
+      LEFT JOIN admin_positions ap ON ap.id = pa.position_id
+      WHERE u.role <> 'super_admin'
+      GROUP BY u.id, u.role, u.name, u.phone, u.email, t.username, u.last_login_at, u.is_active
+      ORDER BY u.role ASC, u.name ASC
+    `);
+    return getRows<SchoolUserRow>(result);
+  });
+
+  const mapped = rows
+    .map((row) => {
+      const role = toSchoolRole(row.role);
+      if (!role) {
+        return null;
+      }
+      return {
+        id: row.id,
+        role,
+        name: row.name,
+        phone: row.phone,
+        email: row.email,
+        username: row.username,
+        positions: row.positions ?? [],
+        lastLoginAt: row.last_login_at,
+        isActive: row.is_active,
+      };
+    })
+    .filter((item): item is SchoolUsersResult['staff'][number] => item !== null);
+
+  const director = mapped.find((item) => item.role === 'director') ?? null;
+  const staff = mapped.filter((item) => item.role === 'secretary' || item.role === 'staff');
+  const teachers = mapped.filter((item) => item.role === 'teacher');
+
+  return { director, staff, teachers };
 };
 
 export const updateSchoolConfig = async (
@@ -1509,6 +1687,73 @@ export const getRevenueSummary = async (publicDb: TenantDb): Promise<RevenueSumm
       paymentMode: row.payment_mode,
     })),
   };
+};
+
+export const listPlanCatalog = async (publicDb: TenantDb): Promise<PlanCatalogItem[]> => {
+  await ensureAdminPublicInfrastructure(publicDb);
+  const result = await publicDb.execute<PlanCatalogRow>(sql`
+    SELECT
+      plan::text AS plan,
+      monthly_price_fcfa,
+      annual_price_fcfa,
+      default_billing_cycle::text AS default_billing_cycle,
+      max_users,
+      max_admin_positions,
+      max_sms_per_month,
+      updated_at::text
+    FROM public.plan_catalog
+    ORDER BY plan ASC
+  `);
+
+  return getRows<PlanCatalogRow>(result).map((row) => ({
+    plan: row.plan,
+    monthlyPriceFcfa: parseNumeric(row.monthly_price_fcfa),
+    annualPriceFcfa: parseNumeric(row.annual_price_fcfa),
+    defaultBillingCycle: row.default_billing_cycle,
+    maxUsers: parseNumeric(row.max_users),
+    maxAdminPositions: parseNumeric(row.max_admin_positions),
+    maxSmsPerMonth: parseNumeric(row.max_sms_per_month),
+    updatedAt: row.updated_at,
+  }));
+};
+
+export const updatePlanCatalog = async (
+  publicDb: TenantDb,
+  plan: TenantListItem['plan'],
+  payload: UpdatePlanCatalogBody
+): Promise<void> => {
+  await ensureAdminPublicInfrastructure(publicDb);
+  await publicDb.execute(sql`
+    INSERT INTO public.plan_catalog (
+      plan,
+      monthly_price_fcfa,
+      annual_price_fcfa,
+      default_billing_cycle,
+      max_users,
+      max_admin_positions,
+      max_sms_per_month,
+      updated_at
+    )
+    VALUES (
+      ${plan},
+      ${payload.monthly_price_fcfa ?? 0},
+      ${payload.annual_price_fcfa ?? 0},
+      ${payload.default_billing_cycle ?? 'monthly'},
+      ${payload.max_users ?? 10},
+      ${payload.max_admin_positions ?? 5},
+      ${payload.max_sms_per_month ?? 2000},
+      NOW()
+    )
+    ON CONFLICT (plan)
+    DO UPDATE SET
+      monthly_price_fcfa = CASE WHEN ${payload.monthly_price_fcfa !== undefined} THEN ${payload.monthly_price_fcfa ?? null}::integer ELSE plan_catalog.monthly_price_fcfa END,
+      annual_price_fcfa = CASE WHEN ${payload.annual_price_fcfa !== undefined} THEN ${payload.annual_price_fcfa ?? null}::integer ELSE plan_catalog.annual_price_fcfa END,
+      default_billing_cycle = CASE WHEN ${payload.default_billing_cycle !== undefined} THEN ${payload.default_billing_cycle ?? null}::billing_cycle ELSE plan_catalog.default_billing_cycle END,
+      max_users = CASE WHEN ${payload.max_users !== undefined} THEN ${payload.max_users ?? null}::integer ELSE plan_catalog.max_users END,
+      max_admin_positions = CASE WHEN ${payload.max_admin_positions !== undefined} THEN ${payload.max_admin_positions ?? null}::integer ELSE plan_catalog.max_admin_positions END,
+      max_sms_per_month = CASE WHEN ${payload.max_sms_per_month !== undefined} THEN ${payload.max_sms_per_month ?? null}::integer ELSE plan_catalog.max_sms_per_month END,
+      updated_at = NOW()
+  `);
 };
 
 export const listSchoolPayments = async (

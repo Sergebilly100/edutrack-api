@@ -218,6 +218,12 @@ export type SchoolDetailsResult = {
     studentsCount: number;
     attendanceRecords30d: number;
     mrrFcfa: number;
+    subscriptionStartedAt: string | null;
+    currentPeriodStart: string | null;
+    currentPeriodEnd: string | null;
+    billingCycle: 'monthly' | 'annual' | null;
+    paidCurrentPeriodFcfa: number;
+    remainingCurrentPeriodFcfa: number;
     nextDueDate: string | null;
     lastConnection: string | null;
   };
@@ -365,10 +371,66 @@ export const smsPlatformAuditQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 
+export const planParamsSchema = z.object({
+  plan: z.enum(TENANT_PLAN_VALUES),
+});
+
+export const updatePlanCatalogBodySchema = z
+  .object({
+    monthly_price_fcfa: z.coerce.number().int().min(0).max(100_000_000).optional(),
+    annual_price_fcfa: z.coerce.number().int().min(0).max(200_000_000).optional(),
+    default_billing_cycle: z.enum(['monthly', 'annual']).optional(),
+    max_users: z.coerce.number().int().min(1).max(5000).optional(),
+    max_admin_positions: z.coerce.number().int().min(1).max(500).optional(),
+    max_sms_per_month: z.coerce.number().int().min(0).max(2_000_000).optional(),
+  })
+  .refine(
+    (value) =>
+      value.monthly_price_fcfa !== undefined ||
+      value.annual_price_fcfa !== undefined ||
+      value.default_billing_cycle !== undefined ||
+      value.max_users !== undefined ||
+      value.max_admin_positions !== undefined ||
+      value.max_sms_per_month !== undefined,
+    {
+      message: 'At least one field must be provided',
+    }
+  );
+
 export type UpdateSmsTemplateBody = z.infer<typeof updateSmsTemplateBodySchema>;
 export type MaintenanceConfigBody = z.infer<typeof maintenanceConfigSchema>;
 export type UpdateSmsPlatformConfigBody = z.infer<typeof updateSmsPlatformConfigBodySchema>;
 export type SmsPlatformAuditQuery = z.infer<typeof smsPlatformAuditQuerySchema>;
+export type UpdatePlanCatalogBody = z.infer<typeof updatePlanCatalogBodySchema>;
+
+export type SchoolUserItem = {
+  id: string;
+  role: 'director' | 'secretary' | 'staff' | 'teacher';
+  name: string;
+  phone: string | null;
+  email: string | null;
+  username: string | null;
+  positions: string[];
+  lastLoginAt: string | null;
+  isActive: boolean;
+};
+
+export type SchoolUsersResult = {
+  director: SchoolUserItem | null;
+  staff: SchoolUserItem[];
+  teachers: SchoolUserItem[];
+};
+
+export type PlanCatalogItem = {
+  plan: TenantPlan;
+  monthlyPriceFcfa: number;
+  annualPriceFcfa: number;
+  defaultBillingCycle: 'monthly' | 'annual';
+  maxUsers: number;
+  maxAdminPositions: number;
+  maxSmsPerMonth: number;
+  updatedAt: string;
+};
 
 export type SmsPlatformConfigResult = {
   provider: SmsProvider;

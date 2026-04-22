@@ -7,6 +7,7 @@ import {
   listSchoolsQuerySchema,
   listTenantsQuerySchema,
   maintenanceConfigSchema,
+  planParamsSchema,
   schoolTenantIdParamsSchema,
   smsPlatformAuditQuerySchema,
   smsTemplateTypeSchema,
@@ -16,6 +17,7 @@ import {
   updateSchoolConfigBodySchema,
   updateTenantBodySchema,
   updateTenantParamsSchema,
+  updatePlanCatalogBodySchema,
 } from './admin.types.js';
 import {
   addManualPayment,
@@ -29,15 +31,18 @@ import {
   getRevenueMetrics,
   getRevenueSummary,
   getSchoolDetails,
+  getSchoolUsers,
   getSmsDashboard,
   getSmsPlatformConfig,
   getTenantStats,
+  listPlanCatalog,
   listSmsPlatformAudit,
   listSchoolPayments,
   listSmsTemplates,
   listSchools,
   listTenants,
   updateMaintenanceConfig,
+  updatePlanCatalog,
   updateSmsPlatformConfig,
   upsertSmsTemplate,
   updateSchoolConfig,
@@ -174,6 +179,16 @@ export default async function adminController(app: FastifyInstance): Promise<voi
     }
   });
 
+  app.get('/api/v1/admin/schools/:tenantId/users', { preHandler: preHandlers }, async (request, reply) => {
+    try {
+      const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+      const result = await getSchoolUsers(ensurePublicDb(request), tenantId);
+      return reply.send(result);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
   app.patch(
     '/api/v1/admin/schools/:tenantId/config',
     { preHandler: preHandlers },
@@ -231,6 +246,26 @@ export default async function adminController(app: FastifyInstance): Promise<voi
     try {
       const result = await getRevenueMetrics(ensurePublicDb(request));
       return reply.send(result);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/admin/plans', { preHandler: preHandlers }, async (request, reply) => {
+    try {
+      const items = await listPlanCatalog(ensurePublicDb(request));
+      return reply.send({ items });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.patch('/api/v1/admin/plans/:plan', { preHandler: preHandlers }, async (request, reply) => {
+    try {
+      const { plan } = planParamsSchema.parse(request.params);
+      const payload = updatePlanCatalogBodySchema.parse(request.body);
+      await updatePlanCatalog(ensurePublicDb(request), plan, payload);
+      return reply.send({ success: true });
     } catch (error) {
       return handleError(reply, error);
     }
