@@ -45,6 +45,7 @@ type AssignableUserRow = {
   email: string | null;
   phone: string | null;
   created_at: Date | string;
+  assigned_positions?: Array<{ id: string; name: string }> | null;
   position_names?: string[] | null;
   permissions?: string[] | null;
 };
@@ -322,6 +323,7 @@ export class PermissionsRepository {
       role: string;
       email: string | null;
       phone: string | null;
+      assignedPositions: Array<{ id: string; name: string }>;
       positions: string[];
       permissions: string[];
     }>
@@ -334,6 +336,11 @@ export class PermissionsRepository {
         u.email,
         u.phone,
         u.created_at,
+        COALESCE(
+          jsonb_agg(DISTINCT jsonb_build_object('id', ap.id, 'name', ap.name))
+            FILTER (WHERE ap.id IS NOT NULL),
+          '[]'::jsonb
+        ) AS assigned_positions,
         COALESCE(array_remove(array_agg(DISTINCT ap.name), NULL), ARRAY[]::text[]) AS position_names,
         COALESCE(array_remove(array_agg(DISTINCT perm.permission), NULL), ARRAY[]::text[]) AS permissions
       FROM users u
@@ -352,6 +359,7 @@ export class PermissionsRepository {
       role: row.role,
       email: row.email,
       phone: row.phone,
+      assignedPositions: Array.isArray(row.assigned_positions) ? row.assigned_positions : [],
       positions: Array.isArray(row.position_names) ? row.position_names : [],
       permissions: Array.isArray(row.permissions) ? row.permissions : [],
     }));
