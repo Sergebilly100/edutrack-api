@@ -125,19 +125,10 @@ const baseSelect = sql`
   LEFT JOIN teachers t ON t.user_id = u.id
 `;
 
-const ensureUsersProfileColumns = async (): Promise<void> => {
-  // Migration-managed (see 0013_users_profile_columns_infrastructure.sql).
-};
-
-const ensureRefreshTokensTable = async (): Promise<void> => {
-  // Table/columns/index are migration-managed (see 0012_refresh_tokens_infrastructure.sql).
-};
-
 export const findUserByPhone = async (
   db: QueryExecutor,
   phone: string
 ): Promise<AuthUser | null> => {
-  await ensureUsersProfileColumns();
   const result = await db.execute(sql`
     ${baseSelect}
     WHERE u.phone = ${phone}
@@ -152,7 +143,6 @@ export const findUserByUsername = async (
   db: QueryExecutor,
   username: string
 ): Promise<AuthUser | null> => {
-  await ensureUsersProfileColumns();
   const result = await db.execute(sql`
     ${baseSelect}
     WHERE t.username = ${username}
@@ -167,7 +157,6 @@ export const findUserByEmail = async (
   db: QueryExecutor,
   email: string
 ): Promise<AuthUser | null> => {
-  await ensureUsersProfileColumns();
   const result = await db.execute(sql`
     ${baseSelect}
     WHERE u.email = ${email}
@@ -182,7 +171,6 @@ export const findUserProfileById = async (
   db: QueryExecutor,
   userId: string
 ): Promise<AuthUser | null> => {
-  await ensureUsersProfileColumns();
   const result = await db.execute(sql`
     ${baseSelect}
     WHERE u.id = ${userId}
@@ -226,7 +214,6 @@ export const updateUserProfile = async (
     profilePhotoUrl?: string | null;
   }
 ): Promise<void> => {
-  await ensureUsersProfileColumns();
   await db.execute(sql`
     UPDATE users
     SET
@@ -247,7 +234,6 @@ export const bindKeycloakSubjectIfNeeded = async (
   userId: string,
   keycloakSubject: string
 ): Promise<void> => {
-  await ensureUsersProfileColumns();
   await db.execute(sql`
     UPDATE users
     SET keycloak_subject = ${keycloakSubject}
@@ -266,7 +252,6 @@ export const storeRefreshToken = async (
     ipAddress?: string | null;
   }
 ): Promise<void> => {
-  await ensureRefreshTokensTable();
   const tokenHash = hashRefreshToken(input.token);
   await db.execute(sql`
     INSERT INTO refresh_tokens (
@@ -310,7 +295,6 @@ export const getRefreshTokenStatus = async (
   db: QueryExecutor,
   token: string
 ): Promise<RefreshTokenStatus> => {
-  await ensureRefreshTokensTable();
   const tokenHash = hashRefreshToken(token);
   const result = await db.execute(sql`
     SELECT
@@ -349,7 +333,6 @@ export const listActiveRefreshSessions = async (
   db: QueryExecutor,
   userId: string
 ): Promise<RefreshSessionRow[]> => {
-  await ensureRefreshTokensTable();
   const result = await db.execute(sql`
     SELECT
       id,
@@ -375,7 +358,6 @@ export const revokeRefreshSessionById = async (
   db: QueryExecutor,
   input: { userId: string; sessionId: string }
 ): Promise<boolean> => {
-  await ensureRefreshTokensTable();
   const result = await db.execute(sql`
     UPDATE refresh_tokens
     SET is_active = false,
@@ -404,8 +386,6 @@ export const invalidateRefreshTokenIfSupported = async (
   db: QueryExecutor,
   input: InvalidateRefreshTokenInput
 ): Promise<void> => {
-  await ensureRefreshTokensTable();
-
   const columnsResult = await db.execute(sql`
     SELECT column_name
     FROM information_schema.columns
