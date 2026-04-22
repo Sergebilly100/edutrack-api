@@ -52,6 +52,11 @@ export type StudentAbsentPayload = {
 
 export type SubscriptionExpiredPayload = {
   tenantId: string;
+  schemaName: string;
+  schoolName: string;
+  periodLabel: string;
+  dueDate: string;
+  remainingAmountFcfa: number;
   directorPhone: string;
 };
 

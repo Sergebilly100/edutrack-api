@@ -31,6 +31,7 @@ import {
   getRevenueMetrics,
   getRevenueSummary,
   getSchoolDetails,
+  sendSchoolPaymentReminder,
   getSchoolUsers,
   getSmsDashboard,
   getSmsPlatformConfig,
@@ -227,6 +228,20 @@ export default async function adminController(app: FastifyInstance): Promise<voi
         const payload = manualPaymentBodySchema.parse(request.body);
         await addManualPayment(ensurePublicDb(request), tenantId, payload);
         return reply.code(201).send({ success: true });
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/admin/schools/:tenantId/payments/reminder',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+        const result = await sendSchoolPaymentReminder(ensurePublicDb(request), tenantId);
+        return reply.send(result);
       } catch (error) {
         return handleError(reply, error);
       }

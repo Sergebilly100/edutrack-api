@@ -40,6 +40,13 @@ type StudentAbsentSmsParams = {
   schoolPhone: string;
 };
 
+type PaymentReminderSmsParams = {
+  schoolName: string;
+  periodLabel: string;
+  dueDate: string;
+  remainingAmountFcfa: number;
+};
+
 const ELLIPSIS = '...';
 
 const normalizeText = (value: string): string => value.replace(/\s+/g, ' ').trim();
@@ -98,5 +105,15 @@ export const buildTeacherQrAlertSms = (
 export const buildStudentAbsentSms = (params: StudentAbsentSmsParams): string => {
   return limitSmsLength(
     `EduTrack: ${safeText(params.studentFirstName)} absent(e) en ${safeText(params.subject)} le ${safeText(params.date)}. Contact école: ${safeText(params.schoolPhone)}`
+  );
+};
+
+export const buildPaymentReminderSms = (params: PaymentReminderSmsParams): string => {
+  const amount = new Intl.NumberFormat('fr-FR', {
+    maximumFractionDigits: 0,
+  }).format(Math.max(0, params.remainingAmountFcfa));
+
+  return limitSmsLength(
+    `EduTrack: relance paiement ${safeText(params.schoolName)}. Échéance ${safeText(params.dueDate)}, période ${safeText(params.periodLabel)}, reste ${amount} FCFA.`
   );
 };

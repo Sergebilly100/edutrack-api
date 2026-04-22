@@ -16,6 +16,7 @@ import {
   type SchoolDetailsResult,
   type SchoolListItem,
   type SchoolListResult,
+  type SchoolPaymentReminderResult,
   type SchoolUsersResult,
   type SmsDashboardResult,
   type SmsPlatformAuditItem,
@@ -36,6 +37,7 @@ import {
 import { withTenantSchema, type TenantDb } from '../../shared/database/db.js';
 import { createTenantSchema } from '../../shared/database/tenant-init.js';
 import { signJwtRs256 } from '../../shared/auth/jwt.js';
+import { emit } from '../../shared/events/event-bus.js';
 
 type TenantRow = {
   id: string;
@@ -75,7 +77,13 @@ type TopTeacherRow = {
 
 type TenantLookupRow = {
   id: string;
+  name?: string;
   schema_name: string;
+};
+
+type SchoolContactRow = {
+  name: string;
+  phone: string | null;
 };
 
 type SchoolLookupRow = {
@@ -788,7 +796,7 @@ export const updateTenant = async (
 
 const getTenantById = async (publicDb: TenantDb, tenantId: string): Promise<TenantLookupRow> => {
   const result = await publicDb.execute<TenantLookupRow>(sql`
-    SELECT id, schema_name
+    SELECT id, name, schema_name
     FROM public.tenants
     WHERE id = ${tenantId}
     LIMIT 1
@@ -982,6 +990,63 @@ const getSchoolConnectionHistory30d = async (
   } catch {
     return [];
   }
+};
+
+const getSchoolLastPaymentReminderAt = async (
+  publicDb: TenantDb,
+  schemaName: string
+): Promise<string | null> => {
+  const schema = quoteIdentifier(schemaName);
+  try {
+    const result = await publicDb.execute<{ sent_at: string | null; created_at: string | null }>(
+      sql.raw(`
+        SELECT sent_at::text, created_at::text
+        FROM ${schema}.notifications_log
+        WHERE type = 'payment_reminder'
+        ORDER BY COALESCE(sent_at, created_at) DESC
+        LIMIT 1
+      `)
+    );
+
+    const row = getRows<{ sent_at: string | null; created_at: string | null }>(result)[0];
+    return row?.sent_at ?? row?.created_at ?? null;
+  } catch {
+    return null;
+  }
+};
+
+const getSchoolContactForPaymentReminder = async (
+  publicDb: TenantDb,
+  schemaName: string
+): Promise<SchoolContactRow | null> => {
+  return withTenantSchema(schemaName, async (tenantDb) => {
+    const directorResult = await tenantDb.execute<SchoolContactRow>(sql`
+      SELECT name, phone
+      FROM users
+      WHERE is_active = true
+        AND role = 'director'
+      ORDER BY created_at ASC
+      LIMIT 1
+    `);
+
+    const director = getRows<SchoolContactRow>(directorResult)[0];
+    if (director?.phone) {
+      return director;
+    }
+
+    const staffResult = await tenantDb.execute<SchoolContactRow>(sql`
+      SELECT name, phone
+      FROM users
+      WHERE is_active = true
+        AND role = 'staff'
+        AND phone IS NOT NULL
+      ORDER BY created_at ASC
+      LIMIT 1
+    `);
+
+    const staff = getRows<SchoolContactRow>(staffResult)[0];
+    return staff ?? director ?? null;
+  });
 };
 
 const getTenantDauLast7d = async (
@@ -1298,10 +1363,11 @@ export const getSchoolDetails = async (
     throw new Error('Tenant not found');
   }
 
-  const [usage, subscription, connectionHistory30d] = await Promise.all([
+  const [usage, subscription, connectionHistory30d, lastPaymentReminderAt] = await Promise.all([
     getSchoolUsageMetrics(publicDb, tenant.schema_name),
     getSchoolSubscriptionSnapshot(publicDb, tenant.id),
     getSchoolConnectionHistory30d(publicDb, tenant.schema_name),
+    getSchoolLastPaymentReminderAt(publicDb, tenant.schema_name),
   ]);
 
   return {
@@ -1340,6 +1406,7 @@ export const getSchoolDetails = async (
       paidCurrentPeriodFcfa: subscription.paidCurrentPeriodFcfa,
       remainingCurrentPeriodFcfa: subscription.remainingCurrentPeriodFcfa,
       nextDueDate: subscription.nextDueDate,
+      lastPaymentReminderAt,
       lastConnection: usage.lastConnection,
     },
     connectionHistory30d,
@@ -1885,6 +1952,62 @@ export const addManualPayment = async (
       WHERE id = ${subscriptionId}
     `);
   }
+};
+
+const toDateLabel = (value: string | null): string => {
+  if (!value) {
+    return 'N/A';
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return 'N/A';
+  }
+
+  return parsed.toISOString().slice(0, 10);
+};
+
+export const sendSchoolPaymentReminder = async (
+  publicDb: TenantDb,
+  tenantId: string
+): Promise<SchoolPaymentReminderResult> => {
+  const tenant = await getTenantById(publicDb, tenantId);
+  const subscription = await getSchoolSubscriptionSnapshot(publicDb, tenantId);
+
+  if (!subscription.nextDueDate || subscription.remainingCurrentPeriodFcfa <= 0) {
+    throw new Error('Aucune relance requise pour cette école');
+  }
+
+  const dueDate = new Date(subscription.nextDueDate);
+  if (Number.isNaN(dueDate.getTime())) {
+    throw new Error('Date d’échéance invalide');
+  }
+
+  if (dueDate.getTime() > Date.now()) {
+    throw new Error('Relance indisponible: échéance non dépassée');
+  }
+
+  const contact = await getSchoolContactForPaymentReminder(publicDb, tenant.schema_name);
+  if (!contact?.phone) {
+    throw new Error("Impossible d'envoyer la relance: aucun numéro responsable disponible");
+  }
+
+  const periodLabel = `${toDateLabel(subscription.currentPeriodStart)} -> ${toDateLabel(subscription.currentPeriodEnd)}`;
+
+  emit('subscription.expired', {
+    tenantId: tenant.id,
+    schemaName: tenant.schema_name,
+    schoolName: tenant.name ?? 'École',
+    periodLabel,
+    dueDate: toDateLabel(subscription.nextDueDate),
+    remainingAmountFcfa: subscription.remainingCurrentPeriodFcfa,
+    directorPhone: contact.phone,
+  });
+
+  return {
+    sentAt: new Date().toISOString(),
+    recipientPhone: contact.phone,
+  };
 };
 
 export const getSmsDashboard = async (publicDb: TenantDb): Promise<SmsDashboardResult> => {

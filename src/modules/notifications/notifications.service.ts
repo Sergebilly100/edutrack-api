@@ -8,6 +8,7 @@ import { off as defaultOff, on as defaultOn } from '../../shared/events/event-bu
 import type {
   EventMap,
   StudentAbsentPayload,
+  SubscriptionExpiredPayload,
   TeacherLatePayload,
   TeacherQrAlertPayload,
 } from '../../shared/events/events.types.js';
@@ -15,6 +16,7 @@ import type { NotificationType } from '../../shared/types/index.js';
 
 import type { NotificationSmsJobData, SmsSender } from './notifications.queue.js';
 import {
+  buildPaymentReminderSms,
   buildStudentAbsentSms,
   buildTeacherLateSms,
   buildTeacherQrAlertSms,
@@ -31,11 +33,11 @@ type NotificationsServiceDeps = {
     callback: (tenantDb: TenantDbLike) => Promise<T>
   ) => Promise<T>;
   eventBus: {
-    on: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'student.absent'>>(
+    on: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'student.absent' | 'subscription.expired'>>(
       event: K,
       handler: (payload: EventMap[K]) => void
     ) => void;
-    off: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'student.absent'>>(
+    off: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'student.absent' | 'subscription.expired'>>(
       event: K,
       handler: (payload: EventMap[K]) => void
     ) => void;
@@ -252,16 +254,26 @@ export class NotificationsService {
     });
   };
 
+  private readonly subscriptionExpiredListener = (
+    payload: EventMap['subscription.expired']
+  ): void => {
+    void this.handleSubscriptionExpired(payload).catch((error) => {
+      console.error('[notifications] failed to process subscription.expired', error);
+    });
+  };
+
   start(): void {
     this.deps.eventBus.on('teacher.late', this.teacherLateListener);
     this.deps.eventBus.on('teacher.qr_alert', this.teacherQrAlertListener);
     this.deps.eventBus.on('student.absent', this.studentAbsentListener);
+    this.deps.eventBus.on('subscription.expired', this.subscriptionExpiredListener);
   }
 
   stop(): void {
     this.deps.eventBus.off('teacher.late', this.teacherLateListener);
     this.deps.eventBus.off('teacher.qr_alert', this.teacherQrAlertListener);
     this.deps.eventBus.off('student.absent', this.studentAbsentListener);
+    this.deps.eventBus.off('subscription.expired', this.subscriptionExpiredListener);
   }
 
   async handleTeacherLate(payload: TeacherLatePayload): Promise<void> {
@@ -399,6 +411,43 @@ export class NotificationsService {
         status: 'queued',
         providerRef: queueRef,
         relatedId: payload.scheduleId,
+      });
+    });
+  }
+
+  async handleSubscriptionExpired(payload: SubscriptionExpiredPayload): Promise<void> {
+    await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
+      const message = buildPaymentReminderSms({
+        schoolName: payload.schoolName,
+        periodLabel: payload.periodLabel,
+        dueDate: payload.dueDate,
+        remainingAmountFcfa: payload.remainingAmountFcfa,
+      });
+
+      const queueRef = buildQueueRef(payload.schemaName, 'payment_reminder');
+
+      await this.deps.smsQueue.add(
+        'send-sms',
+        toSmsJobData({
+          queueRef,
+          to: payload.directorPhone,
+          message,
+          notificationType: 'payment_reminder',
+          schemaName: payload.schemaName,
+        }),
+        {
+          jobId: queueRef,
+          removeOnComplete: true,
+          removeOnFail: true,
+        }
+      );
+
+      await this.deps.repository.insertNotificationLog(tenantDb, {
+        type: 'payment_reminder',
+        recipientPhone: payload.directorPhone,
+        message,
+        status: 'queued',
+        providerRef: queueRef,
       });
     });
   }

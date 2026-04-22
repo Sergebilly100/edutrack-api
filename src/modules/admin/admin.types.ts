@@ -225,12 +225,18 @@ export type SchoolDetailsResult = {
     paidCurrentPeriodFcfa: number;
     remainingCurrentPeriodFcfa: number;
     nextDueDate: string | null;
+    lastPaymentReminderAt: string | null;
     lastConnection: string | null;
   };
   connectionHistory30d: Array<{
     date: string;
     uniqueUsers: number;
   }>;
+};
+
+export type SchoolPaymentReminderResult = {
+  sentAt: string;
+  recipientPhone: string;
 };
 
 export type AdminMetricsResult = {
