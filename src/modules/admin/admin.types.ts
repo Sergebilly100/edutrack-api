@@ -45,6 +45,7 @@ export const createSchoolBodySchema = z.object({
   director_phone: z.string().regex(/^225\d{10}$/),
   director_email: z.string().email().max(255).optional(),
   max_admin_positions: z.coerce.number().int().min(1).max(50).default(5),
+  active_school_year: z.string().trim().regex(/^\d{4}-\d{4}$/),
   plan: z.enum(TENANT_PLAN_VALUES).default('essential'),
 });
 
@@ -85,6 +86,8 @@ export const updateSchoolConfigBodySchema = z
     director_title: z.string().trim().min(1).max(120).optional(),
     can_edit_sms_template: z.boolean().optional(),
     can_export_data: z.boolean().optional(),
+    active_school_year: z.string().trim().regex(/^\d{4}-\d{4}$/).optional(),
+    logo_url: z.string().trim().max(2_000_000).nullable().optional(),
     plan: z.enum(TENANT_PLAN_VALUES).optional(),
     status: z.enum(TENANT_STATUS_VALUES).optional(),
   })
@@ -99,6 +102,8 @@ export const updateSchoolConfigBodySchema = z
       value.director_title !== undefined ||
       value.can_edit_sms_template !== undefined ||
       value.can_export_data !== undefined ||
+      value.active_school_year !== undefined ||
+      value.logo_url !== undefined ||
       value.plan !== undefined ||
       value.status !== undefined,
     {
@@ -199,6 +204,8 @@ export type SchoolDetailsResult = {
     directorTitle: string | null;
     canEditSmsTemplate: boolean;
     canExportData: boolean;
+    activeSchoolYear: string | null;
+    logoUrl: string | null;
     createdAt: string;
     updatedAt: string;
   };

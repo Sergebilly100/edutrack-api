@@ -86,6 +86,8 @@ type SchoolLookupRow = {
   director_title: string | null;
   can_edit_sms_template: boolean;
   can_export_data: boolean;
+  active_school_year: string | null;
+  logo_url: string | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -267,7 +269,9 @@ const ensureAdminPublicInfrastructure = async (publicDb: TenantDb): Promise<void
       ADD COLUMN IF NOT EXISTS director_title varchar(120) DEFAULT 'Directeur',
       ADD COLUMN IF NOT EXISTS max_sms_per_month integer DEFAULT 2000,
       ADD COLUMN IF NOT EXISTS can_edit_sms_template boolean DEFAULT false,
-      ADD COLUMN IF NOT EXISTS can_export_data boolean DEFAULT true;
+      ADD COLUMN IF NOT EXISTS can_export_data boolean DEFAULT true,
+      ADD COLUMN IF NOT EXISTS active_school_year varchar(20),
+      ADD COLUMN IF NOT EXISTS logo_url text;
   `));
 
   await publicDb.execute(sql.raw(`
@@ -909,6 +913,7 @@ export const createSchool = async (
       teaching_type,
       max_admin_positions,
       max_users,
+      active_school_year,
       trial_ends_at
     )
     VALUES (
@@ -921,6 +926,7 @@ export const createSchool = async (
       ${payload.teaching_type},
       ${payload.max_admin_positions},
       ${MAX_USERS_BY_PLAN[payload.plan]},
+      ${payload.active_school_year},
       ${trialEndsAt}
     )
     RETURNING id, schema_name
@@ -1016,6 +1022,8 @@ export const listSchools = async (
       COALESCE(t.director_title, 'Directeur') AS director_title,
       COALESCE(t.can_edit_sms_template, false) AS can_edit_sms_template,
       COALESCE(t.can_export_data, true) AS can_export_data,
+      t.active_school_year,
+      t.logo_url,
       t.created_at,
       t.updated_at
     FROM public.tenants t
@@ -1076,6 +1084,8 @@ export const getSchoolDetails = async (
       COALESCE(t.director_title, 'Directeur') AS director_title,
       COALESCE(t.can_edit_sms_template, false) AS can_edit_sms_template,
       COALESCE(t.can_export_data, true) AS can_export_data,
+      t.active_school_year,
+      t.logo_url,
       t.created_at,
       t.updated_at
     FROM public.tenants t
@@ -1111,6 +1121,8 @@ export const getSchoolDetails = async (
       directorTitle: tenant.director_title,
       canEditSmsTemplate: tenant.can_edit_sms_template,
       canExportData: tenant.can_export_data,
+      activeSchoolYear: tenant.active_school_year,
+      logoUrl: tenant.logo_url,
       createdAt: formatDateTime(tenant.created_at) ?? new Date(0).toISOString(),
       updatedAt: formatDateTime(tenant.updated_at) ?? new Date(0).toISOString(),
     },
@@ -1166,6 +1178,12 @@ export const updateSchoolConfig = async (
       can_export_data = CASE WHEN ${payload.can_export_data !== undefined}
         THEN ${payload.can_export_data ?? null}::boolean
         ELSE can_export_data END,
+      active_school_year = CASE WHEN ${payload.active_school_year !== undefined}
+        THEN ${payload.active_school_year ?? null}
+        ELSE active_school_year END,
+      logo_url = CASE WHEN ${payload.logo_url !== undefined}
+        THEN ${payload.logo_url ?? null}
+        ELSE logo_url END,
       updated_at = NOW()
     WHERE id = ${tenantId}
     RETURNING id
@@ -1194,6 +1212,8 @@ export const getAdminMetrics = async (publicDb: TenantDb): Promise<AdminMetricsR
       COALESCE(t.director_title, 'Directeur') AS director_title,
       COALESCE(t.can_edit_sms_template, false) AS can_edit_sms_template,
       COALESCE(t.can_export_data, true) AS can_export_data,
+      t.active_school_year,
+      t.logo_url,
       t.created_at,
       t.updated_at
     FROM public.tenants t

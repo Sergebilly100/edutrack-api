@@ -52,6 +52,12 @@ const handleError = (
   });
 };
 
+const assertSettingsManager = (role: string): void => {
+  if (role !== 'director' && role !== 'super_admin') {
+    throw new PermissionsModuleError('Forbidden', 403, 'FORBIDDEN');
+  }
+};
+
 export default async function permissionsController(app: FastifyInstance): Promise<void> {
   app.get(
     '/api/v1/permissions/config',
@@ -59,6 +65,7 @@ export default async function permissionsController(app: FastifyInstance): Promi
     async (request, reply) => {
       try {
         const claims = request.claims!;
+        assertSettingsManager(claims.role);
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
           return buildPermissionsService(tenantDb).getConfig(claims.schemaName);
@@ -77,6 +84,7 @@ export default async function permissionsController(app: FastifyInstance): Promi
     async (request, reply) => {
       try {
         const claims = request.claims!;
+        assertSettingsManager(claims.role);
         const body = updateSchoolConfigBodySchema.parse(request.body ?? {});
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
@@ -84,6 +92,10 @@ export default async function permissionsController(app: FastifyInstance): Promi
             ...(body.name !== undefined ? { name: body.name } : {}),
             ...(body.city !== undefined ? { city: body.city } : {}),
             ...(body.teachingType !== undefined ? { teachingType: body.teachingType } : {}),
+            ...(body.logoUrl !== undefined ? { logoUrl: body.logoUrl } : {}),
+            ...(body.activeSchoolYear !== undefined
+              ? { activeSchoolYear: body.activeSchoolYear }
+              : {}),
           });
         });
 
@@ -100,6 +112,7 @@ export default async function permissionsController(app: FastifyInstance): Promi
     async (request, reply) => {
       try {
         const claims = request.claims!;
+        assertSettingsManager(claims.role);
         if (claims.role !== 'super_admin') {
           throw new PermissionsModuleError(
             'Only super admin can update limits',
@@ -128,6 +141,7 @@ export default async function permissionsController(app: FastifyInstance): Promi
     async (request, reply) => {
       try {
         const claims = request.claims!;
+        assertSettingsManager(claims.role);
         const body = createAdministrativeUserBodySchema.parse(request.body ?? {});
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
@@ -155,6 +169,7 @@ export default async function permissionsController(app: FastifyInstance): Promi
     async (request, reply) => {
       try {
         const claims = request.claims!;
+        assertSettingsManager(claims.role);
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
           return buildPermissionsService(tenantDb).listPositions();
@@ -173,6 +188,7 @@ export default async function permissionsController(app: FastifyInstance): Promi
     async (request, reply) => {
       try {
         const claims = request.claims!;
+        assertSettingsManager(claims.role);
         const body = createPositionBodySchema.parse(request.body ?? {});
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
@@ -196,6 +212,7 @@ export default async function permissionsController(app: FastifyInstance): Promi
     async (request, reply) => {
       try {
         const claims = request.claims!;
+        assertSettingsManager(claims.role);
         const params = positionIdParamsSchema.parse(request.params ?? {});
         const body = updatePositionBodySchema.parse(request.body ?? {});
 
@@ -219,6 +236,7 @@ export default async function permissionsController(app: FastifyInstance): Promi
     async (request, reply) => {
       try {
         const claims = request.claims!;
+        assertSettingsManager(claims.role);
         const params = positionIdParamsSchema.parse(request.params ?? {});
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
@@ -238,6 +256,7 @@ export default async function permissionsController(app: FastifyInstance): Promi
     async (request, reply) => {
       try {
         const claims = request.claims!;
+        assertSettingsManager(claims.role);
         const params = assignPositionParamsSchema.parse(request.params ?? {});
         const body = assignPositionBodySchema.parse(request.body ?? {});
 
@@ -262,6 +281,7 @@ export default async function permissionsController(app: FastifyInstance): Promi
     async (request, reply) => {
       try {
         const claims = request.claims!;
+        assertSettingsManager(claims.role);
         const params = removeAssignmentParamsSchema.parse(request.params ?? {});
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {

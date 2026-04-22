@@ -57,6 +57,13 @@
       "when": 1776355200000,
       "tag": "0007_g5_users_limit",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1776816000000,
+      "tag": "0008_school_logo_year_profile",
+      "breakpoints": true
     }
   ]
 }

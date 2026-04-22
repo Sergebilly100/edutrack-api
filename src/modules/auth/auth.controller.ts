@@ -9,6 +9,7 @@ import {
   logout,
   refreshAccessToken,
   signRefreshToken,
+  updateMe,
   verifyAccessToken,
   verifyRefreshToken,
 } from './auth.service.js';
@@ -36,6 +37,24 @@ const changePasswordSchema = z
     message: 'Les mots de passe ne correspondent pas',
     path: ['confirmPassword'],
   });
+
+const updateMeSchema = z
+  .object({
+    name: z.string().trim().min(2).max(255).optional(),
+    phone: z.string().trim().min(6).max(20).nullable().optional(),
+    email: z.string().trim().email().max(255).nullable().optional(),
+    profilePhotoUrl: z.string().trim().max(2_000_000).nullable().optional(),
+  })
+  .refine(
+    (body) =>
+      body.name !== undefined ||
+      body.phone !== undefined ||
+      body.email !== undefined ||
+      body.profilePhotoUrl !== undefined,
+    {
+      message: 'At least one field must be provided',
+    }
+  );
 
 const SCHEMA_NAME_REGEX = /^[a-z][a-z0-9_]{2,63}$/;
 
@@ -121,14 +140,37 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
     message === 'Current password is incorrect' ||
     (error instanceof Error && error.name === 'JWTExpired');
   const isForbidden = message === 'Modification de mot de passe non autorisée pour ce rôle';
-
-  const statusCode = isUnauthorized ? 401 : isForbidden ? 403 : 400;
   const code =
-    statusCode === 401 ? 'UNAUTHORIZED' : statusCode === 403 ? 'FORBIDDEN' : 'BAD_REQUEST';
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code: unknown }).code)
+      : '';
+  const constraint =
+    typeof error === 'object' && error !== null && 'constraint' in error
+      ? String((error as { constraint: unknown }).constraint)
+      : '';
+  const isConflict =
+    code === '23505' &&
+    (constraint.includes('users_email_unique') || constraint.includes('users_phone_unique'));
+
+  const statusCode = isUnauthorized ? 401 : isForbidden ? 403 : isConflict ? 409 : 400;
+  const errorCode =
+    statusCode === 401
+      ? 'UNAUTHORIZED'
+      : statusCode === 403
+        ? 'FORBIDDEN'
+        : statusCode === 409
+          ? 'CONFLICT'
+          : 'BAD_REQUEST';
+  const finalMessage =
+    statusCode === 409
+      ? constraint.includes('users_email_unique')
+        ? 'Cet email est déjà utilisé'
+        : 'Ce numéro est déjà utilisé'
+      : message;
 
   return reply.code(statusCode).send({
-    error: message,
-    code,
+    error: finalMessage,
+    code: errorCode,
     statusCode,
   });
 };
@@ -224,7 +266,6 @@ export default async function authController(app: FastifyInstance): Promise<void
         await withTenantSchema(claims.schemaName, (tenantDb) =>
           changePassword(tenantDb, {
             userId: claims.sub,
-            role: claims.role,
             currentPassword: body.currentPassword,
             newPassword: body.newPassword,
           })
@@ -236,4 +277,26 @@ export default async function authController(app: FastifyInstance): Promise<void
       }
     }
   );
+
+  app.patch('/api/v1/auth/me', async (request, reply) => {
+    try {
+      const token = extractBearerToken(request);
+      const claims = await verifyAccessToken(token);
+      const body = updateMeSchema.parse(request.body);
+
+      const result = await withTenantSchema(claims.schemaName, (tenantDb) =>
+        updateMe(tenantDb, {
+          userId: claims.sub,
+          ...(body.name !== undefined ? { name: body.name } : {}),
+          ...(body.phone !== undefined ? { phone: body.phone } : {}),
+          ...(body.email !== undefined ? { email: body.email } : {}),
+          ...(body.profilePhotoUrl !== undefined ? { profilePhotoUrl: body.profilePhotoUrl } : {}),
+        })
+      );
+
+      return reply.send(result);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
 }

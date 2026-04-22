@@ -82,6 +82,7 @@ export const users = tenant.table('users', {
   name: varchar('name', { length: 255 }).notNull(),
   phone: varchar('phone', { length: 20 }).unique(),
   email: varchar('email', { length: 255 }).unique(),
+  profilePhotoUrl: text('profile_photo_url'),
   passwordHash: text('password_hash').notNull(),
   isActive: boolean('is_active').notNull().default(true),
   lastLoginAt: timestamp('last_login_at', { withTimezone: true, mode: 'date' }),

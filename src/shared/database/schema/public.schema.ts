@@ -75,6 +75,8 @@ export const tenants = pgTable('tenants', {
   maxSmsPerMonth: integer('max_sms_per_month').default(2000),
   canEditSmsTemplate: boolean('can_edit_sms_template').default(false),
   canExportData: boolean('can_export_data').default(true),
+  logoUrl: text('logo_url'),
+  activeSchoolYear: varchar('active_school_year', { length: 20 }),
 });
 
 export const subscriptions = pgTable('subscriptions', {

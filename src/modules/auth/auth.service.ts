@@ -6,6 +6,7 @@ import {
   findUserByPhone,
   findUserByUsername,
   findUserProfileById,
+  updateUserProfile,
   updateUserPasswordHash,
   updateLastLoginAt,
   type AuthUser,
@@ -46,6 +47,7 @@ export type LoginResult = {
     name: string;
     phone: string | null;
     email: string | null;
+    profilePhotoUrl: string | null;
     username?: string;
   };
 };
@@ -54,9 +56,16 @@ export type TenantDb = QueryExecutor;
 
 type ChangePasswordInput = {
   userId: string;
-  role: AuthUser['role'];
   currentPassword: string;
   newPassword: string;
+};
+
+type UpdateMeInput = {
+  userId: string;
+  name?: string;
+  phone?: string | null;
+  email?: string | null;
+  profilePhotoUrl?: string | null;
 };
 
 const normalizePem = (value: string): string => {
@@ -156,6 +165,7 @@ const sanitizeProfile = (user: AuthUser) => ({
   name: user.name,
   phone: user.phone,
   email: user.email,
+  profilePhotoUrl: user.profilePhotoUrl,
   ...(user.role === 'teacher' && user.username ? { username: user.username } : {}),
 });
 
@@ -251,10 +261,6 @@ export const changePassword = async (
   db: TenantDb,
   input: ChangePasswordInput
 ): Promise<void> => {
-  if (input.role !== 'director' && input.role !== 'super_admin') {
-    throw new Error('Modification de mot de passe non autorisée pour ce rôle');
-  }
-
   const profile = await findUserProfileById(db, input.userId);
   if (!profile || !profile.isActive) {
     throw new Error('Invalid credentials');
@@ -267,4 +273,22 @@ export const changePassword = async (
 
   const passwordHash = await argon2.hash(input.newPassword);
   await updateUserPasswordHash(db, profile.userId, passwordHash);
+};
+
+export const updateMe = async (db: TenantDb, input: UpdateMeInput) => {
+  await updateUserProfile(db, input.userId, {
+    ...(input.name !== undefined ? { name: input.name } : {}),
+    ...(input.phone !== undefined ? { phone: input.phone } : {}),
+    ...(input.email !== undefined ? { email: input.email } : {}),
+    ...(input.profilePhotoUrl !== undefined ? { profilePhotoUrl: input.profilePhotoUrl } : {}),
+  });
+
+  const profile = await findUserProfileById(db, input.userId);
+  if (!profile || !profile.isActive) {
+    throw new Error('Invalid credentials');
+  }
+
+  return {
+    user: sanitizeProfile(profile),
+  };
 };

@@ -34,6 +34,8 @@ type SchoolConfigRow = {
   teaching_type: string | null;
   max_users: number;
   max_admin_positions: number;
+  logo_url: string | null;
+  active_school_year: string | null;
 };
 
 type AssignableUserRow = {
@@ -81,11 +83,31 @@ const mapPosition = (row: PositionListRow) => ({
 export class PermissionsRepository {
   constructor(private readonly db: QueryExecutor) {}
 
+  private async ensurePublicTenantColumns(): Promise<void> {
+    await this.db.execute(sql`
+      ALTER TABLE public.tenants
+      ADD COLUMN IF NOT EXISTS logo_url text,
+      ADD COLUMN IF NOT EXISTS active_school_year varchar(20)
+    `);
+  }
+
   async countActiveUsers(): Promise<number> {
     const result = await this.db.execute<AssignmentCountRow>(sql`
       SELECT COUNT(*)::int AS count
       FROM users
       WHERE is_active = true
+    `);
+
+    const [row] = getRows(result);
+    return row ? toNumber(row.count) : 0;
+  }
+
+  async countActiveAdministrativeUsers(): Promise<number> {
+    const result = await this.db.execute<AssignmentCountRow>(sql`
+      SELECT COUNT(*)::int AS count
+      FROM users
+      WHERE is_active = true
+        AND role = 'secretary'
     `);
 
     const [row] = getRows(result);
@@ -111,6 +133,7 @@ export class PermissionsRepository {
   }
 
   async getSchoolConfigBySchemaName(schemaName: string): Promise<SchoolConfigRow | null> {
+    await this.ensurePublicTenantColumns();
     const result = await this.db.execute<SchoolConfigRow>(sql`
       SELECT
         name,
@@ -119,7 +142,9 @@ export class PermissionsRepository {
         city,
         teaching_type,
         max_users,
-        max_admin_positions
+        max_admin_positions,
+        logo_url,
+        active_school_year
       FROM public.tenants
       WHERE schema_name = ${schemaName}
       LIMIT 1
@@ -348,8 +373,15 @@ export class PermissionsRepository {
 
   async updateSchoolConfig(
     schemaName: string,
-    input: { name?: string; city?: string; teachingType?: string }
+    input: {
+      name?: string;
+      city?: string;
+      teachingType?: string;
+      logoUrl?: string | null;
+      activeSchoolYear?: string | null;
+    }
   ): Promise<void> {
+    await this.ensurePublicTenantColumns();
     await this.db.execute(sql`
       UPDATE public.tenants
       SET
@@ -359,6 +391,12 @@ export class PermissionsRepository {
           WHEN ${input.teachingType !== undefined}
             THEN ${input.teachingType ?? null}
           ELSE teaching_type
+        END,
+        logo_url = CASE WHEN ${input.logoUrl !== undefined} THEN ${input.logoUrl ?? null} ELSE logo_url END,
+        active_school_year = CASE
+          WHEN ${input.activeSchoolYear !== undefined}
+            THEN ${input.activeSchoolYear ?? null}
+          ELSE active_school_year
         END,
         updated_at = NOW()
       WHERE schema_name = ${schemaName}

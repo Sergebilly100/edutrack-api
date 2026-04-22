@@ -45,11 +45,12 @@ export class PermissionsService {
   constructor(private readonly repository: PermissionsRepository) {}
 
   async getConfig(schemaName: string) {
-    const [schoolConfig, positions, users, currentUsers] = await Promise.all([
+    const [schoolConfig, positions, users, currentUsers, adminUsersCount] = await Promise.all([
       this.repository.getSchoolConfigBySchemaName(schemaName),
       this.repository.listPositions(),
       this.repository.listAdministrativeUsers(),
       this.repository.countActiveUsers(),
+      this.repository.countActiveAdministrativeUsers(),
     ]);
 
     if (!schoolConfig) {
@@ -64,7 +65,11 @@ export class PermissionsService {
         city: schoolConfig.city ?? '',
         teachingType: schoolConfig.teaching_type ?? 'general',
         maxUsers: schoolConfig.max_users,
-        currentUsers,
+        currentUsers: adminUsersCount,
+        totalUsers: currentUsers,
+        adminUsersCount,
+        logoUrl: schoolConfig.logo_url,
+        activeSchoolYear: schoolConfig.active_school_year,
       },
       limits: {
         maxAdminPositions: schoolConfig.max_admin_positions,
@@ -76,7 +81,13 @@ export class PermissionsService {
 
   async updateSchoolConfig(
     schemaName: string,
-    input: { name?: string; city?: string; teachingType?: string }
+    input: {
+      name?: string;
+      city?: string;
+      teachingType?: string;
+      logoUrl?: string | null;
+      activeSchoolYear?: string | null;
+    }
   ) {
     await this.repository.updateSchoolConfig(schemaName, input);
     return this.getConfig(schemaName);

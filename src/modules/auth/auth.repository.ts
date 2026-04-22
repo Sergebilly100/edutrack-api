@@ -10,6 +10,7 @@ type AuthUserRow = {
   name: string;
   phone: string | null;
   email: string | null;
+  profile_photo_url: string | null;
   password_hash: string;
   is_active: boolean;
   teacher_id: string | null;
@@ -22,6 +23,7 @@ export type AuthUser = {
   name: string;
   phone: string | null;
   email: string | null;
+  profilePhotoUrl: string | null;
   passwordHash: string;
   isActive: boolean;
   teacherId: string | null;
@@ -34,6 +36,7 @@ const mapAuthUser = (row: AuthUserRow): AuthUser => ({
   name: row.name,
   phone: row.phone,
   email: row.email,
+  profilePhotoUrl: row.profile_photo_url,
   passwordHash: row.password_hash,
   isActive: row.is_active,
   teacherId: row.teacher_id,
@@ -82,6 +85,7 @@ const baseSelect = sql`
     u.name,
     u.phone,
     u.email,
+    u.profile_photo_url,
     u.password_hash,
     u.is_active,
     t.id AS teacher_id,
@@ -90,10 +94,18 @@ const baseSelect = sql`
   LEFT JOIN teachers t ON t.user_id = u.id
 `;
 
+const ensureUsersProfileColumns = async (db: QueryExecutor): Promise<void> => {
+  await db.execute(sql`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS profile_photo_url text
+  `);
+};
+
 export const findUserByPhone = async (
   db: QueryExecutor,
   phone: string
 ): Promise<AuthUser | null> => {
+  await ensureUsersProfileColumns(db);
   const result = await db.execute(sql`
     ${baseSelect}
     WHERE u.phone = ${phone}
@@ -108,6 +120,7 @@ export const findUserByUsername = async (
   db: QueryExecutor,
   username: string
 ): Promise<AuthUser | null> => {
+  await ensureUsersProfileColumns(db);
   const result = await db.execute(sql`
     ${baseSelect}
     WHERE t.username = ${username}
@@ -122,6 +135,7 @@ export const findUserByEmail = async (
   db: QueryExecutor,
   email: string
 ): Promise<AuthUser | null> => {
+  await ensureUsersProfileColumns(db);
   const result = await db.execute(sql`
     ${baseSelect}
     WHERE u.email = ${email}
@@ -136,6 +150,7 @@ export const findUserProfileById = async (
   db: QueryExecutor,
   userId: string
 ): Promise<AuthUser | null> => {
+  await ensureUsersProfileColumns(db);
   const result = await db.execute(sql`
     ${baseSelect}
     WHERE u.id = ${userId}
@@ -165,6 +180,32 @@ export const updateUserPasswordHash = async (
   await db.execute(sql`
     UPDATE users
     SET password_hash = ${passwordHash}
+    WHERE id = ${userId}
+  `);
+};
+
+export const updateUserProfile = async (
+  db: QueryExecutor,
+  userId: string,
+  input: {
+    name?: string;
+    phone?: string | null;
+    email?: string | null;
+    profilePhotoUrl?: string | null;
+  }
+): Promise<void> => {
+  await ensureUsersProfileColumns(db);
+  await db.execute(sql`
+    UPDATE users
+    SET
+      name = CASE WHEN ${input.name !== undefined} THEN ${input.name ?? null} ELSE name END,
+      phone = CASE WHEN ${input.phone !== undefined} THEN ${input.phone ?? null} ELSE phone END,
+      email = CASE WHEN ${input.email !== undefined} THEN ${input.email ?? null} ELSE email END,
+      profile_photo_url = CASE
+        WHEN ${input.profilePhotoUrl !== undefined}
+          THEN ${input.profilePhotoUrl ?? null}
+        ELSE profile_photo_url
+      END
     WHERE id = ${userId}
   `);
 };

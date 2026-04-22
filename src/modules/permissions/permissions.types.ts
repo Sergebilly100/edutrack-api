@@ -75,10 +75,25 @@ export const updateSchoolConfigBodySchema = z
     teachingType: z
       .enum(['general', 'technical', 'mixed', 'primaire', 'secondaire', 'superieur', 'mixte'])
       .optional(),
+    logoUrl: z.string().trim().max(2_000_000).nullable().optional(),
+    activeSchoolYear: z
+      .string()
+      .trim()
+      .regex(/^\d{4}-\d{4}$/)
+      .nullable()
+      .optional(),
   })
-  .refine((value) => value.name !== undefined || value.city !== undefined || value.teachingType !== undefined, {
-    message: 'At least one field must be provided',
-  });
+  .refine(
+    (value) =>
+      value.name !== undefined ||
+      value.city !== undefined ||
+      value.teachingType !== undefined ||
+      value.logoUrl !== undefined ||
+      value.activeSchoolYear !== undefined,
+    {
+      message: 'At least one field must be provided',
+    }
+  );
 
 export const updateLimitsBodySchema = z.object({
   max_admin_positions: z.number().int().min(1).max(50),
