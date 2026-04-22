@@ -21,7 +21,7 @@ export const tenant = pgSchema('tenant');
 
 export const userRoleEnum = tenant.enum('user_role', [
   'director',
-  'secretary',
+  'staff',
   'teacher',
   'super_admin',
 ]);

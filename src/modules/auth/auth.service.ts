@@ -24,9 +24,12 @@ type LoginInput = {
   schemaName: string;
 };
 
+export type UserRole = 'director' | 'staff' | 'teacher' | 'super_admin';
+type LegacyUserRole = UserRole | 'secretary';
+
 export type AccessTokenClaims = JwtPayload & {
   sub: string;
-  role: AuthUser['role'];
+  role: UserRole;
   schemaName: string;
   username?: string;
 };
@@ -43,7 +46,7 @@ export type LoginResult = {
   expiresIn: string;
   user: {
     id: string;
-    role: AuthUser['role'];
+    role: UserRole;
     name: string;
     phone: string | null;
     email: string | null;
@@ -51,6 +54,16 @@ export type LoginResult = {
     username?: string;
   };
 };
+
+const normalizeRole = (role: LegacyUserRole): UserRole => {
+  if (role === 'secretary') {
+    return 'staff';
+  }
+  return role;
+};
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
 
 export type TenantDb = QueryExecutor;
 
@@ -99,7 +112,7 @@ export const getPublicKey = async () => {
 
 export const buildClaims = (user: AuthUser, schemaName: string): AccessTokenClaims => ({
   sub: user.userId,
-  role: user.role,
+  role: normalizeRole(user.role),
   schemaName,
   ...(user.role === 'teacher' && user.username ? { username: user.username } : {}),
 });
@@ -134,12 +147,38 @@ export const verifyAccessToken = async (token: string): Promise<AccessTokenClaim
   const payload = verifyJwtRs256({
     token,
     publicKeyPem: publicKey,
-  }) as AccessTokenClaims;
-  if (!payload.sub || !payload.role || !payload.schemaName) {
+  }) as unknown;
+
+  if (!isObject(payload)) {
     throw new Error('Invalid access token');
   }
 
-  return payload;
+  const sub = typeof payload.sub === 'string' ? payload.sub : '';
+  const role = payload.role;
+  const schemaName = typeof payload.schemaName === 'string' ? payload.schemaName : '';
+  const username = typeof payload.username === 'string' ? payload.username : undefined;
+
+  if (!sub || !schemaName) {
+    throw new Error('Invalid access token');
+  }
+
+  if (
+    role !== 'director' &&
+    role !== 'staff' &&
+    role !== 'teacher' &&
+    role !== 'super_admin' &&
+    role !== 'secretary'
+  ) {
+    throw new Error('Invalid access token');
+  }
+
+  return {
+    ...payload,
+    sub,
+    role: normalizeRole(role),
+    schemaName,
+    ...(username ? { username } : {}),
+  } as AccessTokenClaims;
 };
 
 export const verifyRefreshToken = async (token: string): Promise<RefreshTokenClaims> => {
@@ -161,7 +200,7 @@ export const verifyRefreshToken = async (token: string): Promise<RefreshTokenCla
 
 const sanitizeProfile = (user: AuthUser) => ({
   id: user.userId,
-  role: user.role,
+  role: normalizeRole(user.role),
   name: user.name,
   phone: user.phone,
   email: user.email,

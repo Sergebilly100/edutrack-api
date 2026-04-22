@@ -64,6 +64,13 @@
       "when": 1776816000000,
       "tag": "0008_school_logo_year_profile",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1777003200000,
+      "tag": "0010_staff_role_migration",
+      "breakpoints": true
     }
   ]
 }

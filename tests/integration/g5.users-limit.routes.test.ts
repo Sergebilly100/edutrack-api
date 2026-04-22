@@ -27,7 +27,7 @@ describe('G5 users limit enforcement', () => {
       `
         INSERT INTO ${tenantTable('users')} (role, name, phone, email, password_hash, is_active)
         SELECT
-          'secretary',
+          'staff',
           'Quota User ' || gs,
           NULL,
           'quota' || gs || '@test.local',
@@ -56,7 +56,7 @@ describe('G5 users limit enforcement', () => {
     });
   });
 
-  it('POST /api/v1/permissions/positions/:id/assign refuse quand la limite users est atteinte', async () => {
+  it('POST /api/v1/permissions/positions/:id/assign refuse un utilisateur non administratif', async () => {
     const headers = await getAuthHeaders('director');
     const context = getSeedContext();
     await ensureTenantRow(3);
@@ -90,10 +90,10 @@ describe('G5 users limit enforcement', () => {
         userId: context.teacherUserId,
       });
 
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(400);
     expect(response.body).toMatchObject({
-      code: 'USERS_LIMIT_REACHED',
-      statusCode: 403,
+      code: 'INVALID_ASSIGNMENT_TARGET',
+      statusCode: 400,
     });
   });
 });

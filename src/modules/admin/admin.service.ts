@@ -1352,8 +1352,11 @@ export const getSchoolUsers = async (
 ): Promise<SchoolUsersResult> => {
   const toSchoolRole = (
     role: string
-  ): 'director' | 'secretary' | 'teacher' | 'staff' | null => {
-    if (role === 'director' || role === 'secretary' || role === 'teacher' || role === 'staff') {
+  ): 'director' | 'teacher' | 'staff' | null => {
+    if (role === 'secretary' || role === 'staff') {
+      return 'staff';
+    }
+    if (role === 'director' || role === 'teacher') {
       return role;
     }
     return null;
@@ -1414,7 +1417,7 @@ export const getSchoolUsers = async (
     .filter((item): item is SchoolUsersResult['staff'][number] => item !== null);
 
   const director = mapped.find((item) => item.role === 'director') ?? null;
-  const staff = mapped.filter((item) => item.role === 'secretary' || item.role === 'staff');
+  const staff = mapped.filter((item) => item.role === 'staff');
   const teachers = mapped.filter((item) => item.role === 'teacher');
 
   return { director, staff, teachers };
@@ -2227,10 +2230,10 @@ export const createImpersonationToken = async (
       SELECT id
       FROM users
       WHERE is_active = true
-        AND role IN ('director', 'secretary')
+        AND role IN ('director', 'staff')
       ORDER BY CASE
         WHEN role = 'director' THEN 0
-        WHEN role = 'secretary' THEN 1
+        WHEN role = 'staff' THEN 1
         ELSE 2
       END, created_at ASC
       LIMIT 1

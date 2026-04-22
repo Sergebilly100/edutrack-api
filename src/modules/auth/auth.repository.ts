@@ -6,7 +6,7 @@ export type QueryExecutor = {
 
 type AuthUserRow = {
   user_id: string;
-  role: 'director' | 'staff' | 'secretary' | 'teacher' | 'super_admin';
+  role: 'director' | 'staff' | 'teacher' | 'super_admin';
   name: string;
   phone: string | null;
   email: string | null;

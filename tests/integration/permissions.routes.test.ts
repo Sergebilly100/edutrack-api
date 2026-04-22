@@ -41,14 +41,14 @@ beforeEach(() => {
     return callback({ execute: mocks.dbExecute });
   });
   mocks.verifyAccessToken.mockResolvedValue({
-    sub: 'secretary-user-id',
-    role: 'secretary',
+    sub: 'staff-user-id',
+    role: 'staff',
     schemaName: 'school_sainte_marie',
   });
 });
 
 describe('permissions routes', () => {
-  it('GET /api/v1/permissions/me retourne les permissions de base secretary', async () => {
+  it('GET /api/v1/permissions/me retourne les permissions de base staff', async () => {
     const app = await buildApp();
 
     const response = await app.inject({
@@ -59,7 +59,7 @@ describe('permissions routes', () => {
 
     expect(response.statusCode).toBe(200);
     const body = JSON.parse(response.body) as { role: string; permissions: string[] };
-    expect(body.role).toBe('secretary');
+    expect(body.role).toBe('staff');
     expect(new Set(body.permissions)).toEqual(
       new Set(['teachers.view', 'students.view', 'attendance.mark_students', 'schedule.view'])
     );
@@ -67,7 +67,7 @@ describe('permissions routes', () => {
     await app.close();
   });
 
-  it('POST /api/v1/billing/salary/compute refuse un secretary (403)', async () => {
+  it('POST /api/v1/billing/salary/compute refuse un staff (403)', async () => {
     const app = await buildApp();
 
     const response = await app.inject({

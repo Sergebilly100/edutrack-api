@@ -43,8 +43,8 @@ describe('billing integration (real db)', () => {
     expect(Number(rows[0]?.count ?? 0)).toBe(1);
   });
 
-  it('POST /api/v1/billing/salary/compute refuse secretary (403)', async () => {
-    const headers = await getAuthHeaders('secretary');
+  it('POST /api/v1/billing/salary/compute refuse staff (403)', async () => {
+    const headers = await getAuthHeaders('staff');
 
     const response = await request()
       .post(`/api/v1/billing/salary/compute?month=${currentMonth}`)

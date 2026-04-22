@@ -283,10 +283,10 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('POST /api/v1/auth/change-password — secrétaire interdit → 403', async () => {
+  it('POST /api/v1/auth/change-password — staff interdit → 403', async () => {
     mocks.verifyAccessToken.mockResolvedValue({
-      sub: 'secretary-1',
-      role: 'secretary',
+      sub: 'staff-1',
+      role: 'staff',
       schemaName: 'tenant_demo',
     });
     mocks.changePassword.mockRejectedValue(
@@ -299,7 +299,7 @@ describe('auth routes', () => {
       url: '/api/v1/auth/change-password',
       headers: { authorization: 'Bearer valid-token' },
       payload: {
-        currentPassword: 'secretary2024',
+        currentPassword: 'staff2024',
         newPassword: 'SecurePass1',
         confirmPassword: 'SecurePass1',
       },

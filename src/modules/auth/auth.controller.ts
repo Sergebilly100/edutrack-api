@@ -261,6 +261,9 @@ export default async function authController(app: FastifyInstance): Promise<void
       try {
         const token = extractBearerToken(request);
         const claims = await verifyAccessToken(token);
+        if (claims.role !== 'director') {
+          throw new Error('Modification de mot de passe non autorisée pour ce rôle');
+        }
         const body = changePasswordSchema.parse(request.body);
 
         await withTenantSchema(claims.schemaName, (tenantDb) =>

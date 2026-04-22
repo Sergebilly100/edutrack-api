@@ -172,14 +172,14 @@ describe('auth integration (real db)', () => {
     expect(rotateAgainResponse.status).toBe(200);
   });
 
-  it('POST /api/v1/auth/change-password retourne 403 pour secrétaire', async () => {
+  it('POST /api/v1/auth/change-password retourne 403 pour staff', async () => {
     const context = getSeedContext();
-    const headers = await getAuthHeaders('secretary');
+    const headers = await getAuthHeaders('staff');
 
     const response = await request().post('/api/v1/auth/change-password').set(headers).send({
-      currentPassword: context.secretaryPassword,
-      newPassword: 'SecretaryNew1',
-      confirmPassword: 'SecretaryNew1',
+      currentPassword: context.staffPassword,
+      newPassword: 'StaffNew1',
+      confirmPassword: 'StaffNew1',
     });
 
     expect(response.status).toBe(403);

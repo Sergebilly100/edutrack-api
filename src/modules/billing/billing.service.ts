@@ -287,7 +287,7 @@ export class BillingService {
     recordId: string;
     status: 'paid' | 'disputed';
     notes?: string;
-    actor: { userId: string; role: 'director' | 'staff' | 'secretary' | 'teacher' | 'super_admin' };
+    actor: { userId: string; role: 'director' | 'staff' | 'teacher' | 'super_admin' };
   }) {
     if (input.status === 'paid' && input.actor.role !== 'director') {
       throw new BillingModuleError(

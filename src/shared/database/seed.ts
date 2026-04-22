@@ -326,10 +326,10 @@ const main = async (): Promise<void> => {
       throw new Error('[seed] Failed to create director user');
     }
 
-    const secretaryUser = await tx.execute<IdRow>(sql`
+    const staffUser = await tx.execute<IdRow>(sql`
       INSERT INTO users (role, name, phone, email, password_hash, is_active)
       VALUES (
-        'secretary',
+        'staff',
         'Secrétaire Sainte-Marie',
         '+225070888888',
         'secretariat@sainte-marie.ci',
@@ -339,9 +339,9 @@ const main = async (): Promise<void> => {
       RETURNING id
     `);
 
-    const secretaryId = secretaryUser.rows[0]?.id;
-    if (!secretaryId) {
-      throw new Error('[seed] Failed to create secretary user');
+    const staffId = staffUser.rows[0]?.id;
+    if (!staffId) {
+      throw new Error('[seed] Failed to create staff user');
     }
 
     const superAdminUser = await tx.execute<IdRow>(sql`
@@ -485,7 +485,7 @@ const main = async (): Promise<void> => {
     await tx.execute(sql`
       INSERT INTO position_assignments (user_id, position_id, assigned_by)
       SELECT
-        ${secretaryId},
+        ${staffId},
         ap.id,
         ${directorId}
       FROM admin_positions ap

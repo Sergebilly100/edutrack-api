@@ -9,7 +9,7 @@ import { Pool, type QueryResultRow } from 'pg';
 import supertest from 'supertest';
 import { afterAll, afterEach, beforeAll } from 'vitest';
 
-type TestRole = 'teacher' | 'director' | 'secretary' | 'super_admin';
+type TestRole = 'teacher' | 'director' | 'staff' | 'super_admin';
 
 type SeedContext = {
   schemaName: string;
@@ -20,9 +20,9 @@ type SeedContext = {
   teacherUsername: string;
   teacherPassword: string;
   directorUserId: string;
-  secretaryUserId: string;
+  staffUserId: string;
   directorPassword: string;
-  secretaryPassword: string;
+  staffPassword: string;
   validRoomToken: string;
 };
 
@@ -124,10 +124,10 @@ const getLoginCredentials = (
     };
   }
 
-  if (role === 'secretary') {
+  if (role === 'staff') {
     return {
       identifier: '2250702345678',
-      password: context.secretaryPassword,
+      password: context.staffPassword,
     };
   }
 
@@ -190,10 +190,10 @@ const toTimeFromUtcMinutes = (minutes: number): string => {
 const seedTenantData = async (): Promise<SeedContext> => {
   const teacherPassword = 'edutrack2024';
   const directorPassword = 'director2024';
-  const secretaryPassword = 'secretary2024';
+  const staffPassword = 'staff2024';
   const teacherPasswordHash = await argon2.hash(teacherPassword);
   const directorPasswordHash = await argon2.hash(directorPassword);
-  const secretaryPasswordHash = await argon2.hash(secretaryPassword);
+  const staffPasswordHash = await argon2.hash(staffPassword);
 
   const now = new Date();
   const validFrom = formatDate(addDays(now, -7));
@@ -238,19 +238,19 @@ const seedTenantData = async (): Promise<SeedContext> => {
       [teacherPasswordHash]
     );
 
-    const secretaryResult = await client.query<{ id: string }>(
+    const staffResult = await client.query<{ id: string }>(
       `
         INSERT INTO users (role, name, phone, email, password_hash, is_active)
-        VALUES ('secretary', 'Integration Secretary', '2250702345678', 'secretary.integration@edutrack.local', $1, true)
+        VALUES ('staff', 'Integration Staff', '2250702345678', 'staff.integration@edutrack.local', $1, true)
         RETURNING id
       `,
-      [secretaryPasswordHash]
+      [staffPasswordHash]
     );
 
     const teacherUserId = teacherUserResult.rows[0]?.id;
     const directorUserId = directorResult.rows[0]?.id;
-    const secretaryUserId = secretaryResult.rows[0]?.id;
-    if (!teacherUserId || !directorUserId || !secretaryUserId) {
+    const staffUserId = staffResult.rows[0]?.id;
+    if (!teacherUserId || !directorUserId || !staffUserId) {
       throw new Error('[integration] Failed to seed users');
     }
 
@@ -360,9 +360,9 @@ const seedTenantData = async (): Promise<SeedContext> => {
       teacherUsername,
       teacherPassword,
       directorUserId,
-      secretaryUserId,
+      staffUserId,
       directorPassword,
-      secretaryPassword,
+      staffPassword,
       validRoomToken: room.qr_token,
     };
   } catch (error) {

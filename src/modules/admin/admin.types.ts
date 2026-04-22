@@ -405,7 +405,7 @@ export type UpdatePlanCatalogBody = z.infer<typeof updatePlanCatalogBodySchema>;
 
 export type SchoolUserItem = {
   id: string;
-  role: 'director' | 'secretary' | 'staff' | 'teacher';
+  role: 'director' | 'staff' | 'teacher';
   name: string;
   phone: string | null;
   email: string | null;

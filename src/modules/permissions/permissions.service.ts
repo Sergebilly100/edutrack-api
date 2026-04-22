@@ -23,7 +23,7 @@ const baseRolePermissions = (role: AccessTokenClaims['role']): Set<PermissionKey
     return new Set(ALL_PERMISSIONS_SET);
   }
 
-  if (role === 'secretary' || role === 'staff') {
+  if (role === 'staff') {
     return new Set(STAFF_BASE_PERMISSIONS_SET);
   }
 

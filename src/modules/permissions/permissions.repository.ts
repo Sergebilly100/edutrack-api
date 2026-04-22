@@ -41,7 +41,7 @@ type SchoolConfigRow = {
 type AssignableUserRow = {
   id: string;
   name: string;
-  role: 'director' | 'staff' | 'secretary' | 'teacher' | 'super_admin';
+  role: 'director' | 'staff' | 'teacher' | 'super_admin';
   email: string | null;
   phone: string | null;
   created_at: Date | string;
@@ -379,7 +379,7 @@ export class PermissionsRepository {
   }> {
     const result = await this.db.execute<AssignableUserRow>(sql`
       INSERT INTO users (role, name, phone, email, password_hash, is_active)
-      VALUES ('secretary', ${input.name}, ${input.phone}, ${input.email}, ${input.passwordHash}, true)
+      VALUES ('staff', ${input.name}, ${input.phone}, ${input.email}, ${input.passwordHash}, true)
       RETURNING id, name, role, email, phone, created_at
     `);
 

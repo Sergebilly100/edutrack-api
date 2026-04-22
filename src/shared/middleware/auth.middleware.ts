@@ -8,8 +8,8 @@ import {
 import { resolveEffectivePermissions } from '../../modules/permissions/permissions.service.js';
 import { verifyAccessToken, type AccessTokenClaims } from '../../modules/auth/auth.service.js';
 
-const DIRECTOR_STAFF_ROLES = new Set(['director', 'staff', 'secretary']);
-const TEACHER_DIRECTOR_STAFF_ROLES = new Set(['teacher', 'director', 'staff', 'secretary']);
+const DIRECTOR_STAFF_ROLES = new Set(['director', 'staff']);
+const TEACHER_DIRECTOR_STAFF_ROLES = new Set(['teacher', 'director', 'staff']);
 
 const extractBearerToken = (request: FastifyRequest): string => {
   const authorization = request.headers.authorization;
