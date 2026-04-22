@@ -354,6 +354,7 @@ export class AttendanceService {
       student_total_count: number;
     }>;
   }> {
+    await this.repository.markMissingTeacherAttendancesAsAbsent();
     const today = await this.repository.listTodayForDirector();
     return {
       date: today.date,

@@ -157,6 +157,64 @@ const mapScheduleContext = (row: ScheduleContextRow): AttendanceScheduleContext 
 export class AttendanceRepository {
   constructor(private readonly db: QueryExecutor) {}
 
+  async markMissingTeacherAttendancesAsAbsent(): Promise<number> {
+    const result = await this.db.execute<{ id: string }>(sql`
+      WITH now_ctx AS (
+        SELECT
+          (NOW() AT TIME ZONE 'Africa/Abidjan')::date AS today,
+          (NOW() AT TIME ZONE 'Africa/Abidjan') AS now_local,
+          EXTRACT(ISODOW FROM (NOW() AT TIME ZONE 'Africa/Abidjan'))::int AS day_of_week
+      ),
+      active_period AS (
+        SELECT id
+        FROM schedule_periods
+        WHERE is_active = true
+          AND valid_from <= (SELECT today FROM now_ctx)
+          AND valid_to >= (SELECT today FROM now_ctx)
+        ORDER BY created_at DESC
+        LIMIT 1
+      ),
+      due_schedules AS (
+        SELECT
+          s.teacher_id,
+          s.id AS schedule_id,
+          (SELECT today FROM now_ctx) AS date
+        FROM schedules s
+        INNER JOIN active_period ap ON ap.id = s.schedule_period_id
+        INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+        CROSS JOIN now_ctx
+        WHERE s.is_active = true
+          AND s.day_of_week = now_ctx.day_of_week
+          AND (now_ctx.today::timestamp + ts.end_time + INTERVAL '15 minute') <= now_ctx.now_local
+      )
+      INSERT INTO attendances_teacher (
+        teacher_id,
+        schedule_id,
+        date,
+        status,
+        room_mismatch,
+        qr_alert_sent
+      )
+      SELECT
+        ds.teacher_id,
+        ds.schedule_id,
+        ds.date,
+        'absent',
+        false,
+        false
+      FROM due_schedules ds
+      ON CONFLICT (teacher_id, schedule_id, date)
+      DO UPDATE SET
+        status = 'absent',
+        late_minutes = NULL
+      WHERE attendances_teacher.checked_in_at IS NULL
+        AND attendances_teacher.status <> 'excused'
+      RETURNING id::text
+    `);
+
+    return getRows(result).length;
+  }
+
   async findTeacherByUserId(userId: string): Promise<TeacherRow | null> {
     const result = await this.db.execute<TeacherRow>(sql`
       SELECT t.id, t.user_id, u.name

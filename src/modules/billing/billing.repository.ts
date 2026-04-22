@@ -114,7 +114,7 @@ export class BillingRepository {
         INNER JOIN schedules s ON s.id = at.schedule_id
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id
         WHERE at.date BETWEEN ${monthStart}::date AND ${monthEnd}::date
-          AND at.status IN ('present', 'late')
+          AND at.status IN ('present', 'late', 'excused')
         GROUP BY s.teacher_id
       )
       SELECT
