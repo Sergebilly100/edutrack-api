@@ -72,9 +72,12 @@ const extractTenantIds = (request: FastifyRequest, payload: unknown): string[] =
   const ids = new Set<string>();
 
   const params = asRecord(request.params);
-  const paramsId = normalizeUuid(params?.id);
-  if (paramsId) {
-    ids.add(paramsId);
+  const paramsIds = [params?.id, params?.tenantId];
+  for (const value of paramsIds) {
+    const normalized = normalizeUuid(value);
+    if (normalized) {
+      ids.add(normalized);
+    }
   }
 
   const body = asRecord(request.body);

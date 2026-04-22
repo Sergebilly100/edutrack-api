@@ -216,6 +216,7 @@ export type SchoolDetailsResult = {
     studentsCount: number;
     attendanceRecords30d: number;
     mrrFcfa: number;
+    nextDueDate: string | null;
     lastConnection: string | null;
   };
   connectionHistory30d: Array<{

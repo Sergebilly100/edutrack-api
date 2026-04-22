@@ -17,6 +17,7 @@ import {
 } from './admin.types.js';
 import {
   addManualPayment,
+  clearAdminCache,
   createImpersonationToken,
   createSchool,
   createTenant,
@@ -338,7 +339,12 @@ export default async function adminController(app: FastifyInstance): Promise<voi
   });
 
   app.delete('/api/v1/admin/cache', { preHandler: preHandlers }, async (_request, reply) => {
-    return reply.send({ success: true });
+    try {
+      await clearAdminCache();
+      return reply.send({ success: true });
+    } catch (error) {
+      return handleError(reply, error);
+    }
   });
 
   app.get('/api/v1/admin/revenue/summary', { preHandler: preHandlers }, async (request, reply) => {

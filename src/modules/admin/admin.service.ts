@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 
 import argon2 from 'argon2';
 import { sql } from 'drizzle-orm';
+import { Redis } from 'ioredis';
 
 import {
   type AdminMetricsResult,
@@ -118,6 +119,10 @@ type RevenueSchoolRow = {
   amount_per_month: number;
   last_due_date: string | null;
   payment_mode: string | null;
+};
+
+type TenantUserLookupRow = {
+  id: string;
 };
 
 type SmsTemplateRow = {
@@ -771,6 +776,11 @@ type SchoolUsageMetrics = {
   attendanceRecords30d: number;
 };
 
+type SchoolSubscriptionSnapshot = {
+  mrrFcfa: number;
+  nextDueDate: string | null;
+};
+
 const getSchoolUsageMetrics = async (
   publicDb: TenantDb,
   schemaName: string
@@ -829,20 +839,24 @@ const getSchoolConnectionHistory30d = async (
   schemaName: string
 ): Promise<Array<{ date: string; uniqueUsers: number }>> => {
   const schema = quoteIdentifier(schemaName);
-  const result = await publicDb.execute<{ date: string; unique_users: number }>(sql.raw(`
-    SELECT
-      to_char(date_trunc('day', u.last_login_at), 'YYYY-MM-DD') AS date,
-      COUNT(DISTINCT u.id)::int AS unique_users
-    FROM ${schema}.users u
-    WHERE u.last_login_at >= NOW() - INTERVAL '30 days'
-    GROUP BY 1
-    ORDER BY 1 ASC
-  `));
+  try {
+    const result = await publicDb.execute<{ date: string; unique_users: number }>(sql.raw(`
+      SELECT
+        to_char(date_trunc('day', u.last_login_at), 'YYYY-MM-DD') AS date,
+        COUNT(DISTINCT u.id)::int AS unique_users
+      FROM ${schema}.users u
+      WHERE u.last_login_at >= NOW() - INTERVAL '30 days'
+      GROUP BY 1
+      ORDER BY 1 ASC
+    `));
 
-  return getRows<{ date: string; unique_users: number }>(result).map((row) => ({
-    date: row.date,
-    uniqueUsers: parseNumeric(row.unique_users),
-  }));
+    return getRows<{ date: string; unique_users: number }>(result).map((row) => ({
+      date: row.date,
+      uniqueUsers: parseNumeric(row.unique_users),
+    }));
+  } catch {
+    return [];
+  }
 };
 
 const getTenantDauLast7d = async (
@@ -850,20 +864,24 @@ const getTenantDauLast7d = async (
   schemaName: string
 ): Promise<Array<{ date: string; uniqueUsers: number }>> => {
   const schema = quoteIdentifier(schemaName);
-  const result = await publicDb.execute<{ date: string; unique_users: number }>(sql.raw(`
-    SELECT
-      to_char(date_trunc('day', u.last_login_at), 'YYYY-MM-DD') AS date,
-      COUNT(DISTINCT u.id)::int AS unique_users
-    FROM ${schema}.users u
-    WHERE u.last_login_at >= CURRENT_DATE - INTERVAL '6 days'
-    GROUP BY 1
-    ORDER BY 1 ASC
-  `));
+  try {
+    const result = await publicDb.execute<{ date: string; unique_users: number }>(sql.raw(`
+      SELECT
+        to_char(date_trunc('day', u.last_login_at), 'YYYY-MM-DD') AS date,
+        COUNT(DISTINCT u.id)::int AS unique_users
+      FROM ${schema}.users u
+      WHERE u.last_login_at >= CURRENT_DATE - INTERVAL '6 days'
+      GROUP BY 1
+      ORDER BY 1 ASC
+    `));
 
-  return getRows<{ date: string; unique_users: number }>(result).map((row) => ({
-    date: row.date,
-    uniqueUsers: parseNumeric(row.unique_users),
-  }));
+    return getRows<{ date: string; unique_users: number }>(result).map((row) => ({
+      date: row.date,
+      uniqueUsers: parseNumeric(row.unique_users),
+    }));
+  } catch {
+    return [];
+  }
 };
 
 const getSchoolMrr = async (publicDb: TenantDb, tenantId: string): Promise<number> => {
@@ -876,6 +894,27 @@ const getSchoolMrr = async (publicDb: TenantDb, tenantId: string): Promise<numbe
 
   const [row] = getRows<{ mrr_fcfa: number }>(result);
   return parseNumeric(row?.mrr_fcfa);
+};
+
+const getSchoolSubscriptionSnapshot = async (
+  publicDb: TenantDb,
+  tenantId: string
+): Promise<SchoolSubscriptionSnapshot> => {
+  const result = await publicDb.execute<{ mrr_fcfa: number; next_due_date: string | null }>(sql`
+    SELECT
+      COALESCE(s.mrr_fcfa, 0)::int AS mrr_fcfa,
+      s.current_period_end::text AS next_due_date
+    FROM public.subscriptions s
+    WHERE s.tenant_id = ${tenantId}
+    ORDER BY s.created_at DESC
+    LIMIT 1
+  `);
+
+  const row = getRows<{ mrr_fcfa: number; next_due_date: string | null }>(result)[0];
+  return {
+    mrrFcfa: parseNumeric(row?.mrr_fcfa),
+    nextDueDate: row?.next_due_date ?? null,
+  };
 };
 
 export const createSchool = async (
@@ -1098,9 +1137,9 @@ export const getSchoolDetails = async (
     throw new Error('Tenant not found');
   }
 
-  const [usage, mrrFcfa, connectionHistory30d] = await Promise.all([
+  const [usage, subscription, connectionHistory30d] = await Promise.all([
     getSchoolUsageMetrics(publicDb, tenant.schema_name),
-    getSchoolMrr(publicDb, tenant.id),
+    getSchoolSubscriptionSnapshot(publicDb, tenant.id),
     getSchoolConnectionHistory30d(publicDb, tenant.schema_name),
   ]);
 
@@ -1132,7 +1171,8 @@ export const getSchoolDetails = async (
       teachersCount: usage.teachersCount,
       studentsCount: usage.studentsCount,
       attendanceRecords30d: usage.attendanceRecords30d,
-      mrrFcfa,
+      mrrFcfa: subscription.mrrFcfa,
+      nextDueDate: subscription.nextDueDate,
       lastConnection: usage.lastConnection,
     },
     connectionHistory30d,
@@ -1479,7 +1519,36 @@ export const addManualPayment = async (
     ORDER BY created_at DESC
     LIMIT 1
   `);
-  const subscriptionId = getRows<{ id: string }>(subscriptionResult)[0]?.id;
+  let subscriptionId = getRows<{ id: string }>(subscriptionResult)[0]?.id;
+
+  if (!subscriptionId) {
+    const now = new Date();
+    const nextMonth = new Date(now);
+    nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1);
+
+    const createSubscriptionResult = await publicDb.execute<{ id: string }>(sql`
+      INSERT INTO public.subscriptions (
+        tenant_id,
+        status,
+        mrr_fcfa,
+        billing_cycle,
+        current_period_start,
+        current_period_end
+      )
+      VALUES (
+        ${tenantId},
+        'active',
+        0,
+        'monthly',
+        ${now},
+        ${nextMonth}
+      )
+      RETURNING id
+    `);
+
+    subscriptionId = getRows<{ id: string }>(createSubscriptionResult)[0]?.id;
+  }
+
   if (!subscriptionId) {
     throw new Error('Tenant not found');
   }
@@ -1529,51 +1598,61 @@ export const getSmsDashboard = async (publicDb: TenantDb): Promise<SmsDashboardR
   let total = 0;
 
   for (const tenant of tenants) {
-    const schema = quoteIdentifier(tenant.schema_name);
-    const escapedSchoolName = tenant.name.replace(/'/g, "''");
-    const statsResult = await publicDb.execute<{ sent: number; delivered: number; total: number }>(sql.raw(`
-      SELECT
-        COUNT(*) FILTER (WHERE nl.status IN ('sent', 'delivered')
-          AND date_trunc('month', COALESCE(nl.sent_at, nl.created_at)) = date_trunc('month', CURRENT_DATE))::int AS sent,
-        COUNT(*) FILTER (WHERE nl.status = 'delivered')::int AS delivered,
-        COUNT(*)::int AS total
-      FROM ${schema}.notifications_log nl
-    `));
-    const stats = getRows<{ sent: number; delivered: number; total: number }>(statsResult)[0] ?? {
-      sent: 0,
-      delivered: 0,
-      total: 0,
-    };
-    sentThisMonth += parseNumeric(stats.sent);
-    delivered += parseNumeric(stats.delivered);
-    total += parseNumeric(stats.total);
+    try {
+      const schema = quoteIdentifier(tenant.schema_name);
+      const escapedSchoolName = tenant.name.replace(/'/g, "''");
+      const statsResult = await publicDb.execute<{ sent: number; delivered: number; total: number }>(sql.raw(`
+        SELECT
+          COUNT(*) FILTER (WHERE nl.status IN ('sent', 'delivered')
+            AND date_trunc('month', COALESCE(nl.sent_at, nl.created_at)) = date_trunc('month', CURRENT_DATE))::int AS sent,
+          COUNT(*) FILTER (WHERE nl.status = 'delivered')::int AS delivered,
+          COUNT(*)::int AS total
+        FROM ${schema}.notifications_log nl
+      `));
+      const stats = getRows<{ sent: number; delivered: number; total: number }>(statsResult)[0] ?? {
+        sent: 0,
+        delivered: 0,
+        total: 0,
+      };
+      sentThisMonth += parseNumeric(stats.sent);
+      delivered += parseNumeric(stats.delivered);
+      total += parseNumeric(stats.total);
 
-    const usedPct = tenant.max_sms_per_month > 0
-      ? Math.min(100, Math.round((parseNumeric(stats.sent) / tenant.max_sms_per_month) * 100))
-      : 0;
+      const usedPct = tenant.max_sms_per_month > 0
+        ? Math.min(100, Math.round((parseNumeric(stats.sent) / tenant.max_sms_per_month) * 100))
+        : 0;
 
-    bySchool.push({
-      tenant_id: tenant.id,
-      school: tenant.name,
-      sent: parseNumeric(stats.sent),
-      quota: tenant.max_sms_per_month,
-      used_pct: usedPct,
-    });
+      bySchool.push({
+        tenant_id: tenant.id,
+        school: tenant.name,
+        sent: parseNumeric(stats.sent),
+        quota: tenant.max_sms_per_month,
+        used_pct: usedPct,
+      });
 
-    const historyResult = await publicDb.execute<SmsHistoryRow>(sql.raw(`
-      SELECT
-        nl.id::text AS id,
-        COALESCE(nl.sent_at, nl.created_at)::text AS date,
-        '${escapedSchoolName}'::text AS school,
-        nl.type::text AS type,
-        nl.recipient_phone,
-        nl.status::text AS status,
-        nl.message
-      FROM ${schema}.notifications_log nl
-      ORDER BY COALESCE(nl.sent_at, nl.created_at) DESC
-      LIMIT 20
-    `));
-    history.push(...getRows<SmsHistoryRow>(historyResult));
+      const historyResult = await publicDb.execute<SmsHistoryRow>(sql.raw(`
+        SELECT
+          nl.id::text AS id,
+          COALESCE(nl.sent_at, nl.created_at)::text AS date,
+          '${escapedSchoolName}'::text AS school,
+          nl.type::text AS type,
+          nl.recipient_phone,
+          nl.status::text AS status,
+          nl.message
+        FROM ${schema}.notifications_log nl
+        ORDER BY COALESCE(nl.sent_at, nl.created_at) DESC
+        LIMIT 20
+      `));
+      history.push(...getRows<SmsHistoryRow>(historyResult));
+    } catch {
+      bySchool.push({
+        tenant_id: tenant.id,
+        school: tenant.name,
+        sent: 0,
+        quota: tenant.max_sms_per_month,
+        used_pct: 0,
+      });
+    }
   }
 
   history.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
@@ -1705,6 +1784,17 @@ export const updateMaintenanceConfig = async (
   `);
 };
 
+export const clearAdminCache = async (): Promise<void> => {
+  const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
+  const redis = new Redis(redisUrl, { maxRetriesPerRequest: null });
+
+  try {
+    await redis.flushdb('ASYNC');
+  } finally {
+    await redis.quit();
+  }
+};
+
 export const createImpersonationToken = async (
   publicDb: TenantDb,
   tenantId: string,
@@ -1715,16 +1805,38 @@ export const createImpersonationToken = async (
   }
 
   const tenant = await getTenantById(publicDb, tenantId);
+  const targetUser = await withTenantSchema(tenant.schema_name, async (tenantDb) => {
+    const userResult = await tenantDb.execute<TenantUserLookupRow>(sql`
+      SELECT id
+      FROM users
+      WHERE is_active = true
+        AND role IN ('director', 'secretary')
+      ORDER BY CASE
+        WHEN role = 'director' THEN 0
+        WHEN role = 'secretary' THEN 1
+        ELSE 2
+      END, created_at ASC
+      LIMIT 1
+    `);
+
+    return getRows<TenantUserLookupRow>(userResult)[0] ?? null;
+  });
+
+  if (!targetUser) {
+    throw new Error('Tenant has no active staff user to impersonate');
+  }
+
   const privateKey = await getPrivateKey();
 
   const token = signJwtRs256({
     payload: {
-      sub: adminId,
-      role: 'super_admin',
+      sub: targetUser.id,
+      role: 'director',
       schemaName: tenant.schema_name,
       tenantId: tenant.id,
       readOnly: true,
       impersonation: true,
+      impersonatedBy: adminId,
     },
     privateKeyPem: privateKey,
     expiresIn: '1h',
