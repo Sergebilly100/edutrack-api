@@ -16,10 +16,9 @@ import type { NotificationType } from '../../shared/types/index.js';
 
 import type { NotificationSmsJobData, SmsSender } from './notifications.queue.js';
 import {
-  buildPaymentReminderSms,
-  buildStudentAbsentSms,
   buildTeacherLateSms,
   buildTeacherQrAlertSms,
+  renderSmsTemplate,
 } from './notifications.sms.js';
 import {
   defaultRepository,
@@ -66,6 +65,14 @@ type SmsPlatformRuntimeConfig = {
 
 let smsConfigCache: { fetchedAt: number; value: SmsPlatformRuntimeConfig } | null = null;
 
+const SMS_TEMPLATE_STUDENT_ABSENT_TYPE = 'student_absent_parent';
+const SMS_TEMPLATE_PAYMENT_REMINDER_TYPE = 'payment_reminder';
+
+const DEFAULT_STUDENT_ABSENT_TEMPLATE =
+  'EduTrack: {studentFirstName} absent(e) en {subject} le {date}. Contact école: {schoolPhone}';
+const DEFAULT_PAYMENT_REMINDER_TEMPLATE =
+  'EduTrack: relance paiement {schoolName}. Échéance {dueDate}, période {periodLabel}, reste {remainingAmountFcfa} FCFA.';
+
 const loadSmsPlatformConfig = async (): Promise<SmsPlatformRuntimeConfig> => {
   const now = Date.now();
   if (smsConfigCache && now - smsConfigCache.fetchedAt < 15_000) {
@@ -103,6 +110,40 @@ const loadSmsPlatformConfig = async (): Promise<SmsPlatformRuntimeConfig> => {
   };
   smsConfigCache = { fetchedAt: now, value };
   return value;
+};
+
+const resolveSmsTemplateMessage = async (
+  schemaName: string,
+  type: typeof SMS_TEMPLATE_STUDENT_ABSENT_TYPE | typeof SMS_TEMPLATE_PAYMENT_REMINDER_TYPE,
+  fallbackTemplate: string
+): Promise<string> => {
+  try {
+    const tenantResult = await db.execute<{ id: string }>(sql`
+      SELECT id::text
+      FROM public.tenants
+      WHERE schema_name = ${schemaName}
+      LIMIT 1
+    `);
+    const tenantId = tenantResult.rows?.[0]?.id;
+    if (!tenantId) {
+      return fallbackTemplate;
+    }
+
+    const templateResult = await db.execute<{ message_template: string }>(sql`
+      SELECT message_template
+      FROM public.sms_templates
+      WHERE type = ${type}
+        AND (tenant_id = ${tenantId}::uuid OR tenant_id IS NULL)
+      ORDER BY
+        CASE WHEN tenant_id = ${tenantId}::uuid THEN 0 ELSE 1 END,
+        updated_at DESC
+      LIMIT 1
+    `);
+
+    return templateResult.rows?.[0]?.message_template ?? fallbackTemplate;
+  } catch {
+    return fallbackTemplate;
+  }
 };
 
 const sendInfobipSms = async (params: {
@@ -378,7 +419,12 @@ export class NotificationsService {
 
   async handleStudentAbsent(payload: StudentAbsentPayload): Promise<void> {
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
-      const message = buildStudentAbsentSms({
+      const template = await resolveSmsTemplateMessage(
+        payload.schemaName,
+        SMS_TEMPLATE_STUDENT_ABSENT_TYPE,
+        DEFAULT_STUDENT_ABSENT_TEMPLATE
+      );
+      const message = renderSmsTemplate(template, {
         studentFirstName: payload.studentFirstName,
         subject: payload.subject,
         date: payload.date,
@@ -417,11 +463,19 @@ export class NotificationsService {
 
   async handleSubscriptionExpired(payload: SubscriptionExpiredPayload): Promise<void> {
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
-      const message = buildPaymentReminderSms({
+      const template = await resolveSmsTemplateMessage(
+        payload.schemaName,
+        SMS_TEMPLATE_PAYMENT_REMINDER_TYPE,
+        DEFAULT_PAYMENT_REMINDER_TEMPLATE
+      );
+      const formattedAmount = new Intl.NumberFormat('fr-FR', {
+        maximumFractionDigits: 0,
+      }).format(Math.max(0, payload.remainingAmountFcfa));
+      const message = renderSmsTemplate(template, {
         schoolName: payload.schoolName,
         periodLabel: payload.periodLabel,
         dueDate: payload.dueDate,
-        remainingAmountFcfa: payload.remainingAmountFcfa,
+        remainingAmountFcfa: formattedAmount,
       });
 
       const queueRef = buildQueueRef(payload.schemaName, 'payment_reminder');

@@ -1,11 +1,14 @@
 import argon2 from 'argon2';
 
 import {
+  bindKeycloakSubjectIfNeeded,
   invalidateRefreshTokenIfSupported,
+  isRefreshTokenActive,
   findUserByEmail,
   findUserByPhone,
   findUserByUsername,
   findUserProfileById,
+  storeRefreshToken,
   updateUserProfile,
   updateUserPasswordHash,
   updateLastLoginAt,
@@ -32,6 +35,10 @@ export type AccessTokenClaims = JwtPayload & {
   role: UserRole;
   schemaName: string;
   username?: string;
+  readOnly?: boolean;
+  impersonation?: boolean;
+  impersonatedBy?: string;
+  tenantId?: string;
 };
 
 type RefreshTokenClaims = JwtPayload & {
@@ -65,6 +72,35 @@ const normalizeRole = (role: LegacyUserRole): UserRole => {
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
 
+const parseBooleanEnv = (value: string | undefined, fallback: boolean): boolean => {
+  if (!value) {
+    return fallback;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes') {
+    return true;
+  }
+  if (normalized === 'false' || normalized === '0' || normalized === 'no') {
+    return false;
+  }
+  return fallback;
+};
+
+const decodeJwtPayload = (token: string): Record<string, unknown> => {
+  const parts = token.split('.');
+  const payloadBase64 = parts[1];
+  if (!payloadBase64) {
+    return {};
+  }
+
+  const normalized = payloadBase64.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+  const raw = Buffer.from(padded, 'base64').toString('utf8');
+  const parsed = JSON.parse(raw) as unknown;
+  return isObject(parsed) ? parsed : {};
+};
+
 export type TenantDb = QueryExecutor;
 
 type ChangePasswordInput = {
@@ -90,6 +126,96 @@ const normalizePem = (value: string): string => {
       : trimmed;
 
   return unquoted.replace(/\\n/g, '\n').replace(/\r\n/g, '\n');
+};
+
+const isKeycloakAuthEnabled = (): boolean =>
+  (process.env.AUTH_PROVIDER ?? 'local').trim().toLowerCase() === 'keycloak';
+
+const getKeycloakConfig = (): {
+  baseUrl: string;
+  realm: string;
+  clientId: string;
+  clientSecret?: string;
+} => {
+  const baseUrl = process.env.KEYCLOAK_BASE_URL?.trim();
+  const realm = process.env.KEYCLOAK_REALM?.trim();
+  const clientId = process.env.KEYCLOAK_CLIENT_ID?.trim();
+  const clientSecret = process.env.KEYCLOAK_CLIENT_SECRET?.trim();
+
+  if (!baseUrl || !realm || !clientId) {
+    throw new Error(
+      'Keycloak auth enabled but KEYCLOAK_BASE_URL, KEYCLOAK_REALM or KEYCLOAK_CLIENT_ID is missing'
+    );
+  }
+
+  return {
+    baseUrl: baseUrl.replace(/\/+$/, ''),
+    realm,
+    clientId,
+    ...(clientSecret ? { clientSecret } : {}),
+  };
+};
+
+const getKeycloakTenantClaimConfig = (): {
+  claimName: string;
+  requireMatch: boolean;
+} => {
+  const claimName = (process.env.KEYCLOAK_TENANT_CLAIM ?? 'schemaName').trim() || 'schemaName';
+  const requireMatch = parseBooleanEnv(process.env.KEYCLOAK_REQUIRE_TENANT_CLAIM, false);
+  return { claimName, requireMatch };
+};
+
+type KeycloakVerificationResult = {
+  subject: string;
+  claims: Record<string, unknown>;
+};
+
+const verifyCredentialsWithKeycloak = async (
+  identifier: string,
+  password: string
+): Promise<KeycloakVerificationResult> => {
+  const config = getKeycloakConfig();
+  const tokenEndpoint = `${config.baseUrl}/realms/${encodeURIComponent(
+    config.realm
+  )}/protocol/openid-connect/token`;
+
+  const form = new URLSearchParams();
+  form.set('grant_type', 'password');
+  form.set('client_id', config.clientId);
+  if (config.clientSecret) {
+    form.set('client_secret', config.clientSecret);
+  }
+  form.set('username', identifier);
+  form.set('password', password);
+
+  const response = await fetch(tokenEndpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    },
+    body: form.toString(),
+  });
+
+  if (!response.ok) {
+    throw new Error('Invalid credentials');
+  }
+
+  const payload = (await response.json()) as unknown;
+  if (!isObject(payload)) {
+    throw new Error('Invalid credentials');
+  }
+
+  const accessToken =
+    typeof payload.access_token === 'string' ? payload.access_token : '';
+  const idToken = typeof payload.id_token === 'string' ? payload.id_token : '';
+  const claims = idToken ? decodeJwtPayload(idToken) : decodeJwtPayload(accessToken);
+  const subject = typeof claims.sub === 'string' ? claims.sub.trim() : '';
+  if (!subject) {
+    throw new Error('Invalid credentials');
+  }
+
+  return { subject, claims };
 };
 
 const getPrivateKey = async () => {
@@ -157,6 +283,11 @@ export const verifyAccessToken = async (token: string): Promise<AccessTokenClaim
   const role = payload.role;
   const schemaName = typeof payload.schemaName === 'string' ? payload.schemaName : '';
   const username = typeof payload.username === 'string' ? payload.username : undefined;
+  const readOnly = payload.readOnly === true;
+  const impersonation = payload.impersonation === true;
+  const impersonatedBy =
+    typeof payload.impersonatedBy === 'string' ? payload.impersonatedBy : undefined;
+  const tenantId = typeof payload.tenantId === 'string' ? payload.tenantId : undefined;
 
   if (!sub || !schemaName) {
     throw new Error('Invalid access token');
@@ -178,6 +309,10 @@ export const verifyAccessToken = async (token: string): Promise<AccessTokenClaim
     role: normalizeRole(role),
     schemaName,
     ...(username ? { username } : {}),
+    ...(readOnly ? { readOnly: true } : {}),
+    ...(impersonation ? { impersonation: true } : {}),
+    ...(impersonatedBy ? { impersonatedBy } : {}),
+    ...(tenantId ? { tenantId } : {}),
   } as AccessTokenClaims;
 };
 
@@ -196,6 +331,19 @@ export const verifyRefreshToken = async (token: string): Promise<RefreshTokenCla
   }
 
   return payload;
+};
+
+const getRefreshTokenExpiryIso = (token: string): string | null => {
+  try {
+    const payload = decodeJwtPayload(token);
+    const exp = payload.exp;
+    if (typeof exp !== 'number' || !Number.isFinite(exp)) {
+      return null;
+    }
+    return new Date(exp * 1000).toISOString();
+  } catch {
+    return null;
+  }
 };
 
 const sanitizeProfile = (user: AuthUser) => ({
@@ -227,9 +375,31 @@ export const login = async (db: TenantDb, input: LoginInput): Promise<LoginResul
     throw new Error('Invalid credentials');
   }
 
-  const validPassword = await argon2.verify(authUser.passwordHash, input.password);
-  if (!validPassword) {
-    throw new Error('Invalid credentials');
+  if (isKeycloakAuthEnabled()) {
+    const keycloakVerification = await verifyCredentialsWithKeycloak(
+      input.identifier,
+      input.password
+    );
+    const { claimName, requireMatch } = getKeycloakTenantClaimConfig();
+    const tenantClaim =
+      typeof keycloakVerification.claims[claimName] === 'string'
+        ? String(keycloakVerification.claims[claimName]).trim()
+        : '';
+    if (requireMatch && tenantClaim !== input.schemaName) {
+      throw new Error('Invalid credentials');
+    }
+    if (
+      authUser.keycloakSubject &&
+      authUser.keycloakSubject !== keycloakVerification.subject
+    ) {
+      throw new Error('Invalid credentials');
+    }
+    await bindKeycloakSubjectIfNeeded(db, authUser.userId, keycloakVerification.subject);
+  } else {
+    const validPassword = await argon2.verify(authUser.passwordHash, input.password);
+    if (!validPassword) {
+      throw new Error('Invalid credentials');
+    }
   }
 
   const claims = buildClaims(authUser, input.schemaName);
@@ -264,6 +434,10 @@ export const getMeFromToken = async (db: TenantDb, token: string) => {
 
 export const refreshAccessToken = async (db: TenantDb, refreshToken: string) => {
   const payload = await verifyRefreshToken(refreshToken);
+  const isActive = await isRefreshTokenActive(db, refreshToken);
+  if (!isActive) {
+    throw new Error('Invalid refresh token');
+  }
 
   const profile = await findUserProfileById(db, payload.sub);
   if (!profile || !profile.isActive) {
@@ -278,6 +452,15 @@ export const refreshAccessToken = async (db: TenantDb, refreshToken: string) => 
     tokenType: 'Bearer' as const,
     expiresIn: process.env.JWT_EXPIRY ?? '15m',
   };
+};
+
+export const registerRefreshToken = async (db: TenantDb, refreshToken: string): Promise<void> => {
+  const payload = await verifyRefreshToken(refreshToken);
+  await storeRefreshToken(db, {
+    userId: payload.sub,
+    token: refreshToken,
+    expiresAt: getRefreshTokenExpiryIso(refreshToken),
+  });
 };
 
 export const logout = async (db: TenantDb, refreshToken?: string): Promise<void> => {
@@ -300,6 +483,10 @@ export const changePassword = async (
   db: TenantDb,
   input: ChangePasswordInput
 ): Promise<void> => {
+  if (isKeycloakAuthEnabled()) {
+    throw new Error('Modification de mot de passe non autorisée pour ce rôle');
+  }
+
   const profile = await findUserProfileById(db, input.userId);
   if (!profile || !profile.isActive) {
     throw new Error('Invalid credentials');

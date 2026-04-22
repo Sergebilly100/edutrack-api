@@ -69,6 +69,18 @@ const safeText = (value: string | null | undefined, fallback = 'N/A'): string =>
   return normalized.length > 0 ? normalized : fallback;
 };
 
+export const renderSmsTemplate = (
+  template: string,
+  variables: Record<string, string | number | null | undefined>
+): string => {
+  const rendered = template.replace(/\{([a-zA-Z0-9_]+)\}/g, (_match, key: string) => {
+    const value = variables[key];
+    return safeText(value === undefined || value === null ? undefined : String(value));
+  });
+
+  return limitSmsLength(rendered);
+};
+
 export const buildTeacherLateSms = (params: TeacherLateSmsParams): string => {
   return limitSmsLength(
     `EduTrack: ${safeText(params.teacherName)} en retard de ${params.lateMinutes}min - ${safeText(params.subject)} (${safeText(params.className)}, ${safeText(params.slotLabel)}). ${safeText(params.date)}`

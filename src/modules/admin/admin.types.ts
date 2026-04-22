@@ -332,8 +332,11 @@ export const smsTemplateTypeSchema = z.enum([
 ]);
 
 export const updateSmsTemplateBodySchema = z.object({
-  message_template: z.string().trim().min(5).max(500),
-  variables: z.array(z.string().trim().min(1).max(60)).default([]),
+  message_template: z.string().trim().min(5).max(2000),
+  variables: z
+    .array(z.string().trim().max(60))
+    .default([])
+    .transform((items) => Array.from(new Set(items.filter((item) => item.length > 0)))),
 });
 
 export const maintenanceConfigSchema = z.object({

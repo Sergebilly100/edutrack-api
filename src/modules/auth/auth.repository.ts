@@ -15,6 +15,7 @@ type AuthUserRow = {
   is_active: boolean;
   teacher_id: string | null;
   username: string | null;
+  keycloak_subject: string | null;
 };
 
 export type AuthUser = {
@@ -28,6 +29,7 @@ export type AuthUser = {
   isActive: boolean;
   teacherId: string | null;
   username: string | null;
+  keycloakSubject: string | null;
 };
 
 const mapAuthUser = (row: AuthUserRow): AuthUser => ({
@@ -41,6 +43,7 @@ const mapAuthUser = (row: AuthUserRow): AuthUser => ({
   isActive: row.is_active,
   teacherId: row.teacher_id,
   username: row.username,
+  keycloakSubject: row.keycloak_subject,
 });
 
 const getRows = (result: unknown): AuthUserRow[] => {
@@ -86,6 +89,7 @@ const baseSelect = sql`
     u.phone,
     u.email,
     u.profile_photo_url,
+    u.keycloak_subject,
     u.password_hash,
     u.is_active,
     t.id AS teacher_id,
@@ -97,7 +101,28 @@ const baseSelect = sql`
 const ensureUsersProfileColumns = async (db: QueryExecutor): Promise<void> => {
   await db.execute(sql`
     ALTER TABLE users
-    ADD COLUMN IF NOT EXISTS profile_photo_url text
+    ADD COLUMN IF NOT EXISTS profile_photo_url text,
+    ADD COLUMN IF NOT EXISTS keycloak_subject varchar(255)
+  `);
+};
+
+const ensureRefreshTokensTable = async (db: QueryExecutor): Promise<void> => {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS refresh_tokens (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token text NOT NULL UNIQUE,
+      is_active boolean NOT NULL DEFAULT true,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      revoked_at timestamptz,
+      expires_at timestamptz
+    )
+  `);
+
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_active
+      ON refresh_tokens (user_id, is_active)
   `);
 };
 
@@ -210,6 +235,72 @@ export const updateUserProfile = async (
   `);
 };
 
+export const bindKeycloakSubjectIfNeeded = async (
+  db: QueryExecutor,
+  userId: string,
+  keycloakSubject: string
+): Promise<void> => {
+  await ensureUsersProfileColumns(db);
+  await db.execute(sql`
+    UPDATE users
+    SET keycloak_subject = ${keycloakSubject}
+    WHERE id = ${userId}
+      AND keycloak_subject IS NULL
+  `);
+};
+
+export const storeRefreshToken = async (
+  db: QueryExecutor,
+  input: {
+    userId: string;
+    token: string;
+    expiresAt: string | null;
+  }
+): Promise<void> => {
+  await ensureRefreshTokensTable(db);
+  await db.execute(sql`
+    INSERT INTO refresh_tokens (user_id, token, is_active, updated_at, revoked_at, expires_at)
+    VALUES (
+      ${input.userId}::uuid,
+      ${input.token},
+      true,
+      NOW(),
+      NULL,
+      ${input.expiresAt ? sql`${input.expiresAt}::timestamptz` : sql`NULL`}
+    )
+    ON CONFLICT (token)
+    DO UPDATE SET
+      user_id = EXCLUDED.user_id,
+      is_active = true,
+      updated_at = NOW(),
+      revoked_at = NULL,
+      expires_at = EXCLUDED.expires_at
+  `);
+};
+
+export const isRefreshTokenActive = async (
+  db: QueryExecutor,
+  token: string
+): Promise<boolean> => {
+  await ensureRefreshTokensTable(db);
+  const result = await db.execute(sql`
+    SELECT EXISTS (
+      SELECT 1
+      FROM refresh_tokens
+      WHERE token = ${token}
+        AND is_active = true
+        AND (expires_at IS NULL OR expires_at > NOW())
+    ) AS active
+  `);
+
+  if (typeof result !== 'object' || result === null || !('rows' in result)) {
+    return false;
+  }
+
+  const rows = (result as { rows: Array<{ active: boolean }> }).rows;
+  return rows[0]?.active === true;
+};
+
 type InvalidateRefreshTokenInput = {
   refreshToken?: string;
   userId?: string;
@@ -219,15 +310,7 @@ export const invalidateRefreshTokenIfSupported = async (
   db: QueryExecutor,
   input: InvalidateRefreshTokenInput
 ): Promise<void> => {
-  const tableExistsResult = await db.execute(sql`
-    SELECT to_regclass('refresh_tokens')::text AS table_name
-  `);
-
-  const tableRows = getRegclassRows(tableExistsResult);
-  const refreshTokensTableExists = tableRows.length > 0 && tableRows[0]?.table_name !== null;
-  if (!refreshTokensTableExists) {
-    return;
-  }
+  await ensureRefreshTokensTable(db);
 
   const columnsResult = await db.execute(sql`
     SELECT column_name

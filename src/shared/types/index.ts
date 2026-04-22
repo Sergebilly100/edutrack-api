@@ -79,4 +79,5 @@ export type PermissionKey =
   | 'salary.mark_paid'
   | 'salary.export'
   | 'settings.positions'
-  | 'settings.school';
+  | 'settings.school'
+  | 'settings.sms_templates';

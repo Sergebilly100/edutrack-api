@@ -7,6 +7,7 @@ import {
   getMe,
   login,
   logout,
+  registerRefreshToken,
   refreshAccessToken,
   signRefreshToken,
   updateMe,
@@ -120,6 +121,12 @@ const clearRefreshCookie = (reply: FastifyReply): void => {
   reply.header('Set-Cookie', cookie);
 };
 
+const assertWritableSession = (request: FastifyRequest, claims: { readOnly?: boolean }): void => {
+  if (claims.readOnly && request.method.toUpperCase() !== 'GET') {
+    throw new Error('Session en lecture seule');
+  }
+};
+
 const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
   if (error instanceof ZodError) {
     return reply.code(400).send({
@@ -139,7 +146,9 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
     message === 'Invalid access token' ||
     message === 'Current password is incorrect' ||
     (error instanceof Error && error.name === 'JWTExpired');
-  const isForbidden = message === 'Modification de mot de passe non autorisée pour ce rôle';
+  const isForbidden =
+    message === 'Modification de mot de passe non autorisée pour ce rôle' ||
+    message === 'Session en lecture seule';
   const code =
     typeof error === 'object' && error !== null && 'code' in error
       ? String((error as { code: unknown }).code)
@@ -190,6 +199,16 @@ export default async function authController(app: FastifyInstance): Promise<void
       );
 
       const refreshToken = await signRefreshToken(result.user.id, schemaName);
+      try {
+        await withTenantSchema(schemaName, (tenantDb) =>
+          registerRefreshToken(tenantDb, refreshToken)
+        );
+      } catch (error) {
+        request.log.warn(
+          { err: error instanceof Error ? error.message : 'unknown error', schemaName },
+          '[auth] unable to persist refresh token at login'
+        );
+      }
       setRefreshCookie(reply, refreshToken);
 
       return reply.send(result);
@@ -261,6 +280,7 @@ export default async function authController(app: FastifyInstance): Promise<void
       try {
         const token = extractBearerToken(request);
         const claims = await verifyAccessToken(token);
+        assertWritableSession(request, claims);
         if (claims.role !== 'director') {
           throw new Error('Modification de mot de passe non autorisée pour ce rôle');
         }
@@ -285,6 +305,7 @@ export default async function authController(app: FastifyInstance): Promise<void
     try {
       const token = extractBearerToken(request);
       const claims = await verifyAccessToken(token);
+      assertWritableSession(request, claims);
       const body = updateMeSchema.parse(request.body);
 
       const result = await withTenantSchema(claims.schemaName, (tenantDb) =>

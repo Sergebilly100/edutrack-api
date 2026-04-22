@@ -10,6 +10,7 @@ import { verifyAccessToken, type AccessTokenClaims } from '../../modules/auth/au
 
 const DIRECTOR_STAFF_ROLES = new Set(['director', 'staff']);
 const TEACHER_DIRECTOR_STAFF_ROLES = new Set(['teacher', 'director', 'staff']);
+const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 const extractBearerToken = (request: FastifyRequest): string => {
   const authorization = request.headers.authorization;
@@ -71,6 +72,11 @@ export const authenticateRequest = async (
     }
 
     unauthorized(reply, 'Invalid access token');
+    return;
+  }
+
+  if (claims.readOnly && !READ_ONLY_METHODS.has(request.method.toUpperCase())) {
+    forbidden(reply, 'Session en lecture seule');
     return;
   }
 

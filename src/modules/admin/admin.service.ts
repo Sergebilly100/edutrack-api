@@ -330,6 +330,22 @@ const parseNumeric = (value: unknown): number => {
   return 0;
 };
 
+const toPgTextArrayLiteral = (values: readonly string[]): string => {
+  if (values.length === 0) {
+    return '{}';
+  }
+
+  const escaped = values.map((value) => {
+    const sanitized = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    return `"${sanitized}"`;
+  });
+
+  return `{${escaped.join(',')}}`;
+};
+
+const toTextArraySql = (values: readonly string[]) =>
+  sql`CAST(${toPgTextArrayLiteral(values)} AS text[])`;
+
 const ensureAdminPublicInfrastructure = async (publicDb: TenantDb): Promise<void> => {
   await publicDb.execute(sql.raw(`
     ALTER TABLE public.tenants
@@ -2123,11 +2139,17 @@ export const listSmsTemplates = async (
 ): Promise<SmsTemplateItem[]> => {
   await ensureAdminPublicInfrastructure(publicDb);
   const result = await publicDb.execute<SmsTemplateRow>(sql`
-    SELECT id::text, tenant_id::text, type::text, message_template, variables, updated_at
+    SELECT DISTINCT ON (type)
+      id::text,
+      tenant_id::text,
+      type::text,
+      message_template,
+      variables,
+      updated_at
     FROM public.sms_templates
     WHERE (${tenantId ?? null}::uuid IS NULL AND tenant_id IS NULL)
        OR (${tenantId ?? null}::uuid IS NOT NULL AND tenant_id = ${tenantId ?? null}::uuid)
-    ORDER BY type ASC
+    ORDER BY type ASC, updated_at DESC
   `);
 
   return getRows<SmsTemplateRow>(result).map((row) => ({
@@ -2150,22 +2172,59 @@ export const upsertSmsTemplate = async (
   }
 ): Promise<void> => {
   await ensureAdminPublicInfrastructure(publicDb);
-  await publicDb.execute(sql`
-    INSERT INTO public.sms_templates (tenant_id, type, message_template, variables, created_by, updated_at)
-    VALUES (
-      ${params.tenantId},
-      ${params.type},
-      ${params.body.message_template},
-      ${params.body.variables},
-      ${params.adminId ?? null},
-      NOW()
-    )
-    ON CONFLICT (tenant_id, type)
-    DO UPDATE SET
-      message_template = EXCLUDED.message_template,
-      variables = EXCLUDED.variables,
-      updated_at = NOW()
+  if (params.tenantId === null) {
+    const updateResult = await publicDb.execute(sql`
+      UPDATE public.sms_templates
+      SET
+        message_template = ${params.body.message_template},
+        variables = ${toTextArraySql(params.body.variables)},
+        updated_at = NOW(),
+        created_by = COALESCE(${params.adminId ?? null}::uuid, created_by)
+      WHERE tenant_id IS NULL
+        AND type = ${params.type}
+    `);
+
+    if ((updateResult.rowCount ?? 0) === 0) {
+      await publicDb.execute(sql`
+        INSERT INTO public.sms_templates (tenant_id, type, message_template, variables, created_by, updated_at)
+        VALUES (
+          NULL,
+          ${params.type},
+          ${params.body.message_template},
+          ${toTextArraySql(params.body.variables)},
+          ${params.adminId ?? null},
+          NOW()
+        )
+      `);
+    }
+
+    return;
+  }
+
+  const updateResult = await publicDb.execute(sql`
+    UPDATE public.sms_templates
+    SET
+      message_template = ${params.body.message_template},
+      variables = ${toTextArraySql(params.body.variables)},
+      updated_at = NOW(),
+      created_by = COALESCE(${params.adminId ?? null}::uuid, created_by)
+    WHERE tenant_id = ${params.tenantId}::uuid
+      AND type = ${params.type}
   `);
+
+  if ((updateResult.rowCount ?? 0) === 0) {
+    await publicDb.execute(sql`
+      INSERT INTO public.sms_templates (tenant_id, type, message_template, variables, created_by, updated_at)
+      VALUES (
+        ${params.tenantId}::uuid,
+        ${params.type},
+        ${params.body.message_template},
+        ${toTextArraySql(params.body.variables)},
+        ${params.adminId ?? null},
+        NOW()
+      )
+    `);
+  }
 };
 
 export const deleteTenantSmsTemplate = async (

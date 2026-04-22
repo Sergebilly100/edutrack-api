@@ -243,7 +243,7 @@ export default async function permissionsController(app: FastifyInstance): Promi
         assertSettingsManager(claims.role);
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-          return buildPermissionsService(tenantDb).listPositions();
+          return buildPermissionsService(tenantDb).listPositions(claims.schemaName);
         });
 
         return reply.send(result);
@@ -267,6 +267,7 @@ export default async function permissionsController(app: FastifyInstance): Promi
             name: body.name,
             permissions: body.permissions,
             createdBy: claims.sub,
+            schemaName: claims.schemaName,
           });
         });
 
@@ -291,6 +292,7 @@ export default async function permissionsController(app: FastifyInstance): Promi
           return buildPermissionsService(tenantDb).updatePosition(params.id, {
             ...(body.name !== undefined ? { name: body.name } : {}),
             ...(body.permissions !== undefined ? { permissions: body.permissions } : {}),
+            schemaName: claims.schemaName,
           });
         });
 

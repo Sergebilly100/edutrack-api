@@ -1,8 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { sql } from 'drizzle-orm';
 import { ZodError, z } from 'zod';
 
-import { withTenantSchema } from '../../shared/database/db.js';
-import { requireDirector } from '../../shared/middleware/auth.middleware.js';
+import { db as publicDb, withTenantSchema } from '../../shared/database/db.js';
+import { requireDirector, requirePermission } from '../../shared/middleware/auth.middleware.js';
 import type { NotificationType } from '../../shared/types/index.js';
 
 import { defaultRepository } from './notifications.repository.js';
@@ -19,6 +20,27 @@ const notificationTypes: NotificationType[] = [
 ];
 
 const notificationTypeSet = new Set(notificationTypes);
+const SMS_TEMPLATE_STUDENT_ABSENT_TYPE = 'student_absent_parent';
+const DEFAULT_STUDENT_ABSENT_TEMPLATE =
+  'EduTrack: {studentFirstName} absent(e) en {subject} le {date}. Contact école: {schoolPhone}';
+
+const schoolTemplateBodySchema = z.object({
+  message_template: z.string().trim().min(5).max(500),
+  variables: z.array(z.string().trim().min(1).max(60)).default([]),
+});
+
+const toPgTextArrayLiteral = (values: readonly string[]): string => {
+  if (values.length === 0) {
+    return '{}';
+  }
+
+  const escaped = values.map((value) => {
+    const sanitized = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    return `"${sanitized}"`;
+  });
+
+  return `{${escaped.join(',')}}`;
+};
 
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(10),
@@ -86,4 +108,205 @@ export default async function notificationsController(app: FastifyInstance): Pro
       return handleError(request, reply, error);
     }
   });
+
+  app.get(
+    '/api/v1/notifications/templates/student-absence',
+    { preHandler: requirePermission('settings.sms_templates') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        if (claims.role !== 'director' && claims.role !== 'staff') {
+          return reply.code(403).send({
+            error: 'Permission settings.sms_templates required',
+            code: 'FORBIDDEN',
+            statusCode: 403,
+          });
+        }
+
+        const tenantResult = await publicDb.execute<{
+          id: string;
+          can_edit_sms_template: boolean;
+        }>(sql`
+          SELECT id::text, COALESCE(can_edit_sms_template, false) AS can_edit_sms_template
+          FROM public.tenants
+          WHERE schema_name = ${claims.schemaName}
+          LIMIT 1
+        `);
+        const tenant = tenantResult.rows[0];
+        if (!tenant) {
+          return reply.code(404).send({
+            error: 'Tenant not found',
+            code: 'NOT_FOUND',
+            statusCode: 404,
+          });
+        }
+
+        const globalTemplateResult = await publicDb.execute<{
+          message_template: string;
+          variables: string[] | null;
+          updated_at: string | null;
+        }>(sql`
+          SELECT message_template, variables, updated_at::text
+          FROM public.sms_templates
+          WHERE tenant_id IS NULL
+            AND type = ${SMS_TEMPLATE_STUDENT_ABSENT_TYPE}
+          ORDER BY updated_at DESC
+          LIMIT 1
+        `);
+
+        const schoolTemplateResult = await publicDb.execute<{
+          message_template: string;
+          variables: string[] | null;
+          updated_at: string | null;
+        }>(sql`
+          SELECT message_template, variables, updated_at::text
+          FROM public.sms_templates
+          WHERE tenant_id = ${tenant.id}::uuid
+            AND type = ${SMS_TEMPLATE_STUDENT_ABSENT_TYPE}
+          ORDER BY updated_at DESC
+          LIMIT 1
+        `);
+
+        const schoolTemplate = schoolTemplateResult.rows[0];
+        const globalTemplate = globalTemplateResult.rows[0];
+        const source = schoolTemplate
+          ? 'school'
+          : globalTemplate
+            ? 'global'
+            : 'default';
+        const messageTemplate =
+          schoolTemplate?.message_template ??
+          globalTemplate?.message_template ??
+          DEFAULT_STUDENT_ABSENT_TEMPLATE;
+        const variables = schoolTemplate?.variables ?? globalTemplate?.variables ?? [];
+        const updatedAt = schoolTemplate?.updated_at ?? globalTemplate?.updated_at ?? null;
+
+        return reply.send({
+          enabledBySuperAdmin: tenant.can_edit_sms_template,
+          source,
+          messageTemplate,
+          variables,
+          updatedAt,
+        });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.put(
+    '/api/v1/notifications/templates/student-absence',
+    { preHandler: requirePermission('settings.sms_templates') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        if (claims.role !== 'director' && claims.role !== 'staff') {
+          return reply.code(403).send({
+            error: 'Permission settings.sms_templates required',
+            code: 'FORBIDDEN',
+            statusCode: 403,
+          });
+        }
+
+        const body = schoolTemplateBodySchema.parse(request.body ?? {});
+        const tenantResult = await publicDb.execute<{
+          id: string;
+          can_edit_sms_template: boolean;
+        }>(sql`
+          SELECT id::text, COALESCE(can_edit_sms_template, false) AS can_edit_sms_template
+          FROM public.tenants
+          WHERE schema_name = ${claims.schemaName}
+          LIMIT 1
+        `);
+        const tenant = tenantResult.rows[0];
+        if (!tenant) {
+          return reply.code(404).send({
+            error: 'Tenant not found',
+            code: 'NOT_FOUND',
+            statusCode: 404,
+          });
+        }
+        if (!tenant.can_edit_sms_template) {
+          return reply.code(403).send({
+            error: "La personnalisation des templates SMS n'est pas autorisée pour cette école",
+            code: 'FORBIDDEN',
+            statusCode: 403,
+          });
+        }
+
+        await publicDb.execute(sql`
+          INSERT INTO public.sms_templates (tenant_id, type, message_template, variables, created_by, updated_at)
+          VALUES (
+            ${tenant.id}::uuid,
+            ${SMS_TEMPLATE_STUDENT_ABSENT_TYPE},
+            ${body.message_template},
+            CAST(${toPgTextArrayLiteral(body.variables)} AS text[]),
+            ${claims.sub}::uuid,
+            NOW()
+          )
+          ON CONFLICT (tenant_id, type)
+          DO UPDATE SET
+            message_template = EXCLUDED.message_template,
+            variables = EXCLUDED.variables,
+            updated_at = NOW()
+        `);
+
+        return reply.send({ success: true });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.delete(
+    '/api/v1/notifications/templates/student-absence',
+    { preHandler: requirePermission('settings.sms_templates') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        if (claims.role !== 'director' && claims.role !== 'staff') {
+          return reply.code(403).send({
+            error: 'Permission settings.sms_templates required',
+            code: 'FORBIDDEN',
+            statusCode: 403,
+          });
+        }
+
+        const tenantResult = await publicDb.execute<{
+          id: string;
+          can_edit_sms_template: boolean;
+        }>(sql`
+          SELECT id::text, COALESCE(can_edit_sms_template, false) AS can_edit_sms_template
+          FROM public.tenants
+          WHERE schema_name = ${claims.schemaName}
+          LIMIT 1
+        `);
+        const tenant = tenantResult.rows[0];
+        if (!tenant) {
+          return reply.code(404).send({
+            error: 'Tenant not found',
+            code: 'NOT_FOUND',
+            statusCode: 404,
+          });
+        }
+        if (!tenant.can_edit_sms_template) {
+          return reply.code(403).send({
+            error: "La personnalisation des templates SMS n'est pas autorisée pour cette école",
+            code: 'FORBIDDEN',
+            statusCode: 403,
+          });
+        }
+
+        await publicDb.execute(sql`
+          DELETE FROM public.sms_templates
+          WHERE tenant_id = ${tenant.id}::uuid
+            AND type = ${SMS_TEMPLATE_STUDENT_ABSENT_TYPE}
+        `);
+
+        return reply.send({ success: true });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
 }

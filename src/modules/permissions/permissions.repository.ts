@@ -34,6 +34,7 @@ type SchoolConfigRow = {
   teaching_type: string | null;
   max_users: number;
   max_admin_positions: number;
+  can_edit_sms_template: boolean;
   logo_url: string | null;
   active_school_year: string | null;
 };
@@ -146,6 +147,7 @@ export class PermissionsRepository {
         teaching_type,
         max_users,
         max_admin_positions,
+        COALESCE(can_edit_sms_template, false) AS can_edit_sms_template,
         logo_url,
         active_school_year
       FROM public.tenants

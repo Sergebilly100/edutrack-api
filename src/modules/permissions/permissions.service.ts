@@ -12,6 +12,7 @@ import {
 
 const ALL_PERMISSIONS_SET = new Set<PermissionKey>(PERMISSION_KEYS);
 const STAFF_BASE_PERMISSIONS_SET = new Set<PermissionKey>(STAFF_BASE_PERMISSIONS);
+const SMS_TEMPLATE_PERMISSION: PermissionKey = 'settings.sms_templates';
 
 const dedupePermissions = (permissions: readonly PermissionKey[]): PermissionKey[] => {
   const uniq = new Set<PermissionKey>(permissions);
@@ -28,6 +29,19 @@ const baseRolePermissions = (role: AccessTokenClaims['role']): Set<PermissionKey
   }
 
   return new Set();
+};
+
+const withSmsTemplatePermissionGuard = (
+  permissions: readonly PermissionKey[],
+  canEditSmsTemplate: boolean
+): PermissionKey[] => {
+  if (canEditSmsTemplate) {
+    return dedupePermissions(permissions);
+  }
+
+  return dedupePermissions(
+    permissions.filter((permission) => permission !== SMS_TEMPLATE_PERMISSION)
+  );
 };
 
 export class PermissionsModuleError extends Error {
@@ -68,13 +82,20 @@ export class PermissionsService {
         currentUsers: adminUsersCount,
         totalUsers: currentUsers,
         adminUsersCount,
+        canEditSmsTemplate: schoolConfig.can_edit_sms_template,
         logoUrl: schoolConfig.logo_url,
         activeSchoolYear: schoolConfig.active_school_year,
       },
       limits: {
         maxAdminPositions: schoolConfig.max_admin_positions,
       },
-      positions,
+      positions: positions.map((position) => ({
+        ...position,
+        permissions: withSmsTemplatePermissionGuard(
+          position.permissions,
+          schoolConfig.can_edit_sms_template
+        ),
+      })),
       users,
     };
   }
@@ -98,15 +119,41 @@ export class PermissionsService {
     return this.getConfig(schemaName);
   }
 
-  async listPositions() {
+  async listPositions(schemaName: string) {
+    const schoolConfig = await this.repository.getSchoolConfigBySchemaName(schemaName);
+    if (!schoolConfig) {
+      throw new PermissionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
+    }
+
     const positions = await this.repository.listPositions();
-    return { positions };
+    return {
+      positions: positions.map((position) => ({
+        ...position,
+        permissions: withSmsTemplatePermissionGuard(
+          position.permissions,
+          schoolConfig.can_edit_sms_template
+        ),
+      })),
+    };
   }
 
-  async createPosition(input: { name: string; permissions: PermissionKey[]; createdBy: string }) {
+  async createPosition(input: {
+    name: string;
+    permissions: PermissionKey[];
+    createdBy: string;
+    schemaName: string;
+  }) {
+    const schoolConfig = await this.repository.getSchoolConfigBySchemaName(input.schemaName);
+    if (!schoolConfig) {
+      throw new PermissionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
+    }
+
     const position = await this.repository.createPosition({
       name: input.name,
-      permissions: dedupePermissions(input.permissions),
+      permissions: withSmsTemplatePermissionGuard(
+        input.permissions,
+        schoolConfig.can_edit_sms_template
+      ),
       createdBy: input.createdBy,
     });
 
@@ -115,12 +162,22 @@ export class PermissionsService {
 
   async updatePosition(
     positionId: string,
-    input: { name?: string; permissions?: PermissionKey[] }
+    input: { name?: string; permissions?: PermissionKey[]; schemaName: string }
   ) {
+    const schoolConfig = await this.repository.getSchoolConfigBySchemaName(input.schemaName);
+    if (!schoolConfig) {
+      throw new PermissionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
+    }
+
     const position = await this.repository.updatePosition(positionId, {
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.permissions !== undefined
-        ? { permissions: dedupePermissions(input.permissions) }
+        ? {
+            permissions: withSmsTemplatePermissionGuard(
+              input.permissions,
+              schoolConfig.can_edit_sms_template
+            ),
+          }
         : {}),
     });
 
@@ -322,7 +379,9 @@ export class PermissionsService {
     return { updated: true };
   }
 
-  async getEffectivePermissions(claims: Pick<AccessTokenClaims, 'sub' | 'role'>) {
+  async getEffectivePermissions(
+    claims: Pick<AccessTokenClaims, 'sub' | 'role' | 'schemaName'>
+  ) {
     const permissions = await resolveEffectivePermissions(this.repository, claims);
 
     return {
@@ -335,16 +394,23 @@ export class PermissionsService {
 
 export const resolveEffectivePermissions = async (
   repository: PermissionsRepository,
-  claims: Pick<AccessTokenClaims, 'sub' | 'role'>
+  claims: Pick<AccessTokenClaims, 'sub' | 'role' | 'schemaName'>
 ): Promise<PermissionKey[]> => {
   const rolePermissions = baseRolePermissions(claims.role);
-  if (claims.role === 'director' || claims.role === 'super_admin') {
+  if (claims.role === 'super_admin') {
     return dedupePermissions([...rolePermissions]);
+  }
+
+  const schoolConfig = await repository.getSchoolConfigBySchemaName(claims.schemaName);
+  const canEditSmsTemplate = schoolConfig?.can_edit_sms_template ?? false;
+
+  if (claims.role === 'director') {
+    return withSmsTemplatePermissionGuard([...rolePermissions], canEditSmsTemplate);
   }
 
   const assignedPermissions = await repository.listAssignedPermissions(claims.sub);
   const effective = new Set<PermissionKey>([...rolePermissions, ...assignedPermissions]);
-  return dedupePermissions([...effective]);
+  return withSmsTemplatePermissionGuard([...effective], canEditSmsTemplate);
 };
 
 export const buildPermissionsService = (db: ConstructorParameters<typeof PermissionsRepository>[0]) =>

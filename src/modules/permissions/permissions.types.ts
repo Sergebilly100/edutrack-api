@@ -22,6 +22,7 @@ export const PERMISSION_KEYS = [
   'salary.export',
   'settings.positions',
   'settings.school',
+  'settings.sms_templates',
 ] as const satisfies readonly PermissionKey[];
 
 const permissionKeySchema = z.enum(PERMISSION_KEYS);
