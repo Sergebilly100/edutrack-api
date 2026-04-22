@@ -299,6 +299,7 @@ export type SmsDashboardResult = {
   }>;
   history: Array<{
     id: string;
+    tenantId: string;
     date: string;
     school: string;
     type: string;

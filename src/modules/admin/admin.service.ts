@@ -144,6 +144,7 @@ type SmsStatsBySchoolRow = {
 
 type SmsHistoryRow = {
   id: string;
+  tenant_id: string;
   date: string;
   school: string;
   type: string;
@@ -1633,6 +1634,7 @@ export const getSmsDashboard = async (publicDb: TenantDb): Promise<SmsDashboardR
       const historyResult = await publicDb.execute<SmsHistoryRow>(sql.raw(`
         SELECT
           nl.id::text AS id,
+          '${tenant.id}'::text AS tenant_id,
           COALESCE(nl.sent_at, nl.created_at)::text AS date,
           '${escapedSchoolName}'::text AS school,
           nl.type::text AS type,
@@ -1671,6 +1673,7 @@ export const getSmsDashboard = async (publicDb: TenantDb): Promise<SmsDashboardR
     })),
     history: history.slice(0, 200).map((row) => ({
       id: row.id,
+      tenantId: row.tenant_id,
       date: row.date,
       school: row.school,
       type: row.type,
