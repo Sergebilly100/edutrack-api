@@ -171,6 +171,7 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
   const isForbidden =
     message === 'Modification de mot de passe non autorisée pour ce rôle' ||
     message === 'Session en lecture seule';
+  const isInternal = message === 'Session initialization failed';
   const code =
     typeof error === 'object' && error !== null && 'code' in error
       ? String((error as { code: unknown }).code)
@@ -183,7 +184,15 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
     code === '23505' &&
     (constraint.includes('users_email_unique') || constraint.includes('users_phone_unique'));
 
-  const statusCode = isUnauthorized ? 401 : isForbidden ? 403 : isConflict ? 409 : 400;
+  const statusCode = isUnauthorized
+    ? 401
+    : isForbidden
+      ? 403
+      : isConflict
+        ? 409
+        : isInternal
+          ? 500
+          : 400;
   const errorCode =
     statusCode === 401
       ? 'UNAUTHORIZED'
@@ -191,6 +200,8 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
         ? 'FORBIDDEN'
         : statusCode === 409
           ? 'CONFLICT'
+          : statusCode === 500
+            ? 'INTERNAL_ERROR'
           : 'BAD_REQUEST';
   const finalMessage =
     statusCode === 409
@@ -237,10 +248,11 @@ export default async function authController(app: FastifyInstance): Promise<void
             registerRefreshToken(tenantDb, refreshToken, context)
           );
         } catch (error) {
-          request.log.warn(
+          request.log.error(
             { err: error instanceof Error ? error.message : 'unknown error', schemaName },
             '[auth] unable to persist refresh token at login'
           );
+          throw new Error('Session initialization failed');
         }
         setRefreshCookie(reply, refreshToken);
 

@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   getMe: vi.fn(),
   verifyRefreshToken: vi.fn(),
   refreshAccessToken: vi.fn(),
+  registerRefreshToken: vi.fn(),
   logout: vi.fn(),
   changePassword: vi.fn(),
 }));
@@ -24,6 +25,7 @@ vi.mock('../../src/modules/auth/auth.service.js', () => ({
   getMe: mocks.getMe,
   verifyRefreshToken: mocks.verifyRefreshToken,
   refreshAccessToken: mocks.refreshAccessToken,
+  registerRefreshToken: mocks.registerRefreshToken,
   logout: mocks.logout,
   changePassword: mocks.changePassword,
 }));
@@ -87,6 +89,7 @@ beforeEach(() => {
     tokenType: 'Bearer',
     expiresIn: '15m',
   });
+  mocks.registerRefreshToken.mockResolvedValue(undefined);
   mocks.logout.mockResolvedValue(undefined);
   mocks.changePassword.mockResolvedValue(undefined);
 });
