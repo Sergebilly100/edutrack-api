@@ -1,5 +1,5 @@
 import argon2 from 'argon2';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import {
   bindKeycloakSubjectIfNeeded,
@@ -107,6 +107,9 @@ const decodeJwtPayload = (token: string): Record<string, unknown> => {
   const parsed = JSON.parse(raw) as unknown;
   return isObject(parsed) ? parsed : {};
 };
+
+const hashRefreshToken = (token: string): string =>
+  createHash('sha256').update(token).digest('hex');
 
 export type TenantDb = QueryExecutor;
 
@@ -518,6 +521,9 @@ export const listUserSessions = async (
   input: { userId: string; currentRefreshToken?: string }
 ): Promise<ActiveSession[]> => {
   const sessions = await listActiveRefreshSessions(db, input.userId);
+  const currentRefreshHash = input.currentRefreshToken
+    ? hashRefreshToken(input.currentRefreshToken)
+    : null;
   return sessions.map((session) => ({
     id: session.id,
     createdAt: session.created_at,
@@ -526,8 +532,7 @@ export const listUserSessions = async (
     expiresAt: session.expires_at,
     userAgent: session.user_agent,
     ipAddress: session.ip_address,
-    isCurrent:
-      input.currentRefreshToken !== undefined && input.currentRefreshToken === session.token,
+    isCurrent: currentRefreshHash !== null && currentRefreshHash === session.token_hash,
   }));
 };
 

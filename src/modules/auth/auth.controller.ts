@@ -280,7 +280,7 @@ export default async function authController(app: FastifyInstance): Promise<void
       try {
         const parsedBody = refreshSchema.parse(request.body ?? {});
         const cookies = parseCookies(request.headers.cookie);
-        const refreshToken = parsedBody.refreshToken ?? cookies.refresh_token;
+        const refreshToken = cookies.refresh_token ?? parsedBody.refreshToken;
         if (!refreshToken) {
           throw new Error('Missing refresh token');
         }
@@ -309,7 +309,7 @@ export default async function authController(app: FastifyInstance): Promise<void
     try {
       const parsedBody = refreshSchema.parse(request.body ?? {});
       const cookies = parseCookies(request.headers.cookie);
-      const refreshToken = parsedBody.refreshToken ?? cookies.refresh_token;
+      const refreshToken = cookies.refresh_token ?? parsedBody.refreshToken;
 
       if (refreshToken) {
         try {

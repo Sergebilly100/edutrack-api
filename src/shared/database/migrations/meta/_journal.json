@@ -71,6 +71,13 @@
       "when": 1777003200000,
       "tag": "0010_staff_role_migration",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1777006800000,
+      "tag": "0011_refresh_token_hash_backfill",
+      "breakpoints": true
     }
   ]
 }

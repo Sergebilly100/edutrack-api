@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
 
 export type QueryExecutor = {
   execute: (query: ReturnType<typeof sql>) => Promise<unknown>;
@@ -74,8 +75,11 @@ type RefreshSessionRow = {
   expires_at: string | null;
   user_agent: string | null;
   ip_address: string | null;
-  token: string;
+  token_hash: string;
 };
+
+const hashRefreshToken = (token: string): string =>
+  createHash('sha256').update(token).digest('hex');
 
 const getColumnRows = (result: unknown): ColumnRow[] => {
   if (typeof result !== 'object' || result === null || !('rows' in result)) {
@@ -293,6 +297,7 @@ export const storeRefreshToken = async (
   }
 ): Promise<void> => {
   await ensureRefreshTokensTable(db);
+  const tokenHash = hashRefreshToken(input.token);
   await db.execute(sql`
     INSERT INTO refresh_tokens (
       user_id,
@@ -307,7 +312,7 @@ export const storeRefreshToken = async (
     )
     VALUES (
       ${input.userId}::uuid,
-      ${input.token},
+      ${tokenHash},
       true,
       NOW(),
       NOW(),
@@ -336,22 +341,23 @@ export const getRefreshTokenStatus = async (
   token: string
 ): Promise<RefreshTokenStatus> => {
   await ensureRefreshTokensTable(db);
+  const tokenHash = hashRefreshToken(token);
   const result = await db.execute(sql`
     SELECT
       EXISTS (
-        SELECT 1 FROM refresh_tokens WHERE token = ${token}
+        SELECT 1 FROM refresh_tokens WHERE token = ${tokenHash}
       ) AS token_exists,
       COALESCE((
         SELECT is_active
         FROM refresh_tokens
-        WHERE token = ${token}
+        WHERE token = ${tokenHash}
         ORDER BY updated_at DESC
         LIMIT 1
       ), false) AS is_active,
       COALESCE((
         SELECT expires_at IS NULL OR expires_at > NOW()
         FROM refresh_tokens
-        WHERE token = ${token}
+        WHERE token = ${tokenHash}
         ORDER BY updated_at DESC
         LIMIT 1
       ), false) AS not_expired
@@ -384,7 +390,7 @@ export const listActiveRefreshSessions = async (
       expires_at::text,
       user_agent,
       ip_address,
-      token
+      token AS token_hash
     FROM refresh_tokens
     WHERE user_id = ${userId}::uuid
       AND is_active = true
@@ -453,12 +459,13 @@ export const invalidateRefreshTokenIfSupported = async (
   }
 
   const setSql = sql.raw(setClauses.join(', '));
+  const refreshTokenHash = input.refreshToken ? hashRefreshToken(input.refreshToken) : undefined;
 
-  if (columns.has('token') && input.refreshToken) {
+  if (columns.has('token') && refreshTokenHash) {
     await db.execute(sql`
       UPDATE refresh_tokens
       SET ${setSql}
-      WHERE token = ${input.refreshToken}
+      WHERE token = ${refreshTokenHash}
     `);
     return;
   }
