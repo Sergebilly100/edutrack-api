@@ -125,49 +125,19 @@ const baseSelect = sql`
   LEFT JOIN teachers t ON t.user_id = u.id
 `;
 
-const ensureUsersProfileColumns = async (db: QueryExecutor): Promise<void> => {
-  await db.execute(sql`
-    ALTER TABLE users
-    ADD COLUMN IF NOT EXISTS profile_photo_url text,
-    ADD COLUMN IF NOT EXISTS keycloak_subject varchar(255)
-  `);
+const ensureUsersProfileColumns = async (): Promise<void> => {
+  // Migration-managed (see 0013_users_profile_columns_infrastructure.sql).
 };
 
-const ensureRefreshTokensTable = async (db: QueryExecutor): Promise<void> => {
-  await db.execute(sql`
-    CREATE TABLE IF NOT EXISTS refresh_tokens (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      token text NOT NULL UNIQUE,
-      is_active boolean NOT NULL DEFAULT true,
-      created_at timestamptz NOT NULL DEFAULT now(),
-      updated_at timestamptz NOT NULL DEFAULT now(),
-      last_used_at timestamptz NOT NULL DEFAULT now(),
-      revoked_at timestamptz,
-      expires_at timestamptz,
-      user_agent text,
-      ip_address text
-    )
-  `);
-
-  await db.execute(sql`
-    ALTER TABLE refresh_tokens
-    ADD COLUMN IF NOT EXISTS user_agent text,
-    ADD COLUMN IF NOT EXISTS ip_address text,
-    ADD COLUMN IF NOT EXISTS last_used_at timestamptz
-  `);
-
-  await db.execute(sql`
-    CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_active
-      ON refresh_tokens (user_id, is_active)
-  `);
+const ensureRefreshTokensTable = async (): Promise<void> => {
+  // Table/columns/index are migration-managed (see 0012_refresh_tokens_infrastructure.sql).
 };
 
 export const findUserByPhone = async (
   db: QueryExecutor,
   phone: string
 ): Promise<AuthUser | null> => {
-  await ensureUsersProfileColumns(db);
+  await ensureUsersProfileColumns();
   const result = await db.execute(sql`
     ${baseSelect}
     WHERE u.phone = ${phone}
@@ -182,7 +152,7 @@ export const findUserByUsername = async (
   db: QueryExecutor,
   username: string
 ): Promise<AuthUser | null> => {
-  await ensureUsersProfileColumns(db);
+  await ensureUsersProfileColumns();
   const result = await db.execute(sql`
     ${baseSelect}
     WHERE t.username = ${username}
@@ -197,7 +167,7 @@ export const findUserByEmail = async (
   db: QueryExecutor,
   email: string
 ): Promise<AuthUser | null> => {
-  await ensureUsersProfileColumns(db);
+  await ensureUsersProfileColumns();
   const result = await db.execute(sql`
     ${baseSelect}
     WHERE u.email = ${email}
@@ -212,7 +182,7 @@ export const findUserProfileById = async (
   db: QueryExecutor,
   userId: string
 ): Promise<AuthUser | null> => {
-  await ensureUsersProfileColumns(db);
+  await ensureUsersProfileColumns();
   const result = await db.execute(sql`
     ${baseSelect}
     WHERE u.id = ${userId}
@@ -256,7 +226,7 @@ export const updateUserProfile = async (
     profilePhotoUrl?: string | null;
   }
 ): Promise<void> => {
-  await ensureUsersProfileColumns(db);
+  await ensureUsersProfileColumns();
   await db.execute(sql`
     UPDATE users
     SET
@@ -277,7 +247,7 @@ export const bindKeycloakSubjectIfNeeded = async (
   userId: string,
   keycloakSubject: string
 ): Promise<void> => {
-  await ensureUsersProfileColumns(db);
+  await ensureUsersProfileColumns();
   await db.execute(sql`
     UPDATE users
     SET keycloak_subject = ${keycloakSubject}
@@ -296,7 +266,7 @@ export const storeRefreshToken = async (
     ipAddress?: string | null;
   }
 ): Promise<void> => {
-  await ensureRefreshTokensTable(db);
+  await ensureRefreshTokensTable();
   const tokenHash = hashRefreshToken(input.token);
   await db.execute(sql`
     INSERT INTO refresh_tokens (
@@ -340,7 +310,7 @@ export const getRefreshTokenStatus = async (
   db: QueryExecutor,
   token: string
 ): Promise<RefreshTokenStatus> => {
-  await ensureRefreshTokensTable(db);
+  await ensureRefreshTokensTable();
   const tokenHash = hashRefreshToken(token);
   const result = await db.execute(sql`
     SELECT
@@ -379,7 +349,7 @@ export const listActiveRefreshSessions = async (
   db: QueryExecutor,
   userId: string
 ): Promise<RefreshSessionRow[]> => {
-  await ensureRefreshTokensTable(db);
+  await ensureRefreshTokensTable();
   const result = await db.execute(sql`
     SELECT
       id,
@@ -405,7 +375,7 @@ export const revokeRefreshSessionById = async (
   db: QueryExecutor,
   input: { userId: string; sessionId: string }
 ): Promise<boolean> => {
-  await ensureRefreshTokensTable(db);
+  await ensureRefreshTokensTable();
   const result = await db.execute(sql`
     UPDATE refresh_tokens
     SET is_active = false,
@@ -434,7 +404,7 @@ export const invalidateRefreshTokenIfSupported = async (
   db: QueryExecutor,
   input: InvalidateRefreshTokenInput
 ): Promise<void> => {
-  await ensureRefreshTokensTable(db);
+  await ensureRefreshTokensTable();
 
   const columnsResult = await db.execute(sql`
     SELECT column_name

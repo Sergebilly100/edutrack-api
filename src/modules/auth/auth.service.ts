@@ -92,7 +92,7 @@ const parseBooleanEnv = (value: string | undefined, fallback: boolean): boolean 
 };
 
 const isLegacyRefreshFallbackEnabled = (): boolean =>
-  parseBooleanEnv(process.env.AUTH_ALLOW_LEGACY_REFRESH, true);
+  parseBooleanEnv(process.env.AUTH_ALLOW_LEGACY_REFRESH, false);
 
 const decodeJwtPayload = (token: string): Record<string, unknown> => {
   const parts = token.split('.');
