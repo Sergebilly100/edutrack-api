@@ -48,6 +48,17 @@ export const assignPositionBodySchema = z.object({
   userId: z.string().uuid(),
 });
 
+export const createAdministrativeUserBodySchema = z
+  .object({
+    name: z.string().trim().min(2).max(255),
+    email: z.string().trim().toLowerCase().email().optional(),
+    phone: z.string().trim().min(6).max(20).optional(),
+    password: z.string().min(8).max(128),
+  })
+  .refine((value) => value.email !== undefined || value.phone !== undefined, {
+    message: 'Either email or phone is required',
+  });
+
 export const assignPositionParamsSchema = z.object({
   id: z.string().uuid(),
 });
@@ -55,6 +66,22 @@ export const assignPositionParamsSchema = z.object({
 export const removeAssignmentParamsSchema = z.object({
   id: z.string().uuid(),
   userId: z.string().uuid(),
+});
+
+export const updateSchoolConfigBodySchema = z
+  .object({
+    name: z.string().trim().min(2).max(255).optional(),
+    city: z.string().trim().min(2).max(255).optional(),
+    teachingType: z
+      .enum(['general', 'technical', 'mixed', 'primaire', 'secondaire', 'superieur', 'mixte'])
+      .optional(),
+  })
+  .refine((value) => value.name !== undefined || value.city !== undefined || value.teachingType !== undefined, {
+    message: 'At least one field must be provided',
+  });
+
+export const updateLimitsBodySchema = z.object({
+  max_admin_positions: z.number().int().min(1).max(50),
 });
 
 export const SECRETARY_BASE_PERMISSIONS: readonly PermissionKey[] = [

@@ -11,10 +11,13 @@ import { PermissionsModuleError, buildPermissionsService } from './permissions.s
 import {
   assignPositionBodySchema,
   assignPositionParamsSchema,
+  createAdministrativeUserBodySchema,
   createPositionBodySchema,
   positionIdParamsSchema,
   removeAssignmentParamsSchema,
+  updateLimitsBodySchema,
   updatePositionBodySchema,
+  updateSchoolConfigBodySchema,
 } from './permissions.types.js';
 
 const handleError = (
@@ -50,6 +53,102 @@ const handleError = (
 };
 
 export default async function permissionsController(app: FastifyInstance): Promise<void> {
+  app.get(
+    '/api/v1/permissions/config',
+    { preHandler: requirePermission('settings.positions') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          return buildPermissionsService(tenantDb).getConfig(claims.schemaName);
+        });
+
+        return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.patch(
+    '/api/v1/permissions/config/school',
+    { preHandler: requirePermission('settings.school') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const body = updateSchoolConfigBodySchema.parse(request.body ?? {});
+
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          return buildPermissionsService(tenantDb).updateSchoolConfig(claims.schemaName, {
+            ...(body.name !== undefined ? { name: body.name } : {}),
+            ...(body.city !== undefined ? { city: body.city } : {}),
+            ...(body.teachingType !== undefined ? { teachingType: body.teachingType } : {}),
+          });
+        });
+
+        return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.patch(
+    '/api/v1/permissions/config/limits',
+    { preHandler: requirePermission('settings.school') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        if (claims.role !== 'super_admin') {
+          throw new PermissionsModuleError(
+            'Only super admin can update limits',
+            403,
+            'FORBIDDEN'
+          );
+        }
+        const body = updateLimitsBodySchema.parse(request.body ?? {});
+
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          return buildPermissionsService(tenantDb).updateLimits(claims.schemaName, {
+            maxAdminPositions: body.max_admin_positions,
+          });
+        });
+
+        return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/permissions/users',
+    { preHandler: requirePermission('settings.positions') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const body = createAdministrativeUserBodySchema.parse(request.body ?? {});
+
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          return buildPermissionsService(tenantDb).createAdministrativeUser(
+            {
+              name: body.name,
+              email: body.email,
+              phone: body.phone,
+              password: body.password,
+            },
+            { schemaName: claims.schemaName }
+          );
+        });
+
+        return reply.code(201).send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
   app.get(
     '/api/v1/permissions/positions',
     { preHandler: requirePermission('settings.positions') },

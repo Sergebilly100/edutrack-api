@@ -1,8 +1,14 @@
+import argon2 from 'argon2';
+
 import type { AccessTokenClaims } from '../auth/auth.service.js';
 
 import { PermissionsRepository } from './permissions.repository.js';
 import { PERMISSION_KEYS, SECRETARY_BASE_PERMISSIONS } from './permissions.types.js';
 import type { PermissionKey } from '../../shared/types/index.js';
+import {
+  buildUsersLimitReachedMessage,
+  getMaxUsersBySchemaName,
+} from '../../shared/utils/users-limit.js';
 
 const ALL_PERMISSIONS_SET = new Set<PermissionKey>(PERMISSION_KEYS);
 const SECRETARY_BASE_PERMISSIONS_SET = new Set<PermissionKey>(SECRETARY_BASE_PERMISSIONS);
@@ -37,6 +43,49 @@ export class PermissionsModuleError extends Error {
 
 export class PermissionsService {
   constructor(private readonly repository: PermissionsRepository) {}
+
+  async getConfig(schemaName: string) {
+    const [schoolConfig, positions, users, currentUsers] = await Promise.all([
+      this.repository.getSchoolConfigBySchemaName(schemaName),
+      this.repository.listPositions(),
+      this.repository.listAdministrativeUsers(),
+      this.repository.countActiveUsers(),
+    ]);
+
+    if (!schoolConfig) {
+      throw new PermissionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
+    }
+
+    return {
+      school: {
+        name: schoolConfig.name,
+        subdomain: schoolConfig.subdomain,
+        plan: schoolConfig.plan,
+        city: schoolConfig.city ?? '',
+        teachingType: schoolConfig.teaching_type ?? 'general',
+        maxUsers: schoolConfig.max_users,
+        currentUsers,
+      },
+      limits: {
+        maxAdminPositions: schoolConfig.max_admin_positions,
+      },
+      positions,
+      users,
+    };
+  }
+
+  async updateSchoolConfig(
+    schemaName: string,
+    input: { name?: string; city?: string; teachingType?: string }
+  ) {
+    await this.repository.updateSchoolConfig(schemaName, input);
+    return this.getConfig(schemaName);
+  }
+
+  async updateLimits(schemaName: string, input: { maxAdminPositions: number }) {
+    await this.repository.updateMaxAdminPositions(schemaName, input.maxAdminPositions);
+    return this.getConfig(schemaName);
+  }
 
   async listPositions() {
     const positions = await this.repository.listPositions();
@@ -94,17 +143,21 @@ export class PermissionsService {
     userId: string;
     assignedBy: string;
   }) {
-    const [position, userExists] = await Promise.all([
+    const [position, userAssignable] = await Promise.all([
       this.repository.findPositionById(input.positionId),
-      this.repository.userExists(input.userId),
+      this.repository.canReceivePositionAssignment(input.userId),
     ]);
 
     if (!position) {
       throw new PermissionsModuleError('Position not found', 404, 'POSITION_NOT_FOUND');
     }
 
-    if (!userExists) {
-      throw new PermissionsModuleError('User not found', 404, 'USER_NOT_FOUND');
+    if (!userAssignable) {
+      throw new PermissionsModuleError(
+        'Only active administrative users can be assigned to a position',
+        400,
+        'INVALID_ASSIGNMENT_TARGET'
+      );
     }
 
     await this.repository.assignPosition({
@@ -126,6 +179,61 @@ export class PermissionsService {
     await this.repository.unassignPosition(positionId, userId);
     const assignmentsCount = await this.repository.countAssignments(positionId);
     return { removed: true, assignmentsCount };
+  }
+
+  async createAdministrativeUser(
+    input: {
+      name: string;
+      email?: string;
+      phone?: string;
+      password: string;
+    },
+    context: { schemaName: string }
+  ) {
+    const [currentCount, maxUsers] = await Promise.all([
+      this.repository.countActiveUsers(),
+      getMaxUsersBySchemaName(context.schemaName),
+    ]);
+
+    if (currentCount >= maxUsers) {
+      throw new PermissionsModuleError(
+        buildUsersLimitReachedMessage(currentCount, maxUsers),
+        403,
+        'USERS_LIMIT_REACHED'
+      );
+    }
+
+    const passwordHash = await argon2.hash(input.password);
+
+    try {
+      const user = await this.repository.createAdministrativeUser({
+        name: input.name,
+        email: input.email ?? null,
+        phone: input.phone ?? null,
+        passwordHash,
+      });
+
+      return { user };
+    } catch (error) {
+      const code =
+        typeof error === 'object' && error !== null && 'code' in error
+          ? String((error as { code: unknown }).code)
+          : '';
+      const constraint =
+        typeof error === 'object' && error !== null && 'constraint' in error
+          ? String((error as { constraint: unknown }).constraint)
+          : '';
+
+      if (code === '23505' && constraint.includes('users_email_unique')) {
+        throw new PermissionsModuleError('Cet email est déjà utilisé', 409, 'EMAIL_ALREADY_USED');
+      }
+
+      if (code === '23505' && constraint.includes('users_phone_unique')) {
+        throw new PermissionsModuleError('Ce numéro est déjà utilisé', 409, 'PHONE_ALREADY_USED');
+      }
+
+      throw error;
+    }
   }
 
   async getEffectivePermissions(claims: Pick<AccessTokenClaims, 'sub' | 'role'>) {

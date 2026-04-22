@@ -26,6 +26,25 @@ type AssignmentCountRow = {
   count: string | number;
 };
 
+type SchoolConfigRow = {
+  name: string;
+  subdomain: string;
+  plan: 'essential' | 'pro' | 'establishment';
+  city: string | null;
+  teaching_type: string | null;
+  max_users: number;
+  max_admin_positions: number;
+};
+
+type AssignableUserRow = {
+  id: string;
+  name: string;
+  role: 'director' | 'secretary' | 'teacher' | 'super_admin';
+  email: string | null;
+  phone: string | null;
+  created_at: Date | string;
+};
+
 const getRows = <TRow extends QueryResultRow>(result: QueryResult<TRow>): TRow[] => result.rows;
 
 const toNumber = (value: string | number): number => {
@@ -89,6 +108,25 @@ export class PermissionsRepository {
     `);
 
     return getRows(result).map(mapPosition);
+  }
+
+  async getSchoolConfigBySchemaName(schemaName: string): Promise<SchoolConfigRow | null> {
+    const result = await this.db.execute<SchoolConfigRow>(sql`
+      SELECT
+        name,
+        subdomain,
+        plan,
+        city,
+        teaching_type,
+        max_users,
+        max_admin_positions
+      FROM public.tenants
+      WHERE schema_name = ${schemaName}
+      LIMIT 1
+    `);
+
+    const [row] = getRows(result);
+    return row ?? null;
   }
 
   async findPositionById(positionId: string): Promise<ReturnType<typeof mapPosition> | null> {
@@ -198,6 +236,21 @@ export class PermissionsRepository {
     return row?.exists ?? false;
   }
 
+  async canReceivePositionAssignment(userId: string): Promise<boolean> {
+    const result = await this.db.execute<UserExistsRow>(sql`
+      SELECT EXISTS (
+        SELECT 1
+        FROM users
+        WHERE id = ${userId}
+          AND role = 'secretary'
+          AND is_active = true
+      ) AS exists
+    `);
+
+    const [row] = getRows(result);
+    return row?.exists ?? false;
+  }
+
   async assignPosition(input: {
     userId: string;
     positionId: string;
@@ -233,5 +286,90 @@ export class PermissionsRepository {
     `);
 
     return getRows(result).map((row) => row.permission as PermissionKey);
+  }
+
+  async listAdministrativeUsers(): Promise<
+    Array<{
+      id: string;
+      name: string;
+      role: string;
+      email: string | null;
+      phone: string | null;
+    }>
+  > {
+    const result = await this.db.execute<AssignableUserRow>(sql`
+      SELECT id, name, role, email, phone, created_at
+      FROM users
+      WHERE role = 'secretary'
+        AND is_active = true
+      ORDER BY created_at DESC
+    `);
+
+    return getRows(result).map((row) => ({
+      id: row.id,
+      name: row.name,
+      role: row.role,
+      email: row.email,
+      phone: row.phone,
+    }));
+  }
+
+  async createAdministrativeUser(input: {
+    name: string;
+    email: string | null;
+    phone: string | null;
+    passwordHash: string;
+  }): Promise<{
+    id: string;
+    name: string;
+    role: string;
+    email: string | null;
+    phone: string | null;
+  }> {
+    const result = await this.db.execute<AssignableUserRow>(sql`
+      INSERT INTO users (role, name, phone, email, password_hash, is_active)
+      VALUES ('secretary', ${input.name}, ${input.phone}, ${input.email}, ${input.passwordHash}, true)
+      RETURNING id, name, role, email, phone, created_at
+    `);
+
+    const [row] = getRows(result);
+    if (!row) {
+      throw new Error('Failed to create administrative user');
+    }
+
+    return {
+      id: row.id,
+      name: row.name,
+      role: row.role,
+      email: row.email,
+      phone: row.phone,
+    };
+  }
+
+  async updateSchoolConfig(
+    schemaName: string,
+    input: { name?: string; city?: string; teachingType?: string }
+  ): Promise<void> {
+    await this.db.execute(sql`
+      UPDATE public.tenants
+      SET
+        name = CASE WHEN ${input.name !== undefined} THEN ${input.name ?? null} ELSE name END,
+        city = CASE WHEN ${input.city !== undefined} THEN ${input.city ?? null} ELSE city END,
+        teaching_type = CASE
+          WHEN ${input.teachingType !== undefined}
+            THEN ${input.teachingType ?? null}
+          ELSE teaching_type
+        END,
+        updated_at = NOW()
+      WHERE schema_name = ${schemaName}
+    `);
+  }
+
+  async updateMaxAdminPositions(schemaName: string, maxAdminPositions: number): Promise<void> {
+    await this.db.execute(sql`
+      UPDATE public.tenants
+      SET max_admin_positions = ${maxAdminPositions}, updated_at = NOW()
+      WHERE schema_name = ${schemaName}
+    `);
   }
 }
