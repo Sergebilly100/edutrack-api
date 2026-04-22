@@ -8,8 +8,8 @@ import {
 import { resolveEffectivePermissions } from '../../modules/permissions/permissions.service.js';
 import { verifyAccessToken, type AccessTokenClaims } from '../../modules/auth/auth.service.js';
 
-const DIRECTOR_SECRETARY_ROLES = new Set(['director', 'secretary']);
-const TEACHER_DIRECTOR_SECRETARY_ROLES = new Set(['teacher', 'director', 'secretary']);
+const DIRECTOR_STAFF_ROLES = new Set(['director', 'staff', 'secretary']);
+const TEACHER_DIRECTOR_STAFF_ROLES = new Set(['teacher', 'director', 'staff', 'secretary']);
 
 const extractBearerToken = (request: FastifyRequest): string => {
   const authorization = request.headers.authorization;
@@ -125,7 +125,7 @@ export const requireDirectorOrSecretary = async (
     return;
   }
 
-  if (!DIRECTOR_SECRETARY_ROLES.has(claims.role)) {
+  if (!DIRECTOR_STAFF_ROLES.has(claims.role)) {
     forbidden(reply, 'Forbidden');
     return;
   }
@@ -171,7 +171,7 @@ export const requireTeacherOrDirectorOrSecretary = async (
     return;
   }
 
-  if (!TEACHER_DIRECTOR_SECRETARY_ROLES.has(claims.role)) {
+  if (!TEACHER_DIRECTOR_STAFF_ROLES.has(claims.role)) {
     forbidden(reply, 'Forbidden');
     return;
   }

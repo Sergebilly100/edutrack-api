@@ -109,7 +109,7 @@ export const studentAbsencesQuerySchema = z.object({
   subject: z.string().trim().min(1).optional(),
 });
 
-export type UserRole = 'director' | 'secretary' | 'teacher' | 'super_admin';
+export type UserRole = 'director' | 'staff' | 'secretary' | 'teacher' | 'super_admin';
 
 export type AccessContext = {
   userId: string;

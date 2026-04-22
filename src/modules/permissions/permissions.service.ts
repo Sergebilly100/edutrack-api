@@ -3,7 +3,7 @@ import argon2 from 'argon2';
 import type { AccessTokenClaims } from '../auth/auth.service.js';
 
 import { PermissionsRepository } from './permissions.repository.js';
-import { PERMISSION_KEYS, SECRETARY_BASE_PERMISSIONS } from './permissions.types.js';
+import { PERMISSION_KEYS, STAFF_BASE_PERMISSIONS } from './permissions.types.js';
 import type { PermissionKey } from '../../shared/types/index.js';
 import {
   buildUsersLimitReachedMessage,
@@ -11,7 +11,7 @@ import {
 } from '../../shared/utils/users-limit.js';
 
 const ALL_PERMISSIONS_SET = new Set<PermissionKey>(PERMISSION_KEYS);
-const SECRETARY_BASE_PERMISSIONS_SET = new Set<PermissionKey>(SECRETARY_BASE_PERMISSIONS);
+const STAFF_BASE_PERMISSIONS_SET = new Set<PermissionKey>(STAFF_BASE_PERMISSIONS);
 
 const dedupePermissions = (permissions: readonly PermissionKey[]): PermissionKey[] => {
   const uniq = new Set<PermissionKey>(permissions);
@@ -23,8 +23,8 @@ const baseRolePermissions = (role: AccessTokenClaims['role']): Set<PermissionKey
     return new Set(ALL_PERMISSIONS_SET);
   }
 
-  if (role === 'secretary') {
-    return new Set(SECRETARY_BASE_PERMISSIONS_SET);
+  if (role === 'secretary' || role === 'staff') {
+    return new Set(STAFF_BASE_PERMISSIONS_SET);
   }
 
   return new Set();
@@ -245,6 +245,81 @@ export class PermissionsService {
 
       throw error;
     }
+  }
+
+  async updateAdministrativeUser(
+    userId: string,
+    input: { name?: string; email?: string | null; phone?: string | null }
+  ) {
+    const existingUser = await this.repository.findAdministrativeUserById(userId);
+    if (!existingUser) {
+      throw new PermissionsModuleError(
+        'Utilisateur administratif introuvable',
+        404,
+        'ADMIN_USER_NOT_FOUND'
+      );
+    }
+
+    try {
+      const user = await this.repository.updateAdministrativeUser(userId, input);
+      if (!user) {
+        throw new PermissionsModuleError(
+          'Utilisateur administratif introuvable',
+          404,
+          'ADMIN_USER_NOT_FOUND'
+        );
+      }
+
+      return { user };
+    } catch (error) {
+      const code =
+        typeof error === 'object' && error !== null && 'code' in error
+          ? String((error as { code: unknown }).code)
+          : '';
+      const constraint =
+        typeof error === 'object' && error !== null && 'constraint' in error
+          ? String((error as { constraint: unknown }).constraint)
+          : '';
+
+      if (code === '23505' && constraint.includes('users_email_unique')) {
+        throw new PermissionsModuleError('Cet email est déjà utilisé', 409, 'EMAIL_ALREADY_USED');
+      }
+
+      if (code === '23505' && constraint.includes('users_phone_unique')) {
+        throw new PermissionsModuleError('Ce numéro est déjà utilisé', 409, 'PHONE_ALREADY_USED');
+      }
+
+      throw error;
+    }
+  }
+
+  async deleteAdministrativeUser(userId: string) {
+    const existingUser = await this.repository.findAdministrativeUserById(userId);
+    if (!existingUser) {
+      throw new PermissionsModuleError(
+        'Utilisateur administratif introuvable',
+        404,
+        'ADMIN_USER_NOT_FOUND'
+      );
+    }
+
+    await this.repository.deactivateAdministrativeUser(userId);
+    return { deleted: true };
+  }
+
+  async resetAdministrativeUserPassword(userId: string, input: { newPassword: string }) {
+    const existingUser = await this.repository.findAdministrativeUserById(userId);
+    if (!existingUser) {
+      throw new PermissionsModuleError(
+        'Utilisateur administratif introuvable',
+        404,
+        'ADMIN_USER_NOT_FOUND'
+      );
+    }
+
+    const passwordHash = await argon2.hash(input.newPassword);
+    await this.repository.updateAdministrativeUserPasswordHash(userId, passwordHash);
+    return { updated: true };
   }
 
   async getEffectivePermissions(claims: Pick<AccessTokenClaims, 'sub' | 'role'>) {

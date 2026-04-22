@@ -41,10 +41,12 @@ type SchoolConfigRow = {
 type AssignableUserRow = {
   id: string;
   name: string;
-  role: 'director' | 'secretary' | 'teacher' | 'super_admin';
+  role: 'director' | 'staff' | 'secretary' | 'teacher' | 'super_admin';
   email: string | null;
   phone: string | null;
   created_at: Date | string;
+  position_names?: string[] | null;
+  permissions?: string[] | null;
 };
 
 const getRows = <TRow extends QueryResultRow>(result: QueryResult<TRow>): TRow[] => result.rows;
@@ -107,7 +109,7 @@ export class PermissionsRepository {
       SELECT COUNT(*)::int AS count
       FROM users
       WHERE is_active = true
-        AND role = 'secretary'
+        AND role::text IN ('secretary', 'staff')
     `);
 
     const [row] = getRows(result);
@@ -267,7 +269,7 @@ export class PermissionsRepository {
         SELECT 1
         FROM users
         WHERE id = ${userId}
-          AND role = 'secretary'
+          AND role::text IN ('secretary', 'staff')
           AND is_active = true
       ) AS exists
     `);
@@ -320,14 +322,28 @@ export class PermissionsRepository {
       role: string;
       email: string | null;
       phone: string | null;
+      positions: string[];
+      permissions: string[];
     }>
   > {
     const result = await this.db.execute<AssignableUserRow>(sql`
-      SELECT id, name, role, email, phone, created_at
-      FROM users
-      WHERE role = 'secretary'
-        AND is_active = true
-      ORDER BY created_at DESC
+      SELECT
+        u.id,
+        u.name,
+        u.role,
+        u.email,
+        u.phone,
+        u.created_at,
+        COALESCE(array_remove(array_agg(DISTINCT ap.name), NULL), ARRAY[]::text[]) AS position_names,
+        COALESCE(array_remove(array_agg(DISTINCT perm.permission), NULL), ARRAY[]::text[]) AS permissions
+      FROM users u
+      LEFT JOIN position_assignments pa ON pa.user_id = u.id
+      LEFT JOIN admin_positions ap ON ap.id = pa.position_id
+      LEFT JOIN LATERAL jsonb_array_elements_text(ap.permissions) AS perm(permission) ON true
+      WHERE u.role::text IN ('secretary', 'staff')
+        AND u.is_active = true
+      GROUP BY u.id, u.name, u.role, u.email, u.phone, u.created_at
+      ORDER BY u.created_at DESC
     `);
 
     return getRows(result).map((row) => ({
@@ -336,6 +352,8 @@ export class PermissionsRepository {
       role: row.role,
       email: row.email,
       phone: row.phone,
+      positions: Array.isArray(row.position_names) ? row.position_names : [],
+      permissions: Array.isArray(row.permissions) ? row.permissions : [],
     }));
   }
 
@@ -369,6 +387,109 @@ export class PermissionsRepository {
       email: row.email,
       phone: row.phone,
     };
+  }
+
+  async findAdministrativeUserById(userId: string): Promise<{
+    id: string;
+    name: string;
+    role: string;
+    email: string | null;
+    phone: string | null;
+  } | null> {
+    const result = await this.db.execute<AssignableUserRow>(sql`
+      SELECT id, name, role, email, phone, created_at
+      FROM users
+      WHERE id = ${userId}
+        AND role::text IN ('secretary', 'staff')
+        AND is_active = true
+      LIMIT 1
+    `);
+
+    const [row] = getRows(result);
+    if (!row) {
+      return null;
+    }
+
+    return {
+      id: row.id,
+      name: row.name,
+      role: row.role,
+      email: row.email,
+      phone: row.phone,
+    };
+  }
+
+  async updateAdministrativeUser(
+    userId: string,
+    input: {
+      name?: string;
+      email?: string | null;
+      phone?: string | null;
+    }
+  ): Promise<{
+    id: string;
+    name: string;
+    role: string;
+    email: string | null;
+    phone: string | null;
+  } | null> {
+    const result = await this.db.execute<AssignableUserRow>(sql`
+      UPDATE users
+      SET
+        name = CASE WHEN ${input.name !== undefined} THEN ${input.name ?? null} ELSE name END,
+        email = CASE WHEN ${input.email !== undefined} THEN ${input.email ?? null} ELSE email END,
+        phone = CASE WHEN ${input.phone !== undefined} THEN ${input.phone ?? null} ELSE phone END
+      WHERE id = ${userId}
+        AND role::text IN ('secretary', 'staff')
+        AND is_active = true
+      RETURNING id, name, role, email, phone, created_at
+    `);
+
+    const [row] = getRows(result);
+    if (!row) {
+      return null;
+    }
+
+    return {
+      id: row.id,
+      name: row.name,
+      role: row.role,
+      email: row.email,
+      phone: row.phone,
+    };
+  }
+
+  async deactivateAdministrativeUser(userId: string): Promise<boolean> {
+    const result = await this.db.execute<{ id: string }>(sql`
+      WITH removed_assignments AS (
+        DELETE FROM position_assignments
+        WHERE user_id = ${userId}
+      )
+      UPDATE users
+      SET is_active = false
+      WHERE id = ${userId}
+        AND role::text IN ('secretary', 'staff')
+        AND is_active = true
+      RETURNING id
+    `);
+
+    return getRows(result).length > 0;
+  }
+
+  async updateAdministrativeUserPasswordHash(
+    userId: string,
+    passwordHash: string
+  ): Promise<boolean> {
+    const result = await this.db.execute<{ id: string }>(sql`
+      UPDATE users
+      SET password_hash = ${passwordHash}
+      WHERE id = ${userId}
+        AND role::text IN ('secretary', 'staff')
+        AND is_active = true
+      RETURNING id
+    `);
+
+    return getRows(result).length > 0;
   }
 
   async updateSchoolConfig(

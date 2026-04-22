@@ -65,7 +65,7 @@ const hasEntityPermission = (
     return true;
   }
 
-  if (role === 'secretary') {
+  if (role === 'secretary' || role === 'staff') {
     return false;
   }
 

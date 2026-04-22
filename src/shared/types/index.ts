@@ -1,4 +1,4 @@
-export type CheckedInVia = 'app' | 'manual' | 'secretary';
+export type CheckedInVia = 'app' | 'manual' | 'secretary' | 'staff';
 
 export type QRScanType = 'start' | 'end';
 

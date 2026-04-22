@@ -9,12 +9,15 @@ import {
 
 import { PermissionsModuleError, buildPermissionsService } from './permissions.service.js';
 import {
+  administrativeUserIdParamsSchema,
   assignPositionBodySchema,
   assignPositionParamsSchema,
   createAdministrativeUserBodySchema,
   createPositionBodySchema,
   positionIdParamsSchema,
+  resetAdministrativeUserPasswordBodySchema,
   removeAssignmentParamsSchema,
+  updateAdministrativeUserBodySchema,
   updateLimitsBodySchema,
   updatePositionBodySchema,
   updateSchoolConfigBodySchema,
@@ -157,6 +160,74 @@ export default async function permissionsController(app: FastifyInstance): Promi
         });
 
         return reply.code(201).send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.put(
+    '/api/v1/permissions/users/:id',
+    { preHandler: requirePermission('settings.positions') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        assertSettingsManager(claims.role);
+        const params = administrativeUserIdParamsSchema.parse(request.params ?? {});
+        const body = updateAdministrativeUserBodySchema.parse(request.body ?? {});
+
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          return buildPermissionsService(tenantDb).updateAdministrativeUser(params.id, {
+            ...(body.name !== undefined ? { name: body.name } : {}),
+            ...(body.email !== undefined ? { email: body.email } : {}),
+            ...(body.phone !== undefined ? { phone: body.phone } : {}),
+          });
+        });
+
+        return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.delete(
+    '/api/v1/permissions/users/:id',
+    { preHandler: requirePermission('settings.positions') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        assertSettingsManager(claims.role);
+        const params = administrativeUserIdParamsSchema.parse(request.params ?? {});
+
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          return buildPermissionsService(tenantDb).deleteAdministrativeUser(params.id);
+        });
+
+        return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/permissions/users/:id/reset-password',
+    { preHandler: requirePermission('settings.positions') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        assertSettingsManager(claims.role);
+        const params = administrativeUserIdParamsSchema.parse(request.params ?? {});
+        const body = resetAdministrativeUserPasswordBodySchema.parse(request.body ?? {});
+
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          return buildPermissionsService(tenantDb).resetAdministrativeUserPassword(params.id, {
+            newPassword: body.newPassword,
+          });
+        });
+
+        return reply.send(result);
       } catch (error) {
         return handleError(request, reply, error);
       }

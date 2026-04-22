@@ -59,6 +59,44 @@ export const createAdministrativeUserBodySchema = z
     message: 'Either email or phone is required',
   });
 
+export const updateAdministrativeUserBodySchema = z
+  .object({
+    name: z.string().trim().min(2).max(255).optional(),
+    email: z.string().trim().toLowerCase().email().nullable().optional(),
+    phone: z.string().trim().min(6).max(20).nullable().optional(),
+  })
+  .refine(
+    (value) =>
+      value.name !== undefined || value.email !== undefined || value.phone !== undefined,
+    {
+      message: 'At least one field must be provided',
+    }
+  )
+  .refine(
+    (value) => {
+      const email = value.email ?? undefined;
+      const phone = value.phone ?? undefined;
+      if (email !== undefined && email !== null && email.length > 0) {
+        return true;
+      }
+      if (phone !== undefined && phone !== null && phone.length > 0) {
+        return true;
+      }
+      return value.email === undefined && value.phone === undefined;
+    },
+    {
+      message: 'Either email or phone is required',
+    }
+  );
+
+export const administrativeUserIdParamsSchema = z.object({
+  id: z.string().uuid(),
+});
+
+export const resetAdministrativeUserPasswordBodySchema = z.object({
+  newPassword: z.string().min(8).max(128),
+});
+
 export const assignPositionParamsSchema = z.object({
   id: z.string().uuid(),
 });
@@ -99,9 +137,12 @@ export const updateLimitsBodySchema = z.object({
   max_admin_positions: z.number().int().min(1).max(50),
 });
 
-export const SECRETARY_BASE_PERMISSIONS: readonly PermissionKey[] = [
+export const STAFF_BASE_PERMISSIONS: readonly PermissionKey[] = [
   'teachers.view',
   'students.view',
   'attendance.mark_students',
   'schedule.view',
 ];
+
+// Backward-compatible alias during role transition.
+export const SECRETARY_BASE_PERMISSIONS = STAFF_BASE_PERMISSIONS;
