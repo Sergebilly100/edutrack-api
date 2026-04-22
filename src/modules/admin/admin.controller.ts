@@ -8,8 +8,10 @@ import {
   listTenantsQuerySchema,
   maintenanceConfigSchema,
   schoolTenantIdParamsSchema,
+  smsPlatformAuditQuerySchema,
   smsTemplateTypeSchema,
   tenantParamsSchema,
+  updateSmsPlatformConfigBodySchema,
   updateSmsTemplateBodySchema,
   updateSchoolConfigBodySchema,
   updateTenantBodySchema,
@@ -28,12 +30,15 @@ import {
   getRevenueSummary,
   getSchoolDetails,
   getSmsDashboard,
+  getSmsPlatformConfig,
   getTenantStats,
+  listSmsPlatformAudit,
   listSchoolPayments,
   listSmsTemplates,
   listSchools,
   listTenants,
   updateMaintenanceConfig,
+  updateSmsPlatformConfig,
   upsertSmsTemplate,
   updateSchoolConfig,
   updateTenant,
@@ -235,6 +240,35 @@ export default async function adminController(app: FastifyInstance): Promise<voi
     try {
       const result = await getSmsDashboard(ensurePublicDb(request));
       return reply.send(result);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/admin/sms/platform-config', { preHandler: preHandlers }, async (request, reply) => {
+    try {
+      const result = await getSmsPlatformConfig(ensurePublicDb(request));
+      return reply.send(result);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.patch('/api/v1/admin/sms/platform-config', { preHandler: preHandlers }, async (request, reply) => {
+    try {
+      const payload = updateSmsPlatformConfigBodySchema.parse(request.body);
+      await updateSmsPlatformConfig(ensurePublicDb(request), payload, request.auth?.sub);
+      return reply.send({ success: true });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/admin/sms/platform-audit', { preHandler: preHandlers }, async (request, reply) => {
+    try {
+      const query = smsPlatformAuditQuerySchema.parse(request.query);
+      const items = await listSmsPlatformAudit(ensurePublicDb(request), query.limit);
+      return reply.send({ items });
     } catch (error) {
       return handleError(reply, error);
     }

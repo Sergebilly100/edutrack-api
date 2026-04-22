@@ -3,10 +3,12 @@ import { z } from 'zod';
 const TENANT_PLAN_VALUES = ['essential', 'pro', 'establishment'] as const;
 const TENANT_STATUS_VALUES = ['trial', 'active', 'suspended', 'cancelled'] as const;
 const TEACHING_TYPE_VALUES = ['primaire', 'secondaire', 'superieur', 'mixte'] as const;
+const SMS_PROVIDER_VALUES = ['mock', 'infobip', 'twilio', 'orange_api', 'custom'] as const;
 
 export type TenantPlan = (typeof TENANT_PLAN_VALUES)[number];
 export type TenantStatus = (typeof TENANT_STATUS_VALUES)[number];
 export type TeachingType = (typeof TEACHING_TYPE_VALUES)[number];
+export type SmsProvider = (typeof SMS_PROVIDER_VALUES)[number];
 
 export const listTenantsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -327,5 +329,68 @@ export const maintenanceConfigSchema = z.object({
   maintenance_message: z.string().trim().min(3).max(500),
 });
 
+export const updateSmsPlatformConfigBodySchema = z
+  .object({
+    provider: z.enum(SMS_PROVIDER_VALUES).optional(),
+    api_base_url: z.string().trim().url().max(255).optional(),
+    api_key: z.string().trim().min(8).max(255).optional(),
+    sender_id: z.string().trim().min(3).max(20).optional(),
+    fallback_sender_id: z.string().trim().max(20).nullable().optional(),
+    default_country_code: z.string().trim().regex(/^\+\d{1,4}$/).optional(),
+    alert_quota_threshold_pct: z.coerce.number().int().min(1).max(100).optional(),
+    alert_failure_threshold_count: z.coerce.number().int().min(1).max(5000).optional(),
+    alert_email: z.string().trim().email().max(255).nullable().optional(),
+    sms_maintenance_mode: z.boolean().optional(),
+    sms_maintenance_message: z.string().trim().min(3).max(500).optional(),
+  })
+  .refine(
+    (value) =>
+      value.provider !== undefined ||
+      value.api_base_url !== undefined ||
+      value.api_key !== undefined ||
+      value.sender_id !== undefined ||
+      value.fallback_sender_id !== undefined ||
+      value.default_country_code !== undefined ||
+      value.alert_quota_threshold_pct !== undefined ||
+      value.alert_failure_threshold_count !== undefined ||
+      value.alert_email !== undefined ||
+      value.sms_maintenance_mode !== undefined ||
+      value.sms_maintenance_message !== undefined,
+    {
+      message: 'At least one field must be provided',
+    }
+  );
+
+export const smsPlatformAuditQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
 export type UpdateSmsTemplateBody = z.infer<typeof updateSmsTemplateBodySchema>;
 export type MaintenanceConfigBody = z.infer<typeof maintenanceConfigSchema>;
+export type UpdateSmsPlatformConfigBody = z.infer<typeof updateSmsPlatformConfigBodySchema>;
+export type SmsPlatformAuditQuery = z.infer<typeof smsPlatformAuditQuerySchema>;
+
+export type SmsPlatformConfigResult = {
+  provider: SmsProvider;
+  hasApiKey: boolean;
+  apiBaseUrl: string | null;
+  apiKeyLast4: string | null;
+  apiKeyUpdatedAt: string | null;
+  senderId: string;
+  fallbackSenderId: string | null;
+  defaultCountryCode: string;
+  alertQuotaThresholdPct: number;
+  alertFailureThresholdCount: number;
+  alertEmail: string | null;
+  smsMaintenanceMode: boolean;
+  smsMaintenanceMessage: string;
+  updatedAt: string;
+};
+
+export type SmsPlatformAuditItem = {
+  id: string;
+  action: string;
+  adminId: string | null;
+  createdAt: string;
+  details: Record<string, unknown>;
+};

@@ -16,12 +16,16 @@ import {
   type SchoolListItem,
   type SchoolListResult,
   type SmsDashboardResult,
+  type SmsPlatformAuditItem,
+  type SmsPlatformConfigResult,
+  type SmsProvider,
   type SmsTemplateItem,
   type SmsTemplateType,
   type TeachingType,
   type TenantListItem,
   type TenantListResult,
   type TenantStatsResult,
+  type UpdateSmsPlatformConfigBody,
   type UpdateSmsTemplateBody,
   type UpdateSchoolConfigBody,
   type UpdateTenantBody,
@@ -151,6 +155,30 @@ type SmsHistoryRow = {
   recipient_phone: string;
   status: string;
   message: string;
+};
+
+type SmsPlatformConfigRow = {
+  sms_provider: SmsProvider | null;
+  sms_api_base_url: string | null;
+  sms_api_key_last4: string | null;
+  sms_api_key_updated_at: string | null;
+  sms_sender_id: string | null;
+  sms_fallback_sender_id: string | null;
+  sms_default_country_code: string | null;
+  sms_alert_quota_threshold_pct: number | null;
+  sms_alert_failure_threshold_count: number | null;
+  sms_alert_email: string | null;
+  sms_maintenance_mode: boolean | null;
+  sms_maintenance_message: string | null;
+  updated_at: string | null;
+};
+
+type SmsPlatformAuditRow = {
+  id: string;
+  action: string;
+  admin_id: string | null;
+  created_at: string;
+  details: unknown;
 };
 
 type DirectorInsertRow = { id: string };
@@ -303,6 +331,33 @@ const ensureAdminPublicInfrastructure = async (publicDb: TenantDb): Promise<void
   `));
 
   await publicDb.execute(sql.raw(`
+    ALTER TABLE public.app_settings
+      ADD COLUMN IF NOT EXISTS sms_provider varchar(50) NOT NULL DEFAULT 'mock',
+      ADD COLUMN IF NOT EXISTS sms_api_base_url varchar(255),
+      ADD COLUMN IF NOT EXISTS sms_api_key text,
+      ADD COLUMN IF NOT EXISTS sms_api_key_last4 varchar(4),
+      ADD COLUMN IF NOT EXISTS sms_api_key_updated_at timestamptz,
+      ADD COLUMN IF NOT EXISTS sms_sender_id varchar(20) NOT NULL DEFAULT 'EduTrack',
+      ADD COLUMN IF NOT EXISTS sms_fallback_sender_id varchar(20),
+      ADD COLUMN IF NOT EXISTS sms_default_country_code varchar(8) NOT NULL DEFAULT '+225',
+      ADD COLUMN IF NOT EXISTS sms_alert_quota_threshold_pct integer NOT NULL DEFAULT 80,
+      ADD COLUMN IF NOT EXISTS sms_alert_failure_threshold_count integer NOT NULL DEFAULT 5,
+      ADD COLUMN IF NOT EXISTS sms_alert_email varchar(255),
+      ADD COLUMN IF NOT EXISTS sms_maintenance_mode boolean NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS sms_maintenance_message text NOT NULL DEFAULT 'Service SMS en maintenance';
+  `));
+
+  await publicDb.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS public.sms_admin_audit_log (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+      admin_id uuid,
+      action varchar(80) NOT NULL,
+      details jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+  `));
+
+  await publicDb.execute(sql.raw(`
     INSERT INTO public.app_settings (maintenance_mode, maintenance_message)
     SELECT false, 'Mise à jour en cours'
     WHERE NOT EXISTS (SELECT 1 FROM public.app_settings);
@@ -327,6 +382,13 @@ const formatDateTime = (value: Date | string | null): string | null => {
 
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+};
+
+const toRecord = (value: unknown): Record<string, unknown> => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
 };
 
 const mapWithConcurrency = async <TInput, TOutput>(
@@ -1746,6 +1808,113 @@ export const deleteTenantSmsTemplate = async (
     WHERE tenant_id = ${tenantId}
       AND type = ${type}
   `);
+};
+
+export const getSmsPlatformConfig = async (
+  publicDb: TenantDb
+): Promise<SmsPlatformConfigResult> => {
+  await ensureAdminPublicInfrastructure(publicDb);
+  const result = await publicDb.execute<SmsPlatformConfigRow>(sql`
+    SELECT
+      sms_provider,
+      sms_api_base_url,
+      sms_api_key_last4,
+      sms_api_key_updated_at::text,
+      sms_sender_id,
+      sms_fallback_sender_id,
+      sms_default_country_code,
+      sms_alert_quota_threshold_pct,
+      sms_alert_failure_threshold_count,
+      sms_alert_email,
+      sms_maintenance_mode,
+      sms_maintenance_message,
+      updated_at::text
+    FROM public.app_settings
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `);
+  const row = getRows<SmsPlatformConfigRow>(result)[0];
+  return {
+    provider: row?.sms_provider ?? 'mock',
+    apiBaseUrl: row?.sms_api_base_url ?? null,
+    hasApiKey: Boolean(row?.sms_api_key_last4),
+    apiKeyLast4: row?.sms_api_key_last4 ?? null,
+    apiKeyUpdatedAt: row?.sms_api_key_updated_at ?? null,
+    senderId: row?.sms_sender_id ?? 'EduTrack',
+    fallbackSenderId: row?.sms_fallback_sender_id ?? null,
+    defaultCountryCode: row?.sms_default_country_code ?? '+225',
+    alertQuotaThresholdPct: row?.sms_alert_quota_threshold_pct ?? 80,
+    alertFailureThresholdCount: row?.sms_alert_failure_threshold_count ?? 5,
+    alertEmail: row?.sms_alert_email ?? null,
+    smsMaintenanceMode: row?.sms_maintenance_mode ?? false,
+    smsMaintenanceMessage: row?.sms_maintenance_message ?? 'Service SMS en maintenance',
+    updatedAt: row?.updated_at ?? new Date().toISOString(),
+  };
+};
+
+export const updateSmsPlatformConfig = async (
+  publicDb: TenantDb,
+  payload: UpdateSmsPlatformConfigBody,
+  adminId?: string
+): Promise<void> => {
+  await ensureAdminPublicInfrastructure(publicDb);
+
+  let apiKeyLast4: string | null = null;
+  if (payload.api_key !== undefined) {
+    const compact = payload.api_key.trim();
+    apiKeyLast4 = compact.slice(-4);
+  }
+
+  await publicDb.execute(sql`
+    UPDATE public.app_settings
+    SET
+      sms_provider = CASE WHEN ${payload.provider !== undefined} THEN ${payload.provider ?? null}::varchar(50) ELSE sms_provider END,
+      sms_api_base_url = CASE WHEN ${payload.api_base_url !== undefined} THEN ${payload.api_base_url ?? null}::varchar(255) ELSE sms_api_base_url END,
+      sms_api_key = CASE WHEN ${payload.api_key !== undefined} THEN ${payload.api_key ?? null}::text ELSE sms_api_key END,
+      sms_api_key_last4 = CASE WHEN ${payload.api_key !== undefined} THEN ${apiKeyLast4}::varchar(4) ELSE sms_api_key_last4 END,
+      sms_api_key_updated_at = CASE WHEN ${payload.api_key !== undefined} THEN NOW() ELSE sms_api_key_updated_at END,
+      sms_sender_id = CASE WHEN ${payload.sender_id !== undefined} THEN ${payload.sender_id ?? null}::varchar(20) ELSE sms_sender_id END,
+      sms_fallback_sender_id = CASE WHEN ${payload.fallback_sender_id !== undefined} THEN ${payload.fallback_sender_id ?? null}::varchar(20) ELSE sms_fallback_sender_id END,
+      sms_default_country_code = CASE WHEN ${payload.default_country_code !== undefined} THEN ${payload.default_country_code ?? null}::varchar(8) ELSE sms_default_country_code END,
+      sms_alert_quota_threshold_pct = CASE WHEN ${payload.alert_quota_threshold_pct !== undefined} THEN ${payload.alert_quota_threshold_pct ?? null}::integer ELSE sms_alert_quota_threshold_pct END,
+      sms_alert_failure_threshold_count = CASE WHEN ${payload.alert_failure_threshold_count !== undefined} THEN ${payload.alert_failure_threshold_count ?? null}::integer ELSE sms_alert_failure_threshold_count END,
+      sms_alert_email = CASE WHEN ${payload.alert_email !== undefined} THEN ${payload.alert_email ?? null}::varchar(255) ELSE sms_alert_email END,
+      sms_maintenance_mode = CASE WHEN ${payload.sms_maintenance_mode !== undefined} THEN ${payload.sms_maintenance_mode ?? null}::boolean ELSE sms_maintenance_mode END,
+      sms_maintenance_message = CASE WHEN ${payload.sms_maintenance_message !== undefined} THEN ${payload.sms_maintenance_message ?? null}::text ELSE sms_maintenance_message END,
+      updated_at = NOW()
+    WHERE id = (SELECT id FROM public.app_settings ORDER BY updated_at DESC LIMIT 1)
+  `);
+
+  await publicDb.execute(sql`
+    INSERT INTO public.sms_admin_audit_log (admin_id, action, details)
+    VALUES (
+      ${adminId ?? null},
+      'sms_platform_config_updated',
+      ${JSON.stringify({
+        fields: Object.keys(payload),
+      })}::jsonb
+    )
+  `);
+};
+
+export const listSmsPlatformAudit = async (
+  publicDb: TenantDb,
+  limit = 50
+): Promise<SmsPlatformAuditItem[]> => {
+  await ensureAdminPublicInfrastructure(publicDb);
+  const result = await publicDb.execute<SmsPlatformAuditRow>(sql`
+    SELECT id::text, action::text, admin_id::text, created_at::text, details
+    FROM public.sms_admin_audit_log
+    ORDER BY created_at DESC
+    LIMIT ${limit}
+  `);
+  return getRows<SmsPlatformAuditRow>(result).map((row) => ({
+    id: row.id,
+    action: row.action,
+    adminId: row.admin_id,
+    createdAt: row.created_at,
+    details: toRecord(row.details),
+  }));
 };
 
 export const getMaintenanceConfig = async (

@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 
+import { sql } from 'drizzle-orm';
 import type { Queue } from 'bullmq';
 
-import { withTenantSchema } from '../../shared/database/db.js';
+import { db, withTenantSchema } from '../../shared/database/db.js';
 import { off as defaultOff, on as defaultOn } from '../../shared/events/event-bus.js';
 import type {
   EventMap,
@@ -52,8 +53,109 @@ const defaultDeps = {
   repository: defaultRepository,
 };
 
-export const defaultSmsSender: SmsSender = async ({ type, schemaName }) => {
-  const isMock = (process.env.SMS_MOCK ?? 'true').toLowerCase() === 'true';
+type SmsPlatformRuntimeConfig = {
+  provider: 'mock' | 'infobip' | 'twilio' | 'orange_api' | 'custom';
+  apiBaseUrl: string | null;
+  apiKey: string | null;
+  senderId: string;
+  smsMaintenanceMode: boolean;
+  smsMaintenanceMessage: string;
+};
+
+let smsConfigCache: { fetchedAt: number; value: SmsPlatformRuntimeConfig } | null = null;
+
+const loadSmsPlatformConfig = async (): Promise<SmsPlatformRuntimeConfig> => {
+  const now = Date.now();
+  if (smsConfigCache && now - smsConfigCache.fetchedAt < 15_000) {
+    return smsConfigCache.value;
+  }
+
+  const result = await db.execute<{
+    sms_provider: SmsPlatformRuntimeConfig['provider'] | null;
+    sms_api_base_url: string | null;
+    sms_api_key: string | null;
+    sms_sender_id: string | null;
+    sms_maintenance_mode: boolean | null;
+    sms_maintenance_message: string | null;
+  }>(sql.raw(`
+    SELECT
+      sms_provider,
+      sms_api_base_url,
+      sms_api_key,
+      sms_sender_id,
+      sms_maintenance_mode,
+      sms_maintenance_message
+    FROM public.app_settings
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `));
+
+  const row = result.rows?.[0];
+  const value: SmsPlatformRuntimeConfig = {
+    provider: row?.sms_provider ?? 'mock',
+    apiBaseUrl: row?.sms_api_base_url ?? null,
+    apiKey: row?.sms_api_key ?? null,
+    senderId: row?.sms_sender_id ?? 'EduTrack',
+    smsMaintenanceMode: row?.sms_maintenance_mode ?? false,
+    smsMaintenanceMessage: row?.sms_maintenance_message ?? 'Service SMS en maintenance',
+  };
+  smsConfigCache = { fetchedAt: now, value };
+  return value;
+};
+
+const sendInfobipSms = async (params: {
+  to: string;
+  message: string;
+  config: SmsPlatformRuntimeConfig;
+}): Promise<{ status: 'sent' | 'failed'; providerRef?: string; errorMessage?: string }> => {
+  const apiBaseUrl = params.config.apiBaseUrl?.trim();
+  const apiKey = params.config.apiKey?.trim();
+  if (!apiBaseUrl || !apiKey) {
+    return { status: 'failed', errorMessage: 'Missing Infobip API base URL or API key' };
+  }
+
+  const endpoint = `${apiBaseUrl.replace(/\/+$/, '')}/sms/2/text/advanced`;
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `App ${apiKey}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({
+      messages: [
+        {
+          from: params.config.senderId,
+          destinations: [{ to: params.to }],
+          text: params.message,
+        },
+      ],
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({} as Record<string, unknown>));
+  if (!response.ok) {
+    return { status: 'failed', errorMessage: `Infobip error (${response.status})` };
+  }
+
+  const providerRef =
+    (payload as { messages?: Array<{ messageId?: string }> }).messages?.[0]?.messageId ??
+    randomUUID();
+
+  return { status: 'sent', providerRef };
+};
+
+export const defaultSmsSender: SmsSender = async ({ to, message, type, schemaName }) => {
+  const config = await loadSmsPlatformConfig();
+
+  if (config.smsMaintenanceMode) {
+    return {
+      status: 'failed',
+      errorMessage: config.smsMaintenanceMessage,
+    };
+  }
+
+  const isMock = config.provider === 'mock' || (process.env.SMS_MOCK ?? 'false').toLowerCase() === 'true';
 
   if (isMock) {
     console.info(`[sms][mock] schema=${schemaName} type=${type} ref=mock`);
@@ -63,11 +165,16 @@ export const defaultSmsSender: SmsSender = async ({ type, schemaName }) => {
     };
   }
 
-  console.error('[notifications] SMS provider not configured (SMS_MOCK=false)');
-  return {
-    status: 'failed',
-    errorMessage: 'SMS provider not configured',
-  };
+  if (config.provider === 'infobip') {
+    return sendInfobipSms({
+      to,
+      message,
+      config,
+    });
+  }
+
+  console.error(`[notifications] SMS provider not implemented: ${config.provider}`);
+  return { status: 'failed', errorMessage: `SMS provider not implemented: ${config.provider}` };
 };
 
 const buildQueueRef = (schemaName: string, notificationType: NotificationType): string => {
