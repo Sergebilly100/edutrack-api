@@ -185,37 +185,48 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
 };
 
 export default async function authController(app: FastifyInstance): Promise<void> {
-  app.post('/api/v1/auth/login/teacher', async (request, reply) => {
-    try {
-      const body = loginSchema.parse(request.body);
-      const schemaName = getSchemaName(request);
-
-      const result = await withTenantSchema(schemaName, (tenantDb) =>
-        login(tenantDb, {
-          identifier: body.identifier,
-          password: body.password,
-          schemaName,
-        })
-      );
-
-      const refreshToken = await signRefreshToken(result.user.id, schemaName);
+  app.post(
+    '/api/v1/auth/login/teacher',
+    {
+      config: {
+        rateLimit: {
+          max: 10,
+          timeWindow: '1 minute',
+        },
+      },
+    },
+    async (request, reply) => {
       try {
-        await withTenantSchema(schemaName, (tenantDb) =>
-          registerRefreshToken(tenantDb, refreshToken)
-        );
-      } catch (error) {
-        request.log.warn(
-          { err: error instanceof Error ? error.message : 'unknown error', schemaName },
-          '[auth] unable to persist refresh token at login'
-        );
-      }
-      setRefreshCookie(reply, refreshToken);
+        const body = loginSchema.parse(request.body);
+        const schemaName = getSchemaName(request);
 
-      return reply.send(result);
-    } catch (error) {
-      return handleError(reply, error);
+        const result = await withTenantSchema(schemaName, (tenantDb) =>
+          login(tenantDb, {
+            identifier: body.identifier,
+            password: body.password,
+            schemaName,
+          })
+        );
+
+        const refreshToken = await signRefreshToken(result.user.id, schemaName);
+        try {
+          await withTenantSchema(schemaName, (tenantDb) =>
+            registerRefreshToken(tenantDb, refreshToken)
+          );
+        } catch (error) {
+          request.log.warn(
+            { err: error instanceof Error ? error.message : 'unknown error', schemaName },
+            '[auth] unable to persist refresh token at login'
+          );
+        }
+        setRefreshCookie(reply, refreshToken);
+
+        return reply.send(result);
+      } catch (error) {
+        return handleError(reply, error);
+      }
     }
-  });
+  );
 
   app.get('/api/v1/auth/me', async (request, reply) => {
     try {
@@ -232,25 +243,36 @@ export default async function authController(app: FastifyInstance): Promise<void
     }
   });
 
-  app.post('/api/v1/auth/refresh', async (request, reply) => {
-    try {
-      const parsedBody = refreshSchema.parse(request.body ?? {});
-      const cookies = parseCookies(request.headers.cookie);
-      const refreshToken = parsedBody.refreshToken ?? cookies.refresh_token;
-      if (!refreshToken) {
-        throw new Error('Missing refresh token');
+  app.post(
+    '/api/v1/auth/refresh',
+    {
+      config: {
+        rateLimit: {
+          max: 30,
+          timeWindow: '1 minute',
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const parsedBody = refreshSchema.parse(request.body ?? {});
+        const cookies = parseCookies(request.headers.cookie);
+        const refreshToken = parsedBody.refreshToken ?? cookies.refresh_token;
+        if (!refreshToken) {
+          throw new Error('Missing refresh token');
+        }
+
+        const payload = await verifyRefreshToken(refreshToken);
+        const result = await withTenantSchema(payload.schemaName, (tenantDb) =>
+          refreshAccessToken(tenantDb, refreshToken)
+        );
+
+        return reply.send(result);
+      } catch (error) {
+        return handleError(reply, error);
       }
-
-      const payload = await verifyRefreshToken(refreshToken);
-      const result = await withTenantSchema(payload.schemaName, (tenantDb) =>
-        refreshAccessToken(tenantDb, refreshToken)
-      );
-
-      return reply.send(result);
-    } catch (error) {
-      return handleError(reply, error);
     }
-  });
+  );
 
   app.post('/api/v1/auth/logout', async (request, reply) => {
     try {

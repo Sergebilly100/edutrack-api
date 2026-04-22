@@ -1,6 +1,7 @@
 import 'dotenv/config';
 
 import cors from '@fastify/cors';
+import rateLimit from '@fastify/rate-limit';
 import multipart from '@fastify/multipart';
 import { sql } from 'drizzle-orm';
 import Fastify from 'fastify';
@@ -96,6 +97,10 @@ app.register(cors, {
   origin: true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+});
+app.register(rateLimit, {
+  global: false,
+  skipOnError: true,
 });
 app.register(multipart, {
   limits: {

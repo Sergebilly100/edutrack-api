@@ -87,6 +87,9 @@ const parseBooleanEnv = (value: string | undefined, fallback: boolean): boolean 
   return fallback;
 };
 
+const isLegacyRefreshFallbackEnabled = (): boolean =>
+  parseBooleanEnv(process.env.AUTH_ALLOW_LEGACY_REFRESH, true);
+
 const decodeJwtPayload = (token: string): Record<string, unknown> => {
   const parts = token.split('.');
   const payloadBase64 = parts[1];
@@ -436,7 +439,15 @@ export const refreshAccessToken = async (db: TenantDb, refreshToken: string) => 
   const payload = await verifyRefreshToken(refreshToken);
   const isActive = await isRefreshTokenActive(db, refreshToken);
   if (!isActive) {
-    throw new Error('Invalid refresh token');
+    if (!isLegacyRefreshFallbackEnabled()) {
+      throw new Error('Invalid refresh token');
+    }
+
+    await storeRefreshToken(db, {
+      userId: payload.sub,
+      token: refreshToken,
+      expiresAt: getRefreshTokenExpiryIso(refreshToken),
+    });
   }
 
   const profile = await findUserProfileById(db, payload.sub);
