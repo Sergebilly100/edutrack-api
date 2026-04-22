@@ -439,10 +439,14 @@ export const getMeFromToken = async (db: TenantDb, token: string) => {
   return getMe(db, claims.sub);
 };
 
-export const refreshAccessToken = async (db: TenantDb, refreshToken: string) => {
+export const refreshAccessToken = async (
+  db: TenantDb,
+  refreshToken: string,
+  context?: { userAgent?: string | null; ipAddress?: string | null } | null
+) => {
   const payload = await verifyRefreshToken(refreshToken);
   const status = await getRefreshTokenStatus(db, refreshToken);
-  const shouldInvalidatePreviousToken = status === 'active';
+  const shouldInvalidatePreviousToken = status !== 'inactive';
   if (status !== 'active') {
     if (status === 'inactive') {
       throw new Error('Invalid refresh token');
@@ -467,7 +471,7 @@ export const refreshAccessToken = async (db: TenantDb, refreshToken: string) => 
   const claims = buildClaims(profile, payload.schemaName);
   const accessToken = await signAccessToken(claims);
   const nextRefreshToken = await signRefreshToken(payload.sub, payload.schemaName);
-  await registerRefreshToken(db, nextRefreshToken, null);
+  await registerRefreshToken(db, nextRefreshToken, context ?? null);
   if (shouldInvalidatePreviousToken) {
     await invalidateRefreshTokenIfSupported(db, {
       refreshToken,

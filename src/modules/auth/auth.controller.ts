@@ -286,8 +286,9 @@ export default async function authController(app: FastifyInstance): Promise<void
         }
 
         const payload = await verifyRefreshToken(refreshToken);
+        const context = getClientContext(request);
         const result = await withTenantSchema(payload.schemaName, (tenantDb) =>
-          refreshAccessToken(tenantDb, refreshToken)
+          refreshAccessToken(tenantDb, refreshToken, context)
         );
         if ('refreshToken' in result && typeof result.refreshToken === 'string') {
           setRefreshCookie(reply, result.refreshToken);
@@ -347,6 +348,7 @@ export default async function authController(app: FastifyInstance): Promise<void
     try {
       const token = extractBearerToken(request);
       const claims = await verifyAccessToken(token);
+      assertWritableSession(request, claims);
       const { sessionId } = sessionParamsSchema.parse(request.params);
 
       const revoked = await withTenantSchema(claims.schemaName, (tenantDb) =>
