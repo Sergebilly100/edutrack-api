@@ -1,13 +1,16 @@
 import argon2 from 'argon2';
+import { randomUUID } from 'node:crypto';
 
 import {
   bindKeycloakSubjectIfNeeded,
+  getRefreshTokenStatus,
   invalidateRefreshTokenIfSupported,
-  isRefreshTokenActive,
+  listActiveRefreshSessions,
   findUserByEmail,
   findUserByPhone,
   findUserByUsername,
   findUserProfileById,
+  revokeRefreshSessionById,
   storeRefreshToken,
   updateUserProfile,
   updateUserPasswordHash,
@@ -45,6 +48,7 @@ type RefreshTokenClaims = JwtPayload & {
   sub: string;
   schemaName: string;
   type: 'refresh';
+  jti?: string;
 };
 
 export type LoginResult = {
@@ -265,7 +269,7 @@ export const signRefreshToken = async (
   const expiry = process.env.JWT_REFRESH_EXPIRY ?? '30d';
 
   return signJwtRs256({
-    payload: { sub: userId, schemaName, type: 'refresh' },
+    payload: { sub: userId, schemaName, type: 'refresh', jti: randomUUID() },
     privateKeyPem: privateKey,
     expiresIn: expiry,
   });
@@ -437,8 +441,13 @@ export const getMeFromToken = async (db: TenantDb, token: string) => {
 
 export const refreshAccessToken = async (db: TenantDb, refreshToken: string) => {
   const payload = await verifyRefreshToken(refreshToken);
-  const isActive = await isRefreshTokenActive(db, refreshToken);
-  if (!isActive) {
+  const status = await getRefreshTokenStatus(db, refreshToken);
+  const shouldInvalidatePreviousToken = status === 'active';
+  if (status !== 'active') {
+    if (status === 'inactive') {
+      throw new Error('Invalid refresh token');
+    }
+
     if (!isLegacyRefreshFallbackEnabled()) {
       throw new Error('Invalid refresh token');
     }
@@ -457,20 +466,74 @@ export const refreshAccessToken = async (db: TenantDb, refreshToken: string) => 
 
   const claims = buildClaims(profile, payload.schemaName);
   const accessToken = await signAccessToken(claims);
+  const nextRefreshToken = await signRefreshToken(payload.sub, payload.schemaName);
+  await registerRefreshToken(db, nextRefreshToken, null);
+  if (shouldInvalidatePreviousToken) {
+    await invalidateRefreshTokenIfSupported(db, {
+      refreshToken,
+      userId: payload.sub,
+    });
+  }
 
   return {
     accessToken,
+    refreshToken: nextRefreshToken,
     tokenType: 'Bearer' as const,
     expiresIn: process.env.JWT_EXPIRY ?? '15m',
   };
 };
 
-export const registerRefreshToken = async (db: TenantDb, refreshToken: string): Promise<void> => {
+export const registerRefreshToken = async (
+  db: TenantDb,
+  refreshToken: string,
+  context?: { userAgent?: string | null; ipAddress?: string | null } | null
+): Promise<void> => {
   const payload = await verifyRefreshToken(refreshToken);
   await storeRefreshToken(db, {
     userId: payload.sub,
     token: refreshToken,
     expiresAt: getRefreshTokenExpiryIso(refreshToken),
+    userAgent: context?.userAgent ?? null,
+    ipAddress: context?.ipAddress ?? null,
+  });
+};
+
+export type ActiveSession = {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+  userAgent: string | null;
+  ipAddress: string | null;
+  isCurrent: boolean;
+};
+
+export const listUserSessions = async (
+  db: TenantDb,
+  input: { userId: string; currentRefreshToken?: string }
+): Promise<ActiveSession[]> => {
+  const sessions = await listActiveRefreshSessions(db, input.userId);
+  return sessions.map((session) => ({
+    id: session.id,
+    createdAt: session.created_at,
+    updatedAt: session.updated_at,
+    lastUsedAt: session.last_used_at,
+    expiresAt: session.expires_at,
+    userAgent: session.user_agent,
+    ipAddress: session.ip_address,
+    isCurrent:
+      input.currentRefreshToken !== undefined && input.currentRefreshToken === session.token,
+  }));
+};
+
+export const revokeUserSession = async (
+  db: TenantDb,
+  input: { userId: string; sessionId: string }
+): Promise<boolean> => {
+  return revokeRefreshSessionById(db, {
+    userId: input.userId,
+    sessionId: input.sessionId,
   });
 };
 

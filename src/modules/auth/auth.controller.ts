@@ -6,9 +6,11 @@ import {
   changePassword,
   getMe,
   login,
+  listUserSessions,
   logout,
   registerRefreshToken,
   refreshAccessToken,
+  revokeUserSession,
   signRefreshToken,
   updateMe,
   verifyAccessToken,
@@ -22,6 +24,9 @@ const loginSchema = z.object({
 
 const refreshSchema = z.object({
   refreshToken: z.string().trim().min(1).optional(),
+});
+const sessionParamsSchema = z.object({
+  sessionId: z.string().uuid(),
 });
 
 const changePasswordSchema = z
@@ -107,6 +112,23 @@ const parseCookies = (rawCookieHeader: string | undefined): Record<string, strin
       acc[key] = decodeURIComponent(value);
       return acc;
     }, {});
+};
+
+const getClientContext = (
+  request: FastifyRequest
+): { userAgent: string | null; ipAddress: string | null } => {
+  const rawUserAgent = request.headers['user-agent'];
+  const userAgent =
+    typeof rawUserAgent === 'string' && rawUserAgent.trim().length > 0
+      ? rawUserAgent.trim().slice(0, 512)
+      : null;
+  const forwardedFor = request.headers['x-forwarded-for'];
+  const ipFromForwarded =
+    typeof forwardedFor === 'string'
+      ? forwardedFor.split(',')[0]?.trim() ?? null
+      : null;
+  const ipAddress = ipFromForwarded || request.ip || null;
+  return { userAgent, ipAddress };
 };
 
 const setRefreshCookie = (reply: FastifyReply, refreshToken: string): void => {
@@ -210,8 +232,9 @@ export default async function authController(app: FastifyInstance): Promise<void
 
         const refreshToken = await signRefreshToken(result.user.id, schemaName);
         try {
+          const context = getClientContext(request);
           await withTenantSchema(schemaName, (tenantDb) =>
-            registerRefreshToken(tenantDb, refreshToken)
+            registerRefreshToken(tenantDb, refreshToken, context)
           );
         } catch (error) {
           request.log.warn(
@@ -266,8 +289,15 @@ export default async function authController(app: FastifyInstance): Promise<void
         const result = await withTenantSchema(payload.schemaName, (tenantDb) =>
           refreshAccessToken(tenantDb, refreshToken)
         );
+        if ('refreshToken' in result && typeof result.refreshToken === 'string') {
+          setRefreshCookie(reply, result.refreshToken);
+        }
 
-        return reply.send(result);
+        return reply.send({
+          accessToken: result.accessToken,
+          tokenType: result.tokenType,
+          expiresIn: result.expiresIn,
+        });
       } catch (error) {
         return handleError(reply, error);
       }
@@ -291,6 +321,39 @@ export default async function authController(app: FastifyInstance): Promise<void
 
       clearRefreshCookie(reply);
       return reply.send({ success: true });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/auth/sessions', async (request, reply) => {
+    try {
+      const token = extractBearerToken(request);
+      const claims = await verifyAccessToken(token);
+      const cookies = parseCookies(request.headers.cookie);
+      const currentRefreshToken = cookies.refresh_token;
+
+      const result = await withTenantSchema(claims.schemaName, (tenantDb) =>
+        listUserSessions(tenantDb, { userId: claims.sub, currentRefreshToken })
+      );
+
+      return reply.send({ sessions: result });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.delete('/api/v1/auth/sessions/:sessionId', async (request, reply) => {
+    try {
+      const token = extractBearerToken(request);
+      const claims = await verifyAccessToken(token);
+      const { sessionId } = sessionParamsSchema.parse(request.params);
+
+      const revoked = await withTenantSchema(claims.schemaName, (tenantDb) =>
+        revokeUserSession(tenantDb, { userId: claims.sub, sessionId })
+      );
+
+      return reply.send({ success: revoked });
     } catch (error) {
       return handleError(reply, error);
     }

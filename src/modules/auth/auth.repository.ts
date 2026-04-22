@@ -59,8 +59,22 @@ type ColumnRow = {
   column_name: string;
 };
 
-type RegclassRow = {
-  table_name: string | null;
+type RefreshTokenStateRow = {
+  token_exists: boolean;
+  is_active: boolean;
+  not_expired: boolean;
+};
+
+type RefreshSessionRow = {
+  id: string;
+  user_id: string;
+  created_at: string;
+  updated_at: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+  user_agent: string | null;
+  ip_address: string | null;
+  token: string;
 };
 
 const getColumnRows = (result: unknown): ColumnRow[] => {
@@ -72,12 +86,21 @@ const getColumnRows = (result: unknown): ColumnRow[] => {
   return Array.isArray(rows) ? rows : [];
 };
 
-const getRegclassRows = (result: unknown): RegclassRow[] => {
+const getRefreshTokenStateRows = (result: unknown): RefreshTokenStateRow[] => {
   if (typeof result !== 'object' || result === null || !('rows' in result)) {
     return [];
   }
 
-  const rows = (result as { rows: RegclassRow[] }).rows;
+  const rows = (result as { rows: RefreshTokenStateRow[] }).rows;
+  return Array.isArray(rows) ? rows : [];
+};
+
+const getRefreshSessionRows = (result: unknown): RefreshSessionRow[] => {
+  if (typeof result !== 'object' || result === null || !('rows' in result)) {
+    return [];
+  }
+
+  const rows = (result as { rows: RefreshSessionRow[] }).rows;
   return Array.isArray(rows) ? rows : [];
 };
 
@@ -115,9 +138,19 @@ const ensureRefreshTokensTable = async (db: QueryExecutor): Promise<void> => {
       is_active boolean NOT NULL DEFAULT true,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now(),
+      last_used_at timestamptz NOT NULL DEFAULT now(),
       revoked_at timestamptz,
-      expires_at timestamptz
+      expires_at timestamptz,
+      user_agent text,
+      ip_address text
     )
+  `);
+
+  await db.execute(sql`
+    ALTER TABLE refresh_tokens
+    ADD COLUMN IF NOT EXISTS user_agent text,
+    ADD COLUMN IF NOT EXISTS ip_address text,
+    ADD COLUMN IF NOT EXISTS last_used_at timestamptz
   `);
 
   await db.execute(sql`
@@ -255,50 +288,135 @@ export const storeRefreshToken = async (
     userId: string;
     token: string;
     expiresAt: string | null;
+    userAgent?: string | null;
+    ipAddress?: string | null;
   }
 ): Promise<void> => {
   await ensureRefreshTokensTable(db);
   await db.execute(sql`
-    INSERT INTO refresh_tokens (user_id, token, is_active, updated_at, revoked_at, expires_at)
+    INSERT INTO refresh_tokens (
+      user_id,
+      token,
+      is_active,
+      updated_at,
+      last_used_at,
+      revoked_at,
+      expires_at,
+      user_agent,
+      ip_address
+    )
     VALUES (
       ${input.userId}::uuid,
       ${input.token},
       true,
       NOW(),
+      NOW(),
       NULL,
-      ${input.expiresAt ? sql`${input.expiresAt}::timestamptz` : sql`NULL`}
+      ${input.expiresAt ? sql`${input.expiresAt}::timestamptz` : sql`NULL`},
+      ${input.userAgent ?? null},
+      ${input.ipAddress ?? null}
     )
     ON CONFLICT (token)
     DO UPDATE SET
       user_id = EXCLUDED.user_id,
       is_active = true,
       updated_at = NOW(),
+      last_used_at = NOW(),
       revoked_at = NULL,
-      expires_at = EXCLUDED.expires_at
+      expires_at = EXCLUDED.expires_at,
+      user_agent = EXCLUDED.user_agent,
+      ip_address = EXCLUDED.ip_address
   `);
 };
 
-export const isRefreshTokenActive = async (
+export type RefreshTokenStatus = 'active' | 'inactive' | 'missing';
+
+export const getRefreshTokenStatus = async (
   db: QueryExecutor,
   token: string
+): Promise<RefreshTokenStatus> => {
+  await ensureRefreshTokensTable(db);
+  const result = await db.execute(sql`
+    SELECT
+      EXISTS (
+        SELECT 1 FROM refresh_tokens WHERE token = ${token}
+      ) AS token_exists,
+      COALESCE((
+        SELECT is_active
+        FROM refresh_tokens
+        WHERE token = ${token}
+        ORDER BY updated_at DESC
+        LIMIT 1
+      ), false) AS is_active,
+      COALESCE((
+        SELECT expires_at IS NULL OR expires_at > NOW()
+        FROM refresh_tokens
+        WHERE token = ${token}
+        ORDER BY updated_at DESC
+        LIMIT 1
+      ), false) AS not_expired
+  `);
+
+  const [row] = getRefreshTokenStateRows(result);
+  if (!row || !row.token_exists) {
+    return 'missing';
+  }
+
+  if (row.is_active && row.not_expired) {
+    return 'active';
+  }
+
+  return 'inactive';
+};
+
+export const listActiveRefreshSessions = async (
+  db: QueryExecutor,
+  userId: string
+): Promise<RefreshSessionRow[]> => {
+  await ensureRefreshTokensTable(db);
+  const result = await db.execute(sql`
+    SELECT
+      id,
+      user_id,
+      created_at::text,
+      updated_at::text,
+      last_used_at::text,
+      expires_at::text,
+      user_agent,
+      ip_address,
+      token
+    FROM refresh_tokens
+    WHERE user_id = ${userId}::uuid
+      AND is_active = true
+      AND (expires_at IS NULL OR expires_at > NOW())
+    ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC
+  `);
+
+  return getRefreshSessionRows(result);
+};
+
+export const revokeRefreshSessionById = async (
+  db: QueryExecutor,
+  input: { userId: string; sessionId: string }
 ): Promise<boolean> => {
   await ensureRefreshTokensTable(db);
   const result = await db.execute(sql`
-    SELECT EXISTS (
-      SELECT 1
-      FROM refresh_tokens
-      WHERE token = ${token}
-        AND is_active = true
-        AND (expires_at IS NULL OR expires_at > NOW())
-    ) AS active
+    UPDATE refresh_tokens
+    SET is_active = false,
+        updated_at = NOW(),
+        revoked_at = NOW()
+    WHERE id = ${input.sessionId}::uuid
+      AND user_id = ${input.userId}::uuid
+      AND is_active = true
+    RETURNING id
   `);
 
   if (typeof result !== 'object' || result === null || !('rows' in result)) {
     return false;
   }
 
-  const rows = (result as { rows: Array<{ active: boolean }> }).rows;
-  return rows[0]?.active === true;
+  const rows = (result as { rows: Array<{ id: string }> }).rows;
+  return rows.length > 0;
 };
 
 type InvalidateRefreshTokenInput = {
