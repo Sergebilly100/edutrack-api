@@ -141,6 +141,17 @@ const normalizePem = (value: string): string => {
 const isKeycloakAuthEnabled = (): boolean =>
   (process.env.AUTH_PROVIDER ?? 'local').trim().toLowerCase() === 'keycloak';
 
+const getKeycloakRequestTimeoutMs = (): number => {
+  const parsed = Number.parseInt(process.env.KEYCLOAK_REQUEST_TIMEOUT_MS ?? '', 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 5000;
+  }
+  return parsed;
+};
+
+const shouldFallbackToLocalOnKeycloakUnavailable = (): boolean =>
+  parseBooleanEnv(process.env.AUTH_KEYCLOAK_FALLBACK_LOCAL, true);
+
 const getKeycloakConfig = (): {
   baseUrl: string;
   realm: string;
@@ -180,6 +191,13 @@ type KeycloakVerificationResult = {
   claims: Record<string, unknown>;
 };
 
+class KeycloakUnavailableError extends Error {
+  constructor(message = 'Keycloak unavailable') {
+    super(message);
+    this.name = 'KeycloakUnavailableError';
+  }
+}
+
 const verifyCredentialsWithKeycloak = async (
   identifier: string,
   password: string
@@ -198,14 +216,22 @@ const verifyCredentialsWithKeycloak = async (
   form.set('username', identifier);
   form.set('password', password);
 
-  const response = await fetch(tokenEndpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Accept: 'application/json',
-    },
-    body: form.toString(),
-  });
+  let response: Response;
+  try {
+    response = await fetch(tokenEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+      },
+      body: form.toString(),
+      signal: AbortSignal.timeout(getKeycloakRequestTimeoutMs()),
+    });
+  } catch (error) {
+    throw new KeycloakUnavailableError(
+      error instanceof Error ? error.message : 'Unable to reach Keycloak'
+    );
+  }
 
   if (!response.ok) {
     throw new Error('Invalid credentials');
@@ -386,25 +412,39 @@ export const login = async (db: TenantDb, input: LoginInput): Promise<LoginResul
   }
 
   if (isKeycloakAuthEnabled()) {
-    const keycloakVerification = await verifyCredentialsWithKeycloak(
-      input.identifier,
-      input.password
-    );
-    const { claimName, requireMatch } = getKeycloakTenantClaimConfig();
-    const tenantClaim =
-      typeof keycloakVerification.claims[claimName] === 'string'
-        ? String(keycloakVerification.claims[claimName]).trim()
-        : '';
-    if (requireMatch && tenantClaim !== input.schemaName) {
-      throw new Error('Invalid credentials');
+    try {
+      const keycloakVerification = await verifyCredentialsWithKeycloak(
+        input.identifier,
+        input.password
+      );
+      const { claimName, requireMatch } = getKeycloakTenantClaimConfig();
+      const tenantClaim =
+        typeof keycloakVerification.claims[claimName] === 'string'
+          ? String(keycloakVerification.claims[claimName]).trim()
+          : '';
+      if (requireMatch && tenantClaim !== input.schemaName) {
+        throw new Error('Invalid credentials');
+      }
+      if (
+        authUser.keycloakSubject &&
+        authUser.keycloakSubject !== keycloakVerification.subject
+      ) {
+        throw new Error('Invalid credentials');
+      }
+      await bindKeycloakSubjectIfNeeded(db, authUser.userId, keycloakVerification.subject);
+    } catch (error) {
+      if (
+        error instanceof KeycloakUnavailableError &&
+        shouldFallbackToLocalOnKeycloakUnavailable()
+      ) {
+        const validPassword = await argon2.verify(authUser.passwordHash, input.password);
+        if (!validPassword) {
+          throw new Error('Invalid credentials');
+        }
+      } else {
+        throw error;
+      }
     }
-    if (
-      authUser.keycloakSubject &&
-      authUser.keycloakSubject !== keycloakVerification.subject
-    ) {
-      throw new Error('Invalid credentials');
-    }
-    await bindKeycloakSubjectIfNeeded(db, authUser.userId, keycloakVerification.subject);
   } else {
     const validPassword = await argon2.verify(authUser.passwordHash, input.password);
     if (!validPassword) {

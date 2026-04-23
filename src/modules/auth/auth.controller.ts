@@ -63,6 +63,14 @@ const updateMeSchema = z
   );
 
 const SCHEMA_NAME_REGEX = /^[a-z][a-z0-9_]{2,63}$/;
+const LOGIN_RATE_LIMIT_MAX = (() => {
+  const parsed = Number.parseInt(process.env.AUTH_LOGIN_RATE_LIMIT_MAX ?? '', 10);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return parsed;
+  }
+  return process.env.NODE_ENV === 'production' ? 10 : 200;
+})();
+const LOGIN_RATE_LIMIT_WINDOW = process.env.AUTH_LOGIN_RATE_LIMIT_WINDOW ?? '1 minute';
 
 const getSchemaName = (request: FastifyRequest): string => {
   const headerValue = request.headers['x-tenant-schema'];
@@ -223,8 +231,8 @@ export default async function authController(app: FastifyInstance): Promise<void
     {
       config: {
         rateLimit: {
-          max: 10,
-          timeWindow: '1 minute',
+          max: LOGIN_RATE_LIMIT_MAX,
+          timeWindow: LOGIN_RATE_LIMIT_WINDOW,
         },
       },
     },
