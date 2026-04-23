@@ -51,13 +51,10 @@ const attendanceHistoryQuerySchema = z.object({
 
 const historyDetailQuerySchema = z.object({
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  to: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .refine(
-      (to) => true,
-      'to must be >= from'
-    ),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+}).refine((value) => value.to >= value.from, {
+  message: 'to must be >= from',
+  path: ['to'],
 });
 
 const weekScheduleQuerySchema = z.object({

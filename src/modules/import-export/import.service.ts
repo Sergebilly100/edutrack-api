@@ -68,7 +68,7 @@ const hasFutureOccurrenceInPeriod = (input: {
   const nowDateIso = formatUtcDate(now);
   const baseDateIso = input.validFrom > nowDateIso ? input.validFrom : nowDateIso;
   const periodEnd = parseUtcDate(input.validTo);
-  let candidate = nextIsoDayOnOrAfter(parseUtcDate(baseDateIso), input.dayOfWeek);
+  const candidate = nextIsoDayOnOrAfter(parseUtcDate(baseDateIso), input.dayOfWeek);
 
   while (candidate <= periodEnd) {
     const candidateIso = formatUtcDate(candidate);
