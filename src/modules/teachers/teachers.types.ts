@@ -20,14 +20,33 @@ export const teachersListQuerySchema = z.object({
 
 const teacherTypeSchema = z.enum(['vacataire', 'permanent']);
 
-const fullPayloadSchema = z.object({
-  first_name: z.string().trim().min(1).max(100),
-  last_name: z.string().trim().min(1).max(100),
-  phone: z.string().regex(PHONE_CI_REGEX).nullable().optional().default(null),
-  type: teacherTypeSchema,
-  subjects: z.array(z.string().trim().min(1).max(100)).default([]),
-  hourly_rate: z.number().int().min(0).nullable().optional().default(null),
-});
+const fullPayloadSchema = z
+  .object({
+    first_name: z.string().trim().min(1).max(100),
+    last_name: z.string().trim().min(1).max(100),
+    phone: z.string().regex(PHONE_CI_REGEX).nullable().optional().default(null),
+    type: teacherTypeSchema,
+    subjects: z.array(z.string().trim().min(1).max(100)).default([]),
+    hourly_rate: z.number().int().min(0).nullable().optional().default(null),
+    monthly_salary: z.number().int().min(0).nullable().optional().default(null),
+  })
+  .superRefine((payload, ctx) => {
+    if (payload.type === 'vacataire' && payload.hourly_rate === null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['hourly_rate'],
+        message: 'hourly_rate is required for vacataire',
+      });
+    }
+
+    if (payload.type === 'permanent' && payload.monthly_salary === null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['monthly_salary'],
+        message: 'monthly_salary is required for permanent',
+      });
+    }
+  });
 
 const onboardingPayloadSchema = z.object({
   name: z.string().trim().min(1).max(200),
@@ -45,6 +64,7 @@ export const updateTeacherBodySchema = z
     type: teacherTypeSchema.optional(),
     subjects: z.array(z.string().trim().min(1).max(100)).optional(),
     hourly_rate: z.number().int().min(0).nullable().optional(),
+    monthly_salary: z.number().int().min(0).nullable().optional(),
     // Champ is_active : désactive l'accès au compte (users.is_active) — distinct du blocage
     is_active: z.boolean().optional(),
     // Champ de blocage métier — opère sur teachers.is_blocked + teachers.blocked_reason

@@ -55,6 +55,7 @@ const toCreateInput = (payload: unknown): CreateTeacherInput => {
       type: parsed.type,
       subjects: parsed.subjects,
       hourly_rate: null,
+      monthly_salary: null,
     };
   }
 

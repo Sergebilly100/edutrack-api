@@ -35,6 +35,7 @@ type TeacherDTO = {
   type: 'vacataire' | 'permanent';
   subjects: string[];
   hourly_rate: number | null;
+  monthly_salary: number | null;
   is_active: boolean;
   is_blocked: boolean;
   blocked_reason: string | null;
@@ -51,6 +52,7 @@ const toDTO = (row: {
   type: 'vacataire' | 'permanent';
   subjects: string[];
   hourly_rate: number | null;
+  monthly_salary: number | null;
   is_active: boolean;
   is_blocked: boolean;
   blocked_reason: string | null;
@@ -65,6 +67,7 @@ const toDTO = (row: {
   type: row.type,
   subjects: row.subjects,
   hourly_rate: row.hourly_rate,
+  monthly_salary: row.monthly_salary,
   is_active: row.is_active,
   is_blocked: row.is_blocked,
   blocked_reason: row.blocked_reason,
@@ -121,9 +124,49 @@ export class TeachersService {
   }
 
   async updateTeacher(teacherId: string, input: UpdateTeacherInput) {
+    const current = await this.repository.getTeacherById(teacherId);
+    if (!current) {
+      throw new TeachersModuleError('Teacher not found', 404, 'TEACHER_NOT_FOUND');
+    }
+
+    const nextType = input.type ?? current.type;
+    const nextHourlyRate =
+      input.hourly_rate !== undefined ? input.hourly_rate : current.hourly_rate;
+    const nextMonthlySalary =
+      input.monthly_salary !== undefined ? input.monthly_salary : current.monthly_salary;
+
+    if (nextType === 'vacataire' && nextHourlyRate === null) {
+      throw new TeachersModuleError(
+        'Hourly rate is required for vacataire',
+        400,
+        'HOURLY_RATE_REQUIRED'
+      );
+    }
+
+    if (nextType === 'permanent' && nextMonthlySalary === null) {
+      throw new TeachersModuleError(
+        'Monthly salary is required for permanent',
+        400,
+        'MONTHLY_SALARY_REQUIRED'
+      );
+    }
+
+    if (input.type !== undefined && input.type !== current.type) {
+      const hasUnpaidSalaryRecords = await this.repository.hasUnpaidSalaryRecords(teacherId);
+      if (hasUnpaidSalaryRecords) {
+        throw new TeachersModuleError(
+          'Teacher type change is blocked until all salary records are paid',
+          409,
+          'TEACHER_TYPE_CHANGE_BLOCKED'
+        );
+      }
+    }
+
     const updated = await this.repository.updateTeacher(teacherId, {
       ...input,
       ...(input.subjects ? { subjects: canonicalizeSubjectList(input.subjects) } : {}),
+      hourly_rate: nextType === 'permanent' ? null : nextHourlyRate,
+      monthly_salary: nextType === 'vacataire' ? null : nextMonthlySalary,
     });
     if (!updated) {
       throw new TeachersModuleError('Teacher not found', 404, 'TEACHER_NOT_FOUND');

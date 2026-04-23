@@ -26,6 +26,7 @@ type TeacherRow = {
   type: 'vacataire' | 'permanent';
   subjects: string[];
   hourly_rate: number | null;
+  monthly_salary: number | null;
   is_active: boolean;
   is_blocked: boolean;
   blocked_reason: string | null;
@@ -128,6 +129,7 @@ const TEACHER_SELECT = sql`
     t.type::text                                                              AS type,
     t.subjects,
     t.hourly_rate,
+    t.monthly_salary,
     u.is_active,
     t.is_blocked,
     t.blocked_reason,
@@ -212,8 +214,24 @@ export class TeachersRepository {
     if (!user) throw new Error('Failed to create teacher user');
 
     const teacherResult = await this.db.execute(sql`
-      INSERT INTO teachers (user_id, username, type, subjects, hourly_rate, is_blocked)
-      VALUES (${user.id}, ${username}, ${input.type}, ${input.subjects}, ${input.hourly_rate}, false)
+      INSERT INTO teachers (
+        user_id,
+        username,
+        type,
+        subjects,
+        hourly_rate,
+        monthly_salary,
+        is_blocked
+      )
+      VALUES (
+        ${user.id},
+        ${username},
+        ${input.type},
+        ${input.subjects},
+        ${input.hourly_rate},
+        ${input.monthly_salary},
+        false
+      )
       RETURNING id
     `);
 
@@ -281,6 +299,7 @@ export class TeachersRepository {
         type           = ${input.type ?? current.type},
         subjects       = ${pgArrayFormat},
         hourly_rate    = ${input.hourly_rate === undefined ? current.hourly_rate : input.hourly_rate},
+        monthly_salary = ${input.monthly_salary === undefined ? current.monthly_salary : input.monthly_salary},
         is_blocked     = ${nextIsBlocked},
         blocked_reason = ${blockedReasonSql},
         blocked_at     = ${blockedAtSql}
@@ -288,6 +307,17 @@ export class TeachersRepository {
     `);
 
     return this.getTeacherById(teacherId);
+  }
+
+  async hasUnpaidSalaryRecords(teacherId: string): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      SELECT 1 AS found
+      FROM salary_records
+      WHERE teacher_id = ${teacherId}
+        AND status <> 'paid'::salary_status
+      LIMIT 1
+    `);
+    return getRows<{ found: number }>(result).length > 0;
   }
 
   // softDeleteTeacher : désactivation de compte (users.is_active → false).
