@@ -11,7 +11,7 @@ const repository = {
   softDeleteTeacher: vi.fn(),
   getTeacherStats: vi.fn(),
   getAttendanceStats: vi.fn(),
-  hasUnpaidSalaryRecords: vi.fn(),
+  hasOutstandingUnpaidSalaryRecords: vi.fn(),
 };
 
 const baseTeacher = {
@@ -40,7 +40,7 @@ describe('teachers.service', () => {
 
   it('bloque le changement de type si des salaires ne sont pas payés', async () => {
     repository.getTeacherById.mockResolvedValue(baseTeacher);
-    repository.hasUnpaidSalaryRecords.mockResolvedValue(true);
+    repository.hasOutstandingUnpaidSalaryRecords.mockResolvedValue(true);
 
     const service = new TeachersService(repository as never);
 
@@ -57,7 +57,7 @@ describe('teachers.service', () => {
 
   it('autorise le changement de type si tous les salaires sont payés', async () => {
     repository.getTeacherById.mockResolvedValue(baseTeacher);
-    repository.hasUnpaidSalaryRecords.mockResolvedValue(false);
+    repository.hasOutstandingUnpaidSalaryRecords.mockResolvedValue(false);
     repository.updateTeacher.mockResolvedValue({
       ...baseTeacher,
       type: 'permanent',

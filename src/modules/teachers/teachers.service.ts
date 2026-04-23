@@ -152,8 +152,9 @@ export class TeachersService {
     }
 
     if (input.type !== undefined && input.type !== current.type) {
-      const hasUnpaidSalaryRecords = await this.repository.hasUnpaidSalaryRecords(teacherId);
-      if (hasUnpaidSalaryRecords) {
+      const hasOutstandingUnpaidSalaryRecords =
+        await this.repository.hasOutstandingUnpaidSalaryRecords(teacherId);
+      if (hasOutstandingUnpaidSalaryRecords) {
         throw new TeachersModuleError(
           'Teacher type change is blocked until all salary records are paid',
           409,

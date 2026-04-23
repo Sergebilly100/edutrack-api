@@ -11,6 +11,7 @@ type SalaryMetricRow = {
   teacher_name: string;
   teacher_type: 'vacataire' | 'permanent';
   hourly_rate: number | null;
+  monthly_salary: number | null;
   hours_planned: string | number;
   hours_done: string | number;
   total_fcfa: string | number;
@@ -28,6 +29,7 @@ type TeacherDetailsRow = {
   teacher_name: string;
   teacher_type: 'vacataire' | 'permanent';
   hourly_rate: number | null;
+  monthly_salary: number | null;
 };
 
 type TeacherDailyRow = {
@@ -122,6 +124,7 @@ export class BillingRepository {
         u.name AS teacher_name,
         t.type::text AS teacher_type,
         t.hourly_rate,
+        t.monthly_salary,
         COALESCE(p.hours_planned, 0)::numeric(8,2) AS hours_planned,
         COALESCE(dh.hours_done, 0)::numeric(8,2) AS hours_done,
         CASE
@@ -171,7 +174,8 @@ export class BillingRepository {
         t.id AS teacher_id,
         u.name AS teacher_name,
         t.type::text AS teacher_type,
-        t.hourly_rate
+        t.hourly_rate,
+        t.monthly_salary
       FROM teachers t
       INNER JOIN users u ON u.id = t.user_id
       WHERE t.id = ${teacherId}

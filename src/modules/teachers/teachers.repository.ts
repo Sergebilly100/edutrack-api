@@ -309,12 +309,13 @@ export class TeachersRepository {
     return this.getTeacherById(teacherId);
   }
 
-  async hasUnpaidSalaryRecords(teacherId: string): Promise<boolean> {
+  async hasOutstandingUnpaidSalaryRecords(teacherId: string): Promise<boolean> {
     const result = await this.db.execute(sql`
       SELECT 1 AS found
       FROM salary_records
       WHERE teacher_id = ${teacherId}
         AND status <> 'paid'::salary_status
+        AND total_fcfa > 0
       LIMIT 1
     `);
     return getRows<{ found: number }>(result).length > 0;

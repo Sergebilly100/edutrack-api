@@ -3,10 +3,12 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import archiver from 'archiver';
+import { sql } from 'drizzle-orm';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { Queue, Worker, type Job } from 'bullmq';
 import type { Redis } from 'ioredis';
 
+import { db } from '../../shared/database/db.js';
 import { withTenantSchema } from '../../shared/database/db.js';
 
 import { buildBillingService } from './billing.service.js';
@@ -56,12 +58,143 @@ const iterateMonths = (periodFrom: string, periodTo: string): string[] => {
 
 type TeacherExportPayload = Awaited<ReturnType<ReturnType<typeof buildBillingService>['getExportTeacherPayload']>>;
 
+type SchoolBranding = {
+  schoolName: string;
+  logoUrl: string | null;
+};
+
+type LoadedLogo = {
+  bytes: Uint8Array;
+  format: 'png' | 'jpg';
+};
+
+type PdfBranding = {
+  schoolName: string;
+  logo: LoadedLogo | null;
+};
+
+const DEFAULT_SCHOOL_NAME = 'École';
+
+const fetchSchoolBranding = async (schemaName: string): Promise<SchoolBranding> => {
+  const result = await db.execute<{ name: string | null; logo_url: string | null }>(sql`
+    SELECT name, logo_url
+    FROM public.tenants
+    WHERE schema_name = ${schemaName}
+    LIMIT 1
+  `);
+
+  const row = result.rows[0];
+  if (!row) {
+    return {
+      schoolName: DEFAULT_SCHOOL_NAME,
+      logoUrl: null,
+    };
+  }
+
+  return {
+    schoolName: row.name?.trim() || DEFAULT_SCHOOL_NAME,
+    logoUrl: row.logo_url?.trim() || null,
+  };
+};
+
+const parseDataUri = (value: string): { contentType: string; data: Uint8Array } | null => {
+  const match = /^data:([^;,]+);base64,(.+)$/i.exec(value.trim());
+  if (!match) {
+    return null;
+  }
+
+  const [, contentType, base64Body] = match;
+  try {
+    return {
+      contentType,
+      data: Uint8Array.from(Buffer.from(base64Body, 'base64')),
+    };
+  } catch {
+    return null;
+  }
+};
+
+const detectImageFormat = (bytes: Uint8Array, contentType?: string): 'png' | 'jpg' | null => {
+  if (bytes.length >= 8) {
+    const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    const isPng = pngSignature.every((value, index) => bytes[index] === value);
+    if (isPng) {
+      return 'png';
+    }
+  }
+
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'jpg';
+  }
+
+  const normalizedType = contentType?.toLowerCase() ?? '';
+  if (normalizedType.includes('png')) {
+    return 'png';
+  }
+  if (normalizedType.includes('jpeg') || normalizedType.includes('jpg')) {
+    return 'jpg';
+  }
+
+  return null;
+};
+
+const loadLogo = async (logoUrl: string | null): Promise<LoadedLogo | null> => {
+  if (!logoUrl) {
+    return null;
+  }
+
+  const dataUri = parseDataUri(logoUrl);
+  if (dataUri) {
+    const format = detectImageFormat(dataUri.data, dataUri.contentType);
+    if (!format) {
+      return null;
+    }
+
+    return {
+      bytes: dataUri.data,
+      format,
+    };
+  }
+
+  if (!/^https?:\/\//i.test(logoUrl)) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(logoUrl, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      return null;
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    const format = detectImageFormat(bytes, response.headers.get('content-type') ?? undefined);
+    if (!format) {
+      return null;
+    }
+
+    return {
+      bytes,
+      format,
+    };
+  } catch {
+    return null;
+  }
+};
+
 const buildTeacherExportLines = (details: TeacherExportPayload): string[] => {
+  const compensationLine =
+    details.teacher.type === 'permanent'
+      ? `Salaire mensuel: ${details.teacher.monthlySalary ?? 'Non renseigne'}`
+      : `Taux horaire: ${details.teacher.hourlyRate ?? 'Non renseigne'}`;
+
   return [
     `Professeur: ${details.teacher.name}`,
     `Mois: ${details.month}`,
     `Type: ${details.teacher.type}`,
-    `Taux horaire: ${details.teacher.hourlyRate ?? 'Salaire fixe'}`,
+    compensationLine,
     `Heures prevues: ${details.summary.hoursPlanned.toFixed(2)}`,
     `Heures effectuees: ${details.summary.hoursDone.toFixed(2)}`,
     `Total FCFA: ${details.summary.totalFcfa ?? 'N/A'}`,
@@ -78,39 +211,71 @@ const createSimplePdfBytes = async (params: {
   title: string;
   subtitle: string;
   lines: string[];
+  branding?: PdfBranding;
 }): Promise<Uint8Array> => {
   const pdf = await PDFDocument.create();
   let page = pdf.addPage([595, 842]);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const boldFont = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const schoolName = params.branding?.schoolName ?? DEFAULT_SCHOOL_NAME;
+  const embeddedLogo = params.branding?.logo
+    ? params.branding.logo.format === 'png'
+      ? await pdf.embedPng(params.branding.logo.bytes)
+      : await pdf.embedJpg(params.branding.logo.bytes)
+    : null;
 
-  page.drawText('LOGO ECOLE (placeholder)', {
-    x: 40,
-    y: 790,
-    size: 10,
-    font,
-    color: rgb(0.4, 0.4, 0.4),
-  });
+  const drawHeader = (targetPage: typeof page) => {
+    const pageWidth = targetPage.getWidth();
+    const logoMaxWidth = 72;
+    const logoMaxHeight = 72;
 
-  page.drawText(params.title, {
-    x: 40,
-    y: 760,
-    size: 18,
-    font: boldFont,
-  });
+    if (embeddedLogo) {
+      const scale = Math.min(
+        logoMaxWidth / embeddedLogo.width,
+        logoMaxHeight / embeddedLogo.height,
+        1
+      );
+      const width = embeddedLogo.width * scale;
+      const height = embeddedLogo.height * scale;
+      targetPage.drawImage(embeddedLogo, {
+        x: pageWidth - 40 - width,
+        y: 760,
+        width,
+        height,
+      });
+    }
 
-  page.drawText(params.subtitle, {
-    x: 40,
-    y: 738,
-    size: 11,
-    font,
-  });
+    targetPage.drawText(params.title, {
+      x: 40,
+      y: 760,
+      size: 18,
+      font: boldFont,
+    });
 
-  let cursorY = 710;
+    targetPage.drawText(params.subtitle, {
+      x: 40,
+      y: 740,
+      size: 11,
+      font,
+    });
+
+    targetPage.drawText(`Ecole: ${schoolName}`, {
+      x: 40,
+      y: 724,
+      size: 10,
+      font,
+      color: rgb(0.3, 0.3, 0.3),
+    });
+  };
+
+  drawHeader(page);
+
+  let cursorY = 695;
   for (const line of params.lines) {
     if (cursorY < 60) {
-      cursorY = 760;
+      cursorY = 695;
       page = pdf.addPage([595, 842]);
+      drawHeader(page);
     }
 
     page.drawText(line, {
@@ -137,6 +302,7 @@ const writeSimplePdf = async (params: {
   subtitle: string;
   lines: string[];
   fileName: string;
+  branding?: PdfBranding;
 }): Promise<{ filePath: string; fileName: string; generatedAt: string }> => {
   await mkdir(BILLING_EXPORT_DIR, { recursive: true });
   const bytes = await createSimplePdfBytes(params);
@@ -209,6 +375,12 @@ export type BillingPdfJobResult = {
 export const processBillingPdfJob = async (
   job: Job<BillingPdfJobData>
 ): Promise<BillingPdfJobResult> => {
+  const schoolBranding = await fetchSchoolBranding(job.data.schemaName);
+  const branding: PdfBranding = {
+    schoolName: schoolBranding.schoolName,
+    logo: await loadLogo(schoolBranding.logoUrl),
+  };
+
   return withTenantSchema(job.data.schemaName, async (tenantDb) => {
     const service = buildBillingService(tenantDb);
 
@@ -225,6 +397,7 @@ export const processBillingPdfJob = async (
         subtitle: `Export genere automatiquement - job ${job.id ?? ''}`,
         lines,
         fileName,
+        branding,
       });
       return {
         ...result,
@@ -251,6 +424,7 @@ export const processBillingPdfJob = async (
         subtitle: `Export global - job ${job.id ?? ''}`,
         lines,
         fileName,
+        branding,
       });
 
       return {
@@ -284,6 +458,7 @@ export const processBillingPdfJob = async (
         subtitle: `${teacherName} - ${teacherType} - job ${job.id ?? ''}`,
         lines: allLines,
         fileName,
+        branding,
       });
 
       return {
@@ -318,6 +493,7 @@ export const processBillingPdfJob = async (
         title: 'Bilan Salaire Professeur (multi-periode)',
         subtitle: `${teacher.name} - ${teacher.type} - job ${job.id ?? ''}`,
         lines,
+        branding,
       });
       entries.push({ fileName: entryFileName, bytes });
     }

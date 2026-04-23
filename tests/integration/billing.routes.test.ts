@@ -43,6 +43,38 @@ describe('billing integration (real db)', () => {
     expect(Number(rows[0]?.count ?? 0)).toBe(1);
   });
 
+  it('POST /api/v1/billing/salary/compute ignore les fiches deja payees', async () => {
+    const headers = await getAuthHeaders('director');
+
+    const compute = await request()
+      .post(`/api/v1/billing/salary/compute?month=${currentMonth}`)
+      .set(headers);
+    expect(compute.status).toBe(200);
+
+    const records = await queryTenant<{ id: string }>(
+      `
+        SELECT id
+        FROM ${tenantTable('salary_records')}
+        WHERE period_month = $1::date
+        LIMIT 1
+      `,
+      [`${currentMonth}-01`]
+    );
+    const recordId = records[0]?.id;
+    expect(recordId).toBeTruthy();
+
+    const markPaid = await request()
+      .patch(`/api/v1/billing/salary/${recordId as string}/status`)
+      .set(headers)
+      .send({ status: 'paid', notes: 'test' });
+    expect(markPaid.status).toBe(200);
+
+    const recompute = await request()
+      .post(`/api/v1/billing/salary/compute?month=${currentMonth}`)
+      .set(headers);
+    expect(recompute.status).toBe(200);
+  });
+
   it('POST /api/v1/billing/salary/compute refuse staff (403)', async () => {
     const headers = await getAuthHeaders('staff');
 

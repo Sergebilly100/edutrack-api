@@ -57,7 +57,7 @@ export class BillingService {
           hoursPlanned: roundHours(hoursPlanned),
           hoursDone: roundHours(hoursDone),
           hourlyRate: null,
-          totalFcfa: null,
+          totalFcfa: row.monthly_salary,
           status: 'Salaire fixe',
           salaryRecordId: row.salary_record_id,
           isPartiallyPaid: false,
@@ -153,7 +153,12 @@ export class BillingService {
     );
 
     const hourlyRate = teacher.hourly_rate;
-    const totalFcfa = hourlyRate === null ? null : Math.round(totals.hoursDone * hourlyRate);
+    const totalFcfa =
+      teacher.teacher_type === 'permanent'
+        ? teacher.monthly_salary
+        : hourlyRate === null
+          ? null
+          : Math.round(totals.hoursDone * hourlyRate);
     const teacherMonthlyRecord = teacherMetrics?.salary_record_id
       ? await this.repository.getSalaryRecordById(teacherMetrics.salary_record_id)
       : null;
@@ -207,6 +212,7 @@ export class BillingService {
         name: teacher.teacher_name,
         type: teacher.teacher_type,
         hourlyRate,
+        monthlySalary: teacher.monthly_salary,
       },
       summary: {
         hoursPlanned: roundHours(totals.hoursPlanned),
@@ -238,20 +244,15 @@ export class BillingService {
   async computeSalaryRecords(month: string) {
     const { monthStart, monthEnd } = monthToBounds(month);
 
-    const paidRecordsCount = await this.repository.countPaidRecords(monthStart);
-    if (paidRecordsCount > 0) {
-      throw new BillingModuleError(
-        'Cannot recompute paid salary records',
-        409,
-        'SALARY_ALREADY_PAID'
-      );
-    }
-
     const rows = await this.repository.listTeacherMonthlyMetrics(monthStart, monthEnd);
 
     let updatedCount = 0;
     for (const row of rows) {
       if (row.hourly_rate === null || row.teacher_type === 'permanent') {
+        continue;
+      }
+
+      if (row.salary_status === 'paid') {
         continue;
       }
 
