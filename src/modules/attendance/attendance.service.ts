@@ -190,6 +190,82 @@ export class AttendanceService {
     };
   }
 
+  async skipQrStep(
+    input: {
+      scanType: 'start' | 'end';
+      scheduleId: string;
+      date?: string;
+    },
+    context: ServiceContext
+  ): Promise<{ success: true }> {
+    const isAllowed = await this.repository.isTeacherQrSkipAllowed(context.schemaName);
+    if (!isAllowed) {
+      throw new AttendanceModuleError(
+        'QR skip is disabled by school settings',
+        403,
+        'QR_SKIP_DISABLED'
+      );
+    }
+
+    const teacher = await this.repository.findTeacherByUserId(context.userId);
+    if (!teacher) {
+      throw new AttendanceModuleError('Teacher profile not found', 404, 'TEACHER_NOT_FOUND');
+    }
+
+    const schedule = await this.repository.findScheduleContextForTeacher(
+      input.scheduleId,
+      teacher.id
+    );
+    if (!schedule) {
+      throw new AttendanceModuleError('Schedule not found', 404, 'SCHEDULE_NOT_FOUND');
+    }
+
+    const date = input.date ?? currentDateIso();
+    const scannedAt = new Date();
+
+    if (input.scanType === 'start') {
+      const existing = await this.repository.getTeacherAttendance({
+        teacherId: teacher.id,
+        scheduleId: schedule.scheduleId,
+        date,
+      });
+
+      if (!existing?.checked_in_at) {
+        const slotStart = toSlotDateTime(date, schedule.slotStartTime);
+        const slotEnd = toSlotDateTime(date, schedule.slotEndTime);
+        const status = calculateAttendanceStatus(scannedAt, slotStart, slotEnd);
+
+        await this.repository.upsertCheckIn({
+          teacherId: teacher.id,
+          scheduleId: schedule.scheduleId,
+          date,
+          status: status.status,
+          lateMinutes: status.lateMinutes,
+          checkedInAt: toIso(scannedAt),
+        });
+      }
+    } else {
+      await this.repository.ensureAttendanceRecord({
+        teacherId: teacher.id,
+        scheduleId: schedule.scheduleId,
+        date,
+      });
+    }
+
+    await this.repository.recordQrScan({
+      teacherId: teacher.id,
+      scheduleId: schedule.scheduleId,
+      date,
+      scanType: input.scanType,
+      scannedRoomId: schedule.plannedRoomId,
+      roomMismatch: false,
+      qrAlertSent: false,
+      scannedAtIso: toIso(scannedAt),
+    });
+
+    return { success: true };
+  }
+
   async getActive(context: ServiceContext): Promise<{ date: string; items: ActiveAttendanceItem[] }> {
     const teacher = await this.repository.findTeacherByUserId(context.userId);
     if (!teacher) {

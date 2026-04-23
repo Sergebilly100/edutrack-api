@@ -75,6 +75,7 @@ export const tenants = pgTable('tenants', {
   maxSmsPerMonth: integer('max_sms_per_month').default(2000),
   canEditSmsTemplate: boolean('can_edit_sms_template').default(false),
   canExportData: boolean('can_export_data').default(true),
+  allowTeacherQrSkip: boolean('allow_teacher_qr_skip').notNull().default(false),
   logoUrl: text('logo_url'),
   activeSchoolYear: varchar('active_school_year', { length: 20 }),
 });

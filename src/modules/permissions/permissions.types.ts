@@ -121,6 +121,7 @@ export const updateSchoolConfigBodySchema = z
       .regex(/^\d{4}-\d{4}$/)
       .nullable()
       .optional(),
+    allowTeacherQrSkip: z.boolean().optional(),
   })
   .refine(
     (value) =>
@@ -128,7 +129,8 @@ export const updateSchoolConfigBodySchema = z
       value.city !== undefined ||
       value.teachingType !== undefined ||
       value.logoUrl !== undefined ||
-      value.activeSchoolYear !== undefined,
+      value.activeSchoolYear !== undefined ||
+      value.allowTeacherQrSkip !== undefined,
     {
       message: 'At least one field must be provided',
     }

@@ -41,6 +41,11 @@ type AttendanceWriteRow = {
   checked_in_at: string | null;
 };
 
+type ExistingTeacherAttendanceRow = {
+  status: 'present' | 'absent' | 'late' | 'excused';
+  checked_in_at: string | null;
+};
+
 type ActiveAttendanceRow = {
   schedule_id: string;
   subject: string;
@@ -272,6 +277,38 @@ export class AttendanceRepository {
 
     const [row] = getRows(result);
     return row ?? null;
+  }
+
+  async getTeacherAttendance(params: {
+    teacherId: string;
+    scheduleId: string;
+    date: string;
+  }): Promise<ExistingTeacherAttendanceRow | null> {
+    const result = await this.db.execute<ExistingTeacherAttendanceRow>(sql`
+      SELECT
+        status::text AS status,
+        checked_in_at::text AS checked_in_at
+      FROM attendances_teacher
+      WHERE teacher_id = ${params.teacherId}
+        AND schedule_id = ${params.scheduleId}
+        AND date = ${params.date}
+      LIMIT 1
+    `);
+
+    const [row] = getRows(result);
+    return row ?? null;
+  }
+
+  async isTeacherQrSkipAllowed(schemaName: string): Promise<boolean> {
+    const result = await this.db.execute<{ allow_teacher_qr_skip: boolean }>(sql`
+      SELECT COALESCE(allow_teacher_qr_skip, false) AS allow_teacher_qr_skip
+      FROM public.tenants
+      WHERE schema_name = ${schemaName}
+      LIMIT 1
+    `);
+
+    const [row] = getRows(result);
+    return row?.allow_teacher_qr_skip ?? false;
   }
 
   async upsertCheckIn(params: {

@@ -8,6 +8,7 @@ import { AttendanceModuleError, buildAttendanceService } from './attendance.serv
 import {
   bulkStudentsBodySchema,
   checkInBodySchema,
+  qrSkipBodySchema,
   qrScanBodySchema,
   teacherAttendanceDateQuerySchema,
 } from './attendance.types.js';
@@ -100,6 +101,32 @@ export default async function attendanceController(app: FastifyInstance): Promis
         return service.qrScan(
           {
             qrToken: body.qr_token,
+            scanType: body.scan_type,
+            scheduleId: body.schedule_id,
+            date: body.date,
+          },
+          {
+            schemaName: claims.schemaName,
+            userId: claims.sub,
+          }
+        );
+      });
+
+      return reply.send({ data: result });
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.post('/api/v1/attendance/qr-skip', { preHandler: requireTeacher }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const body = qrSkipBodySchema.parse(request.body ?? {});
+
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildAttendanceService(tenantDb);
+        return service.skipQrStep(
+          {
             scanType: body.scan_type,
             scheduleId: body.schedule_id,
             date: body.date,

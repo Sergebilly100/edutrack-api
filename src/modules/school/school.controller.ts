@@ -18,6 +18,7 @@ type TenantInfoRow = {
   max_sms_per_month: number | null;
   can_edit_sms_template: boolean | null;
   can_export_data: boolean | null;
+  allow_teacher_qr_skip: boolean | null;
   onboarding_completed: boolean;
 };
 
@@ -81,6 +82,7 @@ const fetchSchoolInfoBySchema = async (schemaName: string) => {
            COALESCE(max_sms_per_month, 2000) AS max_sms_per_month,
            COALESCE(can_edit_sms_template, false) AS can_edit_sms_template,
            COALESCE(can_export_data, true) AS can_export_data,
+           COALESCE(allow_teacher_qr_skip, false) AS allow_teacher_qr_skip,
            onboarding_completed
     FROM public.tenants
     WHERE schema_name = ${schemaName}
@@ -127,6 +129,7 @@ const fetchSchoolInfoBySchema = async (schemaName: string) => {
     max_sms_per_month: tenant.max_sms_per_month ?? 2000,
     can_edit_sms_template: tenant.can_edit_sms_template ?? false,
     can_export_data: tenant.can_export_data ?? true,
+    allow_teacher_qr_skip: tenant.allow_teacher_qr_skip ?? false,
     current_users: tenantMetrics.currentUsers,
     address: '',
     phone: tenantMetrics.directorPhone,

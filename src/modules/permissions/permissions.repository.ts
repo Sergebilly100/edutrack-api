@@ -35,6 +35,7 @@ type SchoolConfigRow = {
   max_users: number;
   max_admin_positions: number;
   can_edit_sms_template: boolean;
+  allow_teacher_qr_skip: boolean;
   logo_url: string | null;
   active_school_year: string | null;
 };
@@ -91,7 +92,8 @@ export class PermissionsRepository {
     await this.db.execute(sql`
       ALTER TABLE public.tenants
       ADD COLUMN IF NOT EXISTS logo_url text,
-      ADD COLUMN IF NOT EXISTS active_school_year varchar(20)
+      ADD COLUMN IF NOT EXISTS active_school_year varchar(20),
+      ADD COLUMN IF NOT EXISTS allow_teacher_qr_skip boolean NOT NULL DEFAULT false
     `);
   }
 
@@ -148,6 +150,7 @@ export class PermissionsRepository {
         max_users,
         max_admin_positions,
         COALESCE(can_edit_sms_template, false) AS can_edit_sms_template,
+        COALESCE(allow_teacher_qr_skip, false) AS allow_teacher_qr_skip,
         logo_url,
         active_school_year
       FROM public.tenants
@@ -510,6 +513,7 @@ export class PermissionsRepository {
       teachingType?: string;
       logoUrl?: string | null;
       activeSchoolYear?: string | null;
+      allowTeacherQrSkip?: boolean;
     }
   ): Promise<void> {
     await this.ensurePublicTenantColumns();
@@ -528,6 +532,11 @@ export class PermissionsRepository {
           WHEN ${input.activeSchoolYear !== undefined}
             THEN ${input.activeSchoolYear ?? null}
           ELSE active_school_year
+        END,
+        allow_teacher_qr_skip = CASE
+          WHEN ${input.allowTeacherQrSkip !== undefined}
+            THEN ${input.allowTeacherQrSkip ?? false}
+          ELSE allow_teacher_qr_skip
         END,
         updated_at = NOW()
       WHERE schema_name = ${schemaName}

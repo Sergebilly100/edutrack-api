@@ -92,6 +92,13 @@
       "when": 1777014000000,
       "tag": "0013_users_profile_columns_infrastructure",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1777017600000,
+      "tag": "0014_allow_teacher_qr_skip",
+      "breakpoints": true
     }
   ]
 }

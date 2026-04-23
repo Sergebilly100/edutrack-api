@@ -14,6 +14,12 @@ export const qrScanBodySchema = z.object({
   date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format').optional(),
 });
 
+export const qrSkipBodySchema = z.object({
+  scan_type: z.enum(['start', 'end']),
+  schedule_id: z.string().uuid(),
+  date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format').optional(),
+});
+
 // ── NOUVEAU ──────────────────────────────────────────────────────────────────
 export const bulkStudentsBodySchema = z.object({
   schedule_id: z.string().uuid(),

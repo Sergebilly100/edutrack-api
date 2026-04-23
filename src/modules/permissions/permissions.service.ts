@@ -83,6 +83,7 @@ export class PermissionsService {
         totalUsers: currentUsers,
         adminUsersCount,
         canEditSmsTemplate: schoolConfig.can_edit_sms_template,
+        allowTeacherQrSkip: schoolConfig.allow_teacher_qr_skip,
         logoUrl: schoolConfig.logo_url,
         activeSchoolYear: schoolConfig.active_school_year,
       },
@@ -108,6 +109,7 @@ export class PermissionsService {
       teachingType?: string;
       logoUrl?: string | null;
       activeSchoolYear?: string | null;
+      allowTeacherQrSkip?: boolean;
     }
   ) {
     await this.repository.updateSchoolConfig(schemaName, input);
