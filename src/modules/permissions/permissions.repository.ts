@@ -402,6 +402,62 @@ export class PermissionsRepository {
     };
   }
 
+  async reactivateInactiveAdministrativeUserByContact(input: {
+    name: string;
+    email: string | null;
+    phone: string | null;
+    passwordHash: string;
+  }): Promise<{
+    id: string;
+    name: string;
+    role: string;
+    email: string | null;
+    phone: string | null;
+  } | null> {
+    const result = await this.db.execute<AssignableUserRow>(sql`
+      WITH candidate AS (
+        SELECT id
+        FROM users
+        WHERE role::text IN ('secretary', 'staff')
+          AND is_active = false
+          AND (
+            (${input.email}::text IS NOT NULL AND email = ${input.email})
+            OR
+            (${input.phone}::text IS NOT NULL AND phone = ${input.phone})
+          )
+        ORDER BY created_at DESC
+        LIMIT 1
+      ),
+      cleaned_assignments AS (
+        DELETE FROM position_assignments
+        WHERE user_id IN (SELECT id FROM candidate)
+      )
+      UPDATE users u
+      SET
+        name = ${input.name},
+        email = ${input.email},
+        phone = ${input.phone},
+        password_hash = ${input.passwordHash},
+        is_active = true
+      FROM candidate
+      WHERE u.id = candidate.id
+      RETURNING u.id, u.name, u.role, u.email, u.phone, u.created_at
+    `);
+
+    const [row] = getRows(result);
+    if (!row) {
+      return null;
+    }
+
+    return {
+      id: row.id,
+      name: row.name,
+      role: row.role,
+      email: row.email,
+      phone: row.phone,
+    };
+  }
+
   async findAdministrativeUserById(userId: string): Promise<{
     id: string;
     name: string;

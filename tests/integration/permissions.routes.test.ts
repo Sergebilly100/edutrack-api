@@ -48,7 +48,7 @@ beforeEach(() => {
 });
 
 describe('permissions routes', () => {
-  it('GET /api/v1/permissions/me retourne les permissions de base staff', async () => {
+  it('GET /api/v1/permissions/me retourne une base vide pour staff sans poste assigné', async () => {
     const app = await buildApp();
 
     const response = await app.inject({
@@ -60,9 +60,7 @@ describe('permissions routes', () => {
     expect(response.statusCode).toBe(200);
     const body = JSON.parse(response.body) as { role: string; permissions: string[] };
     expect(body.role).toBe('staff');
-    expect(new Set(body.permissions)).toEqual(
-      new Set(['teachers.view', 'students.view', 'attendance.mark_students', 'schedule.view'])
-    );
+    expect(body.permissions).toEqual([]);
 
     await app.close();
   });

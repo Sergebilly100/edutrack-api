@@ -78,6 +78,10 @@ type RefreshSessionRow = {
   token_hash: string;
 };
 
+type PositionNameRow = {
+  name: string;
+};
+
 const hashRefreshToken = (token: string): string =>
   createHash('sha256').update(token).digest('hex');
 
@@ -105,6 +109,15 @@ const getRefreshSessionRows = (result: unknown): RefreshSessionRow[] => {
   }
 
   const rows = (result as { rows: RefreshSessionRow[] }).rows;
+  return Array.isArray(rows) ? rows : [];
+};
+
+const getPositionNameRows = (result: unknown): PositionNameRow[] => {
+  if (typeof result !== 'object' || result === null || !('rows' in result)) {
+    return [];
+  }
+
+  const rows = (result as { rows: PositionNameRow[] }).rows;
   return Array.isArray(rows) ? rows : [];
 };
 
@@ -179,6 +192,21 @@ export const findUserProfileById = async (
 
   const [row] = getRows(result);
   return row ? mapAuthUser(row) : null;
+};
+
+export const listAdministrativePositionNames = async (
+  db: QueryExecutor,
+  userId: string
+): Promise<string[]> => {
+  const result = await db.execute(sql`
+    SELECT ap.name
+    FROM position_assignments pa
+    INNER JOIN admin_positions ap ON ap.id = pa.position_id
+    WHERE pa.user_id = ${userId}
+    ORDER BY ap.created_at ASC, ap.name ASC
+  `);
+
+  return getPositionNameRows(result).map((row) => row.name).filter((name) => name.length > 0);
 };
 
 export const updateLastLoginAt = async (

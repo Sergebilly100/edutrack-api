@@ -5,10 +5,6 @@ import type { AccessTokenClaims } from '../auth/auth.service.js';
 import { PermissionsRepository } from './permissions.repository.js';
 import { PERMISSION_KEYS, STAFF_BASE_PERMISSIONS } from './permissions.types.js';
 import type { PermissionKey } from '../../shared/types/index.js';
-import {
-  buildUsersLimitReachedMessage,
-  getMaxUsersBySchemaName,
-} from '../../shared/utils/users-limit.js';
 
 const ALL_PERMISSIONS_SET = new Set<PermissionKey>(PERMISSION_KEYS);
 const STAFF_BASE_PERMISSIONS_SET = new Set<PermissionKey>(STAFF_BASE_PERMISSIONS);
@@ -260,16 +256,20 @@ export class PermissionsService {
     },
     context: { schemaName: string }
   ) {
-    const [currentCount, maxUsers] = await Promise.all([
-      this.repository.countActiveUsers(),
-      getMaxUsersBySchemaName(context.schemaName),
+    const [schoolConfig, currentAdminCount] = await Promise.all([
+      this.repository.getSchoolConfigBySchemaName(context.schemaName),
+      this.repository.countActiveAdministrativeUsers(),
     ]);
 
-    if (currentCount >= maxUsers) {
+    if (!schoolConfig) {
+      throw new PermissionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
+    }
+
+    if (currentAdminCount >= schoolConfig.max_admin_positions) {
       throw new PermissionsModuleError(
-        buildUsersLimitReachedMessage(currentCount, maxUsers),
+        `Limite d'utilisateurs administratifs atteinte (${currentAdminCount}/${schoolConfig.max_admin_positions}).`,
         403,
-        'USERS_LIMIT_REACHED'
+        'ADMIN_USERS_LIMIT_REACHED'
       );
     }
 
@@ -293,12 +293,35 @@ export class PermissionsService {
         typeof error === 'object' && error !== null && 'constraint' in error
           ? String((error as { constraint: unknown }).constraint)
           : '';
+      const detail =
+        typeof error === 'object' && error !== null && 'detail' in error
+          ? String((error as { detail: unknown }).detail)
+          : '';
 
-      if (code === '23505' && constraint.includes('users_email_unique')) {
+      if (code === '23505') {
+        const reactivatedUser = await this.repository.reactivateInactiveAdministrativeUserByContact({
+          name: input.name,
+          email: input.email ?? null,
+          phone: input.phone ?? null,
+          passwordHash,
+        });
+
+        if (reactivatedUser) {
+          return { user: reactivatedUser };
+        }
+      }
+
+      if (
+        code === '23505' &&
+        (constraint.includes('users_email_unique') || detail.includes('(email)'))
+      ) {
         throw new PermissionsModuleError('Cet email est déjà utilisé', 409, 'EMAIL_ALREADY_USED');
       }
 
-      if (code === '23505' && constraint.includes('users_phone_unique')) {
+      if (
+        code === '23505' &&
+        (constraint.includes('users_phone_unique') || detail.includes('(phone)'))
+      ) {
         throw new PermissionsModuleError('Ce numéro est déjà utilisé', 409, 'PHONE_ALREADY_USED');
       }
 
@@ -339,12 +362,22 @@ export class PermissionsService {
         typeof error === 'object' && error !== null && 'constraint' in error
           ? String((error as { constraint: unknown }).constraint)
           : '';
+      const detail =
+        typeof error === 'object' && error !== null && 'detail' in error
+          ? String((error as { detail: unknown }).detail)
+          : '';
 
-      if (code === '23505' && constraint.includes('users_email_unique')) {
+      if (
+        code === '23505' &&
+        (constraint.includes('users_email_unique') || detail.includes('(email)'))
+      ) {
         throw new PermissionsModuleError('Cet email est déjà utilisé', 409, 'EMAIL_ALREADY_USED');
       }
 
-      if (code === '23505' && constraint.includes('users_phone_unique')) {
+      if (
+        code === '23505' &&
+        (constraint.includes('users_phone_unique') || detail.includes('(phone)'))
+      ) {
         throw new PermissionsModuleError('Ce numéro est déjà utilisé', 409, 'PHONE_ALREADY_USED');
       }
 

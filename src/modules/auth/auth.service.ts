@@ -10,6 +10,7 @@ import {
   findUserByPhone,
   findUserByUsername,
   findUserProfileById,
+  listAdministrativePositionNames,
   revokeRefreshSessionById,
   storeRefreshToken,
   updateUserProfile,
@@ -62,6 +63,8 @@ export type LoginResult = {
     phone: string | null;
     email: string | null;
     profilePhotoUrl: string | null;
+    positionNames?: string[];
+    primaryPosition?: string | null;
     username?: string;
   };
 };
@@ -382,15 +385,25 @@ const getRefreshTokenExpiryIso = (token: string): string | null => {
   }
 };
 
-const sanitizeProfile = (user: AuthUser) => ({
-  id: user.userId,
-  role: normalizeRole(user.role),
-  name: user.name,
-  phone: user.phone,
-  email: user.email,
-  profilePhotoUrl: user.profilePhotoUrl,
-  ...(user.role === 'teacher' && user.username ? { username: user.username } : {}),
-});
+const sanitizeProfile = (user: AuthUser, positionNames: string[] = []) => {
+  const normalizedRole = normalizeRole(user.role);
+
+  return {
+    id: user.userId,
+    role: normalizedRole,
+    name: user.name,
+    phone: user.phone,
+    email: user.email,
+    profilePhotoUrl: user.profilePhotoUrl,
+    ...(normalizedRole === 'staff'
+      ? {
+          positionNames,
+          primaryPosition: positionNames[0] ?? null,
+        }
+      : {}),
+    ...(user.role === 'teacher' && user.username ? { username: user.username } : {}),
+  };
+};
 
 export const login = async (db: TenantDb, input: LoginInput): Promise<LoginResult> => {
   const authUser = await (async () => {
@@ -454,6 +467,10 @@ export const login = async (db: TenantDb, input: LoginInput): Promise<LoginResul
 
   const claims = buildClaims(authUser, input.schemaName);
   const accessToken = await signAccessToken(claims);
+  const positionNames =
+    normalizeRole(authUser.role) === 'staff'
+      ? await listAdministrativePositionNames(db, authUser.userId)
+      : [];
 
   void updateLastLoginAt(db, authUser.userId);
 
@@ -461,7 +478,7 @@ export const login = async (db: TenantDb, input: LoginInput): Promise<LoginResul
     accessToken,
     tokenType: 'Bearer',
     expiresIn: process.env.JWT_EXPIRY ?? '15m',
-    user: sanitizeProfile(authUser),
+    user: sanitizeProfile(authUser, positionNames),
   };
 };
 
@@ -472,8 +489,13 @@ export const getMe = async (db: TenantDb, userId: string) => {
     throw new Error('Invalid credentials');
   }
 
+  const positionNames =
+    normalizeRole(profile.role) === 'staff'
+      ? await listAdministrativePositionNames(db, profile.userId)
+      : [];
+
   return {
-    user: sanitizeProfile(profile),
+    user: sanitizeProfile(profile, positionNames),
   };
 };
 
@@ -637,7 +659,12 @@ export const updateMe = async (db: TenantDb, input: UpdateMeInput) => {
     throw new Error('Invalid credentials');
   }
 
+  const positionNames =
+    normalizeRole(profile.role) === 'staff'
+      ? await listAdministrativePositionNames(db, profile.userId)
+      : [];
+
   return {
-    user: sanitizeProfile(profile),
+    user: sanitizeProfile(profile, positionNames),
   };
 };
