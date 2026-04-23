@@ -122,7 +122,9 @@ describe('permissions routes', () => {
     expect(response.statusCode).toBe(200);
     const body = JSON.parse(response.body) as { role: string; permissions: string[] };
     expect(body.role).toBe('director');
-    expect(new Set(body.permissions)).toEqual(new Set(PERMISSION_KEYS));
+    expect(new Set(body.permissions)).toEqual(
+      new Set(PERMISSION_KEYS.filter((permission) => permission !== 'settings.sms_templates'))
+    );
 
     await app.close();
   });

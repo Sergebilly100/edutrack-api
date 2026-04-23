@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   withTenantSchema: vi.fn(),
-  verifyAccessToken: vi.fn(),
+  requireDirector: vi.fn(),
+  requireDirectorOrSecretary: vi.fn(),
+  requireTeacherOrDirectorOrSecretary: vi.fn(),
   buildStudentsService: vi.fn(),
   service: {
     listStudents: vi.fn(),
@@ -23,13 +25,11 @@ vi.mock('../../src/shared/database/db.js', () => ({
   withTenantSchema: mocks.withTenantSchema,
 }));
 
-vi.mock('../../src/modules/auth/auth.service.js', async () => {
-  const actual = await vi.importActual('../../src/modules/auth/auth.service.js');
-  return {
-    ...actual,
-    verifyAccessToken: mocks.verifyAccessToken,
-  };
-});
+vi.mock('../../src/shared/middleware/auth.middleware.js', () => ({
+  requireDirector: mocks.requireDirector,
+  requireDirectorOrSecretary: mocks.requireDirectorOrSecretary,
+  requireTeacherOrDirectorOrSecretary: mocks.requireTeacherOrDirectorOrSecretary,
+}));
 
 vi.mock('../../src/modules/students/students.service.js', () => ({
   StudentsModuleError: class extends Error {
@@ -61,10 +61,76 @@ beforeEach(() => {
     return callback({ execute: vi.fn() });
   });
 
-  mocks.verifyAccessToken.mockResolvedValue({
-    sub: 'user-1',
-    role: 'director',
-    schemaName: 'school_sainte_marie',
+  const resolveRole = (request: { headers: Record<string, unknown> }): string => {
+    const role = request.headers['x-test-role'];
+    return typeof role === 'string' && role.trim().length > 0 ? role : 'director';
+  };
+
+  const attachClaimsOrReject = (
+    request: { headers: Record<string, unknown>; claims?: unknown },
+    reply: { code: (statusCode: number) => { send: (payload: unknown) => void } }
+  ): string | null => {
+    if (!request.headers.authorization) {
+      reply.code(401).send({
+        error: 'Missing Authorization header',
+        code: 'UNAUTHORIZED',
+        statusCode: 401,
+      });
+      return null;
+    }
+
+    const role = resolveRole(request);
+    request.claims = {
+      sub: 'user-1',
+      role,
+      schemaName: 'school_sainte_marie',
+    };
+    return role;
+  };
+
+  mocks.requireTeacherOrDirectorOrSecretary.mockImplementation(async (request, reply) => {
+    const role = attachClaimsOrReject(request, reply);
+    if (!role) {
+      return;
+    }
+
+    if (!['teacher', 'director', 'staff'].includes(role)) {
+      reply.code(403).send({
+        error: 'Forbidden',
+        code: 'FORBIDDEN',
+        statusCode: 403,
+      });
+    }
+  });
+
+  mocks.requireDirectorOrSecretary.mockImplementation(async (request, reply) => {
+    const role = attachClaimsOrReject(request, reply);
+    if (!role) {
+      return;
+    }
+
+    if (!['director', 'staff'].includes(role)) {
+      reply.code(403).send({
+        error: 'Forbidden',
+        code: 'FORBIDDEN',
+        statusCode: 403,
+      });
+    }
+  });
+
+  mocks.requireDirector.mockImplementation(async (request, reply) => {
+    const role = attachClaimsOrReject(request, reply);
+    if (!role) {
+      return;
+    }
+
+    if (role !== 'director') {
+      reply.code(403).send({
+        error: 'Forbidden',
+        code: 'FORBIDDEN',
+        statusCode: 403,
+      });
+    }
   });
 
   mocks.buildStudentsService.mockReturnValue(mocks.service);
@@ -302,18 +368,15 @@ describe('students routes', () => {
   });
 
   it('GET /api/v1/students refuse un rôle non autorisé', async () => {
-    mocks.verifyAccessToken.mockResolvedValue({
-      sub: 'user-2',
-      role: 'super_admin',
-      schemaName: 'school_sainte_marie',
-    });
-
     const app = await buildApp();
 
     const response = await app.inject({
       method: 'GET',
       url: '/api/v1/students',
-      headers: { authorization: 'Bearer valid-token' },
+      headers: {
+        authorization: 'Bearer valid-token',
+        'x-test-role': 'super_admin',
+      },
     });
 
     expect(response.statusCode).toBe(403);

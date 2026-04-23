@@ -130,6 +130,18 @@ describe('documents routes', () => {
     await app.close();
   });
 
+  it('GET /api/v1/documents/:id/download retourne 400 si uuid invalide', async () => {
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/documents/not-an-uuid/download',
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(mocks.getDocumentMetadata).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it('DELETE /api/v1/documents/:id supprime un document', async () => {
     const app = await buildApp();
     const response = await app.inject({
@@ -156,6 +168,25 @@ describe('documents routes', () => {
     const response = await app.inject({
       method: 'GET',
       url: `/api/v1/documents/teacher/${ENTITY_ID}`,
+    });
+
+    expect(response.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it('staff: suppression document refusée (403)', async () => {
+    mocks.requireDirectorOrSecretary.mockImplementationOnce(async (request: { claims?: unknown }) => {
+      request.claims = {
+        sub: 'staff-id',
+        role: 'staff',
+        schemaName: 'school_sainte_marie',
+      };
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/documents/${DOCUMENT_ID}`,
     });
 
     expect(response.statusCode).toBe(403);

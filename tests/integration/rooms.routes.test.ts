@@ -140,6 +140,22 @@ describe('rooms routes', () => {
     await app.close();
   });
 
+  it('POST /api/v1/rooms retourne 400 si payload invalide', async () => {
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/rooms',
+      payload: {
+        name: '',
+        capacity: -1,
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(mocks.createRoom).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it('PUT /api/v1/rooms/:id met à jour une salle', async () => {
     const app = await buildApp();
     const response = await app.inject({
@@ -191,6 +207,26 @@ describe('rooms routes', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().room_name).toBe('Salle Test MAJ');
     expect(mocks.getRoomQr).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('GET /api/v1/rooms retourne 403 si le middleware refuse', async () => {
+    mocks.requireTeacherOrDirectorOrSecretary.mockImplementationOnce(async (_request, reply) => {
+      reply.code(403).send({
+        error: 'Forbidden',
+        code: 'FORBIDDEN',
+        statusCode: 403,
+      });
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/rooms',
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(mocks.listActiveRooms).not.toHaveBeenCalled();
     await app.close();
   });
 });

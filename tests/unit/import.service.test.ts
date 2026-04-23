@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as XLSX from 'xlsx';
 
 import { ImportModuleError, ImportService } from '../../src/modules/import-export/import.service.js';
@@ -9,6 +9,7 @@ const repository = {
   listRooms: vi.fn(),
   listTimeSlots: vi.fn(),
   findActiveSchedulePeriodId: vi.fn(),
+  findSchedulePeriodById: vi.fn(),
   findOverlappingSchedulePeriods: vi.fn(),
   findOrCreateSchedulePeriod: vi.fn(),
   listExistingStudents: vi.fn(),
@@ -35,6 +36,8 @@ const toWorkbookBuffer = (rows: Record<string, string>[]): Buffer => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-04-01T08:00:00.000Z'));
   process.env.IMPORT_TEACHER_DEFAULT_PASSWORD = 'edutrack2024';
 
   repository.listClasses.mockResolvedValue([
@@ -50,8 +53,20 @@ beforeEach(() => {
     },
   ]);
   repository.listRooms.mockResolvedValue([{ id: 'room-1', name: 'Salle A1' }]);
-  repository.listTimeSlots.mockResolvedValue([{ id: 'slot-1', label: '7h30 - 9h00' }]);
+  repository.listTimeSlots.mockResolvedValue([
+    {
+      id: 'slot-1',
+      label: '7h30 - 9h00',
+      start_time: '07:30:00',
+      end_time: '09:00:00',
+    },
+  ]);
   repository.findActiveSchedulePeriodId.mockResolvedValue('period-1');
+  repository.findSchedulePeriodById.mockResolvedValue({
+    id: 'period-1',
+    valid_from: '2026-04-01',
+    valid_to: '2026-04-30',
+  });
   repository.findOverlappingSchedulePeriods.mockResolvedValue([]);
   repository.findOrCreateSchedulePeriod.mockResolvedValue('period-1');
   repository.listExistingStudents.mockResolvedValue([]);
@@ -63,6 +78,10 @@ beforeEach(() => {
   repository.upsertSchedule.mockResolvedValue('inserted');
   repository.createImportHistory.mockResolvedValue(undefined);
   repository.listImportHistory.mockResolvedValue([]);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('import.service', () => {
@@ -250,23 +269,37 @@ describe('import.service', () => {
       },
     ];
 
-    const report = await service.confirm('schedule', toWorkbookBuffer(rows), db);
+    const workbook = toWorkbookBuffer(rows);
+    const dryRun = await service.dryRun('schedule', workbook, db, {
+      schedulePeriod: {
+        weekStart: '2026-04-27',
+        weekEnd: '2026-05-04',
+      },
+    });
+    expect(dryRun.errors).toEqual([]);
+
+    const report = await service.confirm('schedule', workbook, db, {
+      schedulePeriod: {
+        weekStart: '2026-04-27',
+        weekEnd: '2026-05-04',
+      },
+    });
 
     expect(report.imported).toBe(3);
     expect(report.updated).toBe(0);
     expect(repository.upsertSchedule).toHaveBeenCalledTimes(3);
   });
 
-  it('confirm schedule invalide (room manquante) -> IMPORT_VALIDATION_FAILED', async () => {
+  it('confirm schedule invalide (prof introuvable) -> IMPORT_VALIDATION_FAILED', async () => {
     const service = new ImportService(repository);
     const rows = [
       {
-        'Nom professeur*': 'Ibrahim Diallo',
+        'Nom professeur*': 'Prof Inconnu',
         'Classe*': '3ème A',
         'Matière*': 'Mathématiques',
         'Jour*': 'Lundi',
         'Créneau*': '7h30 - 9h00',
-        Salle: 'Salle inconnue',
+        Salle: 'Salle A1',
       },
     ];
 
