@@ -16,7 +16,13 @@ export type TransactionalQueryExecutor = QueryExecutor & {
 };
 
 type ClassRow = { id: string; name: string };
-type TeacherDirectoryRow = { teacher_id: string; user_id: string; name: string; username: string };
+type TeacherDirectoryRow = {
+  teacher_id: string;
+  user_id: string;
+  name: string;
+  username: string;
+  subjects: string[] | null;
+};
 type RoomRow = { id: string; name: string; building: string | null; capacity: number | null; is_active: boolean };
 type TimeSlotRow = { id: string; label: string; start_time: string; end_time: string };
 type SchedulePeriodRow = { id: string; valid_from?: string; valid_to?: string };
@@ -168,7 +174,7 @@ export const defaultImportRepository: ImportRepository = {
 
   async listTeacherDirectory(db) {
     const result = await db.execute(sql`
-      SELECT t.id AS teacher_id, t.user_id, u.name, t.username
+      SELECT t.id AS teacher_id, t.user_id, u.name, t.username, t.subjects
       FROM teachers t
       INNER JOIN users u ON u.id = t.user_id
     `);

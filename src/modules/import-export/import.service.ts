@@ -3,6 +3,10 @@ import { randomBytes } from 'node:crypto';
 import * as XLSX from 'xlsx';
 
 import { generateUsername } from '../../shared/utils/username.js';
+import {
+  canonicalizeSubject,
+  canonicalizeSubjectList,
+} from '../../shared/utils/subject-normalization.js';
 
 import {
   defaultImportRepository,
@@ -220,12 +224,11 @@ const previewWorkbookRows = (rows: ParsedWorkbookRow[]): Record<string, string>[
 
 const normalizeKey = (value: string): string => normalizeCell(value).toLowerCase();
 
-const parseSubjects = (value: string): string[] => {
-  return value
+const parseSubjects = (value: string): string[] =>
+  value
     .split(',')
     .map((item) => normalizeCell(item))
     .filter((item) => item.length > 0);
-};
 
 const generateRoomQrToken = (): string => randomBytes(32).toString('hex');
 
@@ -692,6 +695,9 @@ export class ImportService {
         .filter((item) => item.matricule)
         .map((item) => [normalizeKey(item.matricule as string), item])
     );
+    const subjectCatalog = new Set(
+      existingTeachers.flatMap((item) => canonicalizeSubjectList(item.subjects))
+    );
     const existingUsernames = directory.map((item) => item.username);
     const byName = new Map<string, string[]>();
     for (const item of directory) {
@@ -755,12 +761,15 @@ export class ImportService {
         );
       }
 
-      const subjects = parseSubjects(subjectsRaw);
+      const subjects = canonicalizeSubjectList(
+        parseSubjects(subjectsRaw).map((subject) => canonicalizeSubject(subject, subjectCatalog))
+      );
       if (subjects.length === 0) {
         errors.push(
           makeError({ row: line, column: 'Matières*', message: 'Au moins une matière requise' })
         );
       }
+      subjects.forEach((subject) => subjectCatalog.add(subject));
 
       let hourlyRate: number | null = null;
       if (hourlyRateRaw) {
@@ -1019,6 +1028,9 @@ export class ImportService {
       list.push(teacher.teacher_id);
       teachersByName.set(key, list);
     }
+    const subjectCatalog = new Set(
+      teacherDirectory.flatMap((teacher) => canonicalizeSubjectList(teacher.subjects ?? []))
+    );
 
     const errors: ImportError[] = [];
     const validRows: ScheduleImportRow[] = [];
@@ -1027,7 +1039,7 @@ export class ImportService {
       const line = sheetRow.line;
       const teacherName = normalizeCell(sheetRow.values['Nom professeur*']);
       const className = normalizeCell(sheetRow.values['Classe*']);
-      const subject = normalizeCell(sheetRow.values['Matière*']);
+      const subject = canonicalizeSubject(normalizeCell(sheetRow.values['Matière*']), subjectCatalog);
       const day = normalizeKey(sheetRow.values['Jour*']);
       const slotLabel = normalizeCell(sheetRow.values['Créneau*']);
       const roomName = normalizeCell(sheetRow.values['Salle']);
@@ -1165,6 +1177,7 @@ export class ImportService {
         roomBuilding,
         roomCapacity,
       });
+      subjectCatalog.add(subject);
     });
 
     let conflicts: DryRunReport['conflicts'] = [];

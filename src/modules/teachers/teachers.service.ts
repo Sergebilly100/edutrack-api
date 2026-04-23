@@ -9,6 +9,7 @@ import {
   buildUsersLimitReachedMessage,
   getMaxUsersBySchemaName,
 } from '../../shared/utils/users-limit.js';
+import { canonicalizeSubjectList } from '../../shared/utils/subject-normalization.js';
 
 export class TeachersModuleError extends Error {
   constructor(
@@ -112,12 +113,18 @@ export class TeachersService {
       );
     }
 
-    const created = await this.repository.createTeacher(input);
+    const created = await this.repository.createTeacher({
+      ...input,
+      subjects: canonicalizeSubjectList(input.subjects),
+    });
     return toDTO(created);
   }
 
   async updateTeacher(teacherId: string, input: UpdateTeacherInput) {
-    const updated = await this.repository.updateTeacher(teacherId, input);
+    const updated = await this.repository.updateTeacher(teacherId, {
+      ...input,
+      ...(input.subjects ? { subjects: canonicalizeSubjectList(input.subjects) } : {}),
+    });
     if (!updated) {
       throw new TeachersModuleError('Teacher not found', 404, 'TEACHER_NOT_FOUND');
     }

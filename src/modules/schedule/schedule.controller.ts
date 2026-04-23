@@ -36,6 +36,7 @@ import {
   periodUpdatePayloadSchema,
   schedulePayloadSchema,
 } from './schedule.schemas.js';
+import { canonicalizeSubject } from '../../shared/utils/subject-normalization.js';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -370,6 +371,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
       try {
         const body = schedulePayloadSchema.parse(request.body);
         const db = ensureTenantDb(request);
+        const canonicalSubject = canonicalizeSubject(body.subject);
 
         const timeSlotId = await resolveTimeSlotId(db, {
           timeSlotId: body.time_slot_id,
@@ -394,7 +396,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           roomId: body.room_id,
           timeSlotId,
           dayOfWeek: body.day_of_week,
-          subject: body.subject,
+          subject: canonicalSubject,
           isActive: body.is_active,
         });
         if (conflicts.teacherConflict) {
@@ -414,7 +416,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           roomId: body.room_id,
           timeSlotId,
           dayOfWeek: body.day_of_week,
-          subject: body.subject,
+          subject: canonicalSubject,
           isActive: body.is_active,
         });
 
@@ -433,6 +435,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
         const { id } = paramsIdSchema.parse(request.params);
         const body = schedulePayloadSchema.parse(request.body);
         const db = ensureTenantDb(request);
+        const canonicalSubject = canonicalizeSubject(body.subject);
 
         const timeSlotId = await resolveTimeSlotId(db, {
           timeSlotId: body.time_slot_id,
@@ -462,7 +465,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           roomId: body.room_id,
           timeSlotId,
           dayOfWeek: body.day_of_week,
-          subject: body.subject,
+          subject: canonicalSubject,
           isActive: body.is_active,
           excludeScheduleId: id,
         });
@@ -483,7 +486,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           roomId: body.room_id,
           timeSlotId,
           dayOfWeek: body.day_of_week,
-          subject: body.subject,
+          subject: canonicalSubject,
           isActive: body.is_active,
         });
 

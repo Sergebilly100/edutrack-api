@@ -93,6 +93,21 @@ const parseUtcDate = (date: string): Date => new Date(`${date}T00:00:00.000Z`);
 
 const formatUtcDate = (value: Date): string => value.toISOString().slice(0, 10);
 
+const toUtcDateTime = (dateIso: string, time: string): Date => {
+  const parts = time.split(':');
+  const hours = Number(parts[0] ?? 0);
+  const minutes = Number(parts[1] ?? 0);
+  const seconds = Number(parts[2] ?? 0);
+  return new Date(Date.UTC(
+    Number(dateIso.slice(0, 4)),
+    Number(dateIso.slice(5, 7)) - 1,
+    Number(dateIso.slice(8, 10)),
+    Number.isFinite(hours) ? hours : 0,
+    Number.isFinite(minutes) ? minutes : 0,
+    Number.isFinite(seconds) ? seconds : 0
+  ));
+};
+
 const nextIsoDayOnOrAfter = (base: Date, dayOfWeek: number): Date => {
   const baseIsoDay = dayOfWeekFromDate(base);
   const delta = (dayOfWeek - baseIsoDay + 7) % 7;
@@ -116,7 +131,7 @@ export const hasFutureOccurrenceInPeriod = (input: {
 
   while (candidateDate <= periodEnd) {
     const candidateIsoDate = formatUtcDate(candidateDate);
-    const candidateDateTime = new Date(`${candidateIsoDate}T${input.startTime}.000Z`);
+    const candidateDateTime = toUtcDateTime(candidateIsoDate, input.startTime);
     if (candidateDateTime > now) {
       return true;
     }

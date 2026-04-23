@@ -23,6 +23,7 @@ import {
   dayOfWeekFromDate,
   duplicatePeriod,
   getActiveSchedulesForDate,
+  hasFutureOccurrenceInPeriod,
 } from '../../src/modules/schedule/schedule.service.js';
 
 const db = {} as never;
@@ -200,5 +201,29 @@ describe('schedule.service', () => {
       createdBy: 'user-1',
     });
     expect(result).toEqual({ id: 'period-1' });
+  });
+
+  it('hasFutureOccurrenceInPeriod() retourne true avec startTime HH:MM', () => {
+    const result = hasFutureOccurrenceInPeriod({
+      validFrom: '2026-04-20',
+      validTo: '2026-04-30',
+      dayOfWeek: 4,
+      startTime: '08:00',
+      now: new Date('2026-04-22T06:00:00.000Z'),
+    });
+
+    expect(result).toBe(true);
+  });
+
+  it('hasFutureOccurrenceInPeriod() retourne false quand toutes les occurrences sont passées', () => {
+    const result = hasFutureOccurrenceInPeriod({
+      validFrom: '2026-04-01',
+      validTo: '2026-04-21',
+      dayOfWeek: 2,
+      startTime: '08:00',
+      now: new Date('2026-04-23T06:00:00.000Z'),
+    });
+
+    expect(result).toBe(false);
   });
 });
