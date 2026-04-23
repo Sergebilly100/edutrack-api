@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   registerRefreshToken: vi.fn(),
   logout: vi.fn(),
   changePassword: vi.fn(),
+  listUserSessions: vi.fn(),
+  revokeUserSession: vi.fn(),
 }));
 
 vi.mock('../../src/shared/database/db.js', () => ({
@@ -28,6 +30,8 @@ vi.mock('../../src/modules/auth/auth.service.js', () => ({
   registerRefreshToken: mocks.registerRefreshToken,
   logout: mocks.logout,
   changePassword: mocks.changePassword,
+  listUserSessions: mocks.listUserSessions,
+  revokeUserSession: mocks.revokeUserSession,
 }));
 
 import authController from '../../src/modules/auth/auth.controller.js';
@@ -92,6 +96,17 @@ beforeEach(() => {
   mocks.registerRefreshToken.mockResolvedValue(undefined);
   mocks.logout.mockResolvedValue(undefined);
   mocks.changePassword.mockResolvedValue(undefined);
+  mocks.listUserSessions.mockResolvedValue([
+    {
+      sessionId: '3e5d9f3c-2a5c-4d3e-a95f-2bb8244f3e31',
+      createdAt: '2026-04-23T00:00:00.000Z',
+      expiresAt: '2026-05-23T00:00:00.000Z',
+      isCurrent: true,
+      userAgent: 'vitest',
+      ipAddress: '127.0.0.1',
+    },
+  ]);
+  mocks.revokeUserSession.mockResolvedValue(true);
 });
 
 describe('auth routes', () => {
@@ -311,6 +326,52 @@ describe('auth routes', () => {
     expect(response.statusCode).toBe(403);
     const body = parseBody(response.body) as { code: string };
     expect(body.code).toBe('FORBIDDEN');
+    await app.close();
+  });
+
+  it('GET /api/v1/auth/sessions — retourne la liste des sessions', async () => {
+    const app = await buildApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/sessions',
+      headers: {
+        authorization: 'Bearer valid-token',
+        cookie: 'refresh_token=valid-refresh-token',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(parseBody(response.body)).toEqual({
+      sessions: [
+        {
+          sessionId: '3e5d9f3c-2a5c-4d3e-a95f-2bb8244f3e31',
+          createdAt: '2026-04-23T00:00:00.000Z',
+          expiresAt: '2026-05-23T00:00:00.000Z',
+          isCurrent: true,
+          userAgent: 'vitest',
+          ipAddress: '127.0.0.1',
+        },
+      ],
+    });
+    expect(mocks.listUserSessions).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('DELETE /api/v1/auth/sessions/:sessionId — revoke une session utilisateur', async () => {
+    const app = await buildApp();
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/api/v1/auth/sessions/3e5d9f3c-2a5c-4d3e-a95f-2bb8244f3e31',
+      headers: {
+        authorization: 'Bearer valid-token',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(parseBody(response.body)).toEqual({ success: true });
+    expect(mocks.revokeUserSession).toHaveBeenCalledTimes(1);
     await app.close();
   });
 });
