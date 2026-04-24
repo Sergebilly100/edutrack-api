@@ -604,10 +604,26 @@ export const defaultImportRepository: ImportRepository = {
         AND teacher_id = ${params.teacherId}
         AND time_slot_id = ${params.timeSlotId}
         AND day_of_week = ${row.dayOfWeek}
+        AND is_active = true
+        AND end_date IS NULL
       LIMIT 1
     `);
 
     const existing = getRows<ScheduleInsertRow>(existingResult)[0];
+
+    if (existing) {
+      await db.execute(sql`
+        UPDATE schedules
+        SET
+          class_id = ${params.classId},
+          room_id = ${params.roomId},
+          subject = ${row.subject},
+          is_active = true,
+          end_date = NULL
+        WHERE id = ${existing.id}
+      `);
+      return 'updated';
+    }
 
     await db.execute(sql`
       INSERT INTO schedules (
@@ -630,15 +646,9 @@ export const defaultImportRepository: ImportRepository = {
         ${row.subject},
         true
       )
-      ON CONFLICT (schedule_period_id, teacher_id, time_slot_id, day_of_week)
-      DO UPDATE SET
-        class_id = EXCLUDED.class_id,
-        room_id = EXCLUDED.room_id,
-        subject = EXCLUDED.subject,
-        is_active = true
     `);
 
-    return existing ? 'updated' : 'inserted';
+    return 'inserted';
   },
 
   async createImportHistory(db, entry) {

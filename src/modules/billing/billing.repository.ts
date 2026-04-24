@@ -134,11 +134,11 @@ export class BillingRepository {
           )::numeric(8,2) AS hours_planned
         FROM month_days md
         INNER JOIN schedule_periods sp
-          ON sp.is_active = true
-         AND md.d BETWEEN sp.valid_from AND sp.valid_to
+          ON md.d BETWEEN sp.valid_from AND sp.valid_to
         INNER JOIN schedules s
           ON s.schedule_period_id = sp.id
          AND s.is_active = true
+         AND (s.end_date IS NULL OR s.end_date > md.d)
          AND s.day_of_week = EXTRACT(ISODOW FROM md.d)::int
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id
         GROUP BY s.teacher_id
@@ -288,11 +288,11 @@ export class BillingRepository {
         rollcall.has_rollcall
       FROM month_days md
       INNER JOIN schedule_periods sp
-        ON sp.is_active = true
-       AND md.d BETWEEN sp.valid_from AND sp.valid_to
+        ON md.d BETWEEN sp.valid_from AND sp.valid_to
       INNER JOIN schedules s
         ON s.schedule_period_id = sp.id
        AND s.is_active = true
+       AND (s.end_date IS NULL OR s.end_date > md.d)
        AND s.day_of_week = EXTRACT(ISODOW FROM md.d)::int
        AND s.teacher_id = ${teacherId}
       INNER JOIN classes c ON c.id = s.class_id

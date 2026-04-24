@@ -99,6 +99,13 @@
       "when": 1777017600000,
       "tag": "0014_allow_teacher_qr_skip",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1777050000000,
+      "tag": "0017_schedule_end_date_history",
+      "breakpoints": true
     }
   ]
 }

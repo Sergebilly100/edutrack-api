@@ -453,6 +453,7 @@ export class TeachersRepository {
           ON s.schedule_period_id = ap.id
           AND s.day_of_week = EXTRACT(ISODOW FROM d.date)::int
           AND s.is_active = true
+          AND (s.end_date IS NULL OR s.end_date > d.date)
         INNER JOIN teachers t ON t.id = s.teacher_id
         INNER JOIN users u ON u.id = t.user_id
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id

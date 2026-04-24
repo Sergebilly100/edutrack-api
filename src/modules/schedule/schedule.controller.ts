@@ -11,13 +11,14 @@ import {
   releaseTenantDb,
 } from '../../shared/middleware/tenant.middleware.js';
 import {
+  closeScheduleAtDate,
+  countPastTeacherAttendancesForSchedule,
   createSchedule,
   deleteScheduleById,
   findScheduleConflicts,
   findSchedulePeriodById,
   findTimeSlotById,
   findTeacherIdByUserId,
-  hasPastOccurrences,
   listSchedulePeriods,
   updateSchedule,
   updateSchedulePeriod,
@@ -179,6 +180,14 @@ const resolveDateParam = (query: unknown): Date => {
     if (!Number.isNaN(d.getTime())) return d;
   }
   return new Date();
+};
+
+const getTodayIso = (): string => new Date().toISOString().slice(0, 10);
+
+const getTomorrowIso = (todayIso: string): string => {
+  const base = new Date(`${todayIso}T00:00:00.000Z`);
+  base.setUTCDate(base.getUTCDate() + 1);
+  return base.toISOString().slice(0, 10);
 };
 
 const assertScheduleTargetsFutureDateTime = async (
@@ -453,11 +462,6 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           startTime: resolvedStartTime,
         });
 
-        const lockedForHistory = await hasPastOccurrences(db, id, new Date().toISOString().slice(0, 10));
-        if (lockedForHistory) {
-          throw new Error('Schedule has past occurrences and cannot be edited or deleted');
-        }
-
         const conflicts = await findScheduleConflicts(db, {
           schedulePeriodId: body.schedule_period_id,
           teacherId: body.teacher_id,
@@ -477,6 +481,46 @@ export default async function scheduleController(app: FastifyInstance): Promise<
         }
         if (conflicts.classConflict) {
           throw new Error('Class already has a course at the same time');
+        }
+
+        const today = getTodayIso();
+        const tomorrow = getTomorrowIso(today);
+        const pastAttendanceCount = await countPastTeacherAttendancesForSchedule(db, id, today);
+
+        if (pastAttendanceCount > 0) {
+          const versionedUpdate = await db.transaction(async (tx) => {
+            const closed = await closeScheduleAtDate(tx, id, today);
+            if (!closed) {
+              return null;
+            }
+
+            const created = await createSchedule(tx, {
+              schedulePeriodId: body.schedule_period_id,
+              teacherId: body.teacher_id,
+              classId: body.class_id,
+              roomId: body.room_id,
+              timeSlotId,
+              dayOfWeek: body.day_of_week,
+              subject: canonicalSubject,
+              isActive: body.is_active,
+            });
+
+            return { created };
+          });
+
+          if (!versionedUpdate) {
+            return reply.code(404).send({
+              error: 'Schedule not found',
+              code: 'NOT_FOUND',
+              statusCode: 404,
+            });
+          }
+
+          return reply.send({
+            schedule: versionedUpdate.created,
+            replaced_schedule_id: id,
+            change_effective_from: tomorrow,
+          });
         }
 
         const updated = await updateSchedule(db, id, {
@@ -511,15 +555,24 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     async (request, reply) => {
       try {
         const { id } = paramsIdSchema.parse(request.params);
-        const lockedForHistory = await hasPastOccurrences(
-          ensureTenantDb(request),
-          id,
-          new Date().toISOString().slice(0, 10)
-        );
-        if (lockedForHistory) {
-          throw new Error('Schedule has past occurrences and cannot be edited or deleted');
+        const db = ensureTenantDb(request);
+        const today = getTodayIso();
+        const pastAttendanceCount = await countPastTeacherAttendancesForSchedule(db, id, today);
+
+        if (pastAttendanceCount > 0) {
+          const closed = await closeScheduleAtDate(db, id, today);
+          if (!closed) {
+            return reply.code(404).send({
+              error: 'Schedule not found',
+              code: 'NOT_FOUND',
+              statusCode: 404,
+            });
+          }
+
+          return reply.code(204).send();
         }
-        const deleted = await deleteScheduleById(ensureTenantDb(request), id);
+
+        const deleted = await deleteScheduleById(db, id);
         if (!deleted) {
           return reply.code(404).send({
             error: 'Schedule not found',

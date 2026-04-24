@@ -37,6 +37,7 @@ type ActiveScheduleRow = {
   attendance_status: 'present' | 'absent' | 'late' | 'excused' | null;
   attendance_checked_in_at: string | null;
   attendance_late_minutes: number | null;
+  past_attendance_count: number;
 };
 
 export type ActiveSchedule = {
@@ -70,6 +71,8 @@ export type ActiveSchedule = {
     checkedInAt: string | null;
     lateMinutes: number | null;
   };
+  pastAttendanceCount: number;
+  hasPastAttendance: boolean;
 };
 
 type RoomRow = {
@@ -263,7 +266,11 @@ const mapActiveSchedule = (row: ActiveScheduleRow): ActiveSchedule => ({
     checkedInAt: row.attendance_checked_in_at,
     lateMinutes: row.attendance_late_minutes,
   },
+  pastAttendanceCount: row.past_attendance_count,
+  hasPastAttendance: row.past_attendance_count > 0,
 });
+
+const ACTIVE_SCHEDULES_CLAUSE = sql`s.is_active = true AND (s.end_date IS NULL OR s.end_date > CURRENT_DATE)`;
 
 export const listSchedulePeriods = async (db: QueryExecutor): Promise<SchedulePeriod[]> => {
   const result = await db.execute<SchedulePeriodRow>(sql`
@@ -397,6 +404,7 @@ export const duplicatePeriodWithSchedules = async (
         time_slot_id,
         day_of_week,
         subject,
+        end_date,
         is_active
       )
       SELECT
@@ -407,6 +415,7 @@ export const duplicatePeriodWithSchedules = async (
         s.time_slot_id,
         s.day_of_week,
         s.subject,
+        s.end_date,
         s.is_active
       FROM schedules s
       CROSS JOIN new_period np
@@ -470,7 +479,8 @@ export const listSchedulesForPeriodAndDay = async (
       s.subject,
       at.status::text AS attendance_status,
       at.checked_in_at::text AS attendance_checked_in_at,
-      at.late_minutes AS attendance_late_minutes
+      at.late_minutes AS attendance_late_minutes,
+      COALESCE(history.past_attendance_count, 0)::int AS past_attendance_count
     FROM schedules s
     INNER JOIN teachers t ON t.id = s.teacher_id
     INNER JOIN users u ON u.id = t.user_id
@@ -478,9 +488,15 @@ export const listSchedulesForPeriodAndDay = async (
     INNER JOIN rooms r ON r.id = s.room_id
     INNER JOIN time_slots ts ON ts.id = s.time_slot_id
     LEFT JOIN attendances_teacher at ON at.schedule_id = s.id AND at.date = ${params.date}
+    LEFT JOIN LATERAL (
+      SELECT COUNT(*)::int AS past_attendance_count
+      FROM attendances_teacher ath
+      WHERE ath.schedule_id = s.id
+        AND ath.date < CURRENT_DATE
+    ) history ON true
     WHERE s.schedule_period_id = ${params.periodId}
       AND s.day_of_week = ${params.dayOfWeek}
-      AND s.is_active = true
+      AND ${ACTIVE_SCHEDULES_CLAUSE}
       ${teacherFilter}
     ORDER BY ts.sort_order ASC, ts.start_time ASC, u.name ASC
   `);
@@ -533,7 +549,8 @@ export const listSchedulesForPeriod = async (
       s.subject,
       at.status::text AS attendance_status,
       at.checked_in_at::text AS attendance_checked_in_at,
-      at.late_minutes AS attendance_late_minutes
+      at.late_minutes AS attendance_late_minutes,
+      COALESCE(history.past_attendance_count, 0)::int AS past_attendance_count
     FROM schedules s
     INNER JOIN teachers t ON t.id = s.teacher_id
     INNER JOIN users u ON u.id = t.user_id
@@ -542,9 +559,15 @@ export const listSchedulesForPeriod = async (
     INNER JOIN time_slots ts ON ts.id = s.time_slot_id
     INNER JOIN schedule_periods sp ON sp.id = s.schedule_period_id
     LEFT JOIN attendances_teacher at ON at.schedule_id = s.id AND at.date = ${params.date}
+    LEFT JOIN LATERAL (
+      SELECT COUNT(*)::int AS past_attendance_count
+      FROM attendances_teacher ath
+      WHERE ath.schedule_id = s.id
+        AND ath.date < CURRENT_DATE
+    ) history ON true
     WHERE s.schedule_period_id = ${params.periodId}
       AND s.day_of_week BETWEEN 1 AND 6
-      AND s.is_active = true
+      AND ${ACTIVE_SCHEDULES_CLAUSE}
       ${dayFilter}
     ORDER BY s.day_of_week ASC, ts.sort_order ASC, ts.start_time ASC, u.name ASC
   `);
@@ -749,7 +772,7 @@ export const findScheduleConflicts = async (
       EXISTS (
         SELECT 1
         FROM schedules s
-        WHERE s.is_active = true
+        WHERE ${ACTIVE_SCHEDULES_CLAUSE}
           AND s.schedule_period_id IN (SELECT id FROM overlapping_periods)
           AND s.day_of_week = ${input.dayOfWeek}
           AND s.time_slot_id = ${input.timeSlotId}
@@ -759,7 +782,7 @@ export const findScheduleConflicts = async (
       EXISTS (
         SELECT 1
         FROM schedules s
-        WHERE s.is_active = true
+        WHERE ${ACTIVE_SCHEDULES_CLAUSE}
           AND s.schedule_period_id IN (SELECT id FROM overlapping_periods)
           AND s.day_of_week = ${input.dayOfWeek}
           AND s.time_slot_id = ${input.timeSlotId}
@@ -769,7 +792,7 @@ export const findScheduleConflicts = async (
       EXISTS (
         SELECT 1
         FROM schedules s
-        WHERE s.is_active = true
+        WHERE ${ACTIVE_SCHEDULES_CLAUSE}
           AND s.schedule_period_id IN (SELECT id FROM overlapping_periods)
           AND s.day_of_week = ${input.dayOfWeek}
           AND s.time_slot_id = ${input.timeSlotId}
@@ -794,25 +817,48 @@ export const hasPastOccurrences = async (
   const result = await db.execute<{ has_past_occurrence: boolean }>(sql`
     SELECT EXISTS (
       SELECT 1
-      FROM schedules s
-      INNER JOIN schedule_periods sp ON sp.id = s.schedule_period_id
-      WHERE s.id = ${scheduleId}
-        AND s.is_active = true
-        AND sp.valid_from < ${today}::date
-        AND EXISTS (
-          SELECT 1
-          FROM generate_series(
-            sp.valid_from,
-            LEAST(sp.valid_to, ${today}::date - interval '1 day'),
-            interval '1 day'
-          ) AS d
-          WHERE EXTRACT(ISODOW FROM d)::int = s.day_of_week
-        )
+      FROM attendances_teacher at
+      WHERE at.schedule_id = ${scheduleId}
+        AND at.date < ${today}::date
+      LIMIT 1
     ) AS has_past_occurrence
   `);
 
   const [row] = getRows(result);
   return row?.has_past_occurrence ?? false;
+};
+
+export const countPastTeacherAttendancesForSchedule = async (
+  db: QueryExecutor,
+  scheduleId: string,
+  today: string
+): Promise<number> => {
+  const result = await db.execute<{ count: string | number }>(sql`
+    SELECT COUNT(*)::int AS count
+    FROM attendances_teacher at
+    WHERE at.schedule_id = ${scheduleId}
+      AND at.date < ${today}::date
+  `);
+
+  const [row] = getRows(result);
+  const value = Number(row?.count ?? 0);
+  return Number.isFinite(value) ? value : 0;
+};
+
+export const closeScheduleAtDate = async (
+  db: QueryExecutor,
+  scheduleId: string,
+  endDate: string
+): Promise<{ id: string } | null> => {
+  const result = await db.execute<{ id: string }>(sql`
+    UPDATE schedules
+    SET end_date = ${endDate}::date
+    WHERE id = ${scheduleId}
+    RETURNING id
+  `);
+
+  const [row] = getRows(result);
+  return row ?? null;
 };
 
 export const listRooms = async (db: QueryExecutor): Promise<Room[]> => {

@@ -189,6 +189,7 @@ export class AttendanceRepository {
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id
         CROSS JOIN now_ctx
         WHERE s.is_active = true
+          AND (s.end_date IS NULL OR s.end_date > now_ctx.today)
           AND s.day_of_week = now_ctx.day_of_week
           AND (now_ctx.today::timestamp + ts.end_time + INTERVAL '15 minute') <= now_ctx.now_local
       )
@@ -553,6 +554,7 @@ export class AttendanceRepository {
           INNER JOIN time_slots ts ON ts.id = s.time_slot_id
           WHERE t.user_id = ${userId}
             AND s.is_active = true
+            AND (s.end_date IS NULL OR s.end_date > ${date}::date)
           ORDER BY s.day_of_week ASC, ts.sort_order ASC, ts.start_time ASC
     `);
 
@@ -611,6 +613,7 @@ export class AttendanceRepository {
       WHERE s.teacher_id = ${params.teacherId}
         AND s.day_of_week = ${params.dayOfWeek}
         AND s.is_active = true
+        AND (s.end_date IS NULL OR s.end_date > ${params.date}::date)
       ORDER BY ts.sort_order ASC, ts.start_time ASC
     `);
 
@@ -733,6 +736,7 @@ export class AttendanceRepository {
        AND ast.date = ${today}
       WHERE s.day_of_week = ${dayOfWeek}
         AND s.is_active = true
+        AND (s.end_date IS NULL OR s.end_date > ${today}::date)
       GROUP BY
         s.id,
         u.name,
@@ -817,6 +821,7 @@ export class AttendanceRepository {
           ON s.schedule_period_id = ap.id
          AND s.day_of_week = EXTRACT(ISODOW FROM d.date)::int
          AND s.is_active = true
+         AND (s.end_date IS NULL OR s.end_date > d.date)
       )
       SELECT
         sbd.date::text AS date,
@@ -898,6 +903,7 @@ export class AttendanceRepository {
         ON s.schedule_period_id = ap.id
        AND s.day_of_week = EXTRACT(ISODOW FROM d.date)::int
        AND s.is_active = true
+       AND (s.end_date IS NULL OR s.end_date > d.date)
       INNER JOIN teachers t    ON t.id = s.teacher_id
       INNER JOIN users u       ON u.id = t.user_id
       INNER JOIN classes c     ON c.id = s.class_id

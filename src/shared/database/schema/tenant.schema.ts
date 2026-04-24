@@ -12,6 +12,7 @@ import {
   time,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
@@ -233,6 +234,7 @@ export const schedules = tenant.table(
       .references(() => timeSlots.id),
     dayOfWeek: integer('day_of_week').notNull(),
     subject: varchar('subject', { length: 100 }).notNull(),
+    endDate: date('end_date', { mode: 'string' }),
     isActive: boolean('is_active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
       .notNull()
@@ -243,12 +245,9 @@ export const schedules = tenant.table(
       'schedules_day_of_week_range',
       sql`${table.dayOfWeek} BETWEEN 1 AND 6`
     ),
-    scheduleSlotTeacherUnique: unique('schedules_period_teacher_slot_day_unique').on(
-      table.schedulePeriodId,
-      table.teacherId,
-      table.timeSlotId,
-      table.dayOfWeek
-    ),
+    scheduleSlotTeacherActiveUnique: uniqueIndex('schedules_period_teacher_slot_day_active_unique')
+      .on(table.schedulePeriodId, table.teacherId, table.timeSlotId, table.dayOfWeek)
+      .where(sql`${table.isActive} = true AND ${table.endDate} IS NULL`),
     schedulesPeriodIdx: index('idx_schedules_period').on(table.schedulePeriodId),
     schedulesTeacherIdx: index('idx_schedules_teacher').on(table.teacherId),
     schedulesRoomIdx: index('idx_schedules_room').on(table.roomId),
