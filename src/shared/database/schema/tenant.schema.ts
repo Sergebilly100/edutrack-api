@@ -473,3 +473,26 @@ export const salaryRecords = tenant.table(
     salaryTeacherMonthIdx: index('idx_salary_teacher_month').on(table.teacherId, table.periodMonth),
   })
 );
+
+export const salaryPayments = tenant.table(
+  'salary_payments',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    salaryRecordId: uuid('salary_record_id')
+      .notNull()
+      .references(() => salaryRecords.id, { onDelete: 'cascade' }),
+    hoursPaid: numeric('hours_paid', { precision: 6, scale: 2 }),
+    amountFcfa: integer('amount_fcfa').notNull(),
+    notes: text('notes'),
+    paidAt: timestamp('paid_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    paidBy: uuid('paid_by')
+      .notNull()
+      .references(() => users.id),
+  },
+  (table) => ({
+    salaryPaymentsRecordPaidAtIdx: index('idx_salary_payments_record_paid_at').on(
+      table.salaryRecordId,
+      table.paidAt
+    ),
+  })
+);

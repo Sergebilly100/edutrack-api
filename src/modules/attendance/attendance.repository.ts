@@ -399,6 +399,7 @@ export class AttendanceRepository {
         SET
           room_scanned_id = ${params.scannedRoomId},
           room_scan_start_at = ${params.scannedAtIso}::timestamptz,
+          room_scan_end_at = NULL,
           room_mismatch = ${params.roomMismatch},
           qr_alert_sent = ${params.qrAlertSent}
         WHERE teacher_id = ${params.teacherId}

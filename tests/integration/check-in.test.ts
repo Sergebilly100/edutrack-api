@@ -148,4 +148,41 @@ describe('attendance integration (real db)', () => {
 
     expect(rows[0]?.room_mismatch).toBe(true);
   });
+
+  it('POST /api/v1/attendance/qr-scan start après end ne retourne pas 500', async () => {
+    const context = getSeedContext();
+    const headers = await getAuthHeaders('teacher');
+
+    const endResponse = await request().post('/api/v1/attendance/qr-scan').set(headers).send({
+      qr_token: context.validRoomToken,
+      scan_type: 'end',
+      schedule_id: context.scheduleId,
+      date: LEGACY_CHECK_IN_DATE,
+    });
+
+    expect(endResponse.status).toBe(200);
+
+    const startResponse = await request().post('/api/v1/attendance/qr-scan').set(headers).send({
+      qr_token: context.validRoomToken,
+      scan_type: 'start',
+      schedule_id: context.scheduleId,
+      date: LEGACY_CHECK_IN_DATE,
+    });
+
+    expect(startResponse.status).toBe(200);
+    expect(startResponse.body).toHaveProperty('data.valid');
+    expect(startResponse.body).toHaveProperty('data.roomMismatch');
+
+    const rows = await queryTenant<{ room_scan_start_at: string | null; room_scan_end_at: string | null }>(
+      `
+        SELECT room_scan_start_at::text, room_scan_end_at::text
+        FROM ${tenantTable('attendances_teacher')}
+        WHERE teacher_id = $1 AND schedule_id = $2 AND date = $3::date
+      `,
+      [context.teacherId, context.scheduleId, LEGACY_CHECK_IN_DATE]
+    );
+
+    expect(rows[0]?.room_scan_start_at).toBeTruthy();
+    expect(rows[0]?.room_scan_end_at).toBeNull();
+  });
 });

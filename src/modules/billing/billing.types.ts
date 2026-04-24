@@ -10,6 +10,10 @@ export const teacherParamsSchema = z.object({
   teacherId: z.string().uuid(),
 });
 
+export const salaryHistoryQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(2000).optional().default(24),
+});
+
 export const recordParamsSchema = z.object({
   recordId: z.string().uuid(),
 });
@@ -21,6 +25,7 @@ export const jobParamsSchema = z.object({
 export const updateSalaryStatusBodySchema = z.object({
   status: z.enum(['paid', 'disputed']),
   notes: z.string().trim().max(2000).optional(),
+  hoursToPay: z.number().positive().max(744).optional(),
 });
 
 export const salarySingleExportBodySchema = z.object({
@@ -46,6 +51,7 @@ export const jobDownloadQuerySchema = z.object({
 
 export type SalaryMonthQuery = z.infer<typeof monthQuerySchema>;
 export type SalaryTeacherParams = z.infer<typeof teacherParamsSchema>;
+export type SalaryHistoryQuery = z.infer<typeof salaryHistoryQuerySchema>;
 export type SalaryRecordParams = z.infer<typeof recordParamsSchema>;
 export type SalaryJobParams = z.infer<typeof jobParamsSchema>;
 export type UpdateSalaryStatusBody = z.infer<typeof updateSalaryStatusBodySchema>;

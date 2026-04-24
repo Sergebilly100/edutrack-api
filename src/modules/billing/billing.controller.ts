@@ -21,6 +21,7 @@ import {
   jobDownloadQuerySchema,
   monthQuerySchema,
   recordParamsSchema,
+  salaryHistoryQuerySchema,
   salaryBulkExportBodySchema,
   salarySingleExportBodySchema,
   teacherParamsSchema,
@@ -198,6 +199,26 @@ export default async function billingController(app: FastifyInstance): Promise<v
     }
   );
 
+  app.get(
+    '/api/v1/billing/salary/:teacherId/payments',
+    { preHandler: requirePermission('salary.view') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const params = teacherParamsSchema.parse(request.params ?? {});
+        const query = salaryHistoryQuerySchema.parse(request.query ?? {});
+
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          return buildBillingService(tenantDb).getTeacherPaymentHistory(params.teacherId, query.limit);
+        });
+
+        return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
   app.post(
     '/api/v1/billing/salary/compute',
     { preHandler: requirePermission('salary.compute') },
@@ -231,6 +252,7 @@ export default async function billingController(app: FastifyInstance): Promise<v
             recordId: params.recordId,
             status: body.status,
             notes: body.notes,
+            hoursToPay: body.hoursToPay,
             actor: {
               userId: claims.sub,
               role: claims.role,

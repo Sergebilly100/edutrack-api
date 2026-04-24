@@ -189,12 +189,29 @@ const buildTeacherExportLines = (details: TeacherExportPayload): string[] => {
     details.teacher.type === 'permanent'
       ? `Salaire mensuel: ${details.teacher.monthlySalary ?? 'Non renseigne'}`
       : `Taux horaire: ${details.teacher.hourlyRate ?? 'Non renseigne'}`;
+  const paymentStatus =
+    details.summary.status === 'paid'
+      ? 'Paye'
+      : details.summary.status === 'disputed'
+        ? 'Litige'
+        : 'En attente';
+  const paymentDateLine = details.payment.paidAt
+    ? `Dernier paiement: ${new Date(details.payment.paidAt).toISOString()}`
+    : 'Dernier paiement: Aucun';
+  const paymentNoteLine = details.payment.notes
+    ? `Note paiement: ${details.payment.notes}`
+    : 'Note paiement: -';
 
   return [
     `Professeur: ${details.teacher.name}`,
     `Mois: ${details.month}`,
     `Type: ${details.teacher.type}`,
     compensationLine,
+    `Statut paiement: ${paymentStatus}`,
+    paymentDateLine,
+    `Montant deja paye: ${details.summary.amountAlreadyPaid ?? 0}`,
+    `Montant restant a payer: ${details.summary.amountRemainingToPayNow ?? 0}`,
+    paymentNoteLine,
     `Heures prevues: ${details.summary.hoursPlanned.toFixed(2)}`,
     `Heures effectuees: ${details.summary.hoursDone.toFixed(2)}`,
     `Total FCFA: ${details.summary.totalFcfa ?? 'N/A'}`,
