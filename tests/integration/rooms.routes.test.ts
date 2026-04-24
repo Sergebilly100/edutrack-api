@@ -3,8 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   withTenantSchema: vi.fn(),
-  requireDirectorOrSecretary: vi.fn(),
-  requireTeacherOrDirectorOrSecretary: vi.fn(),
+  requirePermission: vi.fn(),
   buildRoomsService: vi.fn(),
   listActiveRooms: vi.fn(),
   createRoom: vi.fn(),
@@ -19,8 +18,7 @@ vi.mock('../../src/shared/database/db.js', () => ({
 }));
 
 vi.mock('../../src/shared/middleware/auth.middleware.js', () => ({
-  requireDirectorOrSecretary: mocks.requireDirectorOrSecretary,
-  requireTeacherOrDirectorOrSecretary: mocks.requireTeacherOrDirectorOrSecretary,
+  requirePermission: mocks.requirePermission,
 }));
 
 vi.mock('../../src/modules/rooms/rooms.service.js', async () => {
@@ -45,18 +43,13 @@ const buildApp = async () => {
 beforeEach(() => {
   vi.clearAllMocks();
 
-  mocks.requireDirectorOrSecretary.mockImplementation(async (request: { claims?: unknown }) => {
-    request.claims = {
-      sub: 'director-id',
-      role: 'director',
-      schemaName: 'school_sainte_marie',
-    };
-  });
-  mocks.requireTeacherOrDirectorOrSecretary.mockImplementation(async (request: { claims?: unknown }) => {
-    request.claims = {
-      sub: 'teacher-id',
-      role: 'teacher',
-      schemaName: 'school_sainte_marie',
+  mocks.requirePermission.mockImplementation(() => {
+    return async (request: { claims?: unknown }) => {
+      request.claims = {
+        sub: 'director-id',
+        role: 'director',
+        schemaName: 'school_sainte_marie',
+      };
     };
   });
 
@@ -211,12 +204,14 @@ describe('rooms routes', () => {
   });
 
   it('GET /api/v1/rooms retourne 403 si le middleware refuse', async () => {
-    mocks.requireTeacherOrDirectorOrSecretary.mockImplementationOnce(async (_request, reply) => {
-      reply.code(403).send({
-        error: 'Forbidden',
-        code: 'FORBIDDEN',
-        statusCode: 403,
-      });
+    mocks.requirePermission.mockImplementationOnce(() => {
+      return async (_request, reply) => {
+        reply.code(403).send({
+          error: 'Forbidden',
+          code: 'FORBIDDEN',
+          statusCode: 403,
+        });
+      };
     });
 
     const app = await buildApp();

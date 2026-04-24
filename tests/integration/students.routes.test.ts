@@ -3,9 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   withTenantSchema: vi.fn(),
-  requireDirector: vi.fn(),
-  requireDirectorOrSecretary: vi.fn(),
-  requireTeacherOrDirectorOrSecretary: vi.fn(),
+  requirePermission: vi.fn(),
   buildStudentsService: vi.fn(),
   service: {
     listStudents: vi.fn(),
@@ -26,9 +24,7 @@ vi.mock('../../src/shared/database/db.js', () => ({
 }));
 
 vi.mock('../../src/shared/middleware/auth.middleware.js', () => ({
-  requireDirector: mocks.requireDirector,
-  requireDirectorOrSecretary: mocks.requireDirectorOrSecretary,
-  requireTeacherOrDirectorOrSecretary: mocks.requireTeacherOrDirectorOrSecretary,
+  requirePermission: mocks.requirePermission,
 }));
 
 vi.mock('../../src/modules/students/students.service.js', () => ({
@@ -88,49 +84,35 @@ beforeEach(() => {
     return role;
   };
 
-  mocks.requireTeacherOrDirectorOrSecretary.mockImplementation(async (request, reply) => {
-    const role = attachClaimsOrReject(request, reply);
-    if (!role) {
-      return;
-    }
+  mocks.requirePermission.mockImplementation((permission: string) => {
+    return async (request, reply) => {
+      const role = attachClaimsOrReject(request, reply);
+      if (!role) {
+        return;
+      }
 
-    if (!['teacher', 'director', 'staff'].includes(role)) {
-      reply.code(403).send({
-        error: 'Forbidden',
-        code: 'FORBIDDEN',
-        statusCode: 403,
-      });
-    }
-  });
+      if (!['teacher', 'director', 'staff'].includes(role)) {
+        reply.code(403).send({
+          error: 'Forbidden',
+          code: 'FORBIDDEN',
+          statusCode: 403,
+        });
+        return;
+      }
 
-  mocks.requireDirectorOrSecretary.mockImplementation(async (request, reply) => {
-    const role = attachClaimsOrReject(request, reply);
-    if (!role) {
-      return;
-    }
-
-    if (!['director', 'staff'].includes(role)) {
-      reply.code(403).send({
-        error: 'Forbidden',
-        code: 'FORBIDDEN',
-        statusCode: 403,
-      });
-    }
-  });
-
-  mocks.requireDirector.mockImplementation(async (request, reply) => {
-    const role = attachClaimsOrReject(request, reply);
-    if (!role) {
-      return;
-    }
-
-    if (role !== 'director') {
-      reply.code(403).send({
-        error: 'Forbidden',
-        code: 'FORBIDDEN',
-        statusCode: 403,
-      });
-    }
+      const rawPermissions = request.headers['x-test-permissions'];
+      const permissions =
+        typeof rawPermissions === 'string' && rawPermissions.trim().length > 0
+          ? rawPermissions.split(',').map((value) => value.trim())
+          : [permission];
+      if (!permissions.includes(permission)) {
+        reply.code(403).send({
+          error: `Permission ${permission} required`,
+          code: 'FORBIDDEN',
+          statusCode: 403,
+        });
+      }
+    };
   });
 
   mocks.buildStudentsService.mockReturnValue(mocks.service);

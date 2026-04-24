@@ -126,7 +126,6 @@ type UpdateMeInput = {
   userId: string;
   name?: string;
   phone?: string | null;
-  email?: string | null;
   profilePhotoUrl?: string | null;
 };
 
@@ -650,7 +649,6 @@ export const updateMe = async (db: TenantDb, input: UpdateMeInput) => {
   await updateUserProfile(db, input.userId, {
     ...(input.name !== undefined ? { name: input.name } : {}),
     ...(input.phone !== undefined ? { phone: input.phone } : {}),
-    ...(input.email !== undefined ? { email: input.email } : {}),
     ...(input.profilePhotoUrl !== undefined ? { profilePhotoUrl: input.profilePhotoUrl } : {}),
   });
 

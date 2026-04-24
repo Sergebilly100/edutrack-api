@@ -3,9 +3,7 @@ import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
 import {
-  requireDirector,
-  requireDirectorOrSecretary,
-  requireTeacherOrDirectorOrSecretary,
+  requirePermission,
 } from '../../shared/middleware/auth.middleware.js';
 
 import { StudentsModuleError, buildStudentsService } from './students.service.js';
@@ -46,18 +44,10 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
 };
 
 export default async function studentsController(app: FastifyInstance): Promise<void> {
-  app.get('/api/v1/students', { preHandler: requireTeacherOrDirectorOrSecretary }, async (request, reply) => {
+  app.get('/api/v1/students', { preHandler: requirePermission('students.view') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const query = studentsListQuerySchema.parse(request.query ?? {});
-
-      if (claims.role === 'teacher' && !query.class_id) {
-        return reply.code(400).send({
-          error: 'class_id is required for teacher',
-          code: 'BAD_REQUEST',
-          statusCode: 400,
-        });
-      }
 
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
         const service = buildStudentsService(tenantDb);
@@ -70,7 +60,7 @@ export default async function studentsController(app: FastifyInstance): Promise<
     }
   });
 
-  app.post('/api/v1/students', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.post('/api/v1/students', { preHandler: requirePermission('students.create') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const body = createStudentBodySchema.parse(request.body ?? {});
@@ -86,7 +76,7 @@ export default async function studentsController(app: FastifyInstance): Promise<
     }
   });
 
-  app.get('/api/v1/students/absence-stats', { preHandler: requireDirector }, async (request, reply) => {
+  app.get('/api/v1/students/absence-stats', { preHandler: requirePermission('students.view') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const query = absenceStatsQuerySchema.parse(request.query ?? {});
@@ -102,7 +92,7 @@ export default async function studentsController(app: FastifyInstance): Promise<
     }
   });
 
-  app.get('/api/v1/students/:studentId/absences', { preHandler: requireDirector }, async (request, reply) => {
+  app.get('/api/v1/students/:studentId/absences', { preHandler: requirePermission('students.view') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const params = studentAbsencesParamsSchema.parse(request.params ?? {});
@@ -119,7 +109,7 @@ export default async function studentsController(app: FastifyInstance): Promise<
     }
   });
 
-  app.get('/api/v1/students/:id', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.get('/api/v1/students/:id', { preHandler: requirePermission('students.view') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const params = updateStudentParamsSchema.parse(request.params ?? {});
@@ -135,7 +125,7 @@ export default async function studentsController(app: FastifyInstance): Promise<
     }
   });
 
-  app.put('/api/v1/students/:id', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.put('/api/v1/students/:id', { preHandler: requirePermission('students.edit') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const params = updateStudentParamsSchema.parse(request.params ?? {});
@@ -152,7 +142,7 @@ export default async function studentsController(app: FastifyInstance): Promise<
     }
   });
 
-  app.delete('/api/v1/students/:id', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.delete('/api/v1/students/:id', { preHandler: requirePermission('students.edit') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const params = updateStudentParamsSchema.parse(request.params ?? {});
@@ -171,7 +161,7 @@ export default async function studentsController(app: FastifyInstance): Promise<
   if (!app.hasRoute({ method: 'POST', url: '/api/v1/attendance/students/bulk' })) {
     app.post(
       '/api/v1/attendance/students/bulk',
-      { preHandler: requireDirectorOrSecretary },
+      { preHandler: requirePermission('attendance.mark_students') },
       async (request, reply) => {
         try {
           const claims = request.claims!;
@@ -196,7 +186,7 @@ export default async function studentsController(app: FastifyInstance): Promise<
   if (!app.hasRoute({ method: 'GET', url: '/api/v1/attendance/students' })) {
     app.get(
       '/api/v1/attendance/students',
-      { preHandler: requireDirectorOrSecretary },
+      { preHandler: requirePermission('attendance.view') },
       async (request, reply) => {
         try {
           const claims = request.claims!;
@@ -215,7 +205,7 @@ export default async function studentsController(app: FastifyInstance): Promise<
     );
   }
 
-    app.get('/api/v1/attendance/students/today', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+    app.get('/api/v1/attendance/students/today', { preHandler: requirePermission('attendance.view') }, async (request, reply) => {
     try {
       const claims = request.claims!;
 

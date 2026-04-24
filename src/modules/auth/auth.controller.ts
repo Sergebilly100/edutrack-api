@@ -76,14 +76,12 @@ const updateMeSchema = z
   .object({
     name: z.string().trim().min(2).max(255).optional(),
     phone: z.string().trim().min(6).max(20).nullable().optional(),
-    email: z.string().trim().email().max(255).nullable().optional(),
     profilePhotoUrl: z.string().trim().max(2_000_000).nullable().optional(),
   })
   .refine(
     (body) =>
       body.name !== undefined ||
       body.phone !== undefined ||
-      body.email !== undefined ||
       body.profilePhotoUrl !== undefined,
     {
       message: 'At least one field must be provided',
@@ -450,7 +448,6 @@ export default async function authController(app: FastifyInstance): Promise<void
           userId: claims.sub,
           ...(body.name !== undefined ? { name: body.name } : {}),
           ...(body.phone !== undefined ? { phone: body.phone } : {}),
-          ...(body.email !== undefined ? { email: body.email } : {}),
           ...(body.profilePhotoUrl !== undefined ? { profilePhotoUrl: body.profilePhotoUrl } : {}),
         })
       );

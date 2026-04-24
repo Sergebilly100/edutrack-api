@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
-import { requireDirector, requireDirectorOrSecretary } from '../../shared/middleware/auth.middleware.js';
+import { requirePermission } from '../../shared/middleware/auth.middleware.js';
 
 import { buildTeachersService, TeachersModuleError } from './teachers.service.js';
 import {
@@ -67,7 +67,7 @@ const toCreateInput = (payload: unknown): CreateTeacherInput => {
 
 export default async function teachersController(app: FastifyInstance): Promise<void> {
   // ─── GET /api/v1/teachers ─────────────────────────────────────────────────
-  app.get('/api/v1/teachers', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.get('/api/v1/teachers', { preHandler: requirePermission('teachers.view') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const query = teachersListQuerySchema.parse(request.query ?? {});
@@ -90,7 +90,7 @@ export default async function teachersController(app: FastifyInstance): Promise<
   });
 
   // ─── GET /api/v1/teachers/attendance-stats ───────────────────────────────
-  app.get('/api/v1/teachers/attendance-stats', { preHandler: requireDirector }, async (request, reply) => {
+  app.get('/api/v1/teachers/attendance-stats', { preHandler: requirePermission('teachers.view') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const query = teacherAttendanceStatsQuerySchema.parse(request.query ?? {});
@@ -110,7 +110,7 @@ export default async function teachersController(app: FastifyInstance): Promise<
   // Route dédiée — retourne le prof même s'il est bloqué ou inactif.
   // Évite le pagination-scan côté frontend et le TEACHER_NOT_FOUND spurieux
   // qui déclenchait le toast d'erreur après un blocage réussi.
-  app.get('/api/v1/teachers/:id', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.get('/api/v1/teachers/:id', { preHandler: requirePermission('teachers.view') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const params = teacherParamsSchema.parse(request.params ?? {});
@@ -127,7 +127,7 @@ export default async function teachersController(app: FastifyInstance): Promise<
   });
 
   // ─── POST /api/v1/teachers ────────────────────────────────────────────────
-  app.post('/api/v1/teachers', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.post('/api/v1/teachers', { preHandler: requirePermission('teachers.create') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const input = toCreateInput(request.body ?? {});
@@ -144,7 +144,7 @@ export default async function teachersController(app: FastifyInstance): Promise<
   });
 
   // ─── PUT /api/v1/teachers/:id ─────────────────────────────────────────────
-  app.put('/api/v1/teachers/:id', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.put('/api/v1/teachers/:id', { preHandler: requirePermission('teachers.edit') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const params = teacherParamsSchema.parse(request.params ?? {});
@@ -162,7 +162,7 @@ export default async function teachersController(app: FastifyInstance): Promise<
   });
 
   // ─── DELETE /api/v1/teachers/:id ──────────────────────────────────────────
-  app.delete('/api/v1/teachers/:id', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.delete('/api/v1/teachers/:id', { preHandler: requirePermission('teachers.edit') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const params = teacherParamsSchema.parse(request.params ?? {});
@@ -181,7 +181,7 @@ export default async function teachersController(app: FastifyInstance): Promise<
   // ─── GET /api/v1/teachers/:id/stats ──────────────────────────────────────
   app.get(
     '/api/v1/teachers/:id/stats',
-    { preHandler: requireDirectorOrSecretary },
+    { preHandler: requirePermission('teachers.view') },
     async (request, reply) => {
       try {
         const claims = request.claims!;

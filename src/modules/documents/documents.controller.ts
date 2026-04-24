@@ -57,7 +57,8 @@ const resolveBaseUrl = (request: FastifyRequest): string => {
 };
 
 const hasEntityPermission = (
-  request: FastifyRequest
+  request: FastifyRequest,
+  entityType: 'teacher' | 'student'
 ): boolean => {
   const role = request.claims?.role;
 
@@ -65,11 +66,9 @@ const hasEntityPermission = (
     return true;
   }
 
-  if (role === 'staff') {
-    return false;
-  }
+  const permissionKey = entityType === 'teacher' ? 'teachers.documents' : 'students.documents';
 
-  return false;
+  return request.permissions?.has(permissionKey) ?? false;
 };
 
 const ensureDocumentsPermission = (
@@ -77,7 +76,7 @@ const ensureDocumentsPermission = (
   reply: FastifyReply,
   entityType: 'teacher' | 'student'
 ): boolean => {
-  if (hasEntityPermission(request)) {
+  if (hasEntityPermission(request, entityType)) {
     return true;
   }
 
