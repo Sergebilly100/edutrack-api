@@ -56,7 +56,7 @@ const handleError = (
 };
 
 const assertSettingsManager = (role: string): void => {
-  if (role !== 'director' && role !== 'super_admin') {
+  if (role !== 'director' && role !== 'super_admin' && role !== 'staff') {
     throw new PermissionsModuleError('Forbidden', 403, 'FORBIDDEN');
   }
 };
