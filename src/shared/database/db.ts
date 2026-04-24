@@ -3,6 +3,7 @@ import 'dotenv/config';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
+import type { PoolClient } from 'pg';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -20,6 +21,48 @@ pool.on('error', (err) => {
 export const db = drizzle(pool);
 export type TenantDb = NodePgDatabase<Record<string, unknown>>;
 
+const tenantSchemaCompatInFlight = new Map<string, Promise<void>>();
+
+const ensureTenantSchemaCompatibility = async (
+  schemaName: string,
+  client: PoolClient
+): Promise<void> => {
+  const existing = tenantSchemaCompatInFlight.get(schemaName);
+  if (existing) {
+    await existing;
+    return;
+  }
+
+  const ensurePromise = (async () => {
+    const schema = `"${schemaName}"`;
+
+    await client.query(`
+      ALTER TABLE ${schema}.schedules
+      ADD COLUMN IF NOT EXISTS end_date date
+    `);
+
+    await client.query(`
+      ALTER TABLE ${schema}.schedules
+      DROP CONSTRAINT IF EXISTS schedules_period_teacher_slot_day_unique
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS schedules_period_teacher_slot_day_active_unique
+      ON ${schema}.schedules (schedule_period_id, teacher_id, time_slot_id, day_of_week)
+      WHERE is_active = true
+        AND end_date IS NULL
+    `);
+  })();
+
+  tenantSchemaCompatInFlight.set(schemaName, ensurePromise);
+
+  try {
+    await ensurePromise;
+  } finally {
+    tenantSchemaCompatInFlight.delete(schemaName);
+  }
+};
+
 export const acquireTenantDb = async (
   schemaName: string
 ): Promise<{ db: TenantDb; release: () => void }> => {
@@ -29,6 +72,7 @@ export const acquireTenantDb = async (
 
   const client = await pool.connect();
   await client.query(`SET search_path TO "${schemaName}", public`);
+  await ensureTenantSchemaCompatibility(schemaName, client);
 
   return {
     db: drizzle(client) as TenantDb,
