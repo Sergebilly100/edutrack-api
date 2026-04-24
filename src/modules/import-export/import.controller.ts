@@ -4,14 +4,15 @@ import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError, z } from 'zod';
 
-import { requireDirectorOrSecretary } from '../../shared/middleware/auth.middleware.js';
+import { requirePermission } from '../../shared/middleware/auth.middleware.js';
+import type { PermissionKey } from '../../shared/types/index.js';
 import {
   attachTenantDb,
   releaseTenantDb,
 } from '../../shared/middleware/tenant.middleware.js';
 
 import { ImportModuleError, buildImportService } from './import.service.js';
-import { importTypeParamsSchema } from './import.types.js';
+import { importTypeParamsSchema, type ImportType } from './import.types.js';
 
 const reportHasConflicts = (report: { conflicts?: unknown[] }): boolean => {
   return Array.isArray(report.conflicts) && report.conflicts.length > 0;
@@ -113,6 +114,21 @@ const importHistoryQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
+const IMPORT_PERMISSION_BY_TYPE: Readonly<Record<ImportType, PermissionKey>> = {
+  students: 'import.students',
+  teachers: 'import.teachers',
+  schedule: 'import.schedule',
+};
+
+const requireImportTypePermission = async (
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> => {
+  const { type } = importTypeParamsSchema.parse(request.params ?? {});
+  const permission = IMPORT_PERMISSION_BY_TYPE[type];
+  await requirePermission(permission)(request, reply);
+};
+
 export default async function importExportController(app: FastifyInstance): Promise<void> {
   app.addHook('onResponse', async (request) => {
     await releaseTenantDb(request);
@@ -120,7 +136,7 @@ export default async function importExportController(app: FastifyInstance): Prom
 
   app.get(
     '/api/v1/import/:type/template',
-    { preHandler: [requireDirectorOrSecretary, attachTenantDb] },
+    { preHandler: [requireImportTypePermission, attachTenantDb] },
     async (request, reply) => {
       try {
         const { type } = importTypeParamsSchema.parse(request.params ?? {});
@@ -152,7 +168,7 @@ export default async function importExportController(app: FastifyInstance): Prom
 
   app.post(
     '/api/v1/import/:type/dry-run',
-    { preHandler: [requireDirectorOrSecretary, attachTenantDb] },
+    { preHandler: [requireImportTypePermission, attachTenantDb] },
     async (request, reply) => {
       try {
         const { type } = importTypeParamsSchema.parse(request.params ?? {});
@@ -172,7 +188,7 @@ export default async function importExportController(app: FastifyInstance): Prom
 
   app.post(
     '/api/v1/import/:type/confirm',
-    { preHandler: [requireDirectorOrSecretary, attachTenantDb] },
+    { preHandler: [requireImportTypePermission, attachTenantDb] },
     async (request, reply) => {
       try {
         const { type } = importTypeParamsSchema.parse(request.params ?? {});
@@ -210,7 +226,7 @@ export default async function importExportController(app: FastifyInstance): Prom
 
   app.get(
     '/api/v1/import/history',
-    { preHandler: [requireDirectorOrSecretary, attachTenantDb] },
+    { preHandler: [requirePermission('import.students'), attachTenantDb] },
     async (request, reply) => {
       try {
         const { limit } = importHistoryQuerySchema.parse(request.query ?? {});

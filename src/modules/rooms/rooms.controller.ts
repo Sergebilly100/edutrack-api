@@ -2,10 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
-import {
-  requireDirectorOrSecretary,
-  requireTeacherOrDirectorOrSecretary,
-} from '../../shared/middleware/auth.middleware.js';
+import { requirePermission } from '../../shared/middleware/auth.middleware.js';
 
 import { buildRoomsService, RoomsModuleError } from './rooms.service.js';
 import {
@@ -58,7 +55,7 @@ const handleError = (
 };
 
 export default async function roomsController(app: FastifyInstance): Promise<void> {
-  app.get('/api/v1/rooms', { preHandler: requireTeacherOrDirectorOrSecretary }, async (request, reply) => {
+  app.get('/api/v1/rooms', { preHandler: requirePermission('rooms.view') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
@@ -71,7 +68,7 @@ export default async function roomsController(app: FastifyInstance): Promise<voi
     }
   });
 
-  app.post('/api/v1/rooms', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.post('/api/v1/rooms', { preHandler: requirePermission('rooms.create') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const body = createRoomBodySchema.parse(request.body ?? {});
@@ -86,7 +83,7 @@ export default async function roomsController(app: FastifyInstance): Promise<voi
     }
   });
 
-  app.put('/api/v1/rooms/:id', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.put('/api/v1/rooms/:id', { preHandler: requirePermission('rooms.edit') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const params = roomIdParamsSchema.parse(request.params ?? {});
@@ -102,7 +99,7 @@ export default async function roomsController(app: FastifyInstance): Promise<voi
     }
   });
 
-  app.delete('/api/v1/rooms/:id', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.delete('/api/v1/rooms/:id', { preHandler: requirePermission('rooms.delete') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const params = roomIdParamsSchema.parse(request.params ?? {});
@@ -119,7 +116,7 @@ export default async function roomsController(app: FastifyInstance): Promise<voi
 
   app.post(
     '/api/v1/rooms/:id/regenerate-token',
-    { preHandler: requireDirectorOrSecretary },
+    { preHandler: requirePermission('rooms.edit') },
     async (request, reply) => {
       try {
         const claims = request.claims!;
@@ -136,7 +133,7 @@ export default async function roomsController(app: FastifyInstance): Promise<voi
     }
   );
 
-  app.get('/api/v1/rooms/:id/qr', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.get('/api/v1/rooms/:id/qr', { preHandler: requirePermission('rooms.view') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const params = roomIdParamsSchema.parse(request.params ?? {});

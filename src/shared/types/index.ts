@@ -78,6 +78,13 @@ export type PermissionKey =
   | 'salary.compute'
   | 'salary.mark_paid'
   | 'salary.export'
+  | 'rooms.view'
+  | 'rooms.create'
+  | 'rooms.edit'
+  | 'rooms.delete'
+  | 'import.students'
+  | 'import.teachers'
+  | 'import.schedule'
   | 'settings.positions'
   | 'settings.school'
   | 'settings.sms_templates';
