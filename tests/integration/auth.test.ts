@@ -141,6 +141,7 @@ describe('auth integration (real db)', () => {
     const context = getSeedContext();
     const headers = await getAuthHeaders('director');
     const newPassword = 'DirectorNew1';
+    const restoredPassword = 'DirectorRestored1';
 
     const changeResponse = await request().post('/api/v1/auth/change-password').set(headers).send({
       current_password: context.directorPassword,
@@ -164,10 +165,12 @@ describe('auth integration (real db)', () => {
       .set(headers)
       .send({
         current_password: newPassword,
-        new_password: 'DirectorRestored1',
+        new_password: restoredPassword,
       });
 
     expect(rotateAgainResponse.status).toBe(200);
+    // Maintient la cohérence des credentials utilisés par getAuthHeaders('director')
+    context.directorPassword = restoredPassword;
   });
 
   it('POST /api/v1/auth/change-password retourne 401 si mot de passe actuel incorrect', async () => {
