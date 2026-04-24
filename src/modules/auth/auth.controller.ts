@@ -29,19 +29,47 @@ const sessionParamsSchema = z.object({
   sessionId: z.string().uuid(),
 });
 
+const strongPasswordSchema = z
+  .string()
+  .min(8)
+  .regex(/[A-Z]/, 'Le mot de passe doit contenir au moins une majuscule')
+  .regex(/[0-9]/, 'Le mot de passe doit contenir au moins un chiffre');
+
 const changePasswordSchema = z
   .object({
-    currentPassword: z.string().trim().min(1),
-    newPassword: z
-      .string()
-      .min(8)
-      .regex(/[A-Z]/, 'Le mot de passe doit contenir au moins une majuscule')
-      .regex(/[0-9]/, 'Le mot de passe doit contenir au moins un chiffre'),
-    confirmPassword: z.string().min(1),
+    current_password: z.string().trim().min(1).optional(),
+    new_password: strongPasswordSchema.optional(),
+    currentPassword: z.string().trim().min(1).optional(),
+    newPassword: strongPasswordSchema.optional(),
+    confirmPassword: z.string().min(1).optional(),
   })
-  .refine((body) => body.newPassword === body.confirmPassword, {
-    message: 'Les mots de passe ne correspondent pas',
-    path: ['confirmPassword'],
+  .superRefine((body, ctx) => {
+    const currentPassword = body.current_password ?? body.currentPassword;
+    const newPassword = body.new_password ?? body.newPassword;
+
+    if (!currentPassword) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['current_password'],
+        message: 'Le mot de passe actuel est requis',
+      });
+    }
+
+    if (!newPassword) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['new_password'],
+        message: 'Le nouveau mot de passe est requis',
+      });
+    }
+
+    if (body.confirmPassword !== undefined && newPassword && body.confirmPassword !== newPassword) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['confirmPassword'],
+        message: 'Les mots de passe ne correspondent pas',
+      });
+    }
   });
 
 const updateMeSchema = z
@@ -388,21 +416,23 @@ export default async function authController(app: FastifyInstance): Promise<void
         const token = extractBearerToken(request);
         const claims = await verifyAccessToken(token);
         assertWritableSession(request, claims);
-        if (claims.role !== 'director') {
-          throw new Error('Modification de mot de passe non autorisée pour ce rôle');
-        }
         const body = changePasswordSchema.parse(request.body);
+        const currentPassword = body.current_password ?? body.currentPassword;
+        const newPassword = body.new_password ?? body.newPassword;
 
         await withTenantSchema(claims.schemaName, (tenantDb) =>
           changePassword(tenantDb, {
             userId: claims.sub,
-            currentPassword: body.currentPassword,
-            newPassword: body.newPassword,
+            currentPassword: currentPassword!,
+            newPassword: newPassword!,
           })
         );
 
-        return reply.send({ success: true });
+        return reply.code(200).send({ message: 'Mot de passe mis à jour' });
       } catch (error) {
+        if (error instanceof Error && error.message === 'Current password is incorrect') {
+          return reply.code(401).send({ error: 'Mot de passe actuel incorrect' });
+        }
         return handleError(reply, error);
       }
     }

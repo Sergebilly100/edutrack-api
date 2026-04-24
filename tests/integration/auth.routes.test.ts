@@ -277,7 +277,7 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('POST /api/v1/auth/change-password — directeur autorisé → 200', async () => {
+  it('POST /api/v1/auth/change-password — bon mot de passe actuel → 200', async () => {
     mocks.verifyAccessToken.mockResolvedValue({
       sub: 'director-1',
       role: 'director',
@@ -290,26 +290,23 @@ describe('auth routes', () => {
       url: '/api/v1/auth/change-password',
       headers: { authorization: 'Bearer valid-token' },
       payload: {
-        currentPassword: 'director2024',
-        newPassword: 'SecurePass1',
-        confirmPassword: 'SecurePass1',
+        current_password: 'director2024',
+        new_password: 'SecurePass1',
       },
     });
 
     expect(response.statusCode).toBe(200);
-    expect(parseBody(response.body)).toEqual({ success: true });
+    expect(parseBody(response.body)).toEqual({ message: 'Mot de passe mis à jour' });
     await app.close();
   });
 
-  it('POST /api/v1/auth/change-password — staff interdit → 403', async () => {
+  it('POST /api/v1/auth/change-password — mauvais mot de passe actuel → 401', async () => {
     mocks.verifyAccessToken.mockResolvedValue({
-      sub: 'staff-1',
-      role: 'staff',
+      sub: 'director-1',
+      role: 'director',
       schemaName: 'tenant_demo',
     });
-    mocks.changePassword.mockRejectedValue(
-      new Error('Modification de mot de passe non autorisée pour ce rôle')
-    );
+    mocks.changePassword.mockRejectedValue(new Error('Current password is incorrect'));
     const app = await buildApp();
 
     const response = await app.inject({
@@ -317,15 +314,13 @@ describe('auth routes', () => {
       url: '/api/v1/auth/change-password',
       headers: { authorization: 'Bearer valid-token' },
       payload: {
-        currentPassword: 'staff2024',
-        newPassword: 'SecurePass1',
-        confirmPassword: 'SecurePass1',
+        current_password: 'wrong-password',
+        new_password: 'SecurePass1',
       },
     });
 
-    expect(response.statusCode).toBe(403);
-    const body = parseBody(response.body) as { code: string };
-    expect(body.code).toBe('FORBIDDEN');
+    expect(response.statusCode).toBe(401);
+    expect(parseBody(response.body)).toEqual({ error: 'Mot de passe actuel incorrect' });
     await app.close();
   });
 

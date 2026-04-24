@@ -137,19 +137,18 @@ describe('auth integration (real db)', () => {
     expect(response.body).toEqual({ success: true });
   });
 
-  it('POST /api/v1/auth/change-password fonctionne pour un directeur', async () => {
+  it('POST /api/v1/auth/change-password fonctionne avec bon mot de passe actuel', async () => {
     const context = getSeedContext();
     const headers = await getAuthHeaders('director');
     const newPassword = 'DirectorNew1';
 
     const changeResponse = await request().post('/api/v1/auth/change-password').set(headers).send({
-      currentPassword: context.directorPassword,
-      newPassword,
-      confirmPassword: newPassword,
+      current_password: context.directorPassword,
+      new_password: newPassword,
     });
 
     expect(changeResponse.status).toBe(200);
-    expect(changeResponse.body).toEqual({ success: true });
+    expect(changeResponse.body).toEqual({ message: 'Mot de passe mis à jour' });
 
     const loginWithNewPassword = await request().post('/api/v1/auth/login/teacher').set({
       'x-tenant-schema': TEST_SCHEMA_NAME,
@@ -164,28 +163,22 @@ describe('auth integration (real db)', () => {
       .post('/api/v1/auth/change-password')
       .set(headers)
       .send({
-        currentPassword: newPassword,
-        newPassword: 'DirectorRestored1',
-        confirmPassword: 'DirectorRestored1',
+        current_password: newPassword,
+        new_password: 'DirectorRestored1',
       });
 
     expect(rotateAgainResponse.status).toBe(200);
   });
 
-  it('POST /api/v1/auth/change-password retourne 403 pour staff', async () => {
-    const context = getSeedContext();
-    const headers = await getAuthHeaders('staff');
+  it('POST /api/v1/auth/change-password retourne 401 si mot de passe actuel incorrect', async () => {
+    const headers = await getAuthHeaders('director');
 
     const response = await request().post('/api/v1/auth/change-password').set(headers).send({
-      currentPassword: context.staffPassword,
-      newPassword: 'StaffNew1',
-      confirmPassword: 'StaffNew1',
+      current_password: 'wrong-director-password',
+      new_password: 'StaffNew1',
     });
 
-    expect(response.status).toBe(403);
-    expect(response.body).toMatchObject({
-      code: 'FORBIDDEN',
-      error: 'Modification de mot de passe non autorisée pour ce rôle',
-    });
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({ error: 'Mot de passe actuel incorrect' });
   });
 });
