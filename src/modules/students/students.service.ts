@@ -82,6 +82,14 @@ export class StudentsService {
     };
   }
 
+  async teacherCanAccessClass(input: {
+    teacherUserId: string;
+    classId: string;
+    date: string;
+  }): Promise<boolean> {
+    return this.repository.teacherHasClassAccess(input);
+  }
+
   async createStudent(input: CreateStudentInput): Promise<StudentRecord> {
     try {
       return await this.repository.createStudent(input);

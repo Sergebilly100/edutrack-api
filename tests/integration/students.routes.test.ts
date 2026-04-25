@@ -4,9 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   withTenantSchema: vi.fn(),
   requirePermission: vi.fn(),
+  requireTeacherOrDirectorOrSecretary: vi.fn(),
   buildStudentsService: vi.fn(),
   service: {
     listStudents: vi.fn(),
+    teacherCanAccessClass: vi.fn(),
     createStudent: vi.fn(),
     getStudentDetail: vi.fn(),
     updateStudent: vi.fn(),
@@ -25,6 +27,7 @@ vi.mock('../../src/shared/database/db.js', () => ({
 
 vi.mock('../../src/shared/middleware/auth.middleware.js', () => ({
   requirePermission: mocks.requirePermission,
+  requireTeacherOrDirectorOrSecretary: mocks.requireTeacherOrDirectorOrSecretary,
 }));
 
 vi.mock('../../src/modules/students/students.service.js', () => ({
@@ -115,6 +118,28 @@ beforeEach(() => {
     };
   });
 
+  mocks.requireTeacherOrDirectorOrSecretary.mockImplementation(async (request, reply) => {
+    const role = attachClaimsOrReject(request, reply);
+    if (!role) {
+      return;
+    }
+
+    const rawPermissions = request.headers['x-test-permissions'];
+    const permissions =
+      typeof rawPermissions === 'string' && rawPermissions.trim().length > 0
+        ? rawPermissions.split(',').map((value) => value.trim())
+        : ['students.view', 'attendance.view', 'attendance.mark_students'];
+    request.permissions = new Set(permissions);
+
+    if (!['teacher', 'director', 'staff'].includes(role)) {
+      reply.code(403).send({
+        error: 'Forbidden',
+        code: 'FORBIDDEN',
+        statusCode: 403,
+      });
+    }
+  });
+
   mocks.buildStudentsService.mockReturnValue(mocks.service);
 
   mocks.service.listStudents.mockResolvedValue({
@@ -138,6 +163,7 @@ beforeEach(() => {
       totalPages: 3,
     },
   });
+  mocks.service.teacherCanAccessClass.mockResolvedValue(true);
 
   mocks.service.bulkMarkAbsences.mockResolvedValue({
     createdAttendances: 3,
@@ -219,6 +245,38 @@ describe('students routes', () => {
       search: 'awa',
     });
 
+    await app.close();
+  });
+
+  it('GET /api/v1/students avec role teacher et class_id valide retourne 200', async () => {
+    const app = await buildApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/students?page=1&limit=20&class_id=d4f72601-726f-4956-bedb-1da5193287b9',
+      headers: { authorization: 'Bearer valid-token', 'x-test-role': 'teacher' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.service.teacherCanAccessClass).toHaveBeenCalledWith({
+      teacherUserId: 'user-1',
+      classId: 'd4f72601-726f-4956-bedb-1da5193287b9',
+      date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+    });
+
+    await app.close();
+  });
+
+  it('GET /api/v1/students avec role teacher sans class_id retourne 403', async () => {
+    const app = await buildApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/students?page=1&limit=20',
+      headers: { authorization: 'Bearer valid-token', 'x-test-role': 'teacher' },
+    });
+
+    expect(response.statusCode).toBe(403);
     await app.close();
   });
 

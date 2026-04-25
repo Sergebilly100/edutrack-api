@@ -73,6 +73,7 @@ export const schedulePayloadSchema = z
     end_time: timeStringSchema.optional(),
     day_of_week: z.number().int().min(1).max(6),
     subject: z.string().trim().min(1).max(100),
+    effective_from: dateStringSchema.optional(),
     is_active: z.boolean().optional(),
   })
   .refine(

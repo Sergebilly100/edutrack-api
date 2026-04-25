@@ -234,6 +234,7 @@ export const schedules = tenant.table(
       .references(() => timeSlots.id),
     dayOfWeek: integer('day_of_week').notNull(),
     subject: varchar('subject', { length: 100 }).notNull(),
+    startDate: date('start_date', { mode: 'string' }),
     endDate: date('end_date', { mode: 'string' }),
     isActive: boolean('is_active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })

@@ -38,6 +38,14 @@ const findFirstWeekdayInRange = (startIso: string, endIso: string): string | nul
   return null;
 };
 
+const mondayForIsoDate = (isoDate: string): string => {
+  const date = new Date(`${isoDate}T00:00:00.000Z`);
+  const day = date.getUTCDay();
+  const isoDay = day === 0 ? 7 : day;
+  date.setUTCDate(date.getUTCDate() - (isoDay - 1));
+  return toIsoDate(date);
+};
+
 const createScheduleFixture = async (input: {
   teacherId: string;
   classId: string;
@@ -300,7 +308,7 @@ describe('schedule history protection integration', () => {
       classId: classId as string,
       roomId: roomId as string,
       dayOfWeek: 3,
-      validFrom: addDays(today, -30),
+      validFrom: addDays(today, 1),
       validTo: addDays(today, 30),
       subject: 'SVT',
     });
@@ -345,7 +353,7 @@ describe('schedule history protection integration', () => {
       classId: classId as string,
       roomId: roomId as string,
       dayOfWeek: 4,
-      validFrom: addDays(today, -30),
+      validFrom: addDays(today, 1),
       validTo: addDays(today, 30),
       subject: 'Anglais',
     });
@@ -377,6 +385,183 @@ describe('schedule history protection integration', () => {
     );
     expect(rows[0]?.subject).toBe('Espagnol');
     expect(rows[0]?.end_date).toBeNull();
+  });
+
+  it('DELETE avec effective_from futur clôture le créneau à cette date', async () => {
+    const headers = await getAuthHeaders('director');
+    const context = getSeedContext();
+    const today = toIsoDate(new Date());
+    const effectiveFrom = addDays(today, 2);
+
+    const base = await queryTenant<{ class_id: string; room_id: string }>(
+      `
+        SELECT class_id, room_id
+        FROM ${tenantTable('schedules')}
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [context.scheduleId]
+    );
+    const classId = base[0]?.class_id;
+    const roomId = base[0]?.room_id;
+    expect(classId).toBeTruthy();
+    expect(roomId).toBeTruthy();
+
+    const fixture = await createScheduleFixture({
+      teacherId: context.teacherId,
+      classId: classId as string,
+      roomId: roomId as string,
+      dayOfWeek: 5,
+      validFrom: addDays(today, -30),
+      validTo: addDays(today, 30),
+      subject: 'Informatique',
+    });
+
+    const response = await request()
+      .delete(`/api/v1/schedule/${fixture.scheduleId}?effective_from=${effectiveFrom}`)
+      .set(headers);
+    expect(response.status).toBe(204);
+
+    const scheduleRows = await queryTenant<{ end_date: string | null }>(
+      `
+        SELECT end_date::text AS end_date
+        FROM ${tenantTable('schedules')}
+        WHERE id = $1
+      `,
+      [fixture.scheduleId]
+    );
+    expect(scheduleRows[0]?.end_date).toBe(effectiveFrom);
+
+    const directorWeekly = await request()
+      .get(`/api/v1/schedule/weekly?date=${mondayForIsoDate(effectiveFrom)}`)
+      .set(headers);
+    expect(directorWeekly.status).toBe(200);
+    const directorSchedules = (directorWeekly.body?.schedules ?? []) as Array<{ id: string }>;
+    expect(directorSchedules.some((row) => row.id === fixture.scheduleId)).toBe(false);
+
+    const teacherHeaders = await getAuthHeaders('teacher');
+    const teacherWeekly = await request()
+      .get(`/api/v1/schedule/teacher/me/week?date=${mondayForIsoDate(effectiveFrom)}`)
+      .set(teacherHeaders);
+    expect(teacherWeekly.status).toBe(200);
+    const teacherRows = (teacherWeekly.body ?? []) as Array<{ id: string }>;
+    expect(teacherRows.some((row) => row.id === fixture.scheduleId)).toBe(false);
+  });
+
+  it('PUT avec effective_from futur versionne à partir de cette date', async () => {
+    const headers = await getAuthHeaders('director');
+    const context = getSeedContext();
+    const today = toIsoDate(new Date());
+    const effectiveFrom = addDays(today, 2);
+
+    const base = await queryTenant<{ class_id: string; room_id: string }>(
+      `
+        SELECT class_id, room_id
+        FROM ${tenantTable('schedules')}
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [context.scheduleId]
+    );
+    const classId = base[0]?.class_id;
+    const roomId = base[0]?.room_id;
+    expect(classId).toBeTruthy();
+    expect(roomId).toBeTruthy();
+
+    const fixture = await createScheduleFixture({
+      teacherId: context.teacherId,
+      classId: classId as string,
+      roomId: roomId as string,
+      dayOfWeek: 2,
+      validFrom: addDays(today, -30),
+      validTo: addDays(today, 30),
+      subject: 'Sciences',
+    });
+
+    const response = await request()
+      .put(`/api/v1/schedule/${fixture.scheduleId}`)
+      .set(headers)
+      .send({
+        schedule_period_id: fixture.schedulePeriodId,
+        teacher_id: context.teacherId,
+        class_id: classId,
+        room_id: roomId,
+        time_slot_id: fixture.timeSlotId,
+        day_of_week: fixture.dayOfWeek,
+        subject: 'Sciences physiques',
+        effective_from: effectiveFrom,
+        is_active: true,
+      });
+
+    expect(response.status).toBe(200);
+    const newScheduleId = response.body?.schedule?.id as string | undefined;
+    expect(newScheduleId).toBeTruthy();
+    expect(newScheduleId).not.toBe(fixture.scheduleId);
+    expect(response.body?.change_effective_from).toBe(effectiveFrom);
+
+    const oldRows = await queryTenant<{ end_date: string | null }>(
+      `
+        SELECT end_date::text AS end_date
+        FROM ${tenantTable('schedules')}
+        WHERE id = $1
+      `,
+      [fixture.scheduleId]
+    );
+    expect(oldRows[0]?.end_date).toBe(effectiveFrom);
+
+    const newRows = await queryTenant<{ subject: string; start_date: string | null; end_date: string | null }>(
+      `
+        SELECT subject, start_date::text AS start_date, end_date::text AS end_date
+        FROM ${tenantTable('schedules')}
+        WHERE id = $1
+      `,
+      [newScheduleId]
+    );
+    expect(newRows[0]?.subject).toBe('Sciences Physiques');
+    expect(newRows[0]?.start_date).toBe(effectiveFrom);
+    expect(newRows[0]?.end_date).toBeNull();
+  });
+
+  it('PUT/DELETE avec effective_from passé retourne 409 SCHEDULE_PAST_LOCKED', async () => {
+    const headers = await getAuthHeaders('director');
+    const context = getSeedContext();
+    const today = toIsoDate(new Date());
+    const yesterday = addDays(today, -1);
+
+    const base = await queryTenant<{ class_id: string; room_id: string; schedule_period_id: string; day_of_week: number; time_slot_id: string }>(
+      `
+        SELECT class_id, room_id, schedule_period_id, day_of_week, time_slot_id
+        FROM ${tenantTable('schedules')}
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [context.scheduleId]
+    );
+
+    const putResponse = await request()
+      .put(`/api/v1/schedule/${context.scheduleId}`)
+      .set(headers)
+      .send({
+        schedule_period_id: base[0]?.schedule_period_id,
+        teacher_id: context.teacherId,
+        class_id: base[0]?.class_id,
+        room_id: base[0]?.room_id,
+        time_slot_id: base[0]?.time_slot_id,
+        day_of_week: base[0]?.day_of_week,
+        subject: 'Test verrou passé',
+        effective_from: yesterday,
+        is_active: true,
+      });
+
+    expect(putResponse.status).toBe(409);
+    expect(putResponse.body?.code).toBe('SCHEDULE_PAST_LOCKED');
+
+    const deleteResponse = await request()
+      .delete(`/api/v1/schedule/${context.scheduleId}?effective_from=${yesterday}`)
+      .set(headers);
+
+    expect(deleteResponse.status).toBe(409);
+    expect(deleteResponse.body?.code).toBe('SCHEDULE_PAST_LOCKED');
   });
 
   it('GET salary details inclut les créneaux dont end_date est dans le passé du mois', async () => {

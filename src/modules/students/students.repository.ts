@@ -373,6 +373,32 @@ export class StudentsRepository {
     };
   }
 
+  async teacherHasClassAccess(input: {
+    teacherUserId: string;
+    classId: string;
+    date: string;
+  }): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      SELECT EXISTS (
+        SELECT 1
+        FROM teachers t
+        INNER JOIN schedules s ON s.teacher_id = t.id
+        INNER JOIN schedule_periods sp ON sp.id = s.schedule_period_id
+        WHERE t.user_id = ${input.teacherUserId}
+          AND s.class_id = ${input.classId}
+          AND s.is_active = true
+          AND (s.end_date IS NULL OR s.end_date > ${input.date}::date)
+          AND sp.is_active = true
+          AND sp.valid_from <= ${input.date}::date
+          AND sp.valid_to >= ${input.date}::date
+        LIMIT 1
+      ) AS has_access
+    `);
+
+    const [row] = getRows<{ has_access: boolean }>(result);
+    return row?.has_access ?? false;
+  }
+
   async createStudent(input: CreateStudentInput): Promise<StudentRecord> {
     const result = await this.db.execute(sql`
       INSERT INTO students (

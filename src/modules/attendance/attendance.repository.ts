@@ -189,6 +189,7 @@ export class AttendanceRepository {
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id
         CROSS JOIN now_ctx
         WHERE s.is_active = true
+          AND (s.start_date IS NULL OR s.start_date <= now_ctx.today)
           AND (s.end_date IS NULL OR s.end_date > now_ctx.today)
           AND s.day_of_week = now_ctx.day_of_week
           AND (now_ctx.today::timestamp + ts.end_time + INTERVAL '15 minute') <= now_ctx.now_local
@@ -524,7 +525,13 @@ export class AttendanceRepository {
 
   async getWeekScheduleForTeacher(userId: string, date: string): Promise<schex[]> {
     const result = await this.db.execute<schex>(sql`
-          WITH active_period AS (
+          WITH week_ctx AS (
+            SELECT (
+              ${date}::date
+              - ((EXTRACT(ISODOW FROM ${date}::date)::int - 1) * INTERVAL '1 day')
+            )::date AS week_start
+          ),
+          active_period AS (
             -- Résolution de la période active POUR LA DATE DEMANDÉE,
             -- pas pour aujourd'hui. Si aucune période ne couvre cette date,
             -- le CTE est vide et la query retourne [].
@@ -552,9 +559,17 @@ export class AttendanceRepository {
           INNER JOIN classes  c  ON c.id  = s.class_id
           INNER JOIN rooms    r  ON r.id  = s.room_id
           INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+          CROSS JOIN week_ctx wc
           WHERE t.user_id = ${userId}
             AND s.is_active = true
-            AND (s.end_date IS NULL OR s.end_date > ${date}::date)
+            AND (
+              s.start_date IS NULL
+              OR s.start_date <= (wc.week_start + ((s.day_of_week - 1) * INTERVAL '1 day'))::date
+            )
+            AND (
+              s.end_date IS NULL
+              OR s.end_date > (wc.week_start + ((s.day_of_week - 1) * INTERVAL '1 day'))::date
+            )
           ORDER BY s.day_of_week ASC, ts.sort_order ASC, ts.start_time ASC
     `);
 
@@ -613,6 +628,7 @@ export class AttendanceRepository {
       WHERE s.teacher_id = ${params.teacherId}
         AND s.day_of_week = ${params.dayOfWeek}
         AND s.is_active = true
+        AND (s.start_date IS NULL OR s.start_date <= ${params.date}::date)
         AND (s.end_date IS NULL OR s.end_date > ${params.date}::date)
       ORDER BY ts.sort_order ASC, ts.start_time ASC
     `);
@@ -736,6 +752,7 @@ export class AttendanceRepository {
        AND ast.date = ${today}
       WHERE s.day_of_week = ${dayOfWeek}
         AND s.is_active = true
+        AND (s.start_date IS NULL OR s.start_date <= ${today}::date)
         AND (s.end_date IS NULL OR s.end_date > ${today}::date)
       GROUP BY
         s.id,
@@ -818,9 +835,10 @@ export class AttendanceRepository {
         LEFT JOIN active_period ap
           ON d.date BETWEEN ap.valid_from AND ap.valid_to
         LEFT JOIN schedules s
-          ON s.schedule_period_id = ap.id
+         ON s.schedule_period_id = ap.id
          AND s.day_of_week = EXTRACT(ISODOW FROM d.date)::int
          AND s.is_active = true
+         AND (s.start_date IS NULL OR s.start_date <= d.date)
          AND (s.end_date IS NULL OR s.end_date > d.date)
       )
       SELECT
@@ -903,6 +921,7 @@ export class AttendanceRepository {
         ON s.schedule_period_id = ap.id
        AND s.day_of_week = EXTRACT(ISODOW FROM d.date)::int
        AND s.is_active = true
+       AND (s.start_date IS NULL OR s.start_date <= d.date)
        AND (s.end_date IS NULL OR s.end_date > d.date)
       INNER JOIN teachers t    ON t.id = s.teacher_id
       INNER JOIN users u       ON u.id = t.user_id

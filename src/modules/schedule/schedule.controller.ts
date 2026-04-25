@@ -12,11 +12,12 @@ import {
 } from '../../shared/middleware/tenant.middleware.js';
 import {
   closeScheduleAtDate,
-  countPastTeacherAttendancesForSchedule,
   createSchedule,
   deleteScheduleById,
+  ensureScheduleTemporalColumns,
   findScheduleConflicts,
   findSchedulePeriodById,
+  hasScheduleOccurrenceBeforeDate,
   findTimeSlotById,
   findTeacherIdByUserId,
   listSchedulePeriods,
@@ -51,6 +52,9 @@ const paramsIdSchema = z.object({
  */
 const dateQuerySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+const effectiveFromQuerySchema = z.object({
+  effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
 const pgErrorCodeSchema = z.object({
@@ -128,6 +132,13 @@ const handleError = (
   if (message === 'Schedule must target a future date/time') {
     return reply.code(400).send({ error: message, code: 'BAD_REQUEST', statusCode: 400 });
   }
+  if (message === 'Cannot apply schedule changes to a past date') {
+    return reply.code(409).send({
+      error: message,
+      code: 'SCHEDULE_PAST_LOCKED',
+      statusCode: 409,
+    });
+  }
   if (message === 'Schedule has past occurrences and cannot be edited or deleted') {
     return reply.code(409).send({
       error: message,
@@ -184,11 +195,8 @@ const resolveDateParam = (query: unknown): Date => {
 
 const getTodayIso = (): string => new Date().toISOString().slice(0, 10);
 
-const getTomorrowIso = (todayIso: string): string => {
-  const base = new Date(`${todayIso}T00:00:00.000Z`);
-  base.setUTCDate(base.getUTCDate() + 1);
-  return base.toISOString().slice(0, 10);
-};
+const isIsoDateBefore = (leftIsoDate: string, rightIsoDate: string): boolean =>
+  leftIsoDate < rightIsoDate;
 
 const assertScheduleTargetsFutureDateTime = async (
   db: NonNullable<FastifyRequest['db']>,
@@ -227,6 +235,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     { preHandler: [requireDirectorOrSecretary, attachTenantDb] },
     async (request, reply) => {
       try {
+        await ensureScheduleTemporalColumns(ensureTenantDb(request));
         const periods = await listSchedulePeriods(ensureTenantDb(request));
         return reply.send({ periods });
       } catch (error) {
@@ -240,6 +249,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     { preHandler: [requireDirectorOrSecretary, attachTenantDb] },
     async (request, reply) => {
       try {
+        await ensureScheduleTemporalColumns(ensureTenantDb(request));
         const body = periodPayloadSchema.parse(request.body);
         const period = await createPeriodFromInput(ensureTenantDb(request), {
           name: body.name,
@@ -259,6 +269,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     { preHandler: [requireDirectorOrSecretary, attachTenantDb] },
     async (request, reply) => {
       try {
+        await ensureScheduleTemporalColumns(ensureTenantDb(request));
         const { id } = paramsIdSchema.parse(request.params);
         const body = periodUpdatePayloadSchema.parse(request.body);
         const period = await updateSchedulePeriod(ensureTenantDb(request), id, {
@@ -286,6 +297,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     { preHandler: [requireDirectorOrSecretary, attachTenantDb] },
     async (request, reply) => {
       try {
+        await ensureScheduleTemporalColumns(ensureTenantDb(request));
         const { id } = paramsIdSchema.parse(request.params);
         const body = periodDuplicatePayloadSchema.parse(request.body);
         const duplicated = await duplicatePeriod(ensureTenantDb(request), id, {
@@ -309,6 +321,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     { preHandler: [requireTeacherOrDirectorOrSecretary, attachTenantDb] },
     async (request, reply) => {
       try {
+        await ensureScheduleTemporalColumns(ensureTenantDb(request));
         // BUG 1 — Utiliser la date du querystring si fournie
         const date = resolveDateParam(request.query);
         const active = await getActiveSchedulesForDate(ensureTenantDb(request), date);
@@ -324,6 +337,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     { preHandler: [requireTeacherOrDirectorOrSecretary, attachTenantDb] },
     async (request, reply) => {
       try {
+        await ensureScheduleTemporalColumns(ensureTenantDb(request));
         // BUG 1 — La clé du bug : `new Date()` ignorait le `?date=` du frontend.
         // Le frontend envoie le lundi de la semaine sélectionnée.
         // Le service résout ensuite la période active pour CETTE date,
@@ -360,6 +374,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           });
         }
         const tenantDb = ensureTenantDb(request);
+        await ensureScheduleTemporalColumns(tenantDb);
         const teacherId = await findTeacherIdByUserId(tenantDb, userId);
         if (!teacherId) {
           throw new Error('Teacher profile not found');
@@ -380,7 +395,14 @@ export default async function scheduleController(app: FastifyInstance): Promise<
       try {
         const body = schedulePayloadSchema.parse(request.body);
         const db = ensureTenantDb(request);
+        await ensureScheduleTemporalColumns(db);
         const canonicalSubject = canonicalizeSubject(body.subject);
+        const today = getTodayIso();
+        const effectiveFrom = body.effective_from ?? today;
+
+        if (isIsoDateBefore(effectiveFrom, today)) {
+          throw new Error('Cannot apply schedule changes to a past date');
+        }
 
         const timeSlotId = await resolveTimeSlotId(db, {
           timeSlotId: body.time_slot_id,
@@ -406,7 +428,9 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           timeSlotId,
           dayOfWeek: body.day_of_week,
           subject: canonicalSubject,
+          startDate: effectiveFrom,
           isActive: body.is_active,
+          referenceDate: effectiveFrom,
         });
         if (conflicts.teacherConflict) {
           throw new Error('Teacher already has a course at the same time');
@@ -426,6 +450,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           timeSlotId,
           dayOfWeek: body.day_of_week,
           subject: canonicalSubject,
+          startDate: effectiveFrom,
           isActive: body.is_active,
         });
 
@@ -444,7 +469,14 @@ export default async function scheduleController(app: FastifyInstance): Promise<
         const { id } = paramsIdSchema.parse(request.params);
         const body = schedulePayloadSchema.parse(request.body);
         const db = ensureTenantDb(request);
+        await ensureScheduleTemporalColumns(db);
         const canonicalSubject = canonicalizeSubject(body.subject);
+        const today = getTodayIso();
+        const effectiveFrom = body.effective_from ?? today;
+
+        if (isIsoDateBefore(effectiveFrom, today)) {
+          throw new Error('Cannot apply schedule changes to a past date');
+        }
 
         const timeSlotId = await resolveTimeSlotId(db, {
           timeSlotId: body.time_slot_id,
@@ -470,8 +502,10 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           timeSlotId,
           dayOfWeek: body.day_of_week,
           subject: canonicalSubject,
+          startDate: effectiveFrom,
           isActive: body.is_active,
           excludeScheduleId: id,
+          referenceDate: effectiveFrom,
         });
         if (conflicts.teacherConflict) {
           throw new Error('Teacher already has a course at the same time');
@@ -483,13 +517,11 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           throw new Error('Class already has a course at the same time');
         }
 
-        const today = getTodayIso();
-        const tomorrow = getTomorrowIso(today);
-        const pastAttendanceCount = await countPastTeacherAttendancesForSchedule(db, id, today);
+        const hasPastOccurrences = await hasScheduleOccurrenceBeforeDate(db, id, effectiveFrom);
 
-        if (pastAttendanceCount > 0) {
+        if (hasPastOccurrences) {
           const versionedUpdate = await db.transaction(async (tx) => {
-            const closed = await closeScheduleAtDate(tx, id, today);
+            const closed = await closeScheduleAtDate(tx, id, effectiveFrom);
             if (!closed) {
               return null;
             }
@@ -502,6 +534,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
               timeSlotId,
               dayOfWeek: body.day_of_week,
               subject: canonicalSubject,
+              startDate: effectiveFrom,
               isActive: body.is_active,
             });
 
@@ -519,7 +552,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           return reply.send({
             schedule: versionedUpdate.created,
             replaced_schedule_id: id,
-            change_effective_from: tomorrow,
+            change_effective_from: effectiveFrom,
           });
         }
 
@@ -531,6 +564,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           timeSlotId,
           dayOfWeek: body.day_of_week,
           subject: canonicalSubject,
+          startDate: effectiveFrom,
           isActive: body.is_active,
         });
 
@@ -556,11 +590,19 @@ export default async function scheduleController(app: FastifyInstance): Promise<
       try {
         const { id } = paramsIdSchema.parse(request.params);
         const db = ensureTenantDb(request);
+        await ensureScheduleTemporalColumns(db);
         const today = getTodayIso();
-        const pastAttendanceCount = await countPastTeacherAttendancesForSchedule(db, id, today);
+        const query = effectiveFromQuerySchema.parse(request.query ?? {});
+        const effectiveFrom = query.effective_from ?? today;
 
-        if (pastAttendanceCount > 0) {
-          const closed = await closeScheduleAtDate(db, id, today);
+        if (isIsoDateBefore(effectiveFrom, today)) {
+          throw new Error('Cannot apply schedule changes to a past date');
+        }
+
+        const hasPastOccurrences = await hasScheduleOccurrenceBeforeDate(db, id, effectiveFrom);
+
+        if (hasPastOccurrences) {
+          const closed = await closeScheduleAtDate(db, id, effectiveFrom);
           if (!closed) {
             return reply.code(404).send({
               error: 'Schedule not found',

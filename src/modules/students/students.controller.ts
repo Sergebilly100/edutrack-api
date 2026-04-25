@@ -3,6 +3,7 @@ import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
 import {
+  requireTeacherOrDirectorOrSecretary,
   requirePermission,
 } from '../../shared/middleware/auth.middleware.js';
 
@@ -44,14 +45,44 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
 };
 
 export default async function studentsController(app: FastifyInstance): Promise<void> {
-  app.get('/api/v1/students', { preHandler: requirePermission('students.view') }, async (request, reply) => {
+  app.get('/api/v1/students', { preHandler: requireTeacherOrDirectorOrSecretary }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const query = studentsListQuerySchema.parse(request.query ?? {});
 
+      if (claims.role !== 'teacher' && !request.permissions?.has('students.view')) {
+        return reply.code(403).send({
+          error: 'Permission students.view required',
+          code: 'FORBIDDEN',
+          statusCode: 403,
+        });
+      }
+
+      if (claims.role === 'teacher' && !query.class_id) {
+        return reply.code(403).send({
+          error: 'Teacher must provide class_id',
+          code: 'FORBIDDEN',
+          statusCode: 403,
+        });
+      }
+
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-        const service = buildStudentsService(tenantDb);
-        return service.listStudents(query);
+        const tenantService = buildStudentsService(tenantDb);
+
+        if (claims.role === 'teacher') {
+          const date = new Date().toISOString().slice(0, 10);
+          const canAccessClass = await tenantService.teacherCanAccessClass({
+            teacherUserId: claims.sub,
+            classId: query.class_id as string,
+            date,
+          });
+
+          if (!canAccessClass) {
+            throw new StudentsModuleError('Forbidden', 403, 'FORBIDDEN');
+          }
+        }
+
+        return tenantService.listStudents(query);
       });
 
       return reply.send(result);

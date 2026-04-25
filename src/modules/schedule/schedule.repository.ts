@@ -165,6 +165,7 @@ export type ScheduleMutationInput = {
   timeSlotId: string;
   dayOfWeek: number;
   subject: string;
+  startDate?: string | null;
   isActive?: boolean;
 };
 
@@ -270,7 +271,30 @@ const mapActiveSchedule = (row: ActiveScheduleRow): ActiveSchedule => ({
   hasPastAttendance: row.past_attendance_count > 0,
 });
 
-const ACTIVE_SCHEDULES_CLAUSE = sql`s.is_active = true AND (s.end_date IS NULL OR s.end_date > CURRENT_DATE)`;
+const buildActiveScheduleClause = (
+  input: { date: string } | { fromDate: string; toDate: string }
+) => {
+  if ('date' in input) {
+    return sql`
+      s.is_active = true
+      AND (s.start_date IS NULL OR s.start_date <= ${input.date}::date)
+      AND (s.end_date IS NULL OR s.end_date > ${input.date}::date)
+    `;
+  }
+
+  return sql`
+    s.is_active = true
+    AND (s.start_date IS NULL OR s.start_date <= ${input.toDate}::date)
+    AND (s.end_date IS NULL OR s.end_date > ${input.fromDate}::date)
+  `;
+};
+
+export const ensureScheduleTemporalColumns = async (db: QueryExecutor): Promise<void> => {
+  await db.execute(sql`
+    ALTER TABLE schedules
+    ADD COLUMN IF NOT EXISTS start_date date
+  `);
+};
 
 export const listSchedulePeriods = async (db: QueryExecutor): Promise<SchedulePeriod[]> => {
   const result = await db.execute<SchedulePeriodRow>(sql`
@@ -496,7 +520,7 @@ export const listSchedulesForPeriodAndDay = async (
     ) history ON true
     WHERE s.schedule_period_id = ${params.periodId}
       AND s.day_of_week = ${params.dayOfWeek}
-      AND ${ACTIVE_SCHEDULES_CLAUSE}
+      AND ${buildActiveScheduleClause({ date: params.date })}
       ${teacherFilter}
     ORDER BY ts.sort_order ASC, ts.start_time ASC, u.name ASC
   `);
@@ -527,6 +551,17 @@ export const listSchedulesForPeriod = async (
         )
       `
       : sql``;
+
+  const temporalFilter = params.weekStart && params.weekEnd
+    ? sql`
+      (
+        s.start_date IS NULL OR s.start_date <= (${params.weekStart}::date + ((s.day_of_week - 1) * INTERVAL '1 day'))::date
+      )
+      AND (
+        s.end_date IS NULL OR s.end_date > (${params.weekStart}::date + ((s.day_of_week - 1) * INTERVAL '1 day'))::date
+      )
+    `
+    : buildActiveScheduleClause({ date: params.date });
 
   const result = await db.execute<ActiveScheduleRow>(sql`
     SELECT
@@ -567,7 +602,7 @@ export const listSchedulesForPeriod = async (
     ) history ON true
     WHERE s.schedule_period_id = ${params.periodId}
       AND s.day_of_week BETWEEN 1 AND 6
-      AND ${ACTIVE_SCHEDULES_CLAUSE}
+      AND ${temporalFilter}
       ${dayFilter}
     ORDER BY s.day_of_week ASC, ts.sort_order ASC, ts.start_time ASC, u.name ASC
   `);
@@ -656,6 +691,7 @@ export const createSchedule = async (
       time_slot_id,
       day_of_week,
       subject,
+      start_date,
       is_active
     )
     VALUES (
@@ -666,6 +702,7 @@ export const createSchedule = async (
       ${input.timeSlotId},
       ${input.dayOfWeek},
       ${input.subject},
+      ${input.startDate ?? null}::date,
       ${input.isActive ?? true}
     )
     RETURNING id
@@ -694,6 +731,11 @@ export const updateSchedule = async (
       time_slot_id = ${input.timeSlotId},
       day_of_week = ${input.dayOfWeek},
       subject = ${input.subject},
+      start_date = CASE
+        WHEN ${input.startDate !== undefined}
+          THEN ${input.startDate ?? null}::date
+        ELSE start_date
+      END,
       is_active = ${input.isActive ?? true}
     WHERE id = ${scheduleId}
     RETURNING id
@@ -747,7 +789,7 @@ export const findTeacherIdByUserId = async (
 
 export const findScheduleConflicts = async (
   db: QueryExecutor,
-  input: ScheduleMutationInput & { excludeScheduleId?: string }
+  input: ScheduleMutationInput & { excludeScheduleId?: string; referenceDate: string }
 ): Promise<ScheduleConflictResult> => {
   const result = await db.execute<{
     teacher_conflict: boolean;
@@ -772,7 +814,9 @@ export const findScheduleConflicts = async (
       EXISTS (
         SELECT 1
         FROM schedules s
-        WHERE ${ACTIVE_SCHEDULES_CLAUSE}
+        WHERE s.is_active = true
+          AND (s.start_date IS NULL OR s.start_date <= ${input.referenceDate}::date)
+          AND (s.end_date IS NULL OR s.end_date > ${input.referenceDate}::date)
           AND s.schedule_period_id IN (SELECT id FROM overlapping_periods)
           AND s.day_of_week = ${input.dayOfWeek}
           AND s.time_slot_id = ${input.timeSlotId}
@@ -782,7 +826,9 @@ export const findScheduleConflicts = async (
       EXISTS (
         SELECT 1
         FROM schedules s
-        WHERE ${ACTIVE_SCHEDULES_CLAUSE}
+        WHERE s.is_active = true
+          AND (s.start_date IS NULL OR s.start_date <= ${input.referenceDate}::date)
+          AND (s.end_date IS NULL OR s.end_date > ${input.referenceDate}::date)
           AND s.schedule_period_id IN (SELECT id FROM overlapping_periods)
           AND s.day_of_week = ${input.dayOfWeek}
           AND s.time_slot_id = ${input.timeSlotId}
@@ -792,7 +838,9 @@ export const findScheduleConflicts = async (
       EXISTS (
         SELECT 1
         FROM schedules s
-        WHERE ${ACTIVE_SCHEDULES_CLAUSE}
+        WHERE s.is_active = true
+          AND (s.start_date IS NULL OR s.start_date <= ${input.referenceDate}::date)
+          AND (s.end_date IS NULL OR s.end_date > ${input.referenceDate}::date)
           AND s.schedule_period_id IN (SELECT id FROM overlapping_periods)
           AND s.day_of_week = ${input.dayOfWeek}
           AND s.time_slot_id = ${input.timeSlotId}
@@ -843,6 +891,51 @@ export const countPastTeacherAttendancesForSchedule = async (
   const [row] = getRows(result);
   const value = Number(row?.count ?? 0);
   return Number.isFinite(value) ? value : 0;
+};
+
+export const hasScheduleOccurrenceBeforeDate = async (
+  db: QueryExecutor,
+  scheduleId: string,
+  beforeDate: string
+): Promise<boolean> => {
+  const result = await db.execute<{ has_occurrence: boolean }>(sql`
+    WITH target AS (
+      SELECT
+        s.day_of_week,
+        COALESCE(s.start_date, sp.valid_from) AS effective_start_date,
+        COALESCE(s.end_date, (sp.valid_to + INTERVAL '1 day')::date) AS effective_end_date,
+        sp.valid_to
+      FROM schedules s
+      INNER JOIN schedule_periods sp ON sp.id = s.schedule_period_id
+      WHERE s.id = ${scheduleId}
+      LIMIT 1
+    ),
+    bounded AS (
+      SELECT
+        day_of_week,
+        effective_start_date AS from_date,
+        LEAST(
+          (${beforeDate}::date - INTERVAL '1 day')::date,
+          (effective_end_date - INTERVAL '1 day')::date,
+          valid_to
+        ) AS to_date
+      FROM target
+    )
+    SELECT EXISTS (
+      SELECT 1
+      FROM bounded b
+      WHERE b.from_date <= b.to_date
+        AND EXISTS (
+          SELECT 1
+          FROM generate_series(b.from_date, b.to_date, INTERVAL '1 day') AS d
+          WHERE EXTRACT(ISODOW FROM d)::int = b.day_of_week
+          LIMIT 1
+        )
+    ) AS has_occurrence
+  `);
+
+  const [row] = getRows(result);
+  return row?.has_occurrence ?? false;
 };
 
 export const closeScheduleAtDate = async (
