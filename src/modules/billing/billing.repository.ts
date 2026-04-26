@@ -424,7 +424,8 @@ export class BillingRepository {
       SET
         status = ${input.status}::salary_status,
         notes = CASE WHEN ${input.notes !== undefined} THEN ${input.notes ?? null} ELSE notes END,
-        paid_at = CASE WHEN ${input.status === 'paid'} THEN NOW() ELSE NULL END,
+        paid_at = CASE WHEN ${input.status === 'paid'} THEN NOW() ELSE paid_at END,
+        paid_by = CASE WHEN ${input.status === 'paid'} THEN ${input.paidBy ?? null}::uuid ELSE paid_by END
         paid_by = CASE WHEN ${input.status === 'paid'} THEN ${input.paidBy ?? null}::uuid ELSE NULL END
       WHERE id = ${input.recordId}
       RETURNING
@@ -468,7 +469,8 @@ export class BillingRepository {
           sr.period_month::text AS period_month,
           sp.hours_paid,
           sp.amount_fcfa,
-          sr.status::text AS status,
+          'paid'::text AS status,
+          sr.status::text AS record_status,
           sp.paid_at AS paid_at_ts,
           sp.paid_at::text AS paid_at,
           sr.paid_at AS salary_paid_at_ts,

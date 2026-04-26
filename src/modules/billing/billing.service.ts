@@ -360,17 +360,24 @@ export class BillingService {
 
   async computeSalaryRecords(month: string) {
     const { monthStart, monthEnd } = monthToBounds(month);
-
     const rows = await this.repository.listTeacherMonthlyMetrics(monthStart, monthEnd);
 
     let updatedCount = 0;
     for (const row of rows) {
+
+      const hoursPlanned = roundHours(BillingRepository.toNumber(row.hours_planned));
+      const hoursDone = roundHours(BillingRepository.toNumber(row.hours_done));
+
+      // skip vacataire sans taux horaire
       if (row.teacher_type !== 'permanent' && row.hourly_rate === null) {
         continue;
       }
 
-      const hoursPlanned = roundHours(BillingRepository.toNumber(row.hours_planned));
-      const hoursDone = roundHours(BillingRepository.toNumber(row.hours_done));
+      // Skip vacataire avec 0 heure faite ET 0 heure prévue = ce mois n'existe pas pour lui
+      if (row.teacher_type !== 'permanent' && hoursPlanned <= 0 && hoursDone <= 0) {
+        continue;
+      }
+
       const totalFcfa =
         row.teacher_type === 'permanent'
           ? row.monthly_salary ?? 0
