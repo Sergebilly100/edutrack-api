@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { sql } from 'drizzle-orm';
 import { z, ZodError } from 'zod';
 
-import { withTenantSchema } from '../../shared/database/db.js';
+import { db, withTenantSchema } from '../../shared/database/db.js';
 import {
   changePassword,
   getMe,
@@ -89,6 +90,9 @@ const updateMeSchema = z
   );
 
 const SCHEMA_NAME_REGEX = /^[a-z][a-z0-9_]{2,63}$/;
+const SUBDOMAIN_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const DEFAULT_LOCAL_SCHEMA =
+  (process.env.AUTH_DEFAULT_TENANT_SCHEMA ?? 'school_sainte_marie').trim();
 const LOGIN_RATE_LIMIT_MAX = (() => {
   const parsed = Number.parseInt(process.env.AUTH_LOGIN_RATE_LIMIT_MAX ?? '', 10);
   if (Number.isFinite(parsed) && parsed > 0) {
@@ -98,18 +102,109 @@ const LOGIN_RATE_LIMIT_MAX = (() => {
 })();
 const LOGIN_RATE_LIMIT_WINDOW = process.env.AUTH_LOGIN_RATE_LIMIT_WINDOW ?? '1 minute';
 
-const getSchemaName = (request: FastifyRequest): string => {
+const getRows = <TRow,>(result: unknown): TRow[] => {
+  if (typeof result !== 'object' || result === null || !('rows' in result)) {
+    return [];
+  }
+
+  const rows = (result as { rows: TRow[] }).rows;
+  return Array.isArray(rows) ? rows : [];
+};
+
+const extractHostname = (request: FastifyRequest): string | null => {
+  const host = typeof request.headers.host === 'string' ? request.headers.host : '';
+  if (!host) {
+    return null;
+  }
+
+  const noPort = host.split(':')[0]?.trim().toLowerCase() ?? '';
+  return noPort.length > 0 ? noPort : null;
+};
+
+const parseSubdomain = (hostname: string): string | null => {
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+    return null;
+  }
+
+  const labels = hostname.split('.').filter(Boolean);
+  if (labels.length < 3) {
+    return null;
+  }
+
+  const firstLabel = labels[0] ?? '';
+  if (!SUBDOMAIN_REGEX.test(firstLabel) || firstLabel === 'www' || firstLabel === 'admin') {
+    return null;
+  }
+
+  return firstLabel;
+};
+
+const shouldRestrictToSuperAdmin = (request: FastifyRequest): boolean => {
+  const hostname = extractHostname(request);
+  if (!hostname) {
+    return false;
+  }
+
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+    return false;
+  }
+
+  return parseSubdomain(hostname) === null;
+};
+
+const resolveSchemaBySubdomain = async (subdomain: string): Promise<string | null> => {
+  const result = await db.execute<{ schema_name: string }>(sql`
+    SELECT schema_name
+    FROM public.tenants
+    WHERE subdomain = ${subdomain}
+    LIMIT 1
+  `);
+
+  return getRows<{ schema_name: string }>(result)[0]?.schema_name ?? null;
+};
+
+const getSchemaName = async (request: FastifyRequest): Promise<string> => {
   const headerValue = request.headers['x-tenant-schema'];
-  if (typeof headerValue !== 'string' || headerValue.trim().length === 0) {
-    throw new Error('Missing x-tenant-schema header');
+  if (typeof headerValue === 'string' && headerValue.trim().length > 0) {
+    const schema = headerValue.trim();
+    if (!SCHEMA_NAME_REGEX.test(schema)) {
+      throw new Error('Invalid tenant schema');
+    }
+    return schema;
   }
 
-  const schema = headerValue.trim();
-  if (!SCHEMA_NAME_REGEX.test(schema)) {
-    throw new Error('Invalid tenant schema');
+  const subdomainHeader = request.headers['x-tenant-subdomain'];
+  if (typeof subdomainHeader === 'string' && subdomainHeader.trim().length > 0) {
+    const subdomain = subdomainHeader.trim().toLowerCase();
+    if (!SUBDOMAIN_REGEX.test(subdomain)) {
+      throw new Error('Invalid tenant subdomain');
+    }
+    const schema = await resolveSchemaBySubdomain(subdomain);
+    if (!schema) {
+      throw new Error('Tenant not found');
+    }
+    return schema;
   }
 
-  return schema;
+  const hostname = extractHostname(request);
+  if (hostname) {
+    const subdomain = parseSubdomain(hostname);
+    if (subdomain) {
+      const schema = await resolveSchemaBySubdomain(subdomain);
+      if (!schema) {
+        throw new Error('Tenant not found');
+      }
+      return schema;
+    }
+
+    const isLocalHost =
+      hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+    if (isLocalHost && SCHEMA_NAME_REGEX.test(DEFAULT_LOCAL_SCHEMA)) {
+      return DEFAULT_LOCAL_SCHEMA;
+    }
+  }
+
+  throw new Error('Missing tenant context');
 };
 
 const extractBearerToken = (request: FastifyRequest): string => {
@@ -195,6 +290,7 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
   const message = error instanceof Error ? error.message : 'Unexpected error';
   const isUnauthorized =
     message === 'Invalid credentials' ||
+    message === 'Only super admin can sign in from this domain' ||
     message === 'Missing Authorization header' ||
     message === 'Invalid Authorization header' ||
     message === 'Missing refresh token' ||
@@ -265,7 +361,7 @@ export default async function authController(app: FastifyInstance): Promise<void
     async (request, reply) => {
       try {
         const body = loginSchema.parse(request.body);
-        const schemaName = getSchemaName(request);
+        const schemaName = await getSchemaName(request);
 
         const result = await withTenantSchema(schemaName, (tenantDb) =>
           login(tenantDb, {
@@ -274,6 +370,9 @@ export default async function authController(app: FastifyInstance): Promise<void
             schemaName,
           })
         );
+        if (shouldRestrictToSuperAdmin(request) && result.user.role !== 'super_admin') {
+          throw new Error('Only super admin can sign in from this domain');
+        }
 
         const refreshToken = await signRefreshToken(result.user.id, schemaName);
         try {
