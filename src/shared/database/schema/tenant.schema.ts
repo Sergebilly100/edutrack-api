@@ -496,3 +496,127 @@ export const salaryPayments = tenant.table(
     ),
   })
 );
+
+export const parents = tenant.table(
+  'parents',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    fullName: varchar('full_name', { length: 255 }).notNull(),
+    phone: varchar('phone', { length: 20 }).notNull().unique(),
+    email: varchar('email', { length: 255 }),
+    passwordHash: text('password_hash').notNull(),
+    isActive: boolean('is_active').notNull().default(true),
+    lastLoginAt: timestamp('last_login_at', { withTimezone: true, mode: 'date' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    parentsPhoneIdx: index('idx_parents_phone').on(table.phone),
+  })
+);
+
+export const parentSubscriptions = tenant.table(
+  'parent_subscriptions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    parentId: uuid('parent_id')
+      .notNull()
+      .references(() => parents.id, { onDelete: 'cascade' }),
+    unitPriceFcfa: integer('unit_price_fcfa').notNull(),
+    studentCount: integer('student_count').notNull(),
+    totalAmountFcfa: integer('total_amount_fcfa').notNull(),
+    durationMonths: integer('duration_months').notNull().default(1),
+    startsAt: date('starts_at', { mode: 'string' }).notNull(),
+    endsAt: date('ends_at', { mode: 'string' }).notNull(),
+    status: varchar('status', { length: 20 }).notNull().default('active'),
+    autoRenewAlert: boolean('auto_renew_alert').notNull().default(false),
+    renewedCount: integer('renewed_count').notNull().default(0),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    parentSubscriptionsStatusCheck: check(
+      'parent_subscriptions_status_check',
+      sql`${table.status} IN ('active', 'expired', 'cancelled')`
+    ),
+    parentSubscriptionsParentIdx: index('idx_parent_subs_parent').on(table.parentId),
+    parentSubscriptionsStatusEndIdx: index('idx_parent_subs_status_end').on(
+      table.status,
+      table.endsAt
+    ),
+  })
+);
+
+export const parentStudentLinks = tenant.table(
+  'parent_student_links',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    subscriptionId: uuid('subscription_id')
+      .notNull()
+      .references(() => parentSubscriptions.id, { onDelete: 'cascade' }),
+    parentId: uuid('parent_id')
+      .notNull()
+      .references(() => parents.id, { onDelete: 'cascade' }),
+    studentId: uuid('student_id')
+      .notNull()
+      .references(() => students.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    parentStudentLinksUnique: unique('parent_student_links_parent_student_unique').on(
+      table.parentId,
+      table.studentId
+    ),
+    parentStudentLinksStudentIdx: index('idx_parent_student_links_student').on(table.studentId),
+  })
+);
+
+export const subscriptionPayments = tenant.table(
+  'subscription_payments',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    subscriptionId: uuid('subscription_id')
+      .notNull()
+      .references(() => parentSubscriptions.id, { onDelete: 'cascade' }),
+    amountFcfa: integer('amount_fcfa').notNull(),
+    paymentMethod: varchar('payment_method', { length: 20 }).notNull().default('cash'),
+    paidAt: timestamp('paid_at', { withTimezone: true, mode: 'date' }).notNull(),
+    recordedBy: uuid('recorded_by')
+      .notNull()
+      .references(() => users.id),
+    notes: text('notes'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    subscriptionPaymentsMethodCheck: check(
+      'subscription_payments_method_check',
+      sql`${table.paymentMethod} IN ('cash', 'momo_mtn', 'momo_orange')`
+    ),
+    subscriptionPaymentsSubscriptionIdx: index('idx_sub_payments_sub').on(table.subscriptionId),
+  })
+);
+
+export const smsUsageLog = tenant.table(
+  'sms_usage_log',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    subscriptionId: uuid('subscription_id')
+      .notNull()
+      .references(() => parentSubscriptions.id, { onDelete: 'cascade' }),
+    studentId: uuid('student_id')
+      .notNull()
+      .references(() => students.id, { onDelete: 'cascade' }),
+    month: varchar('month', { length: 7 }).notNull(),
+    smsSentCount: integer('sms_sent_count').notNull().default(0),
+    emailSentCount: integer('email_sent_count').notNull().default(0),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    smsUsageStudentMonthUnique: unique('sms_usage_log_student_month_unique').on(
+      table.studentId,
+      table.month
+    ),
+    smsUsageStudentMonthIdx: index('idx_sms_usage_student_month').on(table.studentId, table.month),
+  })
+);

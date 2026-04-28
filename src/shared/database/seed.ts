@@ -154,6 +154,7 @@ type TeacherRow = { id: string; username: string; primary_subject: string };
 type ClassRow = { id: string; name: string };
 
 type StudentRow = { id: string; class_id: string };
+type ParentSeedRow = { id: string };
 
 type ScheduleRow = {
   id: string;
@@ -241,6 +242,11 @@ const main = async (): Promise<void> => {
   const teacherPasswordHash = await argon2.hash(DEFAULT_PASSWORD);
   const directorPasswordHash = await argon2.hash(DEFAULT_PASSWORD);
   const superAdminPasswordHash = await argon2.hash(DEFAULT_PASSWORD);
+  const parentPwdHash4567 = await argon2.hash('4567');
+  const parentPwdHash6543 = await argon2.hash('6543');
+  const parentPwdHash3322 = await argon2.hash('3322');
+  const subscriptionUnitPriceFcfa = 1000;
+  let superAdminIdForSmsFeature: string | null = null;
 
   console.info('[seed] Creating tenant schema and applying tenant migrations...');
   await createTenantSchema(TENANT.schemaName);
@@ -274,10 +280,24 @@ const main = async (): Promise<void> => {
     throw new Error('[seed] Failed to upsert tenant row');
   }
 
+  await db.execute(sql`
+    DELETE FROM public.edutrack_commission_records
+    WHERE tenant_id = ${tenantId}
+  `);
+  await db.execute(sql`
+    DELETE FROM public.school_sms_features
+    WHERE tenant_id = ${tenantId}
+  `);
+
   await db.transaction(async (tx) => {
     await tx.execute(sql.raw(`SET LOCAL search_path TO "${TENANT.schemaName}", public`));
 
     console.info('[seed] Resetting tenant data...');
+    await tx.execute(sql`DELETE FROM sms_usage_log`);
+    await tx.execute(sql`DELETE FROM subscription_payments`);
+    await tx.execute(sql`DELETE FROM parent_student_links`);
+    await tx.execute(sql`DELETE FROM parent_subscriptions`);
+    await tx.execute(sql`DELETE FROM parents`);
     await tx.execute(sql`DELETE FROM position_assignments`);
     await tx.execute(sql`DELETE FROM salary_records`);
     await tx.execute(sql`DELETE FROM admin_positions`);
@@ -360,6 +380,7 @@ const main = async (): Promise<void> => {
     if (!superAdminId) {
       throw new Error('[seed] Failed to create super admin user');
     }
+    superAdminIdForSmsFeature = superAdminId;
 
     console.info('[seed] Inserting teachers (vacataires) with stable check-in tokens...');
     for (const teacher of TEACHER_SEED) {
@@ -595,6 +616,199 @@ const main = async (): Promise<void> => {
       FROM students
       ORDER BY created_at ASC
     `);
+
+    if (studentsResult.rows.length < 4) {
+      throw new Error('[seed] Not enough students to seed SMS subscriptions');
+    }
+
+    const parentOne = await tx.execute<ParentSeedRow>(sql`
+      INSERT INTO parents (full_name, phone, email, password_hash, is_active)
+      VALUES (
+        'Awa Kouame',
+        '2250701234567',
+        'awa.kouame.parent@example.ci',
+        ${parentPwdHash4567},
+        true
+      )
+      RETURNING id
+    `);
+    const parentTwo = await tx.execute<ParentSeedRow>(sql`
+      INSERT INTO parents (full_name, phone, email, password_hash, is_active)
+      VALUES (
+        'Koffi Diallo',
+        '2250709876543',
+        'koffi.diallo.parent@example.ci',
+        ${parentPwdHash6543},
+        true
+      )
+      RETURNING id
+    `);
+    const parentThree = await tx.execute<ParentSeedRow>(sql`
+      INSERT INTO parents (full_name, phone, email, password_hash, is_active)
+      VALUES (
+        'Mariam Yao',
+        '2250701123322',
+        'mariam.yao.parent@example.ci',
+        ${parentPwdHash3322},
+        true
+      )
+      RETURNING id
+    `);
+
+    const parentOneId = parentOne.rows[0]?.id;
+    const parentTwoId = parentTwo.rows[0]?.id;
+    const parentThreeId = parentThree.rows[0]?.id;
+    if (!parentOneId || !parentTwoId || !parentThreeId) {
+      throw new Error('[seed] Failed to create SMS parents');
+    }
+
+    const activeStartOne = formatDate(addDays(new Date(), -2));
+    const activeEndOne = formatDate(addDays(new Date(activeStartOne), 30));
+    const activeStartTwo = formatDate(addDays(new Date(), -10));
+    const activeEndTwo = formatDate(addDays(new Date(activeStartTwo), 60));
+    const expiredStart = formatDate(addDays(new Date(), -90));
+    const expiredEnd = formatDate(addDays(new Date(), -10));
+
+    const subOneStudentIds = [studentsResult.rows[0]!.id];
+    const subTwoStudentIds = [studentsResult.rows[1]!.id, studentsResult.rows[2]!.id];
+    const subExpiredStudentIds = [studentsResult.rows[3]!.id];
+
+    const subOneTotal = subscriptionUnitPriceFcfa * subOneStudentIds.length * 1;
+    const subTwoTotal = subscriptionUnitPriceFcfa * subTwoStudentIds.length * 2;
+    const subExpiredTotal = subscriptionUnitPriceFcfa * subExpiredStudentIds.length * 1;
+
+    const subOne = await tx.execute<IdRow>(sql`
+      INSERT INTO parent_subscriptions (
+        parent_id,
+        unit_price_fcfa,
+        student_count,
+        total_amount_fcfa,
+        duration_months,
+        starts_at,
+        ends_at,
+        status,
+        auto_renew_alert,
+        renewed_count,
+        created_by
+      )
+      VALUES (
+        ${parentOneId},
+        ${subscriptionUnitPriceFcfa},
+        ${subOneStudentIds.length},
+        ${subOneTotal},
+        1,
+        ${activeStartOne},
+        ${activeEndOne},
+        'active',
+        false,
+        0,
+        ${directorId}
+      )
+      RETURNING id
+    `);
+
+    const subTwo = await tx.execute<IdRow>(sql`
+      INSERT INTO parent_subscriptions (
+        parent_id,
+        unit_price_fcfa,
+        student_count,
+        total_amount_fcfa,
+        duration_months,
+        starts_at,
+        ends_at,
+        status,
+        auto_renew_alert,
+        renewed_count,
+        created_by
+      )
+      VALUES (
+        ${parentTwoId},
+        ${subscriptionUnitPriceFcfa},
+        ${subTwoStudentIds.length},
+        ${subTwoTotal},
+        2,
+        ${activeStartTwo},
+        ${activeEndTwo},
+        'active',
+        true,
+        0,
+        ${staffId}
+      )
+      RETURNING id
+    `);
+
+    const subExpired = await tx.execute<IdRow>(sql`
+      INSERT INTO parent_subscriptions (
+        parent_id,
+        unit_price_fcfa,
+        student_count,
+        total_amount_fcfa,
+        duration_months,
+        starts_at,
+        ends_at,
+        status,
+        auto_renew_alert,
+        renewed_count,
+        created_by
+      )
+      VALUES (
+        ${parentThreeId},
+        ${subscriptionUnitPriceFcfa},
+        ${subExpiredStudentIds.length},
+        ${subExpiredTotal},
+        1,
+        ${expiredStart},
+        ${expiredEnd},
+        'expired',
+        false,
+        0,
+        ${directorId}
+      )
+      RETURNING id
+    `);
+
+    const subOneId = subOne.rows[0]?.id;
+    const subTwoId = subTwo.rows[0]?.id;
+    const subExpiredId = subExpired.rows[0]?.id;
+    if (!subOneId || !subTwoId || !subExpiredId) {
+      throw new Error('[seed] Failed to create parent subscriptions');
+    }
+
+    for (const studentId of subOneStudentIds) {
+      await tx.execute(sql`
+        INSERT INTO parent_student_links (subscription_id, parent_id, student_id)
+        VALUES (${subOneId}, ${parentOneId}, ${studentId})
+      `);
+    }
+    for (const studentId of subTwoStudentIds) {
+      await tx.execute(sql`
+        INSERT INTO parent_student_links (subscription_id, parent_id, student_id)
+        VALUES (${subTwoId}, ${parentTwoId}, ${studentId})
+      `);
+    }
+    for (const studentId of subExpiredStudentIds) {
+      await tx.execute(sql`
+        INSERT INTO parent_student_links (subscription_id, parent_id, student_id)
+        VALUES (${subExpiredId}, ${parentThreeId}, ${studentId})
+      `);
+    }
+
+    await tx.execute(sql`
+      INSERT INTO subscription_payments (subscription_id, amount_fcfa, payment_method, paid_at, recorded_by, notes)
+      VALUES
+      (${subOneId}, ${subOneTotal}, 'cash', NOW() - INTERVAL '1 day', ${staffId}, 'Paiement comptant souscription parent'),
+      (${subTwoId}, ${subTwoTotal}, 'momo_mtn', NOW() - INTERVAL '7 day', ${directorId}, 'Paiement MTN MoMo souscription parent')
+    `);
+
+    const currentMonth = formatDate(new Date()).slice(0, 7);
+    await tx.execute(sql`
+      INSERT INTO sms_usage_log (subscription_id, student_id, month, sms_sent_count, email_sent_count)
+      VALUES
+      (${subOneId}, ${subOneStudentIds[0]}, ${currentMonth}, 4, 1),
+      (${subTwoId}, ${subTwoStudentIds[0]}, ${currentMonth}, 7, 3),
+      (${subTwoId}, ${subTwoStudentIds[1]}, ${currentMonth}, 2, 1)
+    `);
+
     const studentsByClass = new Map<string, string[]>();
     for (const student of studentsResult.rows) {
       const existing = studentsByClass.get(student.class_id) ?? [];
@@ -827,6 +1041,69 @@ const main = async (): Promise<void> => {
       `[seed] Stats: teachers=${teachersResult.rows.length}, classes=${classesResult.rows.length}, students=${studentsResult.rows.length}, schedules=${schedulesResult.rows.length}, att_teacher=${teacherAttendanceCount}, att_student=${studentAttendanceCount}`
     );
   });
+
+  if (!superAdminIdForSmsFeature) {
+    throw new Error('[seed] Missing super admin id for SMS feature seed');
+  }
+
+  const currentMonth = formatDate(new Date()).slice(0, 7);
+  const currentPeriodMonth = `${currentMonth}-01`;
+
+  await db.execute(sql`
+    INSERT INTO public.school_sms_features (
+      tenant_id,
+      is_enabled,
+      commission_pct,
+      sms_cap_per_student,
+      activated_at,
+      activated_by
+    )
+    VALUES (
+      ${tenantId},
+      true,
+      15.00,
+      60,
+      NOW(),
+      ${superAdminIdForSmsFeature}
+    )
+    ON CONFLICT (tenant_id)
+    DO UPDATE SET
+      is_enabled = EXCLUDED.is_enabled,
+      commission_pct = EXCLUDED.commission_pct,
+      sms_cap_per_student = EXCLUDED.sms_cap_per_student,
+      activated_at = EXCLUDED.activated_at,
+      activated_by = EXCLUDED.activated_by,
+      updated_at = NOW()
+  `);
+
+  await db.execute(sql`
+    INSERT INTO public.edutrack_commission_records (
+      tenant_id,
+      period_month,
+      total_subscriptions_fcfa,
+      commission_pct,
+      commission_due_fcfa,
+      commission_paid_fcfa,
+      notes
+    )
+    VALUES (
+      ${tenantId},
+      ${currentPeriodMonth},
+      5000,
+      15.00,
+      750,
+      300,
+      'Seed SMS feature commission snapshot'
+    )
+    ON CONFLICT (tenant_id, period_month)
+    DO UPDATE SET
+      total_subscriptions_fcfa = EXCLUDED.total_subscriptions_fcfa,
+      commission_pct = EXCLUDED.commission_pct,
+      commission_due_fcfa = EXCLUDED.commission_due_fcfa,
+      commission_paid_fcfa = EXCLUDED.commission_paid_fcfa,
+      notes = EXCLUDED.notes,
+      updated_at = NOW()
+  `);
 
   console.info('[seed] Seed completed successfully');
   console.info(`[seed] Tenant: ${TENANT.subdomain} (${TENANT.schemaName})`);

@@ -1,10 +1,13 @@
 import {
   boolean,
+  date,
   inet,
   integer,
+  numeric,
   pgEnum,
   pgTable,
   text,
+  unique,
   timestamp,
   uuid,
   varchar,
@@ -143,3 +146,48 @@ export const appSettings = pgTable('app_settings', {
   maintenanceMessage: text('maintenance_message').notNull().default('Mise à jour en cours'),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
 });
+
+export const schoolSmsFeatures = pgTable(
+  'school_sms_features',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    isEnabled: boolean('is_enabled').notNull().default(false),
+    commissionPct: numeric('commission_pct', { precision: 5, scale: 2 }).notNull().default('0'),
+    smsCapPerStudent: integer('sms_cap_per_student').notNull().default(60),
+    activatedAt: timestamp('activated_at', { withTimezone: true, mode: 'date' }),
+    activatedBy: uuid('activated_by'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    schoolSmsFeaturesTenantUnique: unique('school_sms_features_tenant_unique').on(table.tenantId),
+  })
+);
+
+export const edutrackCommissionRecords = pgTable(
+  'edutrack_commission_records',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    periodMonth: date('period_month', { mode: 'string' }).notNull(),
+    totalSubscriptionsFcfa: integer('total_subscriptions_fcfa').notNull().default(0),
+    commissionPct: numeric('commission_pct', { precision: 5, scale: 2 }).notNull(),
+    commissionDueFcfa: integer('commission_due_fcfa').notNull().default(0),
+    commissionPaidFcfa: integer('commission_paid_fcfa').notNull().default(0),
+    lastPaymentAt: timestamp('last_payment_at', { withTimezone: true, mode: 'date' }),
+    notes: text('notes'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    edutrackCommissionTenantMonthUnique: unique('edutrack_commission_records_tenant_month_unique').on(
+      table.tenantId,
+      table.periodMonth
+    ),
+  })
+);
