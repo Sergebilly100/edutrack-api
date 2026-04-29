@@ -255,7 +255,7 @@ export default async function billingController(app: FastifyInstance): Promise<v
             hoursToPay: body.hoursToPay,
             actor: {
               userId: claims.sub,
-              role: claims.role,
+              role: claims.role as 'director' | 'staff' | 'teacher' | 'super_admin',
             },
           });
         });

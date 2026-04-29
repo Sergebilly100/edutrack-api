@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   withTenantSchema: vi.fn(),
   login: vi.fn(),
   signRefreshToken: vi.fn(),
+  signAccessToken: vi.fn(),
   verifyAccessToken: vi.fn(),
   getMe: vi.fn(),
   verifyRefreshToken: vi.fn(),
@@ -14,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   changePassword: vi.fn(),
   listUserSessions: vi.fn(),
   revokeUserSession: vi.fn(),
+  buildParentPortalService: vi.fn(),
 }));
 
 vi.mock('../../src/shared/database/db.js', () => ({
@@ -23,6 +25,7 @@ vi.mock('../../src/shared/database/db.js', () => ({
 vi.mock('../../src/modules/auth/auth.service.js', () => ({
   login: mocks.login,
   signRefreshToken: mocks.signRefreshToken,
+  signAccessToken: mocks.signAccessToken,
   verifyAccessToken: mocks.verifyAccessToken,
   getMe: mocks.getMe,
   verifyRefreshToken: mocks.verifyRefreshToken,
@@ -32,6 +35,14 @@ vi.mock('../../src/modules/auth/auth.service.js', () => ({
   changePassword: mocks.changePassword,
   listUserSessions: mocks.listUserSessions,
   revokeUserSession: mocks.revokeUserSession,
+}));
+
+vi.mock('../../src/modules/parent-portal/parent-portal.service.js', () => ({
+  ParentPortalError: class ParentPortalError extends Error {
+    statusCode = 400;
+    code = 'BAD_REQUEST';
+  },
+  buildParentPortalService: mocks.buildParentPortalService,
 }));
 
 import authController from '../../src/modules/auth/auth.controller.js';
@@ -67,6 +78,7 @@ beforeEach(() => {
   });
 
   mocks.signRefreshToken.mockResolvedValue('refresh-token');
+  mocks.signAccessToken.mockResolvedValue('access-token-parent');
   mocks.verifyAccessToken.mockResolvedValue({
     sub: 'user-1',
     role: 'teacher',
@@ -107,6 +119,12 @@ beforeEach(() => {
     },
   ]);
   mocks.revokeUserSession.mockResolvedValue(true);
+  mocks.buildParentPortalService.mockReturnValue({
+    loginParent: vi.fn().mockResolvedValue({
+      parentId: 'parent-1',
+      studentIds: ['student-1'],
+    }),
+  });
 });
 
 describe('auth routes', () => {

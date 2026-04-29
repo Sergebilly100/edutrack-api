@@ -12,11 +12,14 @@ import {
   registerRefreshToken,
   refreshAccessToken,
   revokeUserSession,
+  signAccessToken,
   signRefreshToken,
   updateMe,
   verifyAccessToken,
   verifyRefreshToken,
 } from './auth.service.js';
+import { buildParentPortalService, ParentPortalError } from '../parent-portal/parent-portal.service.js';
+import { parentLoginSchema } from '../parent-portal/parent-portal.types.js';
 
 const loginSchema = z.object({
   identifier: z.string().trim().min(4).max(255),
@@ -161,6 +164,19 @@ const resolveSchemaBySubdomain = async (subdomain: string): Promise<string | nul
   `);
 
   return getRows<{ schema_name: string }>(result)[0]?.schema_name ?? null;
+};
+
+const resolveTenantBySchema = async (
+  schemaName: string
+): Promise<{ id: string; schema_name: string } | null> => {
+  const result = await db.execute<{ id: string; schema_name: string }>(sql`
+    SELECT id::text, schema_name
+    FROM public.tenants
+    WHERE schema_name = ${schemaName}
+    LIMIT 1
+  `);
+
+  return getRows<{ id: string; schema_name: string }>(result)[0] ?? null;
 };
 
 const getSchemaName = async (request: FastifyRequest): Promise<string> => {
@@ -391,6 +407,81 @@ export default async function authController(app: FastifyInstance): Promise<void
 
         return reply.send(result);
       } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/auth/login/parent',
+    {
+      config: {
+        rateLimit: {
+          max: LOGIN_RATE_LIMIT_MAX,
+          timeWindow: LOGIN_RATE_LIMIT_WINDOW,
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const body = parentLoginSchema.parse(request.body ?? {});
+        const schemaName = await getSchemaName(request);
+        const tenant = await resolveTenantBySchema(schemaName);
+        if (!tenant) {
+          throw new Error('Tenant not found');
+        }
+
+        const feature = await db.execute<{ is_enabled: boolean }>(sql`
+          SELECT is_enabled
+          FROM public.school_sms_features
+          WHERE tenant_id = ${tenant.id}::uuid
+          LIMIT 1
+        `);
+        const isEnabled = getRows<{ is_enabled: boolean }>(feature)[0]?.is_enabled ?? false;
+        if (!isEnabled) {
+          return reply.code(403).send({
+            error: 'SERVICE_NOT_AVAILABLE',
+            code: 'SERVICE_NOT_AVAILABLE',
+            statusCode: 403,
+          });
+        }
+
+        const auth = await withTenantSchema(schemaName, async (tenantDb) => {
+          const service = buildParentPortalService(tenantDb);
+          return service.loginParent({ phone: body.phone, password: body.password });
+        });
+
+        const claims = {
+          sub: auth.parentId,
+          role: 'parent' as const,
+          tenantId: tenant.id,
+          schemaName,
+          studentIds: auth.studentIds,
+        };
+        const accessToken = await signAccessToken(claims);
+        const refreshToken = await signRefreshToken(auth.parentId, schemaName);
+        setRefreshCookie(reply, refreshToken);
+
+        return reply.send({
+          accessToken,
+          tokenType: 'Bearer',
+          expiresIn: process.env.JWT_EXPIRY ?? '15m',
+          user: {
+            id: auth.parentId,
+            role: 'parent',
+            phone: body.phone,
+            studentIds: auth.studentIds,
+          },
+        });
+      } catch (error) {
+        if (error instanceof ParentPortalError) {
+          return reply.code(error.statusCode).send({
+            error: error.code === 'SUBSCRIPTION_EXPIRED' ? 'SUBSCRIPTION_EXPIRED' : error.message,
+            message: error.code === 'SUBSCRIPTION_EXPIRED' ? error.message : undefined,
+            code: error.code,
+            statusCode: error.statusCode,
+          });
+        }
         return handleError(reply, error);
       }
     }

@@ -16,6 +16,7 @@ import documentsController from './modules/documents/documents.controller.js';
 import importExportController from './modules/import-export/import.controller.js';
 import notificationsController from './modules/notifications/notifications.controller.js';
 import permissionsController from './modules/permissions/permissions.controller.js';
+import parentPortalController from './modules/parent-portal/parent-portal.controller.js';
 import {
   createNotificationsQueue,
   createNotificationsWorker,
@@ -152,6 +153,7 @@ app.register(schoolController);
 app.register(importExportController);
 app.register(permissionsController);
 app.register(subscriptionsController);
+app.register(parentPortalController);
 
 app.get('/health', async () => ({ status: 'ok' }));
 

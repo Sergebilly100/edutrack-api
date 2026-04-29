@@ -31,7 +31,7 @@ type LoginInput = {
   schemaName: string;
 };
 
-export type UserRole = 'director' | 'staff' | 'teacher' | 'super_admin';
+export type UserRole = 'director' | 'staff' | 'teacher' | 'super_admin' | 'parent';
 type LegacyUserRole = UserRole | 'secretary';
 
 export type AccessTokenClaims = JwtPayload & {
@@ -39,6 +39,7 @@ export type AccessTokenClaims = JwtPayload & {
   role: UserRole;
   schemaName: string;
   username?: string;
+  studentIds?: string[];
   readOnly?: boolean;
   impersonation?: boolean;
   impersonatedBy?: string;
@@ -321,6 +322,9 @@ export const verifyAccessToken = async (token: string): Promise<AccessTokenClaim
   const role = payload.role;
   const schemaName = typeof payload.schemaName === 'string' ? payload.schemaName : '';
   const username = typeof payload.username === 'string' ? payload.username : undefined;
+  const studentIds = Array.isArray(payload.studentIds)
+    ? payload.studentIds.filter((value): value is string => typeof value === 'string')
+    : undefined;
   const readOnly = payload.readOnly === true;
   const impersonation = payload.impersonation === true;
   const impersonatedBy =
@@ -336,6 +340,7 @@ export const verifyAccessToken = async (token: string): Promise<AccessTokenClaim
     role !== 'staff' &&
     role !== 'teacher' &&
     role !== 'super_admin' &&
+    role !== 'parent' &&
     role !== 'secretary'
   ) {
     throw new Error('Invalid access token');
@@ -347,6 +352,7 @@ export const verifyAccessToken = async (token: string): Promise<AccessTokenClaim
     role: normalizeRole(role),
     schemaName,
     ...(username ? { username } : {}),
+    ...(studentIds ? { studentIds } : {}),
     ...(readOnly ? { readOnly: true } : {}),
     ...(impersonation ? { impersonation: true } : {}),
     ...(impersonatedBy ? { impersonatedBy } : {}),

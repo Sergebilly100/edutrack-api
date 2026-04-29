@@ -9,6 +9,8 @@ declare module 'fastify' {
     claims?: AccessTokenClaims;
     auth?: AccessTokenClaims;
     permissions?: Set<PermissionKey>;
+    parentId?: string;
+    allowedStudentIds?: string[];
     user: { userId: string; schemaName: string } | null;
     db: TenantDb | null;
     tenantDbRelease: (() => void) | null;

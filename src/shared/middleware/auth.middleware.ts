@@ -42,6 +42,13 @@ const forbidden = (reply: FastifyReply, message: string): FastifyReply => {
   });
 };
 
+export class ParentAccessError extends Error {
+  constructor(public readonly statusCode: number, public readonly code: string, message: string) {
+    super(message);
+    this.name = 'ParentAccessError';
+  }
+}
+
 const internalError = (reply: FastifyReply, message = 'Internal server error'): FastifyReply => {
   return reply.code(500).send({
     error: message,
@@ -221,3 +228,47 @@ export const requirePermission =
       return;
     }
   };
+
+export const requireParent = async (
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> => {
+  request.user = null;
+  request.auth = undefined;
+  request.claims = undefined;
+  request.permissions = undefined;
+  request.parentId = undefined;
+  request.allowedStudentIds = undefined;
+
+  let claims: AccessTokenClaims;
+  try {
+    const token = extractBearerToken(request);
+    claims = await verifyAccessToken(token);
+  } catch {
+    unauthorized(reply, 'Invalid access token');
+    return;
+  }
+
+  if (claims.role !== 'parent') {
+    forbidden(reply, 'Forbidden');
+    return;
+  }
+
+  const allowedStudentIds = Array.isArray(claims.studentIds) ? claims.studentIds : [];
+
+  request.claims = claims;
+  request.auth = claims;
+  request.user = {
+    userId: claims.sub,
+    schemaName: claims.schemaName,
+  };
+  request.parentId = claims.sub;
+  request.allowedStudentIds = allowedStudentIds;
+};
+
+export const checkStudentAccess = (request: FastifyRequest, studentId: string): void => {
+  const allowed = request.allowedStudentIds ?? [];
+  if (!allowed.includes(studentId)) {
+    throw new ParentAccessError(403, 'STUDENT_ACCESS_DENIED', 'Student access denied');
+  }
+};

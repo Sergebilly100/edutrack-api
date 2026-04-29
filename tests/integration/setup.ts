@@ -402,6 +402,7 @@ const initApp = async (): Promise<FastifyInstance> => {
     { default: permissionsController },
     { default: teachersController },
     { default: subscriptionsController },
+    { default: parentPortalController },
   ] = await Promise.all([
     import('../../src/modules/auth/auth.controller.js'),
     import('../../src/modules/attendance/attendance.controller.js'),
@@ -411,6 +412,7 @@ const initApp = async (): Promise<FastifyInstance> => {
     import('../../src/modules/permissions/permissions.controller.js'),
     import('../../src/modules/teachers/teachers.controller.js'),
     import('../../src/modules/subscriptions/subscriptions.controller.js'),
+    import('../../src/modules/parent-portal/parent-portal.controller.js'),
   ]);
 
   const testApp = Fastify({ logger: false });
@@ -428,6 +430,7 @@ const initApp = async (): Promise<FastifyInstance> => {
   testApp.register(permissionsController);
   testApp.register(teachersController);
   testApp.register(subscriptionsController);
+  testApp.register(parentPortalController);
 
   await testApp.ready();
   return testApp;
