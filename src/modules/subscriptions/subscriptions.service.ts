@@ -146,14 +146,28 @@ export class SubscriptionsService {
       throw new SubscriptionsModuleError('Some students were not found', 400, 'INVALID_STUDENT_IDS');
     }
 
+    const existingParent = await this.repository.findParentByPhone(input.payload.phone);
+    if (existingParent) {
+      throw new SubscriptionsModuleError('Parent already exists', 409, 'PARENT_ALREADY_EXISTS');
+    }
+
     const tempPassword = last4(input.payload.phone);
     const passwordHash = await argon2.hash(tempPassword);
-    const parentId = await this.repository.createParent({
-      fullName: input.payload.full_name,
-      phone: input.payload.phone,
-      email: input.payload.email,
-      passwordHash,
-    });
+    let parentId: string;
+    try {
+      parentId = await this.repository.createParent({
+        fullName: input.payload.full_name,
+        phone: input.payload.phone,
+        email: input.payload.email,
+        passwordHash,
+      });
+    } catch (error) {
+      const code = (error as { code?: string } | null)?.code;
+      if (code === '23505') {
+        throw new SubscriptionsModuleError('Parent already exists', 409, 'PARENT_ALREADY_EXISTS');
+      }
+      throw error;
+    }
 
     const totalAmount =
       feature.sms_unit_price_fcfa *

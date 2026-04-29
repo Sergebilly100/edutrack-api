@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SMS_MAX_LENGTH } from '../../src/modules/notifications/notifications.sms.js';
 import { NotificationsService } from '../../src/modules/notifications/notifications.service.js';
+import { SubscriptionsService } from '../../src/modules/subscriptions/subscriptions.service.js';
 import type {
   StudentAbsentPayload,
   TeacherLatePayload,
@@ -263,6 +264,14 @@ describe('notifications.service', () => {
   });
 
   it('student.absent queue le SMS parent et loggue queued', async () => {
+    vi.spyOn(SubscriptionsService.prototype, 'canSendNotification').mockResolvedValueOnce({
+      allowed: true,
+      subscriptionId: 'sub-1',
+      parentPhone: '2250700000001',
+      parentEmail: null,
+    });
+    vi.spyOn(SubscriptionsService.prototype, 'incrementUsage').mockResolvedValueOnce(undefined);
+
     const service = new NotificationsService({
       withTenantSchema,
       repository,
@@ -305,6 +314,102 @@ describe('notifications.service', () => {
         status: 'queued',
         relatedId: 'schedule-1',
       })
+    );
+  });
+
+  it('student.absent sans souscription active loggue skipped_no_active_subscription', async () => {
+    vi.spyOn(SubscriptionsService.prototype, 'canSendNotification').mockResolvedValueOnce({
+      allowed: false,
+      reason: 'no_active_subscription',
+    });
+
+    const service = new NotificationsService({
+      withTenantSchema,
+      repository,
+      eventBus,
+      smsQueue: smsQueue as never,
+    });
+
+    await service.handleStudentAbsent({
+      tenantId: 'tenant-1',
+      schemaName: 'school_sainte_marie',
+      studentId: 'student-1',
+      scheduleId: 'schedule-1',
+      studentFirstName: 'Awa',
+      parentPhone: '2250700000001',
+      subject: 'Maths',
+      date: '2026-04-14',
+      schoolPhone: '2250701234567',
+    });
+
+    expect(smsQueue.add).not.toHaveBeenCalled();
+    expect(repository.insertNotificationLog).toHaveBeenCalledWith(
+      tenantDb,
+      expect.objectContaining({ status: 'skipped_no_active_subscription' })
+    );
+  });
+
+  it('student.absent cap atteint loggue skipped_cap_reached', async () => {
+    vi.spyOn(SubscriptionsService.prototype, 'canSendNotification').mockResolvedValueOnce({
+      allowed: false,
+      reason: 'cap_reached',
+    });
+
+    const service = new NotificationsService({
+      withTenantSchema,
+      repository,
+      eventBus,
+      smsQueue: smsQueue as never,
+    });
+
+    await service.handleStudentAbsent({
+      tenantId: 'tenant-1',
+      schemaName: 'school_sainte_marie',
+      studentId: 'student-1',
+      scheduleId: 'schedule-1',
+      studentFirstName: 'Awa',
+      parentPhone: '2250700000001',
+      subject: 'Maths',
+      date: '2026-04-14',
+      schoolPhone: '2250701234567',
+    });
+
+    expect(smsQueue.add).not.toHaveBeenCalled();
+    expect(repository.insertNotificationLog).toHaveBeenCalledWith(
+      tenantDb,
+      expect.objectContaining({ status: 'skipped_cap_reached' })
+    );
+  });
+
+  it('student.absent feature désactivée loggue skipped_feature_disabled', async () => {
+    vi.spyOn(SubscriptionsService.prototype, 'canSendNotification').mockResolvedValueOnce({
+      allowed: false,
+      reason: 'feature_disabled',
+    });
+
+    const service = new NotificationsService({
+      withTenantSchema,
+      repository,
+      eventBus,
+      smsQueue: smsQueue as never,
+    });
+
+    await service.handleStudentAbsent({
+      tenantId: 'tenant-1',
+      schemaName: 'school_sainte_marie',
+      studentId: 'student-1',
+      scheduleId: 'schedule-1',
+      studentFirstName: 'Awa',
+      parentPhone: '2250700000001',
+      subject: 'Maths',
+      date: '2026-04-14',
+      schoolPhone: '2250701234567',
+    });
+
+    expect(smsQueue.add).not.toHaveBeenCalled();
+    expect(repository.insertNotificationLog).toHaveBeenCalledWith(
+      tenantDb,
+      expect.objectContaining({ status: 'skipped_feature_disabled' })
     );
   });
 });

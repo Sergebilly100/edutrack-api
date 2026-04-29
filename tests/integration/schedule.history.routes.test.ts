@@ -391,7 +391,10 @@ describe('schedule history protection integration', () => {
     const headers = await getAuthHeaders('director');
     const context = getSeedContext();
     const today = toIsoDate(new Date());
-    const effectiveFrom = addDays(today, 2);
+    let effectiveFrom = addDays(today, 2);
+    while (isoDayOfWeek(effectiveFrom) !== 5) {
+      effectiveFrom = addDays(effectiveFrom, 1);
+    }
 
     const base = await queryTenant<{ class_id: string; room_id: string }>(
       `
@@ -452,7 +455,10 @@ describe('schedule history protection integration', () => {
     const headers = await getAuthHeaders('director');
     const context = getSeedContext();
     const today = toIsoDate(new Date());
-    const effectiveFrom = addDays(today, 2);
+    let effectiveFrom = addDays(today, 2);
+    while (isoDayOfWeek(effectiveFrom) !== 4) {
+      effectiveFrom = addDays(effectiveFrom, 1);
+    }
 
     const base = await queryTenant<{ class_id: string; room_id: string }>(
       `

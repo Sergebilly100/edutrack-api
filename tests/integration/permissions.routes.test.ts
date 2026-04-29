@@ -48,7 +48,7 @@ beforeEach(() => {
 });
 
 describe('permissions routes', () => {
-  it('GET /api/v1/permissions/me retourne une base vide pour staff sans poste assigné', async () => {
+  it('GET /api/v1/permissions/me retourne la base staff subscriptions.* sans poste assigné', async () => {
     const app = await buildApp();
 
     const response = await app.inject({
@@ -60,7 +60,7 @@ describe('permissions routes', () => {
     expect(response.statusCode).toBe(200);
     const body = JSON.parse(response.body) as { role: string; permissions: string[] };
     expect(body.role).toBe('staff');
-    expect(body.permissions).toEqual([]);
+    expect(new Set(body.permissions)).toEqual(new Set(['subscriptions.view', 'subscriptions.create']));
 
     await app.close();
   });

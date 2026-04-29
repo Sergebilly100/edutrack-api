@@ -37,6 +37,8 @@ type ParentDetailRow = {
   created_at: string;
 };
 
+type ParentPhoneRow = { id: string };
+
 type SubscriptionRow = {
   id: string;
   status: SubscriptionStatus;
@@ -249,6 +251,16 @@ export class SubscriptionsRepository {
     return result.rows[0]!.id;
   }
 
+  async findParentByPhone(phone: string): Promise<ParentPhoneRow | null> {
+    const result = await this.tenantDb.execute<ParentPhoneRow>(sql`
+      SELECT id::text AS id
+      FROM parents
+      WHERE phone = ${phone}
+      LIMIT 1
+    `);
+    return result.rows[0] ?? null;
+  }
+
   async getStudentsByIds(studentIds: string[]): Promise<StudentRow[]> {
     if (studentIds.length === 0) return [];
     const result = await this.tenantDb.execute<StudentRow>(sql`
@@ -302,6 +314,9 @@ export class SubscriptionsRepository {
       await this.tenantDb.execute(sql`
         INSERT INTO parent_student_links (subscription_id, parent_id, student_id)
         VALUES (${params.subscriptionId}::uuid, ${params.parentId}::uuid, ${studentId}::uuid)
+        ON CONFLICT (parent_id, student_id)
+        DO UPDATE SET
+          subscription_id = EXCLUDED.subscription_id
       `);
     }
   }

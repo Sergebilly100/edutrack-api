@@ -216,6 +216,22 @@ describe('parent auth + parent routes integration', () => {
     expect(response.body.message).toContain('abonnement a expiré');
   });
 
+  it('POST /auth/login/parent feature désactivée → 403 SERVICE_NOT_AVAILABLE', async () => {
+    await queryPublic(
+      `UPDATE public.school_sms_features SET is_enabled = false WHERE tenant_id = (SELECT id FROM public.tenants WHERE schema_name = $1 LIMIT 1)`,
+      [TEST_SCHEMA_NAME]
+    );
+
+    const response = await loginParent();
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe('SERVICE_NOT_AVAILABLE');
+
+    await queryPublic(
+      `UPDATE public.school_sms_features SET is_enabled = true WHERE tenant_id = (SELECT id FROM public.tenants WHERE schema_name = $1 LIMIT 1)`,
+      [TEST_SCHEMA_NAME]
+    );
+  });
+
   it('GET /parent/students retourne seulement les élèves du parent', async () => {
     const loginResponse = await loginParent();
     const token = loginResponse.body.accessToken;
@@ -240,6 +256,20 @@ describe('parent auth + parent routes integration', () => {
 
     expect(response.status).toBe(403);
     expect(response.body.code).toBe('STUDENT_ACCESS_DENIED');
+  });
+
+  it('GET /parent/subscription/status retourne les données attendues', async () => {
+    const loginResponse = await loginParent();
+    const token = loginResponse.body.accessToken;
+
+    const response = await request()
+      .get('/api/v1/parent/subscription/status')
+      .set('authorization', `Bearer ${token}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.status).toBeTruthy();
+    expect(response.body.ends_at).toBeTruthy();
+    expect(typeof response.body.days_remaining).toBe('number');
   });
 
   it('GET /parent/students/:id/schedule retourne l\'EDT avec statuts corrects', async () => {
