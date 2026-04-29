@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import { todayInBusinessTimezone } from '../../shared/utils/business-time.js';
 
 export type TenantDb = NodePgDatabase<Record<string, unknown>>;
 
@@ -101,19 +102,21 @@ export class ParentPortalRepository {
   }
 
   async listActiveStudentIds(parentId: string): Promise<string[]> {
+    const businessToday = todayInBusinessTimezone();
     const result = await this.db.execute<{ student_id: string }>(sql`
       SELECT DISTINCT psl.student_id::text AS student_id
       FROM parent_student_links psl
       INNER JOIN parent_subscriptions ps ON ps.id = psl.subscription_id
       WHERE psl.parent_id = ${parentId}::uuid
         AND ps.status = 'active'
-        AND ps.ends_at >= CURRENT_DATE
+        AND ps.ends_at >= ${businessToday}::date
     `);
 
     return result.rows.map((row) => row.student_id);
   }
 
   async listStudentsByParent(parentId: string): Promise<StudentSummaryRow[]> {
+    const businessToday = todayInBusinessTimezone();
     const result = await this.db.execute<StudentSummaryRow>(sql`
       SELECT
         DISTINCT s.id::text AS id,
@@ -126,7 +129,7 @@ export class ParentPortalRepository {
       INNER JOIN classes c ON c.id = s.class_id
       WHERE psl.parent_id = ${parentId}::uuid
         AND ps.status = 'active'
-        AND ps.ends_at >= CURRENT_DATE
+        AND ps.ends_at >= ${businessToday}::date
       ORDER BY s.last_name ASC, s.first_name ASC
     `);
 
@@ -222,6 +225,7 @@ export class ParentPortalRepository {
   }
 
   async getActiveOrLatestSubscription(parentId: string): Promise<ActiveSubscriptionRow | null> {
+    const businessToday = todayInBusinessTimezone();
     const result = await this.db.execute<ActiveSubscriptionRow>(sql`
       SELECT
         id::text,
@@ -235,7 +239,7 @@ export class ParentPortalRepository {
       FROM parent_subscriptions
       WHERE parent_id = ${parentId}::uuid
       ORDER BY
-        CASE WHEN status = 'active' AND ends_at >= CURRENT_DATE THEN 0 ELSE 1 END,
+        CASE WHEN status = 'active' AND ends_at >= ${businessToday}::date THEN 0 ELSE 1 END,
         ends_at DESC,
         created_at DESC
       LIMIT 1

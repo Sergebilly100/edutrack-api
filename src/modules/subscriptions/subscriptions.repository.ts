@@ -2,6 +2,12 @@ import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import { db as publicDb } from '../../shared/database/db.js';
+import {
+  addDaysIso,
+  addMonthsIso,
+  monthKeyInBusinessTimezone,
+  todayInBusinessTimezone,
+} from '../../shared/utils/business-time.js';
 import type { NotificationChannel, SubscriptionStatus } from './subscriptions.types.js';
 
 type TenantDb = NodePgDatabase<Record<string, unknown>>;
@@ -72,22 +78,7 @@ type ActiveLinkRow = {
 
 const monthToDate = (month: string): string => `${month}-01`;
 
-const formatMonth = (date: Date): string =>
-  `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
-
 const firstDayOfMonth = (month: string): string => `${month}-01`;
-
-const addMonths = (isoDate: string, months: number): string => {
-  const date = new Date(`${isoDate}T00:00:00.000Z`);
-  date.setUTCMonth(date.getUTCMonth() + months);
-  return date.toISOString().slice(0, 10);
-};
-
-const addDays = (isoDate: string, days: number): string => {
-  const date = new Date(`${isoDate}T00:00:00.000Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-};
 
 export class SubscriptionsRepository {
   constructor(private readonly tenantDb: TenantDb) {}
@@ -461,11 +452,12 @@ export class SubscriptionsRepository {
     commission_paid_fcfa: number;
   }> {
     const monthDate = firstDayOfMonth(params.month);
+    const businessToday = todayInBusinessTimezone();
     const activeResult = await this.tenantDb.execute<{ count: number }>(sql`
       SELECT COUNT(*)::int AS count
       FROM parent_subscriptions
       WHERE status = 'active'
-        AND ends_at >= CURRENT_DATE
+        AND ends_at >= ${businessToday}::date
     `);
     const newResult = await this.tenantDb.execute<{ count: number }>(sql`
       SELECT COUNT(*)::int AS count
@@ -557,7 +549,7 @@ export class SubscriptionsRepository {
     const now = new Date();
     for (let i = 0; i < params.months; i += 1) {
       const date = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
-      const month = formatMonth(date);
+      const month = monthKeyInBusinessTimezone(date);
       const summary = await this.getRevenueSummary({ tenantId: params.tenantId, month });
       const feature = await this.getSmsFeatureByTenantId(params.tenantId);
       const commissionPct = Number(feature?.commission_pct ?? 0);
@@ -574,12 +566,13 @@ export class SubscriptionsRepository {
   }
 
   async expireOutdatedSubscriptions(): Promise<number> {
+    const businessToday = todayInBusinessTimezone();
     const result = await this.tenantDb.execute<{ count: number }>(sql`
       WITH updated AS (
         UPDATE parent_subscriptions
         SET status = 'expired'
         WHERE status = 'active'
-          AND ends_at < CURRENT_DATE
+          AND ends_at < ${businessToday}::date
         RETURNING id
       )
       SELECT COUNT(*)::int AS count FROM updated
@@ -588,13 +581,14 @@ export class SubscriptionsRepository {
   }
 
   async listRenewalAlertsInSevenDays(): Promise<Array<{ parentPhone: string; parentName: string; endsAt: string }>> {
+    const targetDate = addDaysIso(todayInBusinessTimezone(), 7);
     const result = await this.tenantDb.execute<{ parent_phone: string; parent_name: string; ends_at: string }>(sql`
       SELECT p.phone AS parent_phone, p.full_name AS parent_name, ps.ends_at::text AS ends_at
       FROM parent_subscriptions ps
       INNER JOIN parents p ON p.id = ps.parent_id
       WHERE ps.status = 'active'
         AND ps.auto_renew_alert = true
-        AND ps.ends_at = CURRENT_DATE + INTERVAL '7 days'
+        AND ps.ends_at = ${targetDate}::date
         AND p.phone IS NOT NULL
     `);
     return result.rows.map((row) => ({
@@ -615,14 +609,14 @@ export class SubscriptionsRepository {
   }
 
   computeStartsAndEnds(durationMonths: number): { startsAt: string; endsAt: string } {
-    const startsAt = new Date().toISOString().slice(0, 10);
-    const endsAt = addMonths(startsAt, durationMonths);
+    const startsAt = todayInBusinessTimezone();
+    const endsAt = addMonthsIso(startsAt, durationMonths);
     return { startsAt, endsAt };
   }
 
   computeRenewalStartsAndEnds(lastEndsAt: string, durationMonths: number): { startsAt: string; endsAt: string } {
-    const startsAt = addDays(lastEndsAt, 1);
-    const endsAt = addMonths(startsAt, durationMonths);
+    const startsAt = addDaysIso(lastEndsAt, 1);
+    const endsAt = addMonthsIso(startsAt, durationMonths);
     return { startsAt, endsAt };
   }
 }

@@ -3,6 +3,11 @@ import { randomInt } from 'node:crypto';
 import argon2 from 'argon2';
 
 import { SubscriptionsRepository } from './subscriptions.repository.js';
+import {
+  businessDateFromNowPlusDays,
+  monthKeyInBusinessTimezone,
+  todayInBusinessTimezone,
+} from '../../shared/utils/business-time.js';
 import type {
   CanSendResult,
   CreateParentSubscriptionBody,
@@ -21,9 +26,6 @@ export class SubscriptionsModuleError extends Error {
     this.name = 'SubscriptionsModuleError';
   }
 }
-
-const toMonth = (date = new Date()): string =>
-  `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
 
 const last4 = (phone: string): string => phone.slice(-4);
 
@@ -53,12 +55,15 @@ export class SubscriptionsService {
       return { allowed: false, reason: 'no_active_subscription' };
     }
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayInBusinessTimezone();
     if (link.ends_at < today) {
       return { allowed: false, reason: 'subscription_expired' };
     }
 
-    const usage = await this.repository.getUsageByStudentMonth(input.studentId, toMonth());
+    const usage = await this.repository.getUsageByStudentMonth(
+      input.studentId,
+      monthKeyInBusinessTimezone()
+    );
     if (input.type === 'sms' && usage.sms >= feature.sms_cap_per_student) {
       return { allowed: false, reason: 'cap_reached' };
     }
@@ -79,17 +84,14 @@ export class SubscriptionsService {
     await this.repository.incrementUsage({
       studentId: input.studentId,
       subscriptionId: input.subscriptionId,
-      month: toMonth(),
+      month: monthKeyInBusinessTimezone(),
       type: input.type,
     });
   }
 
   async listParents(schemaName: string, query: ListParentsQuery) {
     const result = await this.repository.listParents(query);
-    const today = new Date();
-    const in30 = new Date(today);
-    in30.setUTCDate(today.getUTCDate() + 30);
-    const in30Iso = in30.toISOString().slice(0, 10);
+    const in30Iso = businessDateFromNowPlusDays(30);
     return {
       data: result.rows.map((row) => {
         const monthlyAmount =
@@ -309,7 +311,7 @@ export class SubscriptionsService {
   }
 
   async revenueSummary(schemaName: string, month?: string) {
-    const targetMonth = month ?? toMonth();
+    const targetMonth = month ?? monthKeyInBusinessTimezone();
     const tenantId = await this.repository.getTenantIdBySchemaName(schemaName);
     if (!tenantId) {
       throw new SubscriptionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');

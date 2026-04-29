@@ -10,6 +10,7 @@ const buildRepositoryMock = () => ({
   computeStartsAndEnds: vi.fn(),
   computeRenewalStartsAndEnds: vi.fn(),
   getStudentsByIds: vi.fn(),
+  findParentByPhone: vi.fn(),
   createParent: vi.fn(),
   createSubscription: vi.fn(),
   createParentStudentLinks: vi.fn(),
