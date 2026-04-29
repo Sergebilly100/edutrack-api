@@ -70,6 +70,10 @@ export const commissionRecordPaymentBodySchema = z.object({
   idempotency_key: z.string().uuid(),
 });
 
+export const updateSmsPriceBodySchema = z.object({
+  sms_unit_price_fcfa: z.coerce.number().int().min(1).max(50000),
+});
+
 export type ListParentsQuery = z.infer<typeof listParentsQuerySchema>;
 export type CreateParentSubscriptionBody = z.infer<typeof createParentSubscriptionBodySchema>;
 export type RenewParentSubscriptionBody = z.infer<typeof renewParentSubscriptionBodySchema>;

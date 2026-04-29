@@ -297,6 +297,37 @@ export class SubscriptionsService {
     await this.repository.updateSubscriptionStatus(subscriptionId, 'cancelled');
   }
 
+  async getSchoolSmsFeatureSettings(schemaName: string) {
+    const tenantId = await this.repository.getTenantIdBySchemaName(schemaName);
+    if (!tenantId) {
+      throw new SubscriptionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
+    }
+
+    const feature = await this.repository.getSmsFeatureByTenantId(tenantId);
+    return {
+      is_enabled: feature?.is_enabled ?? false,
+      commission_pct: Number(feature?.commission_pct ?? 0),
+      sms_unit_price_fcfa: feature?.sms_unit_price_fcfa ?? null,
+    };
+  }
+
+  async updateSchoolSmsUnitPrice(input: { schemaName: string; smsUnitPriceFcfa: number }) {
+    const tenantId = await this.repository.getTenantIdBySchemaName(input.schemaName);
+    if (!tenantId) {
+      throw new SubscriptionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
+    }
+
+    const feature = await this.repository.updateSmsUnitPriceByTenantId(
+      tenantId,
+      input.smsUnitPriceFcfa
+    );
+    return {
+      is_enabled: feature.is_enabled,
+      commission_pct: Number(feature.commission_pct ?? 0),
+      sms_unit_price_fcfa: feature.sms_unit_price_fcfa,
+    };
+  }
+
   async resetParentPassword(parentId: string): Promise<{ new_temp_password: string }> {
     const parent = await this.repository.getParentById(parentId);
     if (!parent) {

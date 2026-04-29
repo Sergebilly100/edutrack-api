@@ -2,7 +2,10 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
-import { requirePermission } from '../../shared/middleware/auth.middleware.js';
+import {
+  requireDirectorOrSecretary,
+  requirePermission,
+} from '../../shared/middleware/auth.middleware.js';
 import { SubscriptionsRepository } from './subscriptions.repository.js';
 import { SubscriptionsModuleError, SubscriptionsService } from './subscriptions.service.js';
 import {
@@ -16,6 +19,7 @@ import {
   revenueHistoryQuerySchema,
   revenueSummaryQuerySchema,
   renewParentSubscriptionBodySchema,
+  updateSmsPriceBodySchema,
 } from './subscriptions.types.js';
 
 const handleError = (request: FastifyRequest, reply: FastifyReply, error: unknown): FastifyReply => {
@@ -45,6 +49,44 @@ const handleError = (request: FastifyRequest, reply: FastifyReply, error: unknow
 };
 
 export default async function subscriptionsController(app: FastifyInstance): Promise<void> {
+  app.get(
+    '/api/v1/settings/sms-price',
+    { preHandler: requireDirectorOrSecretary },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          const service = new SubscriptionsService(new SubscriptionsRepository(tenantDb));
+          return service.getSchoolSmsFeatureSettings(claims.schemaName);
+        });
+        return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.patch(
+    '/api/v1/settings/sms-price',
+    { preHandler: requirePermission('settings.school') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const body = updateSmsPriceBodySchema.parse(request.body ?? {});
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          const service = new SubscriptionsService(new SubscriptionsRepository(tenantDb));
+          return service.updateSchoolSmsUnitPrice({
+            schemaName: claims.schemaName,
+            smsUnitPriceFcfa: body.sms_unit_price_fcfa,
+          });
+        });
+        return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
   app.get(
     '/api/v1/subscriptions/parents',
     { preHandler: requirePermission('subscriptions.view') },

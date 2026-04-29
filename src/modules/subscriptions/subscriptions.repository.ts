@@ -108,6 +108,46 @@ export class SubscriptionsRepository {
     return result.rows[0] ?? null;
   }
 
+  async updateSmsUnitPriceByTenantId(
+    tenantId: string,
+    smsUnitPriceFcfa: number
+  ): Promise<PublicFeatureRow> {
+    const result = await publicDb.execute<PublicFeatureRow>(sql`
+      INSERT INTO public.school_sms_features (
+        tenant_id,
+        is_enabled,
+        commission_pct,
+        sms_cap_per_student,
+        sms_unit_price_fcfa,
+        updated_at
+      )
+      VALUES (
+        ${tenantId}::uuid,
+        false,
+        0,
+        0,
+        ${smsUnitPriceFcfa},
+        NOW()
+      )
+      ON CONFLICT (tenant_id)
+      DO UPDATE SET
+        sms_unit_price_fcfa = EXCLUDED.sms_unit_price_fcfa,
+        updated_at = NOW()
+      RETURNING
+        tenant_id::text,
+        is_enabled,
+        sms_cap_per_student,
+        commission_pct,
+        sms_unit_price_fcfa
+    `);
+
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error('Failed to update sms feature price');
+    }
+    return row;
+  }
+
   async getActiveSubscriptionLinkByStudent(studentId: string): Promise<ActiveLinkRow | null> {
     const result = await this.tenantDb.execute<ActiveLinkRow>(sql`
       SELECT
