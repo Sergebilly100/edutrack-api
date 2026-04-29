@@ -65,14 +65,23 @@ export class ParentPortalRepository {
   constructor(private readonly db: TenantDb) {}
 
   async findParentByPhone(phone: string): Promise<ParentAuthRow | null> {
-    const result = await this.db.execute<ParentAuthRow>(sql`
-      SELECT id::text, phone, password_hash, must_change_password, is_active
-      FROM parents
-      WHERE phone = ${phone}
-      LIMIT 1
-    `);
-
-    return result.rows[0] ?? null;
+    try {
+      const result = await this.db.execute<ParentAuthRow>(sql`
+        SELECT id::text, phone, password_hash, must_change_password, is_active
+        FROM parents
+        WHERE phone = ${phone}
+        LIMIT 1
+      `);
+      return result.rows[0] ?? null;
+    } catch {
+      const fallback = await this.db.execute<ParentAuthRow>(sql`
+        SELECT id::text, phone, password_hash, false AS must_change_password, is_active
+        FROM parents
+        WHERE phone = ${phone}
+        LIMIT 1
+      `);
+      return fallback.rows[0] ?? null;
+    }
   }
 
   async findParentById(parentId: string): Promise<ParentByIdRow | null> {
