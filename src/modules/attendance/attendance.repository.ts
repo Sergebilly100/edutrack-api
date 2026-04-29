@@ -596,8 +596,8 @@ export class AttendanceRepository {
         SELECT id
         FROM schedule_periods
         WHERE is_active = true
-          AND valid_from <= ${params.date}
-          AND valid_to >= ${params.date}
+          AND valid_from <= ${params.date}::date
+          AND valid_to >= ${params.date}::date
         ORDER BY created_at DESC
         LIMIT 1
       )
@@ -623,13 +623,11 @@ export class AttendanceRepository {
       LEFT JOIN attendances_teacher at
         ON at.schedule_id = s.id
        AND at.teacher_id = ${params.teacherId}
-       AND at.date = ${params.date}
+       AND at.date = ${params.date}::date
       LEFT JOIN rooms rs ON rs.id = at.room_scanned_id
       WHERE s.teacher_id = ${params.teacherId}
         AND s.day_of_week = ${params.dayOfWeek}
         AND s.is_active = true
-        AND (s.start_date IS NULL OR s.start_date <= ${params.date}::date)
-        AND (s.end_date IS NULL OR s.end_date > ${params.date}::date)
       ORDER BY ts.sort_order ASC, ts.start_time ASC
     `);
 

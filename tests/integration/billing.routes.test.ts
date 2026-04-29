@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { getAuthHeaders, getSeedContext, queryTenant, request, tenantTable } from './setup.js';
 
-const currentMonth = '2025-01';
+const currentMonth = new Date().toISOString().slice(0, 7);
 
 describe('billing integration (real db)', () => {
   it('GET /api/v1/billing/salary/summary retourne 200', async () => {
