@@ -1,4 +1,6 @@
+import { sql } from 'drizzle-orm';
 import {
+  check,
   boolean,
   date,
   inet,
@@ -165,6 +167,14 @@ export const schoolSmsFeatures = pgTable(
   },
   (table) => ({
     schoolSmsFeaturesTenantUnique: unique('school_sms_features_tenant_unique').on(table.tenantId),
+    schoolSmsFeaturesCommissionPctRangeCheck: check(
+      'school_sms_features_commission_pct_range_check',
+      sql`${table.commissionPct} >= 0 AND ${table.commissionPct} <= 100`
+    ),
+    schoolSmsFeaturesSmsCapNonNegativeCheck: check(
+      'school_sms_features_sms_cap_non_negative_check',
+      sql`${table.smsCapPerStudent} >= 0`
+    ),
   })
 );
 
@@ -189,6 +199,18 @@ export const edutrackCommissionRecords = pgTable(
     edutrackCommissionTenantMonthUnique: unique('edutrack_commission_records_tenant_month_unique').on(
       table.tenantId,
       table.periodMonth
+    ),
+    edutrackCommissionTotalNonNegativeCheck: check(
+      'edutrack_commission_records_total_non_negative_check',
+      sql`${table.totalSubscriptionsFcfa} >= 0`
+    ),
+    edutrackCommissionDueNonNegativeCheck: check(
+      'edutrack_commission_records_due_non_negative_check',
+      sql`${table.commissionDueFcfa} >= 0`
+    ),
+    edutrackCommissionPaidNonNegativeCheck: check(
+      'edutrack_commission_records_paid_non_negative_check',
+      sql`${table.commissionPaidFcfa} >= 0`
     ),
   })
 );

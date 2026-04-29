@@ -547,6 +547,14 @@ export const parentSubscriptions = tenant.table(
       'parent_subscriptions_status_check',
       sql`${table.status} IN ('active', 'expired', 'cancelled')`
     ),
+    parentSubscriptionsUnitPriceNonNegativeCheck: check(
+      'parent_subscriptions_unit_price_non_negative_check',
+      sql`${table.unitPriceFcfa} >= 0`
+    ),
+    parentSubscriptionsTotalAmountNonNegativeCheck: check(
+      'parent_subscriptions_total_amount_non_negative_check',
+      sql`${table.totalAmountFcfa} >= 0`
+    ),
     parentSubscriptionsParentIdx: index('idx_parent_subs_parent').on(table.parentId),
     parentSubscriptionsStatusEndIdx: index('idx_parent_subs_status_end').on(
       table.status,
@@ -599,6 +607,10 @@ export const subscriptionPayments = tenant.table(
     subscriptionPaymentsMethodCheck: check(
       'subscription_payments_method_check',
       sql`${table.paymentMethod} IN ('cash', 'momo_mtn', 'momo_orange')`
+    ),
+    subscriptionPaymentsAmountNonNegativeCheck: check(
+      'subscription_payments_amount_non_negative_check',
+      sql`${table.amountFcfa} >= 0`
     ),
     subscriptionPaymentsSubscriptionIdx: index('idx_sub_payments_sub').on(table.subscriptionId),
   })
