@@ -14,7 +14,13 @@ import type {
 } from '../../shared/events/events.types.js';
 import type { NotificationType } from '../../shared/types/index.js';
 
-import type { NotificationSmsJobData, SmsSender } from './notifications.queue.js';
+import type {
+  NotificationEmailJobData,
+  NotificationJobData,
+  NotificationSmsJobData,
+  SmsSender,
+  EmailSender,
+} from './notifications.queue.js';
 import {
   buildTeacherLateSms,
   buildTeacherQrAlertSms,
@@ -44,7 +50,7 @@ type NotificationsServiceDeps = {
     ) => void;
   };
   repository: NotificationsRepository;
-  smsQueue: Queue<NotificationSmsJobData>;
+  smsQueue: Queue<NotificationJobData>;
 };
 
 const defaultDeps = {
@@ -74,6 +80,9 @@ const DEFAULT_STUDENT_ABSENT_TEMPLATE =
   'EduTrack: {studentFirstName} absent(e) en {subject} le {date}. Contact école: {schoolPhone}';
 const DEFAULT_PAYMENT_REMINDER_TEMPLATE =
   'EduTrack: relance paiement {schoolName}. Échéance {dueDate}, période {periodLabel}, reste {remainingAmountFcfa} FCFA.';
+const DEFAULT_STUDENT_ABSENT_EMAIL_SUBJECT = 'Absence élève — EduTrack';
+const DEFAULT_STUDENT_ABSENT_EMAIL_TEMPLATE =
+  '{studentFirstName} est absent(e) en {subject} le {date}. Contact école: {schoolPhone}.';
 
 const loadSmsPlatformConfig = async (): Promise<SmsPlatformRuntimeConfig> => {
   const now = Date.now();
@@ -222,6 +231,52 @@ export const defaultSmsSender: SmsSender = async ({ to, message, type, schemaNam
   return { status: 'failed', errorMessage: `SMS provider not implemented: ${config.provider}` };
 };
 
+const sendResendEmail = async (params: {
+  to: string;
+  subject: string;
+  text: string;
+}): Promise<{ status: 'sent' | 'failed'; providerRef?: string; errorMessage?: string }> => {
+  const apiKey = process.env.EMAIL_RESEND_API_KEY?.trim();
+  const from = process.env.EMAIL_FROM?.trim();
+  if (!apiKey || !from) {
+    return { status: 'failed', errorMessage: 'Missing EMAIL_RESEND_API_KEY or EMAIL_FROM' };
+  }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from,
+      to: [params.to],
+      subject: params.subject,
+      text: params.text,
+    }),
+  });
+  const payload = (await response.json().catch(() => ({} as Record<string, unknown>))) as {
+    id?: string;
+  };
+  if (!response.ok) {
+    return { status: 'failed', errorMessage: `Resend error (${response.status})` };
+  }
+  return { status: 'sent', providerRef: payload.id ?? randomUUID() };
+};
+
+export const defaultEmailSender: EmailSender = async ({ to, subject, text }) => {
+  const provider = (process.env.EMAIL_PROVIDER ?? 'mock').trim().toLowerCase();
+  const mockEnabled = (process.env.EMAIL_MOCK ?? 'true').toLowerCase() === 'true';
+  if (provider === 'mock' || mockEnabled) {
+    console.info(`[email][mock] to=${to}`);
+    return { status: 'sent', providerRef: 'mock-email' };
+  }
+  if (provider === 'resend') {
+    return sendResendEmail({ to, subject, text });
+  }
+  return { status: 'failed', errorMessage: `Email provider not implemented: ${provider}` };
+};
+
 const buildQueueRef = (schemaName: string, notificationType: NotificationType): string => {
   return `notif:${schemaName}:${notificationType}:${randomUUID()}`;
 };
@@ -252,6 +307,30 @@ const toSmsJobData = (params: {
   };
 };
 
+const toEmailJobData = (params: {
+  queueRef: string;
+  to: string;
+  subject: string;
+  text: string;
+  recipientPhone: string;
+  notificationType: NotificationType;
+  schemaName: string;
+  relatedId?: string;
+}): NotificationEmailJobData => {
+  return {
+    type: 'send-email',
+    to: params.to,
+    subject: params.subject,
+    text: params.text,
+    notificationType: params.notificationType,
+    schemaName: params.schemaName,
+    relatedId: params.relatedId,
+    recipientPhone: params.recipientPhone,
+    recipientEmail: params.to,
+    queueRef: params.queueRef,
+  };
+};
+
 const toQrNotificationType = (alertType: TeacherQrAlertPayload['alertType']): NotificationType => {
   if (alertType === 'teacher_qr_mismatch') return 'teacher_qr_mismatch';
   if (alertType === 'teacher_qr_missing_scan') return 'teacher_qr_missing_scan';
@@ -263,11 +342,13 @@ const toQrNotificationType = (alertType: TeacherQrAlertPayload['alertType']): No
 
 export class NotificationsService {
   private readonly deps: Omit<NotificationsServiceDeps, 'smsQueue'> & {
-    smsQueue: Queue<NotificationSmsJobData>;
+    smsQueue: Queue<NotificationJobData>;
+    emailSender: EmailSender;
   };
 
   constructor(deps: Partial<Omit<NotificationsServiceDeps, 'smsQueue'>> & {
-    smsQueue: Queue<NotificationSmsJobData>;
+    smsQueue: Queue<NotificationJobData>;
+    emailSender?: EmailSender;
   }) {
     this.deps = {
       ...defaultDeps,
@@ -276,6 +357,7 @@ export class NotificationsService {
         ...defaultDeps.eventBus,
         ...(deps.eventBus ?? {}),
       },
+      emailSender: deps.emailSender ?? defaultEmailSender,
     };
   }
 
@@ -349,6 +431,8 @@ export class NotificationsService {
         }),
         {
           jobId: queueRef,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5_000 },
           removeOnComplete: true,
           removeOnFail: true,
         }
@@ -403,6 +487,8 @@ export class NotificationsService {
         }),
         {
           jobId: queueRef,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5_000 },
           removeOnComplete: true,
           removeOnFail: true,
         }
@@ -440,6 +526,7 @@ export class NotificationsService {
       if (!canSend.allowed) {
         await this.deps.repository.insertNotificationLog(tenantDb, {
           type: 'student_absent_parent',
+          channel: 'sms',
           recipientPhone: payload.parentPhone,
           message: '',
           status:
@@ -450,6 +537,19 @@ export class NotificationsService {
                 : canSend.reason === 'subscription_expired'
                   ? 'skipped_subscription_expired'
                   : 'skipped_no_active_subscription',
+          relatedId: payload.scheduleId,
+        });
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'student_absent_parent',
+          channel: 'email',
+          recipientPhone: payload.parentPhone,
+          message: '',
+          status:
+            canSend.reason === 'feature_disabled'
+              ? 'skipped_feature_disabled'
+              : canSend.reason === 'subscription_expired'
+                ? 'skipped_subscription_expired'
+                : 'skipped_no_active_subscription',
           relatedId: payload.scheduleId,
         });
         return;
@@ -481,6 +581,8 @@ export class NotificationsService {
         }),
         {
           jobId: queueRef,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5_000 },
           removeOnComplete: true,
           removeOnFail: true,
         }
@@ -488,6 +590,7 @@ export class NotificationsService {
 
       await this.deps.repository.insertNotificationLog(tenantDb, {
         type: 'student_absent_parent',
+        channel: 'sms',
         recipientPhone: canSend.parentPhone ?? payload.parentPhone,
         message,
         status: 'queued',
@@ -499,6 +602,98 @@ export class NotificationsService {
           studentId: payload.studentId,
           subscriptionId: canSend.subscriptionId,
           type: 'sms',
+        });
+      }
+
+      const emailAddress = canSend.parentEmail;
+      if (!emailAddress) {
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'student_absent_parent',
+          channel: 'email',
+          recipientPhone: canSend.parentPhone ?? payload.parentPhone,
+          message: '',
+          status: 'skipped_unknown',
+          relatedId: payload.scheduleId,
+        });
+        return;
+      }
+
+      const canSendEmail = await subscriptionsService
+        .canSendNotification({
+          studentId: payload.studentId,
+          tenantId: payload.tenantId,
+          schemaName: payload.schemaName,
+          type: 'email',
+        })
+        .catch(() => ({
+          allowed: true as const,
+          subscriptionId: canSend.subscriptionId,
+          parentPhone: canSend.parentPhone,
+          parentEmail: emailAddress,
+        }));
+
+      if (!canSendEmail.allowed) {
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'student_absent_parent',
+          channel: 'email',
+          recipientPhone: canSend.parentPhone ?? payload.parentPhone,
+          recipientEmail: emailAddress,
+          message: '',
+          status:
+            canSendEmail.reason === 'feature_disabled'
+              ? 'skipped_feature_disabled'
+              : canSendEmail.reason === 'subscription_expired'
+                ? 'skipped_subscription_expired'
+                : 'skipped_no_active_subscription',
+          relatedId: payload.scheduleId,
+        });
+        return;
+      }
+
+      const emailText = renderSmsTemplate(DEFAULT_STUDENT_ABSENT_EMAIL_TEMPLATE, {
+        studentFirstName: payload.studentFirstName,
+        subject: payload.subject,
+        date: payload.date,
+        schoolPhone: payload.schoolPhone,
+      });
+      const emailQueueRef = buildQueueRef(payload.schemaName, 'student_absent_parent');
+
+      await this.deps.smsQueue.add(
+        'send-email',
+        toEmailJobData({
+          queueRef: emailQueueRef,
+          to: emailAddress,
+          subject: DEFAULT_STUDENT_ABSENT_EMAIL_SUBJECT,
+          text: emailText,
+          recipientPhone: canSend.parentPhone ?? payload.parentPhone,
+          notificationType: 'student_absent_parent',
+          schemaName: payload.schemaName,
+          relatedId: payload.scheduleId,
+        }),
+        {
+          jobId: emailQueueRef,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5_000 },
+          removeOnComplete: true,
+          removeOnFail: true,
+        }
+      );
+
+      await this.deps.repository.insertNotificationLog(tenantDb, {
+        type: 'student_absent_parent',
+        channel: 'email',
+        recipientPhone: canSend.parentPhone ?? payload.parentPhone,
+        recipientEmail: emailAddress,
+        message: emailText,
+        status: 'queued',
+        providerRef: emailQueueRef,
+        relatedId: payload.scheduleId,
+      });
+      if (canSendEmail.subscriptionId) {
+        await subscriptionsService.incrementUsage({
+          studentId: payload.studentId,
+          subscriptionId: canSendEmail.subscriptionId,
+          type: 'email',
         });
       }
     });
@@ -534,6 +729,8 @@ export class NotificationsService {
         }),
         {
           jobId: queueRef,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5_000 },
           removeOnComplete: true,
           removeOnFail: true,
         }

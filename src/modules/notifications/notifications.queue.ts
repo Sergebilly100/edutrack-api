@@ -21,6 +21,20 @@ export type SmsSender = (params: {
   schemaName: string;
 }) => Promise<SmsResult>;
 
+export type EmailResult = {
+  status: 'sent' | 'failed';
+  providerRef?: string;
+  errorMessage?: string;
+};
+
+export type EmailSender = (params: {
+  to: string;
+  subject: string;
+  text: string;
+  type: NotificationType;
+  schemaName: string;
+}) => Promise<EmailResult>;
+
 export type NotificationSmsJobData = {
   type: 'send-sms';
   to: string;
@@ -37,25 +51,70 @@ export type NotificationSmsJobData = {
   };
 };
 
+export type NotificationEmailJobData = {
+  type: 'send-email';
+  to: string;
+  subject: string;
+  text: string;
+  notificationType: NotificationType;
+  schemaName: string;
+  relatedId?: string;
+  recipientPhone: string;
+  recipientEmail: string;
+  queueRef: string;
+};
+
+export type NotificationJobData = NotificationSmsJobData | NotificationEmailJobData;
+
 type NotificationsWorkerDeps = {
   repository: NotificationsRepository;
   smsSender: SmsSender;
+  emailSender: EmailSender;
 };
 
-export const processSendSmsJob = async (
-  data: NotificationSmsJobData,
+export const processNotificationJob = async (
+  data: NotificationJobData,
   deps: NotificationsWorkerDeps
 ): Promise<void> => {
   await withTenantSchema(data.schemaName, async (tenantDb) => {
     try {
-      const smsResult = await deps.smsSender({
+      if (data.type === 'send-sms') {
+        const smsResult = await deps.smsSender({
+          to: data.to,
+          message: data.message,
+          type: data.notificationType,
+          schemaName: data.schemaName,
+        });
+
+        if (smsResult.status !== 'sent') {
+          await deps.repository.updateNotificationLogStatus(tenantDb, {
+            queueRef: data.queueRef,
+            status: 'failed',
+          });
+          return;
+        }
+
+        await deps.repository.updateNotificationLogStatus(tenantDb, {
+          queueRef: data.queueRef,
+          status: 'sent',
+          providerRef: smsResult.providerRef,
+          sentAt: new Date(),
+        });
+
+        if (data.qrAlertSentUpdate) {
+          await deps.repository.markQrAlertSent(tenantDb, data.qrAlertSentUpdate);
+        }
+        return;
+      }
+
+      const emailResult = await deps.emailSender({
         to: data.to,
-        message: data.message,
+        subject: data.subject,
+        text: data.text,
         type: data.notificationType,
         schemaName: data.schemaName,
       });
-
-      if (smsResult.status !== 'sent') {
+      if (emailResult.status !== 'sent') {
         await deps.repository.updateNotificationLogStatus(tenantDb, {
           queueRef: data.queueRef,
           status: 'failed',
@@ -66,13 +125,9 @@ export const processSendSmsJob = async (
       await deps.repository.updateNotificationLogStatus(tenantDb, {
         queueRef: data.queueRef,
         status: 'sent',
-        providerRef: smsResult.providerRef,
+        providerRef: emailResult.providerRef,
         sentAt: new Date(),
       });
-
-      if (data.qrAlertSentUpdate) {
-        await deps.repository.markQrAlertSent(tenantDb, data.qrAlertSentUpdate);
-      }
     } catch (error) {
       await deps.repository.updateNotificationLogStatus(tenantDb, {
         queueRef: data.queueRef,
@@ -83,8 +138,8 @@ export const processSendSmsJob = async (
   });
 };
 
-export const createNotificationsQueue = (connection: Redis): Queue<NotificationSmsJobData> => {
-  return new Queue<NotificationSmsJobData>(NOTIFICATIONS_QUEUE_NAME, {
+export const createNotificationsQueue = (connection: Redis): Queue<NotificationJobData> => {
+  return new Queue<NotificationJobData>(NOTIFICATIONS_QUEUE_NAME, {
     connection,
   });
 };
@@ -92,11 +147,11 @@ export const createNotificationsQueue = (connection: Redis): Queue<NotificationS
 export const createNotificationsWorker = (
   connection: Redis,
   deps: NotificationsWorkerDeps
-): Worker<NotificationSmsJobData> => {
-  return new Worker<NotificationSmsJobData>(
+): Worker<NotificationJobData> => {
+  return new Worker<NotificationJobData>(
     NOTIFICATIONS_QUEUE_NAME,
-    async (job: Job<NotificationSmsJobData>) => {
-      await processSendSmsJob(job.data, deps);
+    async (job: Job<NotificationJobData>) => {
+      await processNotificationJob(job.data, deps);
     },
     {
       connection,

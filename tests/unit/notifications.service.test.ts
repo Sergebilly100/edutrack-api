@@ -412,4 +412,73 @@ describe('notifications.service', () => {
       expect.objectContaining({ status: 'skipped_feature_disabled' })
     );
   });
+
+  it('student.absent avec email parent actif queue aussi un email et incrémente email usage', async () => {
+    vi.spyOn(SubscriptionsService.prototype, 'canSendNotification')
+      .mockResolvedValueOnce({
+        allowed: true,
+        subscriptionId: 'sub-1',
+        parentPhone: '2250700000001',
+        parentEmail: 'parent@test.ci',
+      })
+      .mockResolvedValueOnce({
+        allowed: true,
+        subscriptionId: 'sub-1',
+        parentPhone: '2250700000001',
+        parentEmail: 'parent@test.ci',
+      });
+    const incrementSpy = vi
+      .spyOn(SubscriptionsService.prototype, 'incrementUsage')
+      .mockResolvedValue(undefined);
+
+    const service = new NotificationsService({
+      withTenantSchema,
+      repository,
+      eventBus,
+      smsQueue: smsQueue as never,
+    });
+
+    await service.handleStudentAbsent({
+      tenantId: 'tenant-1',
+      schemaName: 'school_sainte_marie',
+      studentId: 'student-1',
+      scheduleId: 'schedule-1',
+      studentFirstName: 'Awa',
+      parentPhone: '2250700000001',
+      subject: 'Maths',
+      date: '2026-04-14',
+      schoolPhone: '2250701234567',
+    });
+
+    expect(smsQueue.add).toHaveBeenNthCalledWith(
+      1,
+      'send-sms',
+      expect.objectContaining({ type: 'send-sms' }),
+      expect.any(Object)
+    );
+    expect(smsQueue.add).toHaveBeenNthCalledWith(
+      2,
+      'send-email',
+      expect.objectContaining({
+        type: 'send-email',
+        to: 'parent@test.ci',
+        notificationType: 'student_absent_parent',
+      }),
+      expect.any(Object)
+    );
+    expect(incrementSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'sms' })
+    );
+    expect(incrementSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'email' })
+    );
+    expect(repository.insertNotificationLog).toHaveBeenCalledWith(
+      tenantDb,
+      expect.objectContaining({
+        channel: 'email',
+        recipientEmail: 'parent@test.ci',
+        status: 'queued',
+      })
+    );
+  });
 });

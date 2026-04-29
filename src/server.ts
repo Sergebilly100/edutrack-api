@@ -22,7 +22,11 @@ import {
   createNotificationsWorker,
 } from './modules/notifications/notifications.queue.js';
 import { defaultRepository } from './modules/notifications/notifications.repository.js';
-import { NotificationsService, defaultSmsSender } from './modules/notifications/notifications.service.js';
+import {
+  NotificationsService,
+  defaultEmailSender,
+  defaultSmsSender,
+} from './modules/notifications/notifications.service.js';
 import roomsController from './modules/rooms/rooms.controller.js';
 import schoolController from './modules/school/school.controller.js';
 import subscriptionsController from './modules/subscriptions/subscriptions.controller.js';
@@ -48,6 +52,7 @@ const subscriptionsMaintenanceWorker = createSubscriptionMaintenanceWorker(subsc
 const notificationsWorker = createNotificationsWorker(notificationsRedis, {
   repository: defaultRepository,
   smsSender: defaultSmsSender,
+  emailSender: defaultEmailSender,
 });
 const notificationsService = new NotificationsService({
   smsQueue: notificationsQueue,

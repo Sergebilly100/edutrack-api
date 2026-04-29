@@ -8,7 +8,7 @@ vi.mock('../../src/shared/database/db.js', () => ({
   withTenantSchema: mocks.withTenantSchema,
 }));
 
-import { processSendSmsJob } from '../../src/modules/notifications/notifications.queue.js';
+import { processNotificationJob } from '../../src/modules/notifications/notifications.queue.js';
 
 const tenantDb = { execute: vi.fn() };
 
@@ -21,16 +21,18 @@ const repository = {
 };
 
 const smsSender = vi.fn();
+const emailSender = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.withTenantSchema.mockImplementation(async (_schemaName, callback) => callback(tenantDb));
   smsSender.mockResolvedValue({ status: 'sent', providerRef: 'provider-1' });
+  emailSender.mockResolvedValue({ status: 'sent', providerRef: 'email-provider-1' });
 });
 
 describe('notifications.queue', () => {
   it('marque sent et met qr_alert_sent=true après envoi réussi', async () => {
-    await processSendSmsJob(
+    await processNotificationJob(
       {
         type: 'send-sms',
         to: '2250700000001',
@@ -49,6 +51,7 @@ describe('notifications.queue', () => {
       {
         repository,
         smsSender,
+        emailSender,
       }
     );
 
@@ -70,7 +73,7 @@ describe('notifications.queue', () => {
   it('marque failed quand le provider retourne failed', async () => {
     smsSender.mockResolvedValueOnce({ status: 'failed', errorMessage: 'quota' });
 
-    await processSendSmsJob(
+    await processNotificationJob(
       {
         type: 'send-sms',
         to: '2250700000001',
@@ -83,6 +86,7 @@ describe('notifications.queue', () => {
       {
         repository,
         smsSender,
+        emailSender,
       }
     );
 

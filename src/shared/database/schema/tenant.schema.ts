@@ -353,7 +353,9 @@ export const notificationsLog = tenant.table(
   {
     id: uuid('id').defaultRandom().primaryKey(),
     type: notificationTypeEnum('type').notNull(),
+    channel: varchar('channel', { length: 10 }).notNull().default('sms'),
     recipientPhone: varchar('recipient_phone', { length: 20 }).notNull(),
+    recipientEmail: varchar('recipient_email', { length: 255 }),
     message: text('message').notNull(),
     status: notificationStatusEnum('status').notNull().default('queued'),
     providerRef: varchar('provider_ref', { length: 255 }),
@@ -364,6 +366,10 @@ export const notificationsLog = tenant.table(
       .defaultNow(),
   },
   (table) => ({
+    notificationsChannelCheck: check(
+      'notifications_log_channel_check',
+      sql`${table.channel} IN ('sms', 'email')`
+    ),
     notifStatusIdx: index('idx_notif_status')
       .on(table.status)
       .where(sql`${table.status} = 'queued'`),

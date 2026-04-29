@@ -25,9 +25,11 @@ export type QrAlertContext = LateAlertContext & {
 export type NotificationLogRow = {
   id: string;
   type: NotificationType;
+  channel: 'sms' | 'email';
   message: string;
   sent_at: string | null;
-  recipient_phone: string;
+  recipient_phone: string | null;
+  recipient_email: string | null;
   status:
     | 'queued'
     | 'sent'
@@ -54,6 +56,8 @@ export type NotificationsRepository = {
     params: {
       type: NotificationType;
       recipientPhone: string;
+      channel?: 'sms' | 'email';
+      recipientEmail?: string;
       message: string;
       status:
         | 'queued'
@@ -211,7 +215,9 @@ export const defaultRepository: NotificationsRepository = {
     await asExecutor(tenantDb).execute(sql`
       INSERT INTO notifications_log (
         type,
+        channel,
         recipient_phone,
+        recipient_email,
         message,
         status,
         provider_ref,
@@ -220,7 +226,9 @@ export const defaultRepository: NotificationsRepository = {
       )
       VALUES (
         ${params.type},
+        ${params.channel ?? 'sms'},
         ${params.recipientPhone},
+        ${params.recipientEmail ?? null},
         ${params.message},
         ${params.status},
         ${params.providerRef ?? null},
@@ -264,9 +272,11 @@ export const defaultRepository: NotificationsRepository = {
       SELECT
         id::text AS id,
         type::text AS type,
+        channel::text AS channel,
         message,
         sent_at::text AS sent_at,
         recipient_phone,
+        recipient_email,
         status::text AS status
       FROM notifications_log
       ${whereClause}
