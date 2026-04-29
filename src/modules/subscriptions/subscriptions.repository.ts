@@ -31,6 +31,10 @@ type ParentListRow = {
   starts_at: string | null;
   total_amount_fcfa: number | null;
   duration_months: number | null;
+  created_at: string | null;
+  active_total_amount_fcfa: number | null;
+  active_duration_months: number | null;
+  active_ends_at: string | null;
   students: Array<{ id: string; full_name: string }>;
 };
 
@@ -57,9 +61,12 @@ type SubscriptionRow = {
   auto_renew_alert: boolean;
   renewed_count: number;
   created_at: string;
+  cancelled_at: string | null;
+  cancelled_by_name: string | null;
 };
 
 type StudentRow = { id: string; full_name: string };
+type ActorRow = { id: string };
 type ClassCatalogRow = { id: string; name: string; students_count: number };
 type ClassStudentCatalogRow = { id: string; full_name: string; class_id: string; class_name: string };
 type PaymentRow = {
@@ -85,6 +92,28 @@ const EDUTRACK_COMMISSION_PCT = 15;
 
 export class SubscriptionsRepository {
   constructor(private readonly tenantDb: TenantDb) {}
+
+  async resolveActorUserId(actorUserId: string): Promise<string | null> {
+    const actorResult = await this.tenantDb.execute<ActorRow>(sql`
+      SELECT id::text AS id
+      FROM users
+      WHERE id = ${actorUserId}::uuid
+      LIMIT 1
+    `);
+    const actor = actorResult.rows[0]?.id;
+    if (actor) {
+      return actor;
+    }
+
+    const fallbackResult = await this.tenantDb.execute<ActorRow>(sql`
+      SELECT id::text AS id
+      FROM users
+      WHERE role IN ('director', 'staff')
+      ORDER BY created_at ASC
+      LIMIT 1
+    `);
+    return fallbackResult.rows[0]?.id ?? null;
+  }
 
   async getTenantIdBySchemaName(schemaName: string): Promise<string | null> {
     const result = await publicDb.execute<{ id: string }>(sql`
@@ -216,14 +245,28 @@ export class SubscriptionsRepository {
     limit: number;
     search?: string;
     status?: SubscriptionStatus;
+    month?: string;
   }): Promise<{ rows: ParentListRow[]; total: number }> {
     const offset = (params.page - 1) * params.limit;
     const searchLike = params.search ? `%${params.search}%` : null;
     const statusFilter = params.status ?? null;
+    const monthDate = params.month ? `${params.month}-01` : null;
     const countResult = await this.tenantDb.execute<{ total: number }>(sql`
+      WITH latest_sub AS (
+        SELECT DISTINCT ON (ps.parent_id)
+          ps.parent_id,
+          ps.status,
+          ps.created_at
+        FROM parent_subscriptions ps
+        WHERE (${monthDate}::date IS NULL OR DATE_TRUNC('month', ps.created_at)::date = ${monthDate}::date)
+        ORDER BY ps.parent_id, ps.created_at DESC
+      )
       SELECT COUNT(*)::int AS total
       FROM parents p
+      LEFT JOIN latest_sub ls ON ls.parent_id = p.id
       WHERE (${searchLike}::text IS NULL OR p.full_name ILIKE ${searchLike} OR p.phone ILIKE ${searchLike})
+        AND (${statusFilter}::text IS NULL OR ls.status::text = ${statusFilter})
+        AND (${monthDate}::date IS NULL OR ls.created_at IS NOT NULL)
     `);
     const total = countResult.rows[0]?.total ?? 0;
 
@@ -236,9 +279,21 @@ export class SubscriptionsRepository {
           ps.starts_at,
           ps.ends_at,
           ps.total_amount_fcfa,
-          ps.duration_months
+          ps.duration_months,
+          ps.created_at
         FROM parent_subscriptions ps
+        WHERE (${monthDate}::date IS NULL OR DATE_TRUNC('month', ps.created_at)::date = ${monthDate}::date)
         ORDER BY ps.parent_id, ps.created_at DESC
+      ),
+      active_rollup AS (
+        SELECT
+          parent_id,
+          SUM(total_amount_fcfa)::int AS active_total_amount_fcfa,
+          SUM(duration_months)::int AS active_duration_months,
+          MAX(ends_at)::text AS active_ends_at
+        FROM parent_subscriptions
+        WHERE status = 'active'
+        GROUP BY parent_id
       )
       SELECT
         p.id::text AS parent_id,
@@ -251,6 +306,10 @@ export class SubscriptionsRepository {
         ls.starts_at::text AS starts_at,
         ls.total_amount_fcfa,
         ls.duration_months,
+        ls.created_at::text AS created_at,
+        ar.active_total_amount_fcfa,
+        ar.active_duration_months,
+        ar.active_ends_at,
         COALESCE(
           (
             SELECT json_agg(json_build_object('id', s.id::text, 'full_name', CONCAT(s.first_name, ' ', s.last_name)))
@@ -262,8 +321,10 @@ export class SubscriptionsRepository {
         ) AS students
       FROM parents p
       LEFT JOIN latest_sub ls ON ls.parent_id = p.id
+      LEFT JOIN active_rollup ar ON ar.parent_id = p.id
       WHERE (${searchLike}::text IS NULL OR p.full_name ILIKE ${searchLike} OR p.phone ILIKE ${searchLike})
         AND (${statusFilter}::text IS NULL OR ls.status::text = ${statusFilter})
+        AND (${monthDate}::date IS NULL OR ls.created_at IS NOT NULL)
       ORDER BY p.created_at DESC
       LIMIT ${params.limit}
       OFFSET ${offset}
@@ -472,24 +533,54 @@ export class SubscriptionsRepository {
   }
 
   async getParentSubscriptions(parentId: string): Promise<SubscriptionRow[]> {
-    const result = await this.tenantDb.execute<SubscriptionRow>(sql`
-      SELECT
-        id::text,
-        status::text AS status,
-        unit_price_fcfa,
-        student_count,
-        total_amount_fcfa,
-        duration_months,
-        starts_at::text,
-        ends_at::text,
-        auto_renew_alert,
-        renewed_count,
-        created_at::text
-      FROM parent_subscriptions
-      WHERE parent_id = ${parentId}::uuid
-      ORDER BY created_at DESC
-    `);
-    return result.rows;
+    try {
+      const result = await this.tenantDb.execute<SubscriptionRow>(sql`
+        SELECT
+          id::text,
+          status::text AS status,
+          unit_price_fcfa,
+          student_count,
+          total_amount_fcfa,
+          duration_months,
+          starts_at::text,
+          ends_at::text,
+          auto_renew_alert,
+          renewed_count,
+          created_at::text,
+          cancelled_at::text,
+          (
+            SELECT u.name
+            FROM users u
+            WHERE u.id = parent_subscriptions.cancelled_by
+            LIMIT 1
+          ) AS cancelled_by_name
+        FROM parent_subscriptions
+        WHERE parent_id = ${parentId}::uuid
+        ORDER BY created_at DESC
+      `);
+      return result.rows;
+    } catch {
+      const fallback = await this.tenantDb.execute<SubscriptionRow>(sql`
+        SELECT
+          id::text,
+          status::text AS status,
+          unit_price_fcfa,
+          student_count,
+          total_amount_fcfa,
+          duration_months,
+          starts_at::text,
+          ends_at::text,
+          auto_renew_alert,
+          renewed_count,
+          created_at::text,
+          NULL::text AS cancelled_at,
+          NULL::text AS cancelled_by_name
+        FROM parent_subscriptions
+        WHERE parent_id = ${parentId}::uuid
+        ORDER BY created_at DESC
+      `);
+      return fallback.rows;
+    }
   }
 
   async getSubscriptionStudents(subscriptionId: string): Promise<StudentRow[]> {
@@ -541,21 +632,44 @@ export class SubscriptionsRepository {
     return result.rows[0] ?? null;
   }
 
-  async updateSubscriptionStatus(subscriptionId: string, status: SubscriptionStatus): Promise<void> {
-    await this.tenantDb.execute(sql`
-      UPDATE parent_subscriptions
-      SET status = ${status}
-      WHERE id = ${subscriptionId}::uuid
-    `);
+  async updateSubscriptionStatus(
+    subscriptionId: string,
+    status: SubscriptionStatus,
+    actorUserId?: string
+  ): Promise<void> {
+    try {
+      await this.tenantDb.execute(sql`
+        UPDATE parent_subscriptions
+        SET status = ${status}
+        ${status === 'cancelled'
+          ? sql`, cancelled_at = NOW(), cancelled_by = ${actorUserId ?? null}::uuid`
+          : sql``}
+        WHERE id = ${subscriptionId}::uuid
+      `);
+    } catch {
+      await this.tenantDb.execute(sql`
+        UPDATE parent_subscriptions
+        SET status = ${status}
+        WHERE id = ${subscriptionId}::uuid
+      `);
+    }
   }
 
   async updateParentPassword(parentId: string, passwordHash: string): Promise<void> {
-    await this.tenantDb.execute(sql`
-      UPDATE parents
-      SET password_hash = ${passwordHash},
-          must_change_password = true
-      WHERE id = ${parentId}::uuid
-    `);
+    try {
+      await this.tenantDb.execute(sql`
+        UPDATE parents
+        SET password_hash = ${passwordHash},
+            must_change_password = true
+        WHERE id = ${parentId}::uuid
+      `);
+    } catch {
+      await this.tenantDb.execute(sql`
+        UPDATE parents
+        SET password_hash = ${passwordHash}
+        WHERE id = ${parentId}::uuid
+      `);
+    }
   }
 
   async computeMonthlyRevenue(month: string): Promise<{ total_subscriptions_fcfa: number; subscription_count: number }> {
@@ -567,6 +681,7 @@ export class SubscriptionsRepository {
       FROM subscription_payments sp
       INNER JOIN parent_subscriptions ps ON ps.id = sp.subscription_id
       WHERE DATE_TRUNC('month', sp.paid_at)::date = ${monthDate}::date
+        AND ps.status <> 'cancelled'
     `);
     return {
       total_subscriptions_fcfa: Math.round(Number(result.rows[0]?.total ?? 0)),
@@ -595,9 +710,11 @@ export class SubscriptionsRepository {
       WHERE DATE_TRUNC('month', created_at)::date = ${monthDate}::date
     `);
     const collectedResult = await this.tenantDb.execute<{ total: string | number }>(sql`
-      SELECT COALESCE(SUM(amount_fcfa), 0) AS total
-      FROM subscription_payments
-      WHERE DATE_TRUNC('month', paid_at)::date = ${monthDate}::date
+      SELECT COALESCE(SUM(sp.amount_fcfa), 0) AS total
+      FROM subscription_payments sp
+      INNER JOIN parent_subscriptions ps ON ps.id = sp.subscription_id
+      WHERE DATE_TRUNC('month', sp.paid_at)::date = ${monthDate}::date
+        AND ps.status <> 'cancelled'
     `);
     const prorated = await this.computeMonthlyRevenue(params.month);
     const paidResult = await publicDb.execute<{ paid: number }>(sql`
@@ -683,6 +800,7 @@ export class SubscriptionsRepository {
     tenantId: string;
     periodMonth: string;
     amountFcfa: number;
+    paymentMethod?: 'cash' | 'momo_mtn' | 'momo_orange' | 'bank_transfer';
     notes?: string;
     commissionPct: number;
     dueFcfa: number;
@@ -769,6 +887,7 @@ export class SubscriptionsRepository {
       `);
       const afterRow = after.rows[0]!;
 
+      const paidBefore = beforeRow?.commission_paid_fcfa ?? 0;
       await tx.execute(sql`
         INSERT INTO public.audit_financial_events (
           tenant_id,
@@ -786,13 +905,146 @@ export class SubscriptionsRepository {
           ${params.action},
           ${params.idempotencyKey}::uuid,
           ${beforeRow ? JSON.stringify(beforeRow) : null}::jsonb,
-          ${JSON.stringify({ success: true })}::jsonb
+          ${JSON.stringify({
+            success: true,
+            period_month: params.periodMonth,
+            amount_fcfa: params.amountFcfa,
+            payment_method: params.paymentMethod ?? null,
+            notes: params.notes ?? null,
+            commission_paid_before_fcfa: paidBefore,
+            commission_paid_after_fcfa: afterRow.commission_paid_fcfa,
+          })}::jsonb
         )
       `);
 
       void afterRow;
       return { replayed: false };
     });
+  }
+
+  async listCommissionPaymentsForMonth(params: {
+    tenantId: string;
+    month: string;
+  }): Promise<Array<{ id: string; period_month: string; amount_fcfa: number; notes: string | null; created_at: string; payment_method: string | null }>> {
+    const result = await publicDb.execute<{
+      id: string;
+      action: string;
+      period_month: string;
+      amount_fcfa: number;
+      notes: string | null;
+      created_at: string;
+      payment_method: string | null;
+      payload_before: unknown;
+      payload_after: unknown;
+    }>(sql`
+      SELECT
+        id::text AS id,
+        action,
+        payload_after->>'period_month' AS period_month,
+        COALESCE((payload_after->>'amount_fcfa')::int, 0) AS amount_fcfa,
+        payload_after->>'notes' AS notes,
+        payload_after->>'payment_method' AS payment_method,
+        created_at::text AS created_at,
+        payload_before,
+        payload_after
+      FROM public.audit_financial_events
+      WHERE tenant_id = ${params.tenantId}::uuid
+        AND action IN ('subscriptions.record_commission_payment', 'admin.record_commission_received')
+        AND LEFT(COALESCE(payload_after->>'period_month', ''), 7) = ${params.month}
+      ORDER BY created_at DESC
+    `);
+    if (result.rows.length > 0) {
+      const mapped = result.rows.map((row) => {
+        if (row.amount_fcfa > 0) {
+          return {
+            id: row.id,
+            period_month: row.period_month,
+            amount_fcfa: row.amount_fcfa,
+            notes: row.notes,
+            created_at: row.created_at,
+            payment_method: row.payment_method,
+          };
+        }
+
+        const before =
+          typeof row.payload_before === 'object' && row.payload_before !== null
+            ? (row.payload_before as { commission_paid_fcfa?: number })
+            : null;
+        const after =
+          typeof row.payload_after === 'object' && row.payload_after !== null
+            ? (row.payload_after as { commission_paid_fcfa?: number })
+            : null;
+        const fallbackAmount = Math.max(
+          0,
+          Number(after?.commission_paid_fcfa ?? 0) - Number(before?.commission_paid_fcfa ?? 0)
+        );
+
+        return {
+          id: row.id,
+          period_month: row.period_month,
+          amount_fcfa: fallbackAmount,
+          notes: row.notes,
+          created_at: row.created_at,
+          payment_method: row.payment_method,
+        };
+      });
+
+      // Reconcile legacy carried balance: if the first event of the month already had paid amount,
+      // expose it as an opening line so monthly reversement total matches commission_paid_fcfa.
+      const ascByCreatedAt = [...result.rows].sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+      const firstRow = ascByCreatedAt[0];
+      const firstBefore =
+        typeof firstRow?.payload_before === 'object' && firstRow.payload_before !== null
+          ? Number((firstRow.payload_before as { commission_paid_fcfa?: number }).commission_paid_fcfa ?? 0)
+          : 0;
+      if (firstBefore > 0) {
+        const openingLine = {
+          id: `opening-${params.tenantId}-${params.month}`,
+          period_month: params.month,
+          amount_fcfa: firstBefore,
+          notes: 'Solde reporté (reversements antérieurs)',
+          created_at: firstRow?.created_at ?? `${params.month}-01T00:00:00.000Z`,
+          payment_method: null as string | null,
+        };
+        return [...mapped, openingLine];
+      }
+
+      return mapped;
+    }
+
+    const monthDate = `${params.month}-01`;
+    const fallback = await publicDb.execute<{
+      period_month: string;
+      amount_fcfa: number;
+      created_at: string;
+    }>(sql`
+      SELECT
+        period_month::text AS period_month,
+        commission_paid_fcfa::int AS amount_fcfa,
+        COALESCE(last_payment_at, updated_at)::text AS created_at
+      FROM public.edutrack_commission_records
+      WHERE tenant_id = ${params.tenantId}::uuid
+        AND period_month = ${monthDate}::date
+        AND commission_paid_fcfa > 0
+      LIMIT 1
+    `);
+
+    if (!fallback.rows[0]) {
+      return [];
+    }
+
+    return [
+      {
+        id: `fallback-${params.tenantId}-${params.month}`,
+        period_month: fallback.rows[0].period_month.slice(0, 7),
+        amount_fcfa: fallback.rows[0].amount_fcfa,
+        notes: 'Historique importé (reversement cumulé)',
+        created_at: fallback.rows[0].created_at,
+        payment_method: null,
+      },
+    ];
   }
 
   async listRevenueHistory(params: { tenantId: string; months: number }): Promise<
@@ -825,7 +1077,7 @@ export class SubscriptionsRepository {
       const date = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
       const month = monthKeyInBusinessTimezone(date);
       const summary = await this.getRevenueSummary({ tenantId: params.tenantId, month });
-      const due = Math.round((summary.monthly_revenue_prorated_fcfa * EDUTRACK_COMMISSION_PCT) / 100);
+      const due = Math.round((summary.total_collected_fcfa * EDUTRACK_COMMISSION_PCT) / 100);
       const remaining = Math.max(0, due - summary.commission_paid_fcfa);
       items.push({
         month,

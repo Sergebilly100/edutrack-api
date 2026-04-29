@@ -89,12 +89,13 @@ export const smsFeatureConfigBodySchema = z
   );
 
 export const smsFeatureMonthQuerySchema = z.object({
-  month: z.string().regex(/^\d{4}-\d{2}$/),
+  month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
 });
 
 export const smsFeatureCommissionPaymentBodySchema = z.object({
   period_month: z.string().regex(/^\d{4}-\d{2}$/),
   amount_fcfa: z.coerce.number().int().min(1),
+  payment_method: z.enum(['cash', 'momo_mtn', 'momo_orange', 'bank_transfer']).optional(),
   notes: z.string().trim().max(1000).optional(),
   idempotency_key: z.string().uuid(),
 });

@@ -255,6 +255,7 @@ type ImpersonationResult = {
 };
 
 const DEFAULT_TRIAL_DAYS = 14;
+const EDUTRACK_COMMISSION_PCT = 15;
 const SCHEMA_NAME_REGEX = /^[a-z][a-z0-9_]{2,63}$/;
 const TENANT_METRICS_CONCURRENCY = 10;
 const MAX_USERS_BY_PLAN: Record<TenantListItem['plan'], number> = {
@@ -2621,7 +2622,13 @@ export const syncSchoolSmsCommission = async (
 export const recordSchoolCommissionReceived = async (
   publicDb: TenantDb,
   tenantId: string,
-  payload: { period_month: string; amount_fcfa: number; notes?: string; idempotency_key: string },
+  payload: {
+    period_month: string;
+    amount_fcfa: number;
+    payment_method?: 'cash' | 'momo_mtn' | 'momo_orange' | 'bank_transfer';
+    notes?: string;
+    idempotency_key: string;
+  },
   actor: { actorId: string | null; actorRole: string }
 ): Promise<{
   period_month: string;
@@ -2706,6 +2713,9 @@ export const recordSchoolCommissionReceived = async (
       commission_paid_fcfa: row.commission_paid_fcfa,
       commission_remaining_fcfa: remaining,
       overpaid,
+      amount_fcfa: payload.amount_fcfa,
+      payment_method: payload.payment_method ?? null,
+      notes: payload.notes ?? null,
     };
 
     await tx.execute(sql`
@@ -2731,6 +2741,102 @@ export const recordSchoolCommissionReceived = async (
 
     return { ...payloadAfter, idempotency_replayed: false };
   });
+};
+
+export const listSchoolCommissionPayments = async (
+  publicDb: TenantDb,
+  tenantId: string,
+  month?: string
+): Promise<
+  Array<{
+    id: string;
+    period_month: string;
+    amount_fcfa: number;
+    payment_method: string | null;
+    notes: string | null;
+    created_at: string;
+  }>
+> => {
+  const targetMonth = month ?? monthFromDate(new Date());
+  const result = await publicDb.execute<{
+    id: string;
+    period_month: string;
+    amount_fcfa: number;
+    payment_method: string | null;
+    notes: string | null;
+    created_at: string;
+  }>(sql`
+    SELECT
+      id::text AS id,
+      payload_after->>'period_month' AS period_month,
+      COALESCE((payload_after->>'amount_fcfa')::int, 0) AS amount_fcfa,
+      payload_after->>'payment_method' AS payment_method,
+      payload_after->>'notes' AS notes,
+      created_at::text AS created_at,
+      payload_before,
+      payload_after
+    FROM public.audit_financial_events
+    WHERE action = 'admin.record_commission_received'
+      AND tenant_id = ${tenantId}::uuid
+      AND LEFT(COALESCE(payload_after->>'period_month', ''), 7) = ${targetMonth}
+    ORDER BY created_at DESC
+  `);
+  const rows = getRows<{
+    id: string;
+    period_month: string;
+    amount_fcfa: number;
+    payment_method: string | null;
+    notes: string | null;
+    created_at: string;
+    payload_before?: unknown;
+    payload_after?: unknown;
+  }>(result);
+
+  const mapped = rows.map((row) => {
+    if (row.amount_fcfa > 0) {
+      return row;
+    }
+    const before =
+      typeof row.payload_before === 'object' && row.payload_before !== null
+        ? (row.payload_before as { commission_paid_fcfa?: number })
+        : null;
+    const after =
+      typeof row.payload_after === 'object' && row.payload_after !== null
+        ? (row.payload_after as { commission_paid_fcfa?: number })
+        : null;
+    const fallbackAmount = Math.max(
+      0,
+      Number(after?.commission_paid_fcfa ?? 0) - Number(before?.commission_paid_fcfa ?? 0)
+    );
+    return {
+      ...row,
+      amount_fcfa: fallbackAmount,
+    };
+  });
+
+  const ascByCreatedAt = [...rows].sort(
+    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  );
+  const firstRow = ascByCreatedAt[0];
+  const firstBefore =
+    typeof firstRow?.payload_before === 'object' && firstRow.payload_before !== null
+      ? Number((firstRow.payload_before as { commission_paid_fcfa?: number }).commission_paid_fcfa ?? 0)
+      : 0;
+  if (firstBefore > 0) {
+    return [
+      ...mapped,
+      {
+        id: `opening-${tenantId}-${targetMonth}`,
+        period_month: targetMonth,
+        amount_fcfa: firstBefore,
+        payment_method: null,
+        notes: 'Solde reporté (reversements antérieurs)',
+        created_at: firstRow?.created_at ?? `${targetMonth}-01T00:00:00.000Z`,
+      },
+    ];
+  }
+
+  return mapped;
 };
 
 export const getSchoolSmsFeatureStats = async (
@@ -2771,7 +2877,7 @@ export const getSchoolSmsFeatureStats = async (
     async (tenantDb) => {
       const repo = new SubscriptionsRepository(tenantDb);
       const current = await repo.getRevenueSummary({ tenantId, month: currentMonth });
-      const due = Math.round((current.monthly_revenue_prorated_fcfa * config.commission_pct) / 100);
+      const due = Math.round((current.total_collected_fcfa * EDUTRACK_COMMISSION_PCT) / 100);
       const currentStats = {
         subscriptions_active: current.subscriptions_active_count,
         subscriptions_new: current.subscriptions_new_this_month,
@@ -2794,7 +2900,7 @@ export const getSchoolSmsFeatureStats = async (
         const date = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - i, 1));
         const month = monthFromDate(date);
         const summary = await repo.getRevenueSummary({ tenantId, month });
-        const commissionDue = Math.round((summary.monthly_revenue_prorated_fcfa * config.commission_pct) / 100);
+        const commissionDue = Math.round((summary.total_collected_fcfa * EDUTRACK_COMMISSION_PCT) / 100);
         historyItems.push({
           month,
           subscriptions_active: summary.subscriptions_active_count,
@@ -2829,14 +2935,18 @@ export const getSchoolSmsFeatureStats = async (
 };
 
 export const getSmsFeatureGlobalStats = async (
-  publicDb: TenantDb
+  publicDb: TenantDb,
+  month?: string
 ): Promise<
   Array<{
     school_name: string;
     tenant_id: string;
     subscriptions_active: number;
+    total_collected_fcfa: number;
+    sms_sent_this_month: number;
     commission_remaining_fcfa: number;
     is_overdue: boolean;
+    last_payment_at: string | null;
   }>
 > => {
   const rows = await publicDb.execute<{ tenant_id: string; school_name: string; schema_name: string }>(sql`
@@ -2848,17 +2958,45 @@ export const getSmsFeatureGlobalStats = async (
   `);
 
   const schools = getRows<{ tenant_id: string; school_name: string; schema_name: string }>(rows);
+  const targetMonth = month ?? monthFromDate(new Date());
   const resolved = await Promise.all(
     schools.map(async (school) => {
       try {
-        const stats = await getSchoolSmsFeatureStats(publicDb, school.tenant_id);
-        const remaining = stats.current_month.commission_remaining_fcfa;
+        const metrics = await withTenantSchema(school.schema_name, async (tenantDb) => {
+          const repo = new SubscriptionsRepository(tenantDb);
+          const summary = await repo.getRevenueSummary({ tenantId: school.tenant_id, month: targetMonth });
+          const due = Math.round((summary.total_collected_fcfa * EDUTRACK_COMMISSION_PCT) / 100);
+          const smsResult = await tenantDb.execute<{ total: string | number }>(sql`
+            SELECT COALESCE(SUM(sms_sent_count), 0) AS total
+            FROM sms_usage_log
+            WHERE month = ${targetMonth}
+          `);
+          return {
+            subscriptions_active: summary.subscriptions_active_count,
+            total_collected_fcfa: summary.total_collected_fcfa,
+            sms_sent_this_month: Math.round(parseNumeric(getRows<{ total: string | number }>(smsResult)[0]?.total ?? 0)),
+            commission_remaining_fcfa: Math.max(0, due - summary.commission_paid_fcfa),
+          };
+        });
+        const monthDate = `${targetMonth}-01`;
+        const lastPaymentResult = await publicDb.execute<{ last_payment_at: string | null }>(sql`
+          SELECT last_payment_at::text
+          FROM public.edutrack_commission_records
+          WHERE tenant_id = ${school.tenant_id}::uuid
+            AND period_month = ${monthDate}::date
+          LIMIT 1
+        `);
+        const lastPaymentAt = lastPaymentResult.rows[0]?.last_payment_at ?? null;
+        const remaining = metrics.commission_remaining_fcfa;
         return {
           school_name: school.school_name,
           tenant_id: school.tenant_id,
-          subscriptions_active: stats.current_month.subscriptions_active,
+          subscriptions_active: metrics.subscriptions_active,
+          total_collected_fcfa: metrics.total_collected_fcfa,
+          sms_sent_this_month: metrics.sms_sent_this_month,
           commission_remaining_fcfa: remaining,
           is_overdue: remaining > 0,
+          last_payment_at: lastPaymentAt,
         };
       } catch {
         return null;

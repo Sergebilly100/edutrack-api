@@ -33,6 +33,14 @@ const EDUTRACK_COMMISSION_PCT = 15;
 export class SubscriptionsService {
   constructor(private readonly repository: SubscriptionsRepository) {}
 
+  private async resolveActorUserId(actorUserId: string): Promise<string> {
+    const resolved = await this.repository.resolveActorUserId(actorUserId);
+    if (!resolved) {
+      throw new SubscriptionsModuleError('No eligible school user found to record this action', 422, 'NO_ELIGIBLE_ACTOR');
+    }
+    return resolved;
+  }
+
   async canSendNotification(input: {
     studentId: string;
     tenantId?: string;
@@ -93,9 +101,15 @@ export class SubscriptionsService {
     const in30Iso = businessDateFromNowPlusDays(30);
     return {
       data: result.rows.map((row) => {
+        const isActive = query.month ? false : row.status === 'active';
+        const resolvedDurationMonths =
+          isActive && row.active_duration_months ? row.active_duration_months : row.duration_months;
+        const resolvedTotalAmount =
+          isActive && row.active_total_amount_fcfa ? row.active_total_amount_fcfa : row.total_amount_fcfa;
+        const resolvedEndsAt = isActive && row.active_ends_at ? row.active_ends_at : row.ends_at;
         const monthlyAmount =
-          row.total_amount_fcfa && row.duration_months
-            ? Math.round(row.total_amount_fcfa / row.duration_months)
+          resolvedTotalAmount && resolvedDurationMonths
+            ? Math.round(resolvedTotalAmount / resolvedDurationMonths)
             : null;
         return {
           parent_id: row.parent_id,
@@ -107,9 +121,12 @@ export class SubscriptionsService {
                 id: row.subscription_id,
                 status: row.status,
                 starts_at: row.starts_at,
-                ends_at: row.ends_at,
+                ends_at: resolvedEndsAt,
+                created_at: row.created_at,
+                duration_months: resolvedDurationMonths,
+                total_amount_fcfa: resolvedTotalAmount,
                 monthly_amount_fcfa: monthlyAmount,
-                expires_soon: Boolean(row.ends_at && row.ends_at < in30Iso),
+                expires_soon: Boolean(resolvedEndsAt && resolvedEndsAt < in30Iso),
               }
             : null,
           students: row.students ?? [],
@@ -168,6 +185,7 @@ export class SubscriptionsService {
     const tempPassword = randomFourDigits();
     const passwordHash = await argon2.hash(tempPassword);
     let parentId: string;
+    const actorUserId = await this.resolveActorUserId(input.actorUserId);
     try {
       parentId = await this.repository.createParent({
         fullName: input.payload.full_name,
@@ -196,7 +214,7 @@ export class SubscriptionsService {
       durationMonths: input.payload.duration_months,
       startsAt,
       endsAt,
-      createdBy: input.actorUserId,
+      createdBy: actorUserId,
     });
 
     await this.repository.createParentStudentLinks({
@@ -210,7 +228,7 @@ export class SubscriptionsService {
         subscriptionId,
         amountFcfa: totalAmount,
         paymentMethod: input.payload.payment_method,
-        recordedBy: input.actorUserId,
+        recordedBy: actorUserId,
       });
     }
 
@@ -279,6 +297,7 @@ export class SubscriptionsService {
       latest.ends_at,
       input.payload.duration_months
     );
+    const actorUserId = await this.resolveActorUserId(input.actorUserId);
     const totalAmount = feature.sms_unit_price_fcfa * students.length * input.payload.duration_months;
     const subscriptionId = await this.repository.createSubscription({
       parentId: input.parentId,
@@ -288,7 +307,7 @@ export class SubscriptionsService {
       durationMonths: input.payload.duration_months,
       startsAt,
       endsAt,
-      createdBy: input.actorUserId,
+      createdBy: actorUserId,
       autoRenewAlert: latest.auto_renew_alert,
     });
     await this.repository.createParentStudentLinks({
@@ -301,14 +320,15 @@ export class SubscriptionsService {
         subscriptionId,
         amountFcfa: totalAmount,
         paymentMethod: input.payload.payment_method,
-        recordedBy: input.actorUserId,
+        recordedBy: actorUserId,
       });
     }
     return { id: subscriptionId, starts_at: startsAt, ends_at: endsAt, total_amount_fcfa: totalAmount };
   }
 
-  async cancelSubscription(subscriptionId: string): Promise<void> {
-    await this.repository.updateSubscriptionStatus(subscriptionId, 'cancelled');
+  async cancelSubscription(subscriptionId: string, actorUserId: string): Promise<void> {
+    const resolvedActorId = await this.resolveActorUserId(actorUserId);
+    await this.repository.updateSubscriptionStatus(subscriptionId, 'cancelled', resolvedActorId);
   }
 
   async getSchoolSmsFeatureSettings(schemaName: string) {
@@ -362,7 +382,7 @@ export class SubscriptionsService {
     const feature = await this.repository.getSmsFeatureByTenantId(tenantId);
     const summary = await this.repository.getRevenueSummary({ tenantId, month: targetMonth });
     const commissionPct = EDUTRACK_COMMISSION_PCT;
-    const due = Math.round((summary.monthly_revenue_prorated_fcfa * commissionPct) / 100);
+    const due = Math.round((summary.total_collected_fcfa * commissionPct) / 100);
     return {
       month: targetMonth,
       subscriptions_active_count: summary.subscriptions_active_count,
@@ -385,10 +405,19 @@ export class SubscriptionsService {
     return this.repository.listRevenueHistory({ tenantId, months });
   }
 
+  async revenuePayments(schemaName: string, month: string) {
+    const tenantId = await this.repository.getTenantIdBySchemaName(schemaName);
+    if (!tenantId) {
+      throw new SubscriptionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
+    }
+    return this.repository.listCommissionPaymentsForMonth({ tenantId, month });
+  }
+
   async recordCommissionPayment(input: {
     schemaName: string;
     periodMonth: string;
     amountFcfa: number;
+    paymentMethod?: 'cash' | 'momo_mtn' | 'momo_orange' | 'bank_transfer';
     notes?: string;
     idempotencyKey: string;
     actorId: string;
@@ -417,6 +446,7 @@ export class SubscriptionsService {
       tenantId,
       periodMonth: input.periodMonth,
       amountFcfa: input.amountFcfa,
+      paymentMethod: input.paymentMethod,
       notes: input.notes,
       commissionPct,
       dueFcfa: summary.commission_due_fcfa,

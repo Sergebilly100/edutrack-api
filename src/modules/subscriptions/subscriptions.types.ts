@@ -31,6 +31,7 @@ export const listParentsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   search: z.string().trim().min(1).max(255).optional(),
   status: z.enum(['active', 'expired', 'cancelled']).optional(),
+  month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
 });
 
 export const createParentSubscriptionBodySchema = z.object({
@@ -73,10 +74,14 @@ export const revenueSummaryQuerySchema = z.object({
 export const revenueHistoryQuerySchema = z.object({
   months: z.coerce.number().int().min(1).max(24).default(12),
 });
+export const revenuePaymentsQuerySchema = z.object({
+  month: z.string().regex(/^\d{4}-\d{2}$/),
+});
 
 export const commissionRecordPaymentBodySchema = z.object({
   period_month: z.string().regex(/^\d{4}-\d{2}$/),
   amount_fcfa: z.coerce.number().int().positive(),
+  payment_method: z.enum(['cash', 'momo_mtn', 'momo_orange', 'bank_transfer']).optional(),
   notes: z.string().trim().max(500).optional(),
   idempotency_key: z.string().uuid(),
 });

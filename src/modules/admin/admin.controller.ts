@@ -38,6 +38,7 @@ import {
   getSchoolSmsFeatureStats,
   getSmsFeatureGlobalStats,
   getSchoolDetails,
+  listSchoolCommissionPayments,
   sendSchoolPaymentReminder,
   syncSchoolSmsCommission,
   getSchoolUsers,
@@ -245,6 +246,21 @@ export default async function adminController(app: FastifyInstance): Promise<voi
     }
   );
 
+  app.get(
+    '/api/v1/admin/schools/:tenantId/sms-feature/payments',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+        const query = smsFeatureMonthQuerySchema.parse(request.query ?? {});
+        const result = await listSchoolCommissionPayments(ensurePublicDb(request), tenantId, query.month);
+        return reply.send({ items: result });
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
   app.post(
     '/api/v1/admin/schools/:tenantId/payments/reminder',
     { preHandler: preHandlers },
@@ -315,7 +331,8 @@ export default async function adminController(app: FastifyInstance): Promise<voi
       try {
         const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
         const query = smsFeatureMonthQuerySchema.parse(request.query ?? {});
-        const result = await syncSchoolSmsCommission(ensurePublicDb(request), tenantId, query.month, {
+        const month = query.month ?? new Date().toISOString().slice(0, 7);
+        const result = await syncSchoolSmsCommission(ensurePublicDb(request), tenantId, month, {
           actorId: request.auth?.sub ?? null,
           actorRole: request.auth?.role ?? 'super_admin',
         });
@@ -363,7 +380,8 @@ export default async function adminController(app: FastifyInstance): Promise<voi
     { preHandler: preHandlers },
     async (request, reply) => {
       try {
-        const result = await getSmsFeatureGlobalStats(ensurePublicDb(request));
+        const query = smsFeatureMonthQuerySchema.parse(request.query ?? {});
+        const result = await getSmsFeatureGlobalStats(ensurePublicDb(request), query.month);
         return reply.send({ items: result });
       } catch (error) {
         return handleError(reply, error);

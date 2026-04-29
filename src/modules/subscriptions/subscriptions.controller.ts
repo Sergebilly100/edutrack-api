@@ -16,6 +16,7 @@ import {
   listParentsQuerySchema,
   parentIdParamsSchema,
   resetPasswordParamsSchema,
+  revenuePaymentsQuerySchema,
   revenueHistoryQuerySchema,
   revenueSummaryQuerySchema,
   renewParentSubscriptionBodySchema,
@@ -222,7 +223,7 @@ export default async function subscriptionsController(app: FastifyInstance): Pro
         const claims = request.claims!;
         await withTenantSchema(claims.schemaName, async (tenantDb) => {
           const service = new SubscriptionsService(new SubscriptionsRepository(tenantDb));
-          await service.cancelSubscription(subscriptionId);
+          await service.cancelSubscription(subscriptionId, claims.sub);
         });
         return reply.send({ success: true });
       } catch (error) {
@@ -285,6 +286,24 @@ export default async function subscriptionsController(app: FastifyInstance): Pro
     }
   );
 
+  app.get(
+    '/api/v1/subscriptions/revenue/payments',
+    { preHandler: requirePermission('subscriptions.revenue') },
+    async (request, reply) => {
+      try {
+        const query = revenuePaymentsQuerySchema.parse(request.query ?? {});
+        const claims = request.claims!;
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          const service = new SubscriptionsService(new SubscriptionsRepository(tenantDb));
+          return service.revenuePayments(claims.schemaName, query.month);
+        });
+        return reply.send({ data: result });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
   app.post(
     '/api/v1/subscriptions/revenue/commission/record-payment',
     { preHandler: requirePermission('subscriptions.revenue') },
@@ -298,6 +317,7 @@ export default async function subscriptionsController(app: FastifyInstance): Pro
             schemaName: claims.schemaName,
             periodMonth: body.period_month,
             amountFcfa: body.amount_fcfa,
+            paymentMethod: body.payment_method,
             notes: body.notes,
             idempotencyKey: body.idempotency_key,
             actorId: claims.sub,
