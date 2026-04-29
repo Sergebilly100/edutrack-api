@@ -19,6 +19,8 @@ import {
   revenueHistoryQuerySchema,
   revenueSummaryQuerySchema,
   renewParentSubscriptionBodySchema,
+  subscriptionClassesQuerySchema,
+  subscriptionClassStudentsQuerySchema,
   updateSmsPriceBodySchema,
 } from './subscriptions.types.js';
 
@@ -78,6 +80,47 @@ export default async function subscriptionsController(app: FastifyInstance): Pro
           return service.updateSchoolSmsUnitPrice({
             schemaName: claims.schemaName,
             smsUnitPriceFcfa: body.sms_unit_price_fcfa,
+          });
+        });
+        return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.get(
+    '/api/v1/subscriptions/classes',
+    { preHandler: requirePermission('subscriptions.view') },
+    async (request, reply) => {
+      try {
+        const query = subscriptionClassesQuerySchema.parse(request.query ?? {});
+        const claims = request.claims!;
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          const service = new SubscriptionsService(new SubscriptionsRepository(tenantDb));
+          return service.listSubscriptionClasses({ search: query.search });
+        });
+        return reply.send({ data: result });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.get(
+    '/api/v1/subscriptions/students',
+    { preHandler: requirePermission('subscriptions.view') },
+    async (request, reply) => {
+      try {
+        const query = subscriptionClassStudentsQuerySchema.parse(request.query ?? {});
+        const claims = request.claims!;
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          const service = new SubscriptionsService(new SubscriptionsRepository(tenantDb));
+          return service.listSubscriptionStudentsByClass({
+            classId: query.class_id,
+            page: query.page,
+            limit: query.limit,
+            search: query.search,
           });
         });
         return reply.send(result);

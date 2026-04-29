@@ -12,8 +12,19 @@ export type CanSendResult =
     };
 
 export const paymentMethodSchema = z.enum(['cash', 'momo_mtn', 'momo_orange']);
-export const durationSchema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
+export const durationSchema = z.coerce.number().int().min(1).max(120);
 export const ciPhoneSchema = z.string().regex(/^225\d{10}$/);
+
+export const subscriptionClassesQuerySchema = z.object({
+  search: z.string().trim().min(1).max(120).optional(),
+});
+
+export const subscriptionClassStudentsQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  class_id: z.string().uuid(),
+  search: z.string().trim().min(1).max(120).optional(),
+});
 
 export const listParentsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),

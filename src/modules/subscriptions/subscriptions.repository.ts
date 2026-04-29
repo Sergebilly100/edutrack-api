@@ -60,6 +60,8 @@ type SubscriptionRow = {
 };
 
 type StudentRow = { id: string; full_name: string };
+type ClassCatalogRow = { id: string; name: string; students_count: number };
+type ClassStudentCatalogRow = { id: string; full_name: string; class_id: string; class_name: string };
 type PaymentRow = {
   id: string;
   amount_fcfa: number;
@@ -79,6 +81,7 @@ type ActiveLinkRow = {
 const monthToDate = (month: string): string => `${month}-01`;
 
 const firstDayOfMonth = (month: string): string => `${month}-01`;
+const EDUTRACK_COMMISSION_PCT = 15;
 
 export class SubscriptionsRepository {
   constructor(private readonly tenantDb: TenantDb) {}
@@ -266,6 +269,92 @@ export class SubscriptionsRepository {
       OFFSET ${offset}
     `);
     return { rows: result.rows, total };
+  }
+
+  async listSubscriptionClasses(params: {
+    search?: string;
+  }): Promise<Array<{ id: string; name: string; students_count: number }>> {
+    const searchLike = params.search ? `%${params.search}%` : null;
+    const result = await this.tenantDb.execute<ClassCatalogRow>(sql`
+      SELECT
+        c.id::text AS id,
+        c.name,
+        COUNT(s.id)::int AS students_count
+      FROM classes c
+      LEFT JOIN students s ON s.class_id = c.id AND s.is_active = true
+      WHERE (${searchLike}::text IS NULL OR c.name ILIKE ${searchLike})
+      GROUP BY c.id, c.name
+      ORDER BY c.name ASC
+    `);
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      students_count: row.students_count ?? 0,
+    }));
+  }
+
+  async listSubscriptionStudentsByClass(params: {
+    classId: string;
+    page: number;
+    limit: number;
+    search?: string;
+  }): Promise<{
+    data: Array<{ id: string; full_name: string; class_id: string; class_name: string }>;
+    pagination: { page: number; limit: number; total: number; totalPages: number };
+  }> {
+    const offset = (params.page - 1) * params.limit;
+    const searchLike = params.search ? `%${params.search}%` : null;
+
+    const countResult = await this.tenantDb.execute<{ total: number }>(sql`
+      SELECT COUNT(*)::int AS total
+      FROM students s
+      WHERE s.class_id = ${params.classId}::uuid
+        AND s.is_active = true
+        AND (
+          ${searchLike}::text IS NULL
+          OR CONCAT(s.last_name, ' ', s.first_name) ILIKE ${searchLike}
+          OR CONCAT(s.first_name, ' ', s.last_name) ILIKE ${searchLike}
+          OR COALESCE(s.matricule, '') ILIKE ${searchLike}
+        )
+    `);
+    const total = countResult.rows[0]?.total ?? 0;
+
+    const result = await this.tenantDb.execute<ClassStudentCatalogRow>(sql`
+      SELECT
+        s.id::text AS id,
+        CONCAT(s.last_name, ' ', s.first_name) AS full_name,
+        c.id::text AS class_id,
+        c.name AS class_name
+      FROM students s
+      INNER JOIN classes c ON c.id = s.class_id
+      WHERE s.class_id = ${params.classId}::uuid
+        AND s.is_active = true
+        AND (
+          ${searchLike}::text IS NULL
+          OR CONCAT(s.last_name, ' ', s.first_name) ILIKE ${searchLike}
+          OR CONCAT(s.first_name, ' ', s.last_name) ILIKE ${searchLike}
+          OR COALESCE(s.matricule, '') ILIKE ${searchLike}
+        )
+      ORDER BY s.last_name ASC, s.first_name ASC
+      LIMIT ${params.limit}
+      OFFSET ${offset}
+    `);
+
+    return {
+      data: result.rows.map((row) => ({
+        id: row.id,
+        full_name: row.full_name,
+        class_id: row.class_id,
+        class_name: row.class_name,
+      })),
+      pagination: {
+        page: params.page,
+        limit: params.limit,
+        total,
+        totalPages: total === 0 ? 0 : Math.ceil(total / params.limit),
+      },
+    };
   }
 
   async createParent(params: {
@@ -709,18 +798,26 @@ export class SubscriptionsRepository {
   async listRevenueHistory(params: { tenantId: string; months: number }): Promise<
     Array<{
       month: string;
+      subscriptions_active_count: number;
+      subscriptions_new_this_month: number;
       total_collected_fcfa: number;
       monthly_revenue_prorated_fcfa: number;
       commission_due_fcfa: number;
       commission_paid_fcfa: number;
+      commission_remaining_fcfa: number;
+      payment_status: 'paid' | 'partial' | 'pending';
     }>
   > {
     const items: Array<{
       month: string;
+      subscriptions_active_count: number;
+      subscriptions_new_this_month: number;
       total_collected_fcfa: number;
       monthly_revenue_prorated_fcfa: number;
       commission_due_fcfa: number;
       commission_paid_fcfa: number;
+      commission_remaining_fcfa: number;
+      payment_status: 'paid' | 'partial' | 'pending';
     }> = [];
 
     const now = new Date();
@@ -728,15 +825,18 @@ export class SubscriptionsRepository {
       const date = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
       const month = monthKeyInBusinessTimezone(date);
       const summary = await this.getRevenueSummary({ tenantId: params.tenantId, month });
-      const feature = await this.getSmsFeatureByTenantId(params.tenantId);
-      const commissionPct = Number(feature?.commission_pct ?? 0);
-      const due = Math.round((summary.monthly_revenue_prorated_fcfa * commissionPct) / 100);
+      const due = Math.round((summary.monthly_revenue_prorated_fcfa * EDUTRACK_COMMISSION_PCT) / 100);
+      const remaining = Math.max(0, due - summary.commission_paid_fcfa);
       items.push({
         month,
+        subscriptions_active_count: summary.subscriptions_active_count,
+        subscriptions_new_this_month: summary.subscriptions_new_this_month,
         total_collected_fcfa: summary.total_collected_fcfa,
         monthly_revenue_prorated_fcfa: summary.monthly_revenue_prorated_fcfa,
         commission_due_fcfa: due,
         commission_paid_fcfa: summary.commission_paid_fcfa,
+        commission_remaining_fcfa: remaining,
+        payment_status: remaining === 0 ? 'paid' : summary.commission_paid_fcfa > 0 ? 'partial' : 'pending',
       });
     }
     return items;

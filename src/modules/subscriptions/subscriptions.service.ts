@@ -28,6 +28,7 @@ export class SubscriptionsModuleError extends Error {
 }
 
 const randomFourDigits = (): string => String(randomInt(0, 10_000)).padStart(4, '0');
+const EDUTRACK_COMMISSION_PCT = 15;
 
 export class SubscriptionsService {
   constructor(private readonly repository: SubscriptionsRepository) {}
@@ -122,6 +123,19 @@ export class SubscriptionsService {
       },
       schemaName,
     };
+  }
+
+  async listSubscriptionClasses(query: { search?: string }) {
+    return this.repository.listSubscriptionClasses({ search: query.search });
+  }
+
+  async listSubscriptionStudentsByClass(query: {
+    classId: string;
+    page: number;
+    limit: number;
+    search?: string;
+  }) {
+    return this.repository.listSubscriptionStudentsByClass(query);
   }
 
   async createParentSubscription(input: {
@@ -306,7 +320,7 @@ export class SubscriptionsService {
     const feature = await this.repository.getSmsFeatureByTenantId(tenantId);
     return {
       is_enabled: feature?.is_enabled ?? false,
-      commission_pct: Number(feature?.commission_pct ?? 0),
+      commission_pct: EDUTRACK_COMMISSION_PCT,
       sms_unit_price_fcfa: feature?.sms_unit_price_fcfa ?? null,
     };
   }
@@ -323,7 +337,7 @@ export class SubscriptionsService {
     );
     return {
       is_enabled: feature.is_enabled,
-      commission_pct: Number(feature.commission_pct ?? 0),
+      commission_pct: EDUTRACK_COMMISSION_PCT,
       sms_unit_price_fcfa: feature.sms_unit_price_fcfa,
     };
   }
@@ -347,7 +361,7 @@ export class SubscriptionsService {
     }
     const feature = await this.repository.getSmsFeatureByTenantId(tenantId);
     const summary = await this.repository.getRevenueSummary({ tenantId, month: targetMonth });
-    const commissionPct = Number(feature?.commission_pct ?? 0);
+    const commissionPct = EDUTRACK_COMMISSION_PCT;
     const due = Math.round((summary.monthly_revenue_prorated_fcfa * commissionPct) / 100);
     return {
       month: targetMonth,
@@ -397,8 +411,7 @@ export class SubscriptionsService {
       return { ...replay, idempotency_replayed: true };
     }
 
-    const feature = await this.repository.getSmsFeatureByTenantId(tenantId);
-    const commissionPct = Number(feature?.commission_pct ?? 0);
+    const commissionPct = EDUTRACK_COMMISSION_PCT;
     const summary = await this.revenueSummary(input.schemaName, input.periodMonth);
     const result = await this.repository.runCommissionPaymentWithAudit({
       tenantId,
