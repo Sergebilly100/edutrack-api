@@ -530,6 +530,142 @@ export class SubscriptionsRepository {
     `);
   }
 
+  async findFinancialAuditReplay<T>(params: {
+    tenantId: string;
+    action: string;
+    idempotencyKey: string;
+  }): Promise<T | null> {
+    const result = await publicDb.execute<{ payload_after: unknown }>(sql`
+      SELECT payload_after
+      FROM public.audit_financial_events
+      WHERE tenant_id = ${params.tenantId}::uuid
+        AND action = ${params.action}
+        AND idempotency_key = ${params.idempotencyKey}::uuid
+      LIMIT 1
+    `);
+    const payload = result.rows[0]?.payload_after;
+    if (!payload || typeof payload !== 'object') {
+      return null;
+    }
+    return payload as T;
+  }
+
+  async runCommissionPaymentWithAudit(params: {
+    tenantId: string;
+    periodMonth: string;
+    amountFcfa: number;
+    notes?: string;
+    commissionPct: number;
+    dueFcfa: number;
+    action: string;
+    idempotencyKey: string;
+    actorId: string;
+    actorRole: string;
+  }): Promise<{ replayed: boolean }> {
+    const monthDate = firstDayOfMonth(params.periodMonth);
+    return publicDb.transaction(async (tx) => {
+      await tx.execute(sql`
+        SELECT pg_advisory_xact_lock(hashtext(${`${params.action}:${params.tenantId}:${params.idempotencyKey}`}))
+      `);
+
+      const replay = await tx.execute<{ payload_after: unknown }>(sql`
+        SELECT payload_after
+        FROM public.audit_financial_events
+        WHERE tenant_id = ${params.tenantId}::uuid
+          AND action = ${params.action}
+          AND idempotency_key = ${params.idempotencyKey}::uuid
+        LIMIT 1
+      `);
+      const replayPayload = replay.rows[0]?.payload_after;
+      if (replayPayload && typeof replayPayload === 'object') {
+        return { replayed: true };
+      }
+
+      const before = await tx.execute<{
+        period_month: string;
+        commission_due_fcfa: number;
+        commission_paid_fcfa: number;
+      }>(sql`
+        SELECT period_month::text, commission_due_fcfa, commission_paid_fcfa
+        FROM public.edutrack_commission_records
+        WHERE tenant_id = ${params.tenantId}::uuid
+          AND period_month = ${monthDate}::date
+        LIMIT 1
+      `);
+      const beforeRow = before.rows[0] ?? null;
+
+      await tx.execute(sql`
+        INSERT INTO public.edutrack_commission_records (
+          tenant_id,
+          period_month,
+          total_subscriptions_fcfa,
+          commission_pct,
+          commission_due_fcfa,
+          commission_paid_fcfa,
+          last_payment_at,
+          notes,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${params.tenantId}::uuid,
+          ${monthDate}::date,
+          0,
+          ${params.commissionPct},
+          ${params.dueFcfa},
+          ${params.amountFcfa},
+          NOW(),
+          ${params.notes ?? null},
+          NOW(),
+          NOW()
+        )
+        ON CONFLICT (tenant_id, period_month)
+        DO UPDATE SET
+          commission_paid_fcfa = public.edutrack_commission_records.commission_paid_fcfa + EXCLUDED.commission_paid_fcfa,
+          last_payment_at = NOW(),
+          notes = COALESCE(EXCLUDED.notes, public.edutrack_commission_records.notes),
+          updated_at = NOW()
+      `);
+
+      const after = await tx.execute<{
+        period_month: string;
+        commission_due_fcfa: number;
+        commission_paid_fcfa: number;
+      }>(sql`
+        SELECT period_month::text, commission_due_fcfa, commission_paid_fcfa
+        FROM public.edutrack_commission_records
+        WHERE tenant_id = ${params.tenantId}::uuid
+          AND period_month = ${monthDate}::date
+        LIMIT 1
+      `);
+      const afterRow = after.rows[0]!;
+
+      await tx.execute(sql`
+        INSERT INTO public.audit_financial_events (
+          tenant_id,
+          actor_id,
+          actor_role,
+          action,
+          idempotency_key,
+          payload_before,
+          payload_after
+        )
+        VALUES (
+          ${params.tenantId}::uuid,
+          ${params.actorId}::uuid,
+          ${params.actorRole},
+          ${params.action},
+          ${params.idempotencyKey}::uuid,
+          ${beforeRow ? JSON.stringify(beforeRow) : null}::jsonb,
+          ${JSON.stringify({ success: true })}::jsonb
+        )
+      `);
+
+      void afterRow;
+      return { replayed: false };
+    });
+  }
+
   async listRevenueHistory(params: { tenantId: string; months: number }): Promise<
     Array<{
       month: string;

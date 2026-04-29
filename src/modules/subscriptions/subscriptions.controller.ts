@@ -214,6 +214,9 @@ export default async function subscriptionsController(app: FastifyInstance): Pro
             periodMonth: body.period_month,
             amountFcfa: body.amount_fcfa,
             notes: body.notes,
+            idempotencyKey: body.idempotency_key,
+            actorId: claims.sub,
+            actorRole: claims.role,
           });
         });
         return reply.send(result);

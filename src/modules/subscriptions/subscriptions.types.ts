@@ -67,6 +67,7 @@ export const commissionRecordPaymentBodySchema = z.object({
   period_month: z.string().regex(/^\d{4}-\d{2}$/),
   amount_fcfa: z.coerce.number().int().positive(),
   notes: z.string().trim().max(500).optional(),
+  idempotency_key: z.string().uuid(),
 });
 
 export type ListParentsQuery = z.infer<typeof listParentsQuerySchema>;

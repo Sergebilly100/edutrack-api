@@ -96,6 +96,7 @@ export const smsFeatureCommissionPaymentBodySchema = z.object({
   period_month: z.string().regex(/^\d{4}-\d{2}$/),
   amount_fcfa: z.coerce.number().int().min(1),
   notes: z.string().trim().max(1000).optional(),
+  idempotency_key: z.string().uuid(),
 });
 
 export const listSchoolsQuerySchema = z.object({

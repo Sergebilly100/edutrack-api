@@ -5,6 +5,7 @@ import {
   date,
   inet,
   integer,
+  jsonb,
   numeric,
   pgEnum,
   pgTable,
@@ -177,6 +178,20 @@ export const schoolSmsFeatures = pgTable(
     ),
   })
 );
+
+export const auditFinancialEvents = pgTable('audit_financial_events', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  tenantId: uuid('tenant_id')
+    .notNull()
+    .references(() => tenants.id, { onDelete: 'cascade' }),
+  actorId: uuid('actor_id'),
+  actorRole: varchar('actor_role', { length: 50 }).notNull(),
+  action: varchar('action', { length: 100 }).notNull(),
+  idempotencyKey: uuid('idempotency_key'),
+  payloadBefore: jsonb('payload_before'),
+  payloadAfter: jsonb('payload_after').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+});
 
 export const edutrackCommissionRecords = pgTable(
   'edutrack_commission_records',

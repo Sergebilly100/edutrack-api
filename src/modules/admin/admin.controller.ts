@@ -315,7 +315,10 @@ export default async function adminController(app: FastifyInstance): Promise<voi
       try {
         const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
         const query = smsFeatureMonthQuerySchema.parse(request.query ?? {});
-        const result = await syncSchoolSmsCommission(ensurePublicDb(request), tenantId, query.month);
+        const result = await syncSchoolSmsCommission(ensurePublicDb(request), tenantId, query.month, {
+          actorId: request.auth?.sub ?? null,
+          actorRole: request.auth?.role ?? 'super_admin',
+        });
         return reply.send(result);
       } catch (error) {
         return handleError(reply, error);
@@ -330,7 +333,10 @@ export default async function adminController(app: FastifyInstance): Promise<voi
       try {
         const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
         const body = smsFeatureCommissionPaymentBodySchema.parse(request.body ?? {});
-        const result = await recordSchoolCommissionReceived(ensurePublicDb(request), tenantId, body);
+        const result = await recordSchoolCommissionReceived(ensurePublicDb(request), tenantId, body, {
+          actorId: request.auth?.sub ?? null,
+          actorRole: request.auth?.role ?? 'super_admin',
+        });
         return reply.send(result);
       } catch (error) {
         return handleError(reply, error);

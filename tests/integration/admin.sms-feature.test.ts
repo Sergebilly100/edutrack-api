@@ -87,6 +87,7 @@ describe('admin sms-feature integration', () => {
 
   it('POST record-commission-received met à jour commission_paid_fcfa', async () => {
     const month = new Date().toISOString().slice(0, 7);
+    const key = '11111111-1111-4111-8111-111111111111';
 
     await request()
       .post(`/api/v1/admin/schools/${tenantId}/sms-feature/sync-commission?month=${month}`)
@@ -95,10 +96,32 @@ describe('admin sms-feature integration', () => {
     const response = await request()
       .post(`/api/v1/admin/schools/${tenantId}/sms-feature/record-commission-received`)
       .set('authorization', `Bearer ${adminToken}`)
-      .send({ period_month: month, amount_fcfa: 1000, notes: 'a4 test' });
+      .send({ period_month: month, amount_fcfa: 1000, notes: 'a4 test', idempotency_key: key });
 
     expect(response.status).toBe(200);
     expect(response.body.commission_paid_fcfa).toBeGreaterThanOrEqual(1000);
+
+    const replay = await request()
+      .post(`/api/v1/admin/schools/${tenantId}/sms-feature/record-commission-received`)
+      .set('authorization', `Bearer ${adminToken}`)
+      .send({ period_month: month, amount_fcfa: 1000, notes: 'a4 test replay', idempotency_key: key });
+    expect(replay.status).toBe(200);
+    expect(replay.body.idempotency_replayed).toBe(true);
+
+    const stats = await request()
+      .get(`/api/v1/admin/schools/${tenantId}/sms-feature/stats`)
+      .set('authorization', `Bearer ${adminToken}`);
+    expect(stats.status).toBe(200);
+    expect(stats.body.current_month.commission_paid_fcfa).toBeGreaterThanOrEqual(1000);
+
+    const auditRows = await queryPublic<{ count: number }>(
+      `SELECT COUNT(*)::int AS count
+       FROM public.audit_financial_events
+       WHERE tenant_id = $1::uuid
+         AND action IN ('admin.sync_commission', 'admin.record_commission_received')`,
+      [tenantId]
+    );
+    expect(auditRows[0]?.count).toBeGreaterThanOrEqual(2);
   });
 
   it('GET global-stats liste les écoles avec feature activée', async () => {

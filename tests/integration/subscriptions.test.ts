@@ -271,6 +271,61 @@ describe('subscriptions integration (real db)', () => {
     expect(response.body).toHaveProperty('total_collected_fcfa');
   });
 
+  it('POST /api/v1/subscriptions/revenue/commission/record-payment est idempotent avec idempotency_key', async () => {
+    const headers = await getAuthHeaders('director');
+    const month = new Date().toISOString().slice(0, 7);
+    const idempotencyKey = '22222222-2222-4222-8222-222222222222';
+
+    const first = await request()
+      .post('/api/v1/subscriptions/revenue/commission/record-payment')
+      .set(headers)
+      .send({
+        period_month: month,
+        amount_fcfa: 500,
+        notes: 'idempotency test',
+        idempotency_key: idempotencyKey,
+      });
+    expect(first.status).toBe(200);
+    expect(first.body.success).toBe(true);
+    expect(first.body.idempotency_replayed).toBe(false);
+
+    const second = await request()
+      .post('/api/v1/subscriptions/revenue/commission/record-payment')
+      .set(headers)
+      .send({
+        period_month: month,
+        amount_fcfa: 500,
+        notes: 'idempotency test replay',
+        idempotency_key: idempotencyKey,
+      });
+    expect(second.status).toBe(200);
+    expect(second.body.success).toBe(true);
+    expect(second.body.idempotency_replayed).toBe(true);
+
+    const paidRows = await queryPublic<{ commission_paid_fcfa: number }>(
+      `
+        SELECT commission_paid_fcfa
+        FROM public.edutrack_commission_records
+        WHERE tenant_id = $1::uuid
+          AND period_month = ($2 || '-01')::date
+        LIMIT 1
+      `,
+      [tenantId, month]
+    );
+    expect((paidRows[0]?.commission_paid_fcfa ?? 0) >= 500).toBe(true);
+
+    const auditRows = await queryPublic<{ count: number }>(
+      `
+        SELECT COUNT(*)::int AS count
+        FROM public.audit_financial_events
+        WHERE tenant_id = $1::uuid
+          AND action = 'subscriptions.record_commission_payment'
+      `,
+      [tenantId]
+    );
+    expect((auditRows[0]?.count ?? 0) >= 1).toBe(true);
+  });
+
   it('Compte staff avec subscriptions.view → GET /parents → 200', async () => {
     const headers = await getAuthHeaders('staff');
     const response = await request()

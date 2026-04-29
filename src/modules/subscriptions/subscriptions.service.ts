@@ -345,23 +345,44 @@ export class SubscriptionsService {
     periodMonth: string;
     amountFcfa: number;
     notes?: string;
+    idempotencyKey: string;
+    actorId: string;
+    actorRole: string;
   }) {
     const tenantId = await this.repository.getTenantIdBySchemaName(input.schemaName);
     if (!tenantId) {
       throw new SubscriptionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
     }
+    const action = 'subscriptions.record_commission_payment';
+    const replay = await this.repository.findFinancialAuditReplay<{
+      success: boolean;
+      idempotency_replayed?: boolean;
+    }>({
+      tenantId,
+      action,
+      idempotencyKey: input.idempotencyKey,
+    });
+    if (replay) {
+      return { ...replay, idempotency_replayed: true };
+    }
+
     const feature = await this.repository.getSmsFeatureByTenantId(tenantId);
     const commissionPct = Number(feature?.commission_pct ?? 0);
     const summary = await this.revenueSummary(input.schemaName, input.periodMonth);
-    await this.repository.upsertCommissionPayment({
+    const result = await this.repository.runCommissionPaymentWithAudit({
       tenantId,
       periodMonth: input.periodMonth,
       amountFcfa: input.amountFcfa,
       notes: input.notes,
       commissionPct,
       dueFcfa: summary.commission_due_fcfa,
+      action,
+      idempotencyKey: input.idempotencyKey,
+      actorId: input.actorId,
+      actorRole: input.actorRole,
     });
-    return { success: true };
+
+    return { success: true, idempotency_replayed: result.replayed };
   }
 
   async runDailyMaintenance(schemaName: string): Promise<{ expired: number; alerts: number }> {

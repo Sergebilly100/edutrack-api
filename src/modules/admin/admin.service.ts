@@ -2488,7 +2488,8 @@ export const updateSchoolSmsFeatureConfig = async (
 export const syncSchoolSmsCommission = async (
   publicDb: TenantDb,
   tenantId: string,
-  month: string
+  month: string,
+  actor?: { actorId: string | null; actorRole: string }
 ): Promise<{
   tenant_id: string;
   period_month: string;
@@ -2509,6 +2510,31 @@ export const syncSchoolSmsCommission = async (
   const total = revenue.total_subscriptions_fcfa;
   const due = Math.round((total * commissionPct) / 100);
   const periodMonth = monthStart(month);
+  const beforeResult = await publicDb.execute<{
+    period_month: string;
+    total_subscriptions_fcfa: number;
+    commission_pct: string | number;
+    commission_due_fcfa: number;
+    commission_paid_fcfa: number;
+  }>(sql`
+    SELECT
+      period_month::text,
+      total_subscriptions_fcfa,
+      commission_pct,
+      commission_due_fcfa,
+      commission_paid_fcfa
+    FROM public.edutrack_commission_records
+    WHERE tenant_id = ${tenantId}::uuid
+      AND period_month = ${periodMonth}::date
+    LIMIT 1
+  `);
+  const beforeRow = getRows<{
+    period_month: string;
+    total_subscriptions_fcfa: number;
+    commission_pct: string | number;
+    commission_due_fcfa: number;
+    commission_paid_fcfa: number;
+  }>(beforeResult)[0] ?? null;
 
   const result = await publicDb.execute<{
     tenant_id: string;
@@ -2561,7 +2587,7 @@ export const syncSchoolSmsCommission = async (
     commission_due_fcfa: number;
     commission_paid_fcfa: number;
   }>(result)[0]!;
-  return {
+  const payloadAfter = {
     tenant_id: row.tenant_id,
     period_month: row.period_month,
     total_subscriptions_fcfa: row.total_subscriptions_fcfa,
@@ -2569,54 +2595,142 @@ export const syncSchoolSmsCommission = async (
     commission_due_fcfa: row.commission_due_fcfa,
     commission_paid_fcfa: row.commission_paid_fcfa,
   };
+
+  await publicDb.execute(sql`
+    INSERT INTO public.audit_financial_events (
+      tenant_id,
+      actor_id,
+      actor_role,
+      action,
+      payload_before,
+      payload_after
+    )
+    VALUES (
+      ${tenantId}::uuid,
+      ${actor?.actorId ?? null}::uuid,
+      ${actor?.actorRole ?? 'system'},
+      ${'admin.sync_commission'},
+      ${beforeRow ? JSON.stringify(beforeRow) : null}::jsonb,
+      ${JSON.stringify(payloadAfter)}::jsonb
+    )
+  `);
+
+  return payloadAfter;
 };
 
 export const recordSchoolCommissionReceived = async (
   publicDb: TenantDb,
   tenantId: string,
-  payload: { period_month: string; amount_fcfa: number; notes?: string }
+  payload: { period_month: string; amount_fcfa: number; notes?: string; idempotency_key: string },
+  actor: { actorId: string | null; actorRole: string }
 ): Promise<{
   period_month: string;
   commission_due_fcfa: number;
   commission_paid_fcfa: number;
   commission_remaining_fcfa: number;
   overpaid: boolean;
+  idempotency_replayed: boolean;
 }> => {
-  const synced = await syncSchoolSmsCommission(publicDb, tenantId, payload.period_month);
   const periodMonth = monthStart(payload.period_month);
+  const action = 'admin.record_commission_received';
+  await syncSchoolSmsCommission(publicDb, tenantId, payload.period_month, actor);
 
-  const result = await publicDb.execute<{
-    period_month: string;
-    commission_due_fcfa: number;
-    commission_paid_fcfa: number;
-  }>(sql`
-    UPDATE public.edutrack_commission_records
-    SET
-      commission_paid_fcfa = commission_paid_fcfa + ${payload.amount_fcfa},
-      last_payment_at = NOW(),
-      notes = COALESCE(${payload.notes ?? null}, notes),
-      updated_at = NOW()
-    WHERE tenant_id = ${tenantId}::uuid
-      AND period_month = ${periodMonth}::date
-    RETURNING period_month::text, commission_due_fcfa, commission_paid_fcfa
-  `);
+  return publicDb.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${action}:${tenantId}:${payload.idempotency_key}`}))`);
 
-  const row = getRows<{
-    period_month: string;
-    commission_due_fcfa: number;
-    commission_paid_fcfa: number;
-  }>(result)[0]!;
-  const remaining = Math.max(0, row.commission_due_fcfa - row.commission_paid_fcfa);
-  const overpaid = row.commission_paid_fcfa > row.commission_due_fcfa;
+    const replay = await tx.execute<{ payload_after: unknown }>(sql`
+      SELECT payload_after
+      FROM public.audit_financial_events
+      WHERE action = ${action}
+        AND tenant_id = ${tenantId}::uuid
+        AND idempotency_key = ${payload.idempotency_key}::uuid
+      LIMIT 1
+    `);
+    const replayRow = getRows<{ payload_after: unknown }>(replay)[0];
+    if (replayRow?.payload_after && typeof replayRow.payload_after === 'object') {
+      return {
+        ...(replayRow.payload_after as {
+          period_month: string;
+          commission_due_fcfa: number;
+          commission_paid_fcfa: number;
+          commission_remaining_fcfa: number;
+          overpaid: boolean;
+        }),
+        idempotency_replayed: true,
+      };
+    }
 
-  void synced;
-  return {
-    period_month: row.period_month,
-    commission_due_fcfa: row.commission_due_fcfa,
-    commission_paid_fcfa: row.commission_paid_fcfa,
-    commission_remaining_fcfa: remaining,
-    overpaid,
-  };
+    const beforeResult = await tx.execute<{
+      period_month: string;
+      commission_due_fcfa: number;
+      commission_paid_fcfa: number;
+    }>(sql`
+      SELECT period_month::text, commission_due_fcfa, commission_paid_fcfa
+      FROM public.edutrack_commission_records
+      WHERE tenant_id = ${tenantId}::uuid
+        AND period_month = ${periodMonth}::date
+      LIMIT 1
+    `);
+    const beforeRow = getRows<{
+      period_month: string;
+      commission_due_fcfa: number;
+      commission_paid_fcfa: number;
+    }>(beforeResult)[0] ?? null;
+
+    const result = await tx.execute<{
+      period_month: string;
+      commission_due_fcfa: number;
+      commission_paid_fcfa: number;
+    }>(sql`
+      UPDATE public.edutrack_commission_records
+      SET
+        commission_paid_fcfa = commission_paid_fcfa + ${payload.amount_fcfa},
+        last_payment_at = NOW(),
+        notes = COALESCE(${payload.notes ?? null}, notes),
+        updated_at = NOW()
+      WHERE tenant_id = ${tenantId}::uuid
+        AND period_month = ${periodMonth}::date
+      RETURNING period_month::text, commission_due_fcfa, commission_paid_fcfa
+    `);
+
+    const row = getRows<{
+      period_month: string;
+      commission_due_fcfa: number;
+      commission_paid_fcfa: number;
+    }>(result)[0]!;
+    const remaining = Math.max(0, row.commission_due_fcfa - row.commission_paid_fcfa);
+    const overpaid = row.commission_paid_fcfa > row.commission_due_fcfa;
+    const payloadAfter = {
+      period_month: row.period_month,
+      commission_due_fcfa: row.commission_due_fcfa,
+      commission_paid_fcfa: row.commission_paid_fcfa,
+      commission_remaining_fcfa: remaining,
+      overpaid,
+    };
+
+    await tx.execute(sql`
+      INSERT INTO public.audit_financial_events (
+        tenant_id,
+        actor_id,
+        actor_role,
+        action,
+        idempotency_key,
+        payload_before,
+        payload_after
+      )
+      VALUES (
+        ${tenantId}::uuid,
+        ${actor.actorId}::uuid,
+        ${actor.actorRole},
+        ${action},
+        ${payload.idempotency_key}::uuid,
+        ${beforeRow ? JSON.stringify(beforeRow) : null}::jsonb,
+        ${JSON.stringify(payloadAfter)}::jsonb
+      )
+    `);
+
+    return { ...payloadAfter, idempotency_replayed: false };
+  });
 };
 
 export const getSchoolSmsFeatureStats = async (
