@@ -457,6 +457,7 @@ export default async function authController(app: FastifyInstance): Promise<void
           tenantId: tenant.id,
           schemaName,
           studentIds: auth.studentIds,
+          mustChangePassword: auth.mustChangePassword,
         };
         const accessToken = await signAccessToken(claims);
         const refreshToken = await signRefreshToken(auth.parentId, schemaName);
@@ -471,6 +472,7 @@ export default async function authController(app: FastifyInstance): Promise<void
             role: 'parent',
             phone: body.phone,
             studentIds: auth.studentIds,
+            mustChangePassword: auth.mustChangePassword,
           },
         });
       } catch (error) {

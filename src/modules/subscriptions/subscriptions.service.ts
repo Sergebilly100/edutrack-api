@@ -27,8 +27,6 @@ export class SubscriptionsModuleError extends Error {
   }
 }
 
-const last4 = (phone: string): string => phone.slice(-4);
-
 const randomFourDigits = (): string => String(randomInt(0, 10_000)).padStart(4, '0');
 
 export class SubscriptionsService {
@@ -153,7 +151,7 @@ export class SubscriptionsService {
       throw new SubscriptionsModuleError('Parent already exists', 409, 'PARENT_ALREADY_EXISTS');
     }
 
-    const tempPassword = last4(input.payload.phone);
+    const tempPassword = randomFourDigits();
     const passwordHash = await argon2.hash(tempPassword);
     let parentId: string;
     try {

@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { sql } from 'drizzle-orm';
 
 import { withTenantSchema } from '../database/db.js';
 import type { PermissionKey } from '../types/index.js';
@@ -252,6 +253,29 @@ export const requireParent = async (
   if (claims.role !== 'parent') {
     forbidden(reply, 'Forbidden');
     return;
+  }
+
+  const allowsPasswordChangeRoute =
+    request.method.toUpperCase() === 'POST' &&
+    request.url.startsWith('/api/v1/parent/auth/change-password');
+  if (!allowsPasswordChangeRoute) {
+    const result = await withTenantSchema(claims.schemaName, async (tenantDb) =>
+      tenantDb.execute<{ must_change_password: boolean }>(sql`
+        SELECT must_change_password
+        FROM parents
+        WHERE id = ${claims.sub}::uuid
+        LIMIT 1
+      `)
+    );
+    const mustChangePassword = result.rows[0]?.must_change_password ?? false;
+    if (mustChangePassword) {
+      reply.code(403).send({
+        error: 'Password change required',
+        code: 'PASSWORD_CHANGE_REQUIRED',
+        statusCode: 403,
+      });
+      return;
+    }
   }
 
   const allowedStudentIds = Array.isArray(claims.studentIds) ? claims.studentIds : [];

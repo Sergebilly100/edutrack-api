@@ -73,8 +73,8 @@ describe('parent auth + parent routes integration', () => {
     const parentHash = await argon2.hash(parentPassword);
     const parentRows = await queryTenant<IdRow>(
       `
-        INSERT INTO ${tenantTable('parents')} (full_name, phone, email, password_hash, is_active)
-        VALUES ('Parent Linked', $1, 'parent@test.ci', $2, true)
+        INSERT INTO ${tenantTable('parents')} (full_name, phone, email, password_hash, must_change_password, is_active)
+        VALUES ('Parent Linked', $1, 'parent@test.ci', $2, false, true)
         RETURNING id::text AS id
       `,
       [parentPhone, parentHash]
@@ -173,6 +173,7 @@ describe('parent auth + parent routes integration', () => {
     expect(response.status).toBe(200);
     expect(response.body.accessToken).toBeTruthy();
     expect(response.body.user?.role).toBe('parent');
+    expect(response.body.user?.mustChangePassword).toBe(false);
   });
 
   it('POST /auth/login/parent avec mauvais mdp → 401', async () => {
@@ -186,8 +187,8 @@ describe('parent auth + parent routes integration', () => {
 
     const parentRows = await queryTenant<IdRow>(
       `
-        INSERT INTO ${tenantTable('parents')} (full_name, phone, password_hash, is_active)
-        VALUES ('Parent Expired', $1, $2, true)
+        INSERT INTO ${tenantTable('parents')} (full_name, phone, password_hash, must_change_password, is_active)
+        VALUES ('Parent Expired', $1, $2, false, true)
         RETURNING id::text AS id
       `,
       [expiredPhone, expiredHash]
@@ -288,5 +289,82 @@ describe('parent auth + parent routes integration', () => {
     expect(allSlots.length).toBeGreaterThan(0);
     const allowedStatuses = new Set(['present', 'absent', 'upcoming', 'unknown']);
     expect(allSlots.every((slot: { status: string }) => allowedStatuses.has(slot.status))).toBe(true);
+  });
+
+  it('Parent avec mot de passe temporaire: accès bloqué hors /auth/change-password, puis accès rétabli', async () => {
+    const forcedPhone = '2250709993333';
+    const tempPassword = '3333';
+    const newPassword = '333333';
+    const forcedHash = await argon2.hash(tempPassword);
+
+    const parentRows = await queryTenant<IdRow>(
+      `
+        INSERT INTO ${tenantTable('parents')} (full_name, phone, password_hash, must_change_password, is_active)
+        VALUES ('Parent Forced', $1, $2, true, true)
+        RETURNING id::text AS id
+      `,
+      [forcedPhone, forcedHash]
+    );
+    const parentId = parentRows[0]!.id;
+    const context = getSeedContext();
+
+    const subscriptionRows = await queryTenant<IdRow>(
+      `
+        INSERT INTO ${tenantTable('parent_subscriptions')} (
+          parent_id,
+          unit_price_fcfa,
+          student_count,
+          total_amount_fcfa,
+          duration_months,
+          starts_at,
+          ends_at,
+          status,
+          auto_renew_alert,
+          renewed_count,
+          created_by
+        )
+        VALUES ($1::uuid, 1000, 1, 1000, 1, CURRENT_DATE - INTERVAL '1 day', CURRENT_DATE + INTERVAL '30 day', 'active', false, 0, $2::uuid)
+        RETURNING id::text AS id
+      `,
+      [parentId, context.directorUserId]
+    );
+    const subscriptionId = subscriptionRows[0]!.id;
+
+    await queryTenant(
+      `
+        INSERT INTO ${tenantTable('parent_student_links')} (subscription_id, parent_id, student_id)
+        VALUES ($1::uuid, $2::uuid, $3::uuid)
+      `,
+      [subscriptionId, parentId, linkedStudentId]
+    );
+
+    const loginResponse = await request()
+      .post('/api/v1/auth/login/parent')
+      .set('x-tenant-schema', TEST_SCHEMA_NAME)
+      .send({ phone: forcedPhone, password: tempPassword });
+
+    expect(loginResponse.status).toBe(200);
+    expect(loginResponse.body.user?.mustChangePassword).toBe(true);
+    const token = loginResponse.body.accessToken;
+
+    const blocked = await request()
+      .get('/api/v1/parent/students')
+      .set('authorization', `Bearer ${token}`);
+    expect(blocked.status).toBe(403);
+    expect(blocked.body.code).toBe('PASSWORD_CHANGE_REQUIRED');
+
+    const changed = await request()
+      .post('/api/v1/parent/auth/change-password')
+      .set('authorization', `Bearer ${token}`)
+      .send({
+        current_password: tempPassword,
+        new_password: newPassword,
+      });
+    expect(changed.status).toBe(200);
+
+    const allowed = await request()
+      .get('/api/v1/parent/students')
+      .set('authorization', `Bearer ${token}`);
+    expect(allowed.status).toBe(200);
   });
 });

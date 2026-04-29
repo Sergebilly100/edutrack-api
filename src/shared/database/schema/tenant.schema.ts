@@ -511,6 +511,7 @@ export const parents = tenant.table(
     phone: varchar('phone', { length: 20 }).notNull().unique(),
     email: varchar('email', { length: 255 }),
     passwordHash: text('password_hash').notNull(),
+    mustChangePassword: boolean('must_change_password').notNull().default(true),
     isActive: boolean('is_active').notNull().default(true),
     lastLoginAt: timestamp('last_login_at', { withTimezone: true, mode: 'date' }),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),

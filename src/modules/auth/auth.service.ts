@@ -40,6 +40,7 @@ export type AccessTokenClaims = JwtPayload & {
   schemaName: string;
   username?: string;
   studentIds?: string[];
+  mustChangePassword?: boolean;
   readOnly?: boolean;
   impersonation?: boolean;
   impersonatedBy?: string;

@@ -235,8 +235,8 @@ export class SubscriptionsRepository {
     passwordHash: string;
   }): Promise<string> {
     const result = await this.tenantDb.execute<{ id: string }>(sql`
-      INSERT INTO parents (full_name, phone, email, password_hash, is_active)
-      VALUES (${params.fullName}, ${params.phone}, ${params.email ?? null}, ${params.passwordHash}, true)
+      INSERT INTO parents (full_name, phone, email, password_hash, must_change_password, is_active)
+      VALUES (${params.fullName}, ${params.phone}, ${params.email ?? null}, ${params.passwordHash}, true, true)
       RETURNING id::text
     `);
     return result.rows[0]!.id;
@@ -423,7 +423,8 @@ export class SubscriptionsRepository {
   async updateParentPassword(parentId: string, passwordHash: string): Promise<void> {
     await this.tenantDb.execute(sql`
       UPDATE parents
-      SET password_hash = ${passwordHash}
+      SET password_hash = ${passwordHash},
+          must_change_password = true
       WHERE id = ${parentId}::uuid
     `);
   }

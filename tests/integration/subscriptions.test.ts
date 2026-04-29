@@ -123,7 +123,8 @@ describe('subscriptions integration (real db)', () => {
     expect(response.status).toBe(201);
     expect(response.body.parent?.id).toBeTruthy();
     expect(response.body.subscription?.id).toBeTruthy();
-    expect(response.body.credentials?.temp_password).toBe('0001');
+    expect(typeof response.body.credentials?.temp_password).toBe('string');
+    expect(response.body.credentials?.temp_password.length).toBe(4);
     createdParentId = response.body.parent.id;
     createdParentPhone = response.body.parent.phone;
   });
@@ -251,6 +252,12 @@ describe('subscriptions integration (real db)', () => {
     expect(response.status).toBe(200);
     expect(typeof response.body.new_temp_password).toBe('string');
     expect(response.body.new_temp_password.length).toBe(4);
+
+    const state = await queryTenant<{ must_change_password: boolean }>(
+      `SELECT must_change_password FROM ${tenantTable('parents')} WHERE id = $1::uuid`,
+      [createdParentId]
+    );
+    expect(state[0]?.must_change_password).toBe(true);
   });
 
   it('GET /api/v1/subscriptions/revenue/summary retourne les agrégats', async () => {

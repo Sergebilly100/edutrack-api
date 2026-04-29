@@ -8,6 +8,7 @@ type ParentAuthRow = {
   id: string;
   phone: string;
   password_hash: string;
+  must_change_password: boolean;
   is_active: boolean;
 };
 
@@ -65,7 +66,7 @@ export class ParentPortalRepository {
 
   async findParentByPhone(phone: string): Promise<ParentAuthRow | null> {
     const result = await this.db.execute<ParentAuthRow>(sql`
-      SELECT id::text, phone, password_hash, is_active
+      SELECT id::text, phone, password_hash, must_change_password, is_active
       FROM parents
       WHERE phone = ${phone}
       LIMIT 1
@@ -96,7 +97,8 @@ export class ParentPortalRepository {
   async updateParentPassword(parentId: string, passwordHash: string): Promise<void> {
     await this.db.execute(sql`
       UPDATE parents
-      SET password_hash = ${passwordHash}
+      SET password_hash = ${passwordHash},
+          must_change_password = false
       WHERE id = ${parentId}::uuid
     `);
   }
