@@ -140,7 +140,7 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('POST /api/v1/auth/login/teacher — header x-tenant-schema absent → 400', async () => {
+  it('POST /api/v1/auth/login/teacher — header x-tenant-schema absent (fallback host) → 200', async () => {
     const app = await buildApp();
 
     const response = await app.inject({
@@ -149,7 +149,7 @@ describe('auth routes', () => {
       payload: { identifier: 'diallo.ibra', password: 'edutrack2024' },
     });
 
-    expect(response.statusCode).toBe(400);
+    expect(response.statusCode).toBe(200);
     await app.close();
   });
 

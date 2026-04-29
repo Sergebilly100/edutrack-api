@@ -28,7 +28,16 @@ export type NotificationLogRow = {
   message: string;
   sent_at: string | null;
   recipient_phone: string;
-  status: 'queued' | 'sent' | 'failed' | 'delivered';
+  status:
+    | 'queued'
+    | 'sent'
+    | 'failed'
+    | 'delivered'
+    | 'skipped_no_active_subscription'
+    | 'skipped_feature_disabled'
+    | 'skipped_cap_reached'
+    | 'skipped_subscription_expired'
+    | 'skipped_unknown';
 };
 
 export type NotificationsRepository = {
@@ -46,7 +55,16 @@ export type NotificationsRepository = {
       type: NotificationType;
       recipientPhone: string;
       message: string;
-      status: 'queued' | 'sent' | 'failed' | 'delivered';
+      status:
+        | 'queued'
+        | 'sent'
+        | 'failed'
+        | 'delivered'
+        | 'skipped_no_active_subscription'
+        | 'skipped_feature_disabled'
+        | 'skipped_cap_reached'
+        | 'skipped_subscription_expired'
+        | 'skipped_unknown';
       providerRef?: string;
       relatedId?: string;
       sentAt?: Date;

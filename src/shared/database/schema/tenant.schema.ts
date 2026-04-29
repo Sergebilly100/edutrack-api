@@ -49,6 +49,7 @@ export const notificationTypeEnum = tenant.enum('notification_type', [
   'teacher_qr_missing_scan',
   'teacher_qr_scan_out_of_time',
   'student_absent_parent',
+  'subscription_expiry_alert',
   'payment_reminder',
   'custom',
 ]);
@@ -58,6 +59,11 @@ export const notificationStatusEnum = tenant.enum('notification_status', [
   'sent',
   'failed',
   'delivered',
+  'skipped_no_active_subscription',
+  'skipped_feature_disabled',
+  'skipped_cap_reached',
+  'skipped_subscription_expired',
+  'skipped_unknown',
 ]);
 
 export const importTypeEnum = tenant.enum('import_type', [

@@ -57,6 +57,7 @@ export type NotificationType =
   | 'teacher_qr_missing_scan'
   | 'teacher_qr_scan_out_of_time'
   | 'student_absent_parent'
+  | 'subscription_expiry_alert'
   | 'payment_reminder'
   | 'custom';
 
@@ -87,4 +88,9 @@ export type PermissionKey =
   | 'import.schedule'
   | 'settings.positions'
   | 'settings.school'
-  | 'settings.sms_templates';
+  | 'settings.sms_templates'
+  | 'subscriptions.view'
+  | 'subscriptions.create'
+  | 'subscriptions.renew'
+  | 'subscriptions.cancel'
+  | 'subscriptions.revenue';

@@ -157,6 +157,7 @@ export const schoolSmsFeatures = pgTable(
     isEnabled: boolean('is_enabled').notNull().default(false),
     commissionPct: numeric('commission_pct', { precision: 5, scale: 2 }).notNull().default('0'),
     smsCapPerStudent: integer('sms_cap_per_student').notNull().default(60),
+    smsUnitPriceFcfa: integer('sms_unit_price_fcfa'),
     activatedAt: timestamp('activated_at', { withTimezone: true, mode: 'date' }),
     activatedBy: uuid('activated_by'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),

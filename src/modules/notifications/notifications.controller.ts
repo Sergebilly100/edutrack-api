@@ -15,6 +15,7 @@ const notificationTypes: NotificationType[] = [
   'teacher_qr_missing_scan',
   'teacher_qr_scan_out_of_time',
   'student_absent_parent',
+  'subscription_expiry_alert',
   'payment_reminder',
   'custom',
 ];

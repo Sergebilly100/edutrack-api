@@ -24,6 +24,11 @@ import { defaultRepository } from './modules/notifications/notifications.reposit
 import { NotificationsService, defaultSmsSender } from './modules/notifications/notifications.service.js';
 import roomsController from './modules/rooms/rooms.controller.js';
 import schoolController from './modules/school/school.controller.js';
+import subscriptionsController from './modules/subscriptions/subscriptions.controller.js';
+import {
+  createSubscriptionMaintenanceQueue,
+  createSubscriptionMaintenanceWorker,
+} from './modules/subscriptions/subscriptions.maintenance.js';
 import studentsController from './modules/students/students.controller.js';
 import scheduleController from './modules/schedule/schedule.controller.js';
 import teachersController from './modules/teachers/teachers.controller.js';
@@ -34,8 +39,11 @@ const port = Number(process.env.PORT || 3000);
 const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
 const notificationsRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
 const billingRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
+const subscriptionsRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
 const notificationsQueue = createNotificationsQueue(notificationsRedis);
 const billingWorker = createBillingPdfWorker(billingRedis);
+const subscriptionsMaintenanceQueue = createSubscriptionMaintenanceQueue(subscriptionsRedis);
+const subscriptionsMaintenanceWorker = createSubscriptionMaintenanceWorker(subscriptionsRedis);
 const notificationsWorker = createNotificationsWorker(notificationsRedis, {
   repository: defaultRepository,
   smsSender: defaultSmsSender,
@@ -143,6 +151,7 @@ app.register(documentsController);
 app.register(schoolController);
 app.register(importExportController);
 app.register(permissionsController);
+app.register(subscriptionsController);
 
 app.get('/health', async () => ({ status: 'ok' }));
 
@@ -153,11 +162,27 @@ app.addHook('onClose', async () => {
   await billingRedis.quit();
   await notificationsWorker.close();
   await notificationsQueue.close();
+  await subscriptionsMaintenanceWorker.close();
+  await subscriptionsMaintenanceQueue.close();
   await notificationsRedis.quit();
+  await subscriptionsRedis.quit();
 });
 
 const start = async (): Promise<void> => {
   try {
+    const subscriptionMaintenanceSchemaName =
+      process.env.SUBSCRIPTION_MAINTENANCE_SCHEMA ?? 'school_sainte_marie';
+    await subscriptionsMaintenanceQueue.upsertJobScheduler(
+      'subscription-maintenance-daily',
+      {
+        pattern: '0 8 * * *',
+        tz: 'Africa/Abidjan',
+      },
+      {
+        name: 'daily-subscription-maintenance',
+        data: { schemaName: subscriptionMaintenanceSchemaName },
+      }
+    );
     await app.listen({ port, host: '0.0.0.0' });
     console.log(`Server listening on port ${port}`);
   } catch (error) {

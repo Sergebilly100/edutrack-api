@@ -1055,6 +1055,7 @@ const main = async (): Promise<void> => {
       is_enabled,
       commission_pct,
       sms_cap_per_student,
+      sms_unit_price_fcfa,
       activated_at,
       activated_by
     )
@@ -1063,6 +1064,7 @@ const main = async (): Promise<void> => {
       true,
       15.00,
       60,
+      1000,
       NOW(),
       ${superAdminIdForSmsFeature}
     )
@@ -1071,6 +1073,7 @@ const main = async (): Promise<void> => {
       is_enabled = EXCLUDED.is_enabled,
       commission_pct = EXCLUDED.commission_pct,
       sms_cap_per_student = EXCLUDED.sms_cap_per_student,
+      sms_unit_price_fcfa = EXCLUDED.sms_unit_price_fcfa,
       activated_at = EXCLUDED.activated_at,
       activated_by = EXCLUDED.activated_by,
       updated_at = NOW()

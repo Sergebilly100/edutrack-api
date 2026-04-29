@@ -83,6 +83,14 @@ export const queryTenant = async <TRow extends QueryResultRow = QueryResultRow>(
   return result.rows;
 };
 
+export const queryPublic = async <TRow extends QueryResultRow = QueryResultRow>(
+  text: string,
+  values: unknown[] = []
+): Promise<TRow[]> => {
+  const result = await pool.query<TRow>(text, values);
+  return result.rows;
+};
+
 const getContext = (): SeedContext => {
   if (!seedContext) {
     throw new Error('[integration] Seed context is not initialized');
@@ -393,6 +401,7 @@ const initApp = async (): Promise<FastifyInstance> => {
     { default: importExportController },
     { default: permissionsController },
     { default: teachersController },
+    { default: subscriptionsController },
   ] = await Promise.all([
     import('../../src/modules/auth/auth.controller.js'),
     import('../../src/modules/attendance/attendance.controller.js'),
@@ -401,6 +410,7 @@ const initApp = async (): Promise<FastifyInstance> => {
     import('../../src/modules/import-export/import.controller.js'),
     import('../../src/modules/permissions/permissions.controller.js'),
     import('../../src/modules/teachers/teachers.controller.js'),
+    import('../../src/modules/subscriptions/subscriptions.controller.js'),
   ]);
 
   const testApp = Fastify({ logger: false });
@@ -417,6 +427,7 @@ const initApp = async (): Promise<FastifyInstance> => {
   testApp.register(importExportController);
   testApp.register(permissionsController);
   testApp.register(teachersController);
+  testApp.register(subscriptionsController);
 
   await testApp.ready();
   return testApp;

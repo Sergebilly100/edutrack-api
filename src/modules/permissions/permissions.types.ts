@@ -30,6 +30,11 @@ export const PERMISSION_KEYS = [
   'settings.positions',
   'settings.school',
   'settings.sms_templates',
+  'subscriptions.view',
+  'subscriptions.create',
+  'subscriptions.renew',
+  'subscriptions.cancel',
+  'subscriptions.revenue',
 ] as const satisfies readonly PermissionKey[];
 
 const permissionKeySchema = z.enum(PERMISSION_KEYS);

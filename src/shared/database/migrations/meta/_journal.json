@@ -113,6 +113,13 @@
       "when": 1777415400000,
       "tag": "0018_sms_parent_subscriptions",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1777422600000,
+      "tag": "0019_subscriptions_runtime_support",
+      "breakpoints": true
     }
   ]
 }

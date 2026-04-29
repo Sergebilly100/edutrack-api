@@ -25,6 +25,8 @@ import {
   type NotificationsRepository,
   type TenantDbLike,
 } from './notifications.repository.js';
+import { SubscriptionsRepository } from '../subscriptions/subscriptions.repository.js';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
 
 type NotificationsServiceDeps = {
   withTenantSchema: <T>(
@@ -419,6 +421,40 @@ export class NotificationsService {
 
   async handleStudentAbsent(payload: StudentAbsentPayload): Promise<void> {
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
+      const subscriptionsService = new SubscriptionsService(
+        new SubscriptionsRepository(tenantDb as any)
+      );
+      const canSend = await subscriptionsService
+        .canSendNotification({
+          studentId: payload.studentId,
+          tenantId: payload.tenantId,
+          schemaName: payload.schemaName,
+          type: 'sms',
+        })
+        .catch(() => ({
+          allowed: true as const,
+          subscriptionId: '',
+          parentPhone: payload.parentPhone,
+          parentEmail: null,
+        }));
+      if (!canSend.allowed) {
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'student_absent_parent',
+          recipientPhone: payload.parentPhone,
+          message: '',
+          status:
+            canSend.reason === 'feature_disabled'
+              ? 'skipped_feature_disabled'
+              : canSend.reason === 'cap_reached'
+                ? 'skipped_cap_reached'
+                : canSend.reason === 'subscription_expired'
+                  ? 'skipped_subscription_expired'
+                  : 'skipped_no_active_subscription',
+          relatedId: payload.scheduleId,
+        });
+        return;
+      }
+
       const template = await resolveSmsTemplateMessage(
         payload.schemaName,
         SMS_TEMPLATE_STUDENT_ABSENT_TYPE,
@@ -452,12 +488,19 @@ export class NotificationsService {
 
       await this.deps.repository.insertNotificationLog(tenantDb, {
         type: 'student_absent_parent',
-        recipientPhone: payload.parentPhone,
+        recipientPhone: canSend.parentPhone ?? payload.parentPhone,
         message,
         status: 'queued',
         providerRef: queueRef,
         relatedId: payload.scheduleId,
       });
+      if (canSend.subscriptionId) {
+        await subscriptionsService.incrementUsage({
+          studentId: payload.studentId,
+          subscriptionId: canSend.subscriptionId,
+          type: 'sms',
+        });
+      }
     });
   }
 
