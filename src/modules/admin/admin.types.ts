@@ -72,6 +72,32 @@ export const schoolTenantIdParamsSchema = z.object({
   tenantId: z.string().uuid(),
 });
 
+export const smsFeatureActivateBodySchema = z.object({
+  commission_pct: z.coerce.number().min(0).max(100),
+});
+
+export const smsFeatureConfigBodySchema = z
+  .object({
+    commission_pct: z.coerce.number().min(0).max(100).optional(),
+    sms_cap_per_student: z.coerce.number().int().min(0).max(10000).optional(),
+  })
+  .refine(
+    (value) => value.commission_pct !== undefined || value.sms_cap_per_student !== undefined,
+    {
+      message: 'At least one field must be provided',
+    }
+  );
+
+export const smsFeatureMonthQuerySchema = z.object({
+  month: z.string().regex(/^\d{4}-\d{2}$/),
+});
+
+export const smsFeatureCommissionPaymentBodySchema = z.object({
+  period_month: z.string().regex(/^\d{4}-\d{2}$/),
+  amount_fcfa: z.coerce.number().int().min(1),
+  notes: z.string().trim().max(1000).optional(),
+});
+
 export const listSchoolsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(200).default(25),

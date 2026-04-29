@@ -1,0 +1,118 @@
+import { beforeAll, describe, expect, it } from 'vitest';
+
+import { signAccessToken } from '../../src/modules/auth/auth.service.js';
+import { getSeedContext, queryPublic, queryTenant, request, tenantTable, TEST_SCHEMA_NAME } from './setup.js';
+
+type TenantRow = { id: string };
+
+describe('admin sms-feature integration', () => {
+  let tenantId = '';
+  let adminToken = '';
+
+  beforeAll(async () => {
+    const tenantRows = await queryPublic<TenantRow>(
+      `
+        INSERT INTO public.tenants (name, subdomain, schema_name, plan, status, max_users, onboarding_completed)
+        VALUES ($1, $2, $3, 'pro', 'active', 50, true)
+        ON CONFLICT (schema_name)
+        DO UPDATE SET updated_at = NOW()
+        RETURNING id::text
+      `,
+      ['A4 Integration School', `a4-${Date.now()}`, TEST_SCHEMA_NAME]
+    );
+    tenantId = tenantRows[0]!.id;
+
+    adminToken = await signAccessToken({
+      sub: getSeedContext().directorUserId,
+      role: 'super_admin',
+      schemaName: TEST_SCHEMA_NAME,
+      tenantId,
+    });
+  });
+
+  it('POST activate → school_sms_features créé avec is_enabled=true', async () => {
+    const response = await request()
+      .post(`/api/v1/admin/schools/${tenantId}/sms-feature/activate`)
+      .set('authorization', `Bearer ${adminToken}`)
+      .send({ commission_pct: 15 });
+
+    expect(response.status).toBe(200);
+    expect(response.body.is_enabled).toBe(true);
+
+    const rows = await queryPublic<{ is_enabled: boolean }>(
+      `SELECT is_enabled FROM public.school_sms_features WHERE tenant_id = $1::uuid LIMIT 1`,
+      [tenantId]
+    );
+    expect(rows[0]?.is_enabled).toBe(true);
+  });
+
+  it('POST deactivate → is_enabled=false, souscriptions intactes', async () => {
+    const context = getSeedContext();
+    const parent = await queryTenant<{ id: string }>(
+      `INSERT INTO ${tenantTable('parents')} (full_name, phone, password_hash, is_active) VALUES ('A4 Parent', '2250707777777', 'hash', true) RETURNING id::text`
+    );
+    await queryTenant(
+      `
+        INSERT INTO ${tenantTable('parent_subscriptions')} (
+          parent_id, unit_price_fcfa, student_count, total_amount_fcfa, duration_months, starts_at, ends_at, status, created_by
+        ) VALUES ($1::uuid, 1000, 1, 1000, 1, CURRENT_DATE, CURRENT_DATE + INTERVAL '30 day', 'active', $2::uuid)
+      `,
+      [parent[0]!.id, context.directorUserId]
+    );
+
+    const before = await queryTenant<{ count: number }>(`SELECT COUNT(*)::int AS count FROM ${tenantTable('parent_subscriptions')}`);
+
+    const response = await request()
+      .post(`/api/v1/admin/schools/${tenantId}/sms-feature/deactivate`)
+      .set('authorization', `Bearer ${adminToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.is_enabled).toBe(false);
+
+    const after = await queryTenant<{ count: number }>(`SELECT COUNT(*)::int AS count FROM ${tenantTable('parent_subscriptions')}`);
+    expect(after[0]?.count).toBe(before[0]?.count);
+  });
+
+  it('GET stats retourne les bonnes valeurs depuis le seed', async () => {
+    const response = await request()
+      .get(`/api/v1/admin/schools/${tenantId}/sms-feature/stats`)
+      .set('authorization', `Bearer ${adminToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveProperty('config');
+    expect(response.body).toHaveProperty('current_month');
+    expect(response.body).toHaveProperty('history');
+    expect(response.body).toHaveProperty('sms_sent_this_month');
+  });
+
+  it('POST record-commission-received met à jour commission_paid_fcfa', async () => {
+    const month = new Date().toISOString().slice(0, 7);
+
+    await request()
+      .post(`/api/v1/admin/schools/${tenantId}/sms-feature/sync-commission?month=${month}`)
+      .set('authorization', `Bearer ${adminToken}`);
+
+    const response = await request()
+      .post(`/api/v1/admin/schools/${tenantId}/sms-feature/record-commission-received`)
+      .set('authorization', `Bearer ${adminToken}`)
+      .send({ period_month: month, amount_fcfa: 1000, notes: 'a4 test' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.commission_paid_fcfa).toBeGreaterThanOrEqual(1000);
+  });
+
+  it('GET global-stats liste les écoles avec feature activée', async () => {
+    await request()
+      .post(`/api/v1/admin/schools/${tenantId}/sms-feature/activate`)
+      .set('authorization', `Bearer ${adminToken}`)
+      .send({ commission_pct: 12 });
+
+    const response = await request()
+      .get('/api/v1/admin/sms-feature/global-stats')
+      .set('authorization', `Bearer ${adminToken}`);
+
+    expect(response.status).toBe(200);
+    expect(Array.isArray(response.body.items)).toBe(true);
+    expect(response.body.items.some((item: { tenant_id: string }) => item.tenant_id === tenantId)).toBe(true);
+  }, 15000);
+});

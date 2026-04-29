@@ -17,6 +17,13 @@ const mocks = vi.hoisted(() => ({
   listSmsTemplates: vi.fn(),
   upsertSmsTemplate: vi.fn(),
   deleteTenantSmsTemplate: vi.fn(),
+  activateSchoolSmsFeature: vi.fn(),
+  deactivateSchoolSmsFeature: vi.fn(),
+  updateSchoolSmsFeatureConfig: vi.fn(),
+  syncSchoolSmsCommission: vi.fn(),
+  recordSchoolCommissionReceived: vi.fn(),
+  getSchoolSmsFeatureStats: vi.fn(),
+  getSmsFeatureGlobalStats: vi.fn(),
   attachPublicDb: vi.fn(),
   releaseTenantDb: vi.fn(),
   authenticateRequest: vi.fn(),
@@ -42,6 +49,13 @@ vi.mock('../../src/modules/admin/admin.service.js', async () => {
     listSmsTemplates: mocks.listSmsTemplates,
     upsertSmsTemplate: mocks.upsertSmsTemplate,
     deleteTenantSmsTemplate: mocks.deleteTenantSmsTemplate,
+    activateSchoolSmsFeature: mocks.activateSchoolSmsFeature,
+    deactivateSchoolSmsFeature: mocks.deactivateSchoolSmsFeature,
+    updateSchoolSmsFeatureConfig: mocks.updateSchoolSmsFeatureConfig,
+    syncSchoolSmsCommission: mocks.syncSchoolSmsCommission,
+    recordSchoolCommissionReceived: mocks.recordSchoolCommissionReceived,
+    getSchoolSmsFeatureStats: mocks.getSchoolSmsFeatureStats,
+    getSmsFeatureGlobalStats: mocks.getSmsFeatureGlobalStats,
   };
 });
 
@@ -139,6 +153,46 @@ beforeEach(() => {
   mocks.listSmsTemplates.mockResolvedValue([]);
   mocks.upsertSmsTemplate.mockResolvedValue(undefined);
   mocks.deleteTenantSmsTemplate.mockResolvedValue(undefined);
+  mocks.activateSchoolSmsFeature.mockResolvedValue({
+    is_enabled: true,
+    commission_pct: 15,
+    activated_at: '2026-04-29T00:00:00.000Z',
+  });
+  mocks.deactivateSchoolSmsFeature.mockResolvedValue({ is_enabled: false });
+  mocks.updateSchoolSmsFeatureConfig.mockResolvedValue({
+    is_enabled: true,
+    commission_pct: 15,
+    sms_cap_per_student: 60,
+  });
+  mocks.syncSchoolSmsCommission.mockResolvedValue({
+    tenant_id: TENANT_ID,
+    period_month: '2026-04-01',
+    total_subscriptions_fcfa: 2000,
+    commission_pct: 15,
+    commission_due_fcfa: 300,
+    commission_paid_fcfa: 0,
+  });
+  mocks.recordSchoolCommissionReceived.mockResolvedValue({
+    period_month: '2026-04-01',
+    commission_due_fcfa: 300,
+    commission_paid_fcfa: 100,
+    commission_remaining_fcfa: 200,
+    overpaid: false,
+  });
+  mocks.getSchoolSmsFeatureStats.mockResolvedValue({
+    config: { is_enabled: true, commission_pct: 15, sms_cap_per_student: 60 },
+    current_month: {
+      subscriptions_active: 2,
+      subscriptions_new: 1,
+      total_collected_fcfa: 2000,
+      commission_due_fcfa: 300,
+      commission_paid_fcfa: 100,
+      commission_remaining_fcfa: 200,
+    },
+    history: [],
+    sms_sent_this_month: 20,
+  });
+  mocks.getSmsFeatureGlobalStats.mockResolvedValue([]);
 });
 
 describe('admin V3 routes', () => {
@@ -404,6 +458,59 @@ describe('admin V3 routes', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ success: true });
     expect(mocks.deleteTenantSmsTemplate).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('POST /api/v1/admin/schools/:tenantId/sms-feature/activate active la feature SMS', async () => {
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/schools/${TENANT_ID}/sms-feature/activate`,
+      payload: { commission_pct: 15 },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.activateSchoolSmsFeature).toHaveBeenCalledTimes(1);
+    expect(response.json().is_enabled).toBe(true);
+    await app.close();
+  });
+
+  it('POST /api/v1/admin/schools/:tenantId/sms-feature/deactivate désactive la feature SMS', async () => {
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/schools/${TENANT_ID}/sms-feature/deactivate`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.deactivateSchoolSmsFeature).toHaveBeenCalledTimes(1);
+    expect(response.json().is_enabled).toBe(false);
+    await app.close();
+  });
+
+  it('GET /api/v1/admin/schools/:tenantId/sms-feature/stats retourne les stats SMS', async () => {
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/v1/admin/schools/${TENANT_ID}/sms-feature/stats`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.getSchoolSmsFeatureStats).toHaveBeenCalledTimes(1);
+    expect(response.json().config.is_enabled).toBe(true);
+    await app.close();
+  });
+
+  it('GET /api/v1/admin/sms-feature/global-stats retourne une liste consolidée', async () => {
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/sms-feature/global-stats',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.getSmsFeatureGlobalStats).toHaveBeenCalledTimes(1);
+    expect(response.json()).toHaveProperty('items');
     await app.close();
   });
 });

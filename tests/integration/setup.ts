@@ -395,6 +395,7 @@ const truncateAttendanceTables = async (): Promise<void> => {
 const initApp = async (): Promise<FastifyInstance> => {
   const [
     { default: authController },
+    { default: adminController },
     { default: attendanceController },
     { default: billingController },
     { default: scheduleController },
@@ -405,6 +406,7 @@ const initApp = async (): Promise<FastifyInstance> => {
     { default: parentPortalController },
   ] = await Promise.all([
     import('../../src/modules/auth/auth.controller.js'),
+    import('../../src/modules/admin/admin.controller.js'),
     import('../../src/modules/attendance/attendance.controller.js'),
     import('../../src/modules/billing/billing.controller.js'),
     import('../../src/modules/schedule/schedule.controller.js'),
@@ -423,6 +425,7 @@ const initApp = async (): Promise<FastifyInstance> => {
   });
 
   testApp.register(authController);
+  testApp.register(adminController);
   testApp.register(attendanceController);
   testApp.register(billingController);
   testApp.register(scheduleController);

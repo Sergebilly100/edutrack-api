@@ -7,6 +7,10 @@ import {
   listSchoolsQuerySchema,
   listTenantsQuerySchema,
   maintenanceConfigSchema,
+  smsFeatureActivateBodySchema,
+  smsFeatureCommissionPaymentBodySchema,
+  smsFeatureConfigBodySchema,
+  smsFeatureMonthQuerySchema,
   planParamsSchema,
   schoolTenantIdParamsSchema,
   smsPlatformAuditQuerySchema,
@@ -23,6 +27,7 @@ import {
   addManualPayment,
   clearAdminCache,
   createImpersonationToken,
+  deactivateSchoolSmsFeature,
   createSchool,
   createTenant,
   deleteTenantSmsTemplate,
@@ -30,8 +35,11 @@ import {
   getMaintenanceConfig,
   getRevenueMetrics,
   getRevenueSummary,
+  getSchoolSmsFeatureStats,
+  getSmsFeatureGlobalStats,
   getSchoolDetails,
   sendSchoolPaymentReminder,
+  syncSchoolSmsCommission,
   getSchoolUsers,
   getSmsDashboard,
   getSmsPlatformConfig,
@@ -43,10 +51,13 @@ import {
   listSchools,
   listTenants,
   updateMaintenanceConfig,
+  activateSchoolSmsFeature,
+  recordSchoolCommissionReceived,
   updatePlanCatalog,
   updateSmsPlatformConfig,
   upsertSmsTemplate,
   updateSchoolConfig,
+  updateSchoolSmsFeatureConfig,
   updateTenant,
 } from './admin.service.js';
 import { adminAuditOnSend } from '../../shared/middleware/admin-audit.middleware.js';
@@ -242,6 +253,112 @@ export default async function adminController(app: FastifyInstance): Promise<voi
         const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
         const result = await sendSchoolPaymentReminder(ensurePublicDb(request), tenantId);
         return reply.send(result);
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/admin/schools/:tenantId/sms-feature/activate',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+        const body = smsFeatureActivateBodySchema.parse(request.body);
+        const result = await activateSchoolSmsFeature(
+          ensurePublicDb(request),
+          tenantId,
+          body,
+          request.auth?.sub
+        );
+        return reply.send(result);
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/admin/schools/:tenantId/sms-feature/deactivate',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+        const result = await deactivateSchoolSmsFeature(ensurePublicDb(request), tenantId);
+        return reply.send(result);
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.patch(
+    '/api/v1/admin/schools/:tenantId/sms-feature/config',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+        const body = smsFeatureConfigBodySchema.parse(request.body);
+        const result = await updateSchoolSmsFeatureConfig(ensurePublicDb(request), tenantId, body);
+        return reply.send(result);
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/admin/schools/:tenantId/sms-feature/sync-commission',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+        const query = smsFeatureMonthQuerySchema.parse(request.query ?? {});
+        const result = await syncSchoolSmsCommission(ensurePublicDb(request), tenantId, query.month);
+        return reply.send(result);
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/admin/schools/:tenantId/sms-feature/record-commission-received',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+        const body = smsFeatureCommissionPaymentBodySchema.parse(request.body ?? {});
+        const result = await recordSchoolCommissionReceived(ensurePublicDb(request), tenantId, body);
+        return reply.send(result);
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.get(
+    '/api/v1/admin/schools/:tenantId/sms-feature/stats',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+        const result = await getSchoolSmsFeatureStats(ensurePublicDb(request), tenantId);
+        return reply.send(result);
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.get(
+    '/api/v1/admin/sms-feature/global-stats',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const result = await getSmsFeatureGlobalStats(ensurePublicDb(request));
+        return reply.send({ items: result });
       } catch (error) {
         return handleError(reply, error);
       }

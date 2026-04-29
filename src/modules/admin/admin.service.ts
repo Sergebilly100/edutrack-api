@@ -38,6 +38,7 @@ import { withTenantSchema, type TenantDb } from '../../shared/database/db.js';
 import { createTenantSchema } from '../../shared/database/tenant-init.js';
 import { signJwtRs256 } from '../../shared/auth/jwt.js';
 import { emit } from '../../shared/events/event-bus.js';
+import { SubscriptionsRepository } from '../subscriptions/subscriptions.repository.js';
 
 type TenantRow = {
   id: string;
@@ -2345,6 +2346,415 @@ export const listSmsPlatformAudit = async (
     createdAt: row.created_at,
     details: toRecord(row.details),
   }));
+};
+
+const monthStart = (month: string): string => `${month}-01`;
+const monthFromDate = (date: Date): string =>
+  `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+
+const getTenantSmsFeatureConfig = async (
+  publicDb: TenantDb,
+  tenantId: string
+): Promise<{ is_enabled: boolean; commission_pct: number; sms_cap_per_student: number } | null> => {
+  const result = await publicDb.execute<{
+    is_enabled: boolean;
+    commission_pct: string | number;
+    sms_cap_per_student: number;
+  }>(sql`
+    SELECT is_enabled, commission_pct, sms_cap_per_student
+    FROM public.school_sms_features
+    WHERE tenant_id = ${tenantId}::uuid
+    LIMIT 1
+  `);
+
+  const row = getRows<{
+    is_enabled: boolean;
+    commission_pct: string | number;
+    sms_cap_per_student: number;
+  }>(result)[0];
+  if (!row) {
+    return null;
+  }
+
+  return {
+    is_enabled: row.is_enabled,
+    commission_pct: parseNumeric(row.commission_pct),
+    sms_cap_per_student: row.sms_cap_per_student,
+  };
+};
+
+export const activateSchoolSmsFeature = async (
+  publicDb: TenantDb,
+  tenantId: string,
+  payload: { commission_pct: number },
+  adminId?: string
+): Promise<{ is_enabled: boolean; commission_pct: number; activated_at: string }> => {
+  await ensureAdminPublicInfrastructure(publicDb);
+  await getTenantById(publicDb, tenantId);
+
+  const result = await publicDb.execute<{
+    is_enabled: boolean;
+    commission_pct: string | number;
+    activated_at: string;
+  }>(sql`
+    INSERT INTO public.school_sms_features (
+      tenant_id, is_enabled, commission_pct, activated_at, activated_by, updated_at
+    )
+    VALUES (${tenantId}::uuid, true, ${payload.commission_pct}, NOW(), ${adminId ?? null}::uuid, NOW())
+    ON CONFLICT (tenant_id)
+    DO UPDATE SET
+      is_enabled = true,
+      commission_pct = EXCLUDED.commission_pct,
+      activated_at = NOW(),
+      activated_by = EXCLUDED.activated_by,
+      updated_at = NOW()
+    RETURNING is_enabled, commission_pct, activated_at::text
+  `);
+  const row = getRows<{
+    is_enabled: boolean;
+    commission_pct: string | number;
+    activated_at: string;
+  }>(result)[0]!;
+  return {
+    is_enabled: row.is_enabled,
+    commission_pct: parseNumeric(row.commission_pct),
+    activated_at: row.activated_at,
+  };
+};
+
+export const deactivateSchoolSmsFeature = async (
+  publicDb: TenantDb,
+  tenantId: string
+): Promise<{ is_enabled: boolean }> => {
+  await ensureAdminPublicInfrastructure(publicDb);
+  await getTenantById(publicDb, tenantId);
+
+  await publicDb.execute(sql`
+    INSERT INTO public.school_sms_features (tenant_id, is_enabled, commission_pct, updated_at)
+    VALUES (${tenantId}::uuid, false, 0, NOW())
+    ON CONFLICT (tenant_id)
+    DO UPDATE SET
+      is_enabled = false,
+      updated_at = NOW()
+  `);
+
+  return { is_enabled: false };
+};
+
+export const updateSchoolSmsFeatureConfig = async (
+  publicDb: TenantDb,
+  tenantId: string,
+  payload: { commission_pct?: number; sms_cap_per_student?: number }
+): Promise<{ is_enabled: boolean; commission_pct: number; sms_cap_per_student: number }> => {
+  await ensureAdminPublicInfrastructure(publicDb);
+  await getTenantById(publicDb, tenantId);
+
+  await publicDb.execute(sql`
+    INSERT INTO public.school_sms_features (
+      tenant_id, is_enabled, commission_pct, sms_cap_per_student, updated_at
+    )
+    VALUES (
+      ${tenantId}::uuid,
+      false,
+      ${payload.commission_pct ?? 0},
+      ${payload.sms_cap_per_student ?? 60},
+      NOW()
+    )
+    ON CONFLICT (tenant_id)
+    DO UPDATE SET
+      commission_pct = CASE
+        WHEN ${payload.commission_pct !== undefined}
+          THEN ${payload.commission_pct ?? 0}
+        ELSE public.school_sms_features.commission_pct
+      END,
+      sms_cap_per_student = CASE
+        WHEN ${payload.sms_cap_per_student !== undefined}
+          THEN ${payload.sms_cap_per_student ?? 60}
+        ELSE public.school_sms_features.sms_cap_per_student
+      END,
+      updated_at = NOW()
+  `);
+
+  const config = await getTenantSmsFeatureConfig(publicDb, tenantId);
+  return (
+    config ?? {
+      is_enabled: false,
+      commission_pct: payload.commission_pct ?? 0,
+      sms_cap_per_student: payload.sms_cap_per_student ?? 60,
+    }
+  );
+};
+
+export const syncSchoolSmsCommission = async (
+  publicDb: TenantDb,
+  tenantId: string,
+  month: string
+): Promise<{
+  tenant_id: string;
+  period_month: string;
+  total_subscriptions_fcfa: number;
+  commission_pct: number;
+  commission_due_fcfa: number;
+  commission_paid_fcfa: number;
+}> => {
+  const tenant = await getTenantById(publicDb, tenantId);
+  const config = await getTenantSmsFeatureConfig(publicDb, tenantId);
+  const commissionPct = config?.commission_pct ?? 0;
+
+  const revenue = await withTenantSchema(tenant.schema_name, async (tenantDb) => {
+    const repository = new SubscriptionsRepository(tenantDb);
+    return repository.computeMonthlyRevenue(month);
+  });
+
+  const total = revenue.total_subscriptions_fcfa;
+  const due = Math.round((total * commissionPct) / 100);
+  const periodMonth = monthStart(month);
+
+  const result = await publicDb.execute<{
+    tenant_id: string;
+    period_month: string;
+    total_subscriptions_fcfa: number;
+    commission_pct: string | number;
+    commission_due_fcfa: number;
+    commission_paid_fcfa: number;
+  }>(sql`
+    INSERT INTO public.edutrack_commission_records (
+      tenant_id,
+      period_month,
+      total_subscriptions_fcfa,
+      commission_pct,
+      commission_due_fcfa,
+      commission_paid_fcfa,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      ${tenantId}::uuid,
+      ${periodMonth}::date,
+      ${total},
+      ${commissionPct},
+      ${due},
+      0,
+      NOW(),
+      NOW()
+    )
+    ON CONFLICT (tenant_id, period_month)
+    DO UPDATE SET
+      total_subscriptions_fcfa = EXCLUDED.total_subscriptions_fcfa,
+      commission_pct = EXCLUDED.commission_pct,
+      commission_due_fcfa = EXCLUDED.commission_due_fcfa,
+      updated_at = NOW()
+    RETURNING
+      tenant_id::text,
+      period_month::text,
+      total_subscriptions_fcfa,
+      commission_pct,
+      commission_due_fcfa,
+      commission_paid_fcfa
+  `);
+
+  const row = getRows<{
+    tenant_id: string;
+    period_month: string;
+    total_subscriptions_fcfa: number;
+    commission_pct: string | number;
+    commission_due_fcfa: number;
+    commission_paid_fcfa: number;
+  }>(result)[0]!;
+  return {
+    tenant_id: row.tenant_id,
+    period_month: row.period_month,
+    total_subscriptions_fcfa: row.total_subscriptions_fcfa,
+    commission_pct: parseNumeric(row.commission_pct),
+    commission_due_fcfa: row.commission_due_fcfa,
+    commission_paid_fcfa: row.commission_paid_fcfa,
+  };
+};
+
+export const recordSchoolCommissionReceived = async (
+  publicDb: TenantDb,
+  tenantId: string,
+  payload: { period_month: string; amount_fcfa: number; notes?: string }
+): Promise<{
+  period_month: string;
+  commission_due_fcfa: number;
+  commission_paid_fcfa: number;
+  commission_remaining_fcfa: number;
+  overpaid: boolean;
+}> => {
+  const synced = await syncSchoolSmsCommission(publicDb, tenantId, payload.period_month);
+  const periodMonth = monthStart(payload.period_month);
+
+  const result = await publicDb.execute<{
+    period_month: string;
+    commission_due_fcfa: number;
+    commission_paid_fcfa: number;
+  }>(sql`
+    UPDATE public.edutrack_commission_records
+    SET
+      commission_paid_fcfa = commission_paid_fcfa + ${payload.amount_fcfa},
+      last_payment_at = NOW(),
+      notes = COALESCE(${payload.notes ?? null}, notes),
+      updated_at = NOW()
+    WHERE tenant_id = ${tenantId}::uuid
+      AND period_month = ${periodMonth}::date
+    RETURNING period_month::text, commission_due_fcfa, commission_paid_fcfa
+  `);
+
+  const row = getRows<{
+    period_month: string;
+    commission_due_fcfa: number;
+    commission_paid_fcfa: number;
+  }>(result)[0]!;
+  const remaining = Math.max(0, row.commission_due_fcfa - row.commission_paid_fcfa);
+  const overpaid = row.commission_paid_fcfa > row.commission_due_fcfa;
+
+  void synced;
+  return {
+    period_month: row.period_month,
+    commission_due_fcfa: row.commission_due_fcfa,
+    commission_paid_fcfa: row.commission_paid_fcfa,
+    commission_remaining_fcfa: remaining,
+    overpaid,
+  };
+};
+
+export const getSchoolSmsFeatureStats = async (
+  publicDb: TenantDb,
+  tenantId: string
+): Promise<{
+  config: { is_enabled: boolean; commission_pct: number; sms_cap_per_student: number };
+  current_month: {
+    subscriptions_active: number;
+    subscriptions_new: number;
+    total_collected_fcfa: number;
+    commission_due_fcfa: number;
+    commission_paid_fcfa: number;
+    commission_remaining_fcfa: number;
+  };
+  history: Array<{
+    month: string;
+    subscriptions_active: number;
+    subscriptions_new: number;
+    total_collected_fcfa: number;
+    commission_due_fcfa: number;
+    commission_paid_fcfa: number;
+    commission_remaining_fcfa: number;
+  }>;
+  sms_sent_this_month: number;
+}> => {
+  const tenant = await getTenantById(publicDb, tenantId);
+  const config =
+    (await getTenantSmsFeatureConfig(publicDb, tenantId)) ?? {
+      is_enabled: false,
+      commission_pct: 0,
+      sms_cap_per_student: 60,
+    };
+  const currentMonth = monthFromDate(new Date());
+
+  const [currentMonthStats, history, smsSentThisMonth] = await withTenantSchema(
+    tenant.schema_name,
+    async (tenantDb) => {
+      const repo = new SubscriptionsRepository(tenantDb);
+      const current = await repo.getRevenueSummary({ tenantId, month: currentMonth });
+      const due = Math.round((current.monthly_revenue_prorated_fcfa * config.commission_pct) / 100);
+      const currentStats = {
+        subscriptions_active: current.subscriptions_active_count,
+        subscriptions_new: current.subscriptions_new_this_month,
+        total_collected_fcfa: current.total_collected_fcfa,
+        commission_due_fcfa: due,
+        commission_paid_fcfa: current.commission_paid_fcfa,
+        commission_remaining_fcfa: Math.max(0, due - current.commission_paid_fcfa),
+      };
+
+      const historyItems: Array<{
+        month: string;
+        subscriptions_active: number;
+        subscriptions_new: number;
+        total_collected_fcfa: number;
+        commission_due_fcfa: number;
+        commission_paid_fcfa: number;
+        commission_remaining_fcfa: number;
+      }> = [];
+      for (let i = 0; i < 12; i += 1) {
+        const date = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - i, 1));
+        const month = monthFromDate(date);
+        const summary = await repo.getRevenueSummary({ tenantId, month });
+        const commissionDue = Math.round((summary.monthly_revenue_prorated_fcfa * config.commission_pct) / 100);
+        historyItems.push({
+          month,
+          subscriptions_active: summary.subscriptions_active_count,
+          subscriptions_new: summary.subscriptions_new_this_month,
+          total_collected_fcfa: summary.total_collected_fcfa,
+          commission_due_fcfa: commissionDue,
+          commission_paid_fcfa: summary.commission_paid_fcfa,
+          commission_remaining_fcfa: Math.max(0, commissionDue - summary.commission_paid_fcfa),
+        });
+      }
+
+      const smsResult = await tenantDb.execute<{ total: string | number }>(sql`
+        SELECT COALESCE(SUM(sms_sent_count), 0) AS total
+        FROM sms_usage_log
+        WHERE month = ${currentMonth}
+      `);
+
+      return [
+        currentStats,
+        historyItems,
+        Math.round(parseNumeric(getRows<{ total: string | number }>(smsResult)[0]?.total ?? 0)),
+      ] as const;
+    }
+  );
+
+  return {
+    config,
+    current_month: currentMonthStats,
+    history,
+    sms_sent_this_month: smsSentThisMonth,
+  };
+};
+
+export const getSmsFeatureGlobalStats = async (
+  publicDb: TenantDb
+): Promise<
+  Array<{
+    school_name: string;
+    tenant_id: string;
+    subscriptions_active: number;
+    commission_remaining_fcfa: number;
+    is_overdue: boolean;
+  }>
+> => {
+  const rows = await publicDb.execute<{ tenant_id: string; school_name: string; schema_name: string }>(sql`
+    SELECT t.id::text AS tenant_id, t.name AS school_name, t.schema_name
+    FROM public.tenants t
+    INNER JOIN public.school_sms_features f ON f.tenant_id = t.id
+    WHERE f.is_enabled = true
+    ORDER BY t.name ASC
+  `);
+
+  const schools = getRows<{ tenant_id: string; school_name: string; schema_name: string }>(rows);
+  const resolved = await Promise.all(
+    schools.map(async (school) => {
+      try {
+        const stats = await getSchoolSmsFeatureStats(publicDb, school.tenant_id);
+        const remaining = stats.current_month.commission_remaining_fcfa;
+        return {
+          school_name: school.school_name,
+          tenant_id: school.tenant_id,
+          subscriptions_active: stats.current_month.subscriptions_active,
+          commission_remaining_fcfa: remaining,
+          is_overdue: remaining > 0,
+        };
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  return resolved
+    .filter((item): item is NonNullable<typeof item> => item !== null)
+    .sort((a, b) => b.commission_remaining_fcfa - a.commission_remaining_fcfa);
 };
 
 export const getMaintenanceConfig = async (
