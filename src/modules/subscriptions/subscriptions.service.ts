@@ -101,12 +101,26 @@ export class SubscriptionsService {
     const in30Iso = businessDateFromNowPlusDays(30);
     return {
       data: result.rows.map((row) => {
-        const isActive = query.month ? false : row.status === 'active';
+        const isMonthHistory = Boolean(query.month);
+        const isActive = !isMonthHistory && row.status === 'active';
         const resolvedDurationMonths =
-          isActive && row.active_duration_months ? row.active_duration_months : row.duration_months;
+          isMonthHistory
+            ? row.month_duration_months ?? row.duration_months
+            : isActive && row.active_duration_months
+              ? row.active_duration_months
+              : row.duration_months;
         const resolvedTotalAmount =
-          isActive && row.active_total_amount_fcfa ? row.active_total_amount_fcfa : row.total_amount_fcfa;
-        const resolvedEndsAt = isActive && row.active_ends_at ? row.active_ends_at : row.ends_at;
+          isMonthHistory
+            ? row.month_total_amount_fcfa ?? row.total_amount_fcfa
+            : isActive && row.active_total_amount_fcfa
+              ? row.active_total_amount_fcfa
+              : row.total_amount_fcfa;
+        const resolvedEndsAt = isMonthHistory
+          ? row.month_ends_at ?? row.ends_at
+          : isActive && row.active_ends_at
+            ? row.active_ends_at
+            : row.ends_at;
+        const resolvedCreatedAt = isMonthHistory ? row.month_created_at ?? row.created_at : row.created_at;
         const monthlyAmount =
           resolvedTotalAmount && resolvedDurationMonths
             ? Math.round(resolvedTotalAmount / resolvedDurationMonths)
@@ -122,7 +136,7 @@ export class SubscriptionsService {
                 status: row.status,
                 starts_at: row.starts_at,
                 ends_at: resolvedEndsAt,
-                created_at: row.created_at,
+                created_at: resolvedCreatedAt,
                 duration_months: resolvedDurationMonths,
                 total_amount_fcfa: resolvedTotalAmount,
                 monthly_amount_fcfa: monthlyAmount,

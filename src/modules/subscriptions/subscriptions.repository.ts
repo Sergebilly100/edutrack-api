@@ -35,6 +35,10 @@ type ParentListRow = {
   active_total_amount_fcfa: number | null;
   active_duration_months: number | null;
   active_ends_at: string | null;
+  month_total_amount_fcfa: number | null;
+  month_duration_months: number | null;
+  month_ends_at: string | null;
+  month_created_at: string | null;
   students: Array<{ id: string; full_name: string }>;
 };
 
@@ -65,10 +69,21 @@ type SubscriptionRow = {
   cancelled_by_name: string | null;
 };
 
-type StudentRow = { id: string; full_name: string };
+type StudentRow = {
+  id: string;
+  full_name: string;
+  class_name: string | null;
+  registration_number: string | null;
+};
 type ActorRow = { id: string };
 type ClassCatalogRow = { id: string; name: string; students_count: number };
-type ClassStudentCatalogRow = { id: string; full_name: string; class_id: string; class_name: string };
+type ClassStudentCatalogRow = {
+  id: string;
+  full_name: string;
+  class_id: string;
+  class_name: string;
+  registration_number: string | null;
+};
 type PaymentRow = {
   id: string;
   amount_fcfa: number;
@@ -256,17 +271,29 @@ export class SubscriptionsRepository {
         SELECT DISTINCT ON (ps.parent_id)
           ps.parent_id,
           ps.status,
-          ps.created_at
+          ps.created_at,
+          ps.ends_at
         FROM parent_subscriptions ps
-        WHERE (${monthDate}::date IS NULL OR DATE_TRUNC('month', ps.created_at)::date = ${monthDate}::date)
         ORDER BY ps.parent_id, ps.created_at DESC
+      ),
+      month_rollup AS (
+        SELECT
+          ps.parent_id,
+          SUM(ps.total_amount_fcfa)::int AS month_total_amount_fcfa,
+          SUM(ps.duration_months)::int AS month_duration_months,
+          MAX(ps.ends_at)::text AS month_ends_at,
+          MAX(ps.created_at)::text AS month_created_at
+        FROM parent_subscriptions ps
+        WHERE DATE_TRUNC('month', ps.created_at)::date = ${monthDate}::date
+        GROUP BY ps.parent_id
       )
       SELECT COUNT(*)::int AS total
       FROM parents p
       LEFT JOIN latest_sub ls ON ls.parent_id = p.id
+      LEFT JOIN month_rollup mr ON mr.parent_id = p.id
       WHERE (${searchLike}::text IS NULL OR p.full_name ILIKE ${searchLike} OR p.phone ILIKE ${searchLike})
         AND (${statusFilter}::text IS NULL OR ls.status::text = ${statusFilter})
-        AND (${monthDate}::date IS NULL OR ls.created_at IS NOT NULL)
+        AND (${monthDate}::date IS NULL OR mr.parent_id IS NOT NULL)
     `);
     const total = countResult.rows[0]?.total ?? 0;
 
@@ -282,8 +309,18 @@ export class SubscriptionsRepository {
           ps.duration_months,
           ps.created_at
         FROM parent_subscriptions ps
-        WHERE (${monthDate}::date IS NULL OR DATE_TRUNC('month', ps.created_at)::date = ${monthDate}::date)
         ORDER BY ps.parent_id, ps.created_at DESC
+      ),
+      month_rollup AS (
+        SELECT
+          ps.parent_id,
+          SUM(ps.total_amount_fcfa)::int AS month_total_amount_fcfa,
+          SUM(ps.duration_months)::int AS month_duration_months,
+          MAX(ps.ends_at)::text AS month_ends_at,
+          MAX(ps.created_at)::text AS month_created_at
+        FROM parent_subscriptions ps
+        WHERE (${monthDate}::date IS NOT NULL AND DATE_TRUNC('month', ps.created_at)::date = ${monthDate}::date)
+        GROUP BY ps.parent_id
       ),
       active_rollup AS (
         SELECT
@@ -310,6 +347,10 @@ export class SubscriptionsRepository {
         ar.active_total_amount_fcfa,
         ar.active_duration_months,
         ar.active_ends_at,
+        mr.month_total_amount_fcfa,
+        mr.month_duration_months,
+        mr.month_ends_at,
+        mr.month_created_at,
         COALESCE(
           (
             SELECT json_agg(json_build_object('id', s.id::text, 'full_name', CONCAT(s.first_name, ' ', s.last_name)))
@@ -322,9 +363,10 @@ export class SubscriptionsRepository {
       FROM parents p
       LEFT JOIN latest_sub ls ON ls.parent_id = p.id
       LEFT JOIN active_rollup ar ON ar.parent_id = p.id
+      LEFT JOIN month_rollup mr ON mr.parent_id = p.id
       WHERE (${searchLike}::text IS NULL OR p.full_name ILIKE ${searchLike} OR p.phone ILIKE ${searchLike})
         AND (${statusFilter}::text IS NULL OR ls.status::text = ${statusFilter})
-        AND (${monthDate}::date IS NULL OR ls.created_at IS NOT NULL)
+        AND (${monthDate}::date IS NULL OR mr.parent_id IS NOT NULL)
       ORDER BY p.created_at DESC
       LIMIT ${params.limit}
       OFFSET ${offset}
@@ -361,7 +403,13 @@ export class SubscriptionsRepository {
     limit: number;
     search?: string;
   }): Promise<{
-    data: Array<{ id: string; full_name: string; class_id: string; class_name: string }>;
+    data: Array<{
+      id: string;
+      full_name: string;
+      class_id: string;
+      class_name: string;
+      registration_number: string | null;
+    }>;
     pagination: { page: number; limit: number; total: number; totalPages: number };
   }> {
     const offset = (params.page - 1) * params.limit;
@@ -386,7 +434,8 @@ export class SubscriptionsRepository {
         s.id::text AS id,
         CONCAT(s.last_name, ' ', s.first_name) AS full_name,
         c.id::text AS class_id,
-        c.name AS class_name
+        c.name AS class_name,
+        s.matricule::text AS registration_number
       FROM students s
       INNER JOIN classes c ON c.id = s.class_id
       WHERE s.class_id = ${params.classId}::uuid
@@ -408,6 +457,7 @@ export class SubscriptionsRepository {
         full_name: row.full_name,
         class_id: row.class_id,
         class_name: row.class_name,
+        registration_number: row.registration_number,
       })),
       pagination: {
         page: params.page,
@@ -585,9 +635,14 @@ export class SubscriptionsRepository {
 
   async getSubscriptionStudents(subscriptionId: string): Promise<StudentRow[]> {
     const result = await this.tenantDb.execute<StudentRow>(sql`
-      SELECT s.id::text AS id, CONCAT(s.first_name, ' ', s.last_name) AS full_name
+      SELECT
+        s.id::text AS id,
+        CONCAT(s.first_name, ' ', s.last_name) AS full_name,
+        c.name AS class_name,
+        s.matricule::text AS registration_number
       FROM parent_student_links psl
       INNER JOIN students s ON s.id = psl.student_id
+      LEFT JOIN classes c ON c.id = s.class_id
       WHERE psl.subscription_id = ${subscriptionId}::uuid
       ORDER BY s.last_name, s.first_name
     `);
