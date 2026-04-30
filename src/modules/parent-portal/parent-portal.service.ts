@@ -64,7 +64,7 @@ export class ParentPortalService {
   async loginParent(input: {
     phone: string;
     password: string;
-  }): Promise<{ parentId: string; studentIds: string[]; mustChangePassword: boolean }> {
+  }): Promise<{ parentId: string; phone: string; studentIds: string[]; mustChangePassword: boolean }> {
     const parent = await this.repository.findParentByPhone(input.phone);
     if (!parent || !parent.is_active) {
       throw new ParentPortalError('Invalid credentials', 401, 'UNAUTHORIZED');
@@ -85,7 +85,37 @@ export class ParentPortalService {
     }
 
     await this.repository.updateParentLastLogin(parent.id);
-    return { parentId: parent.id, studentIds, mustChangePassword: parent.must_change_password };
+    return {
+      parentId: parent.id,
+      phone: parent.phone,
+      studentIds,
+      mustChangePassword: parent.must_change_password,
+    };
+  }
+
+  async restoreSessionByParentId(input: {
+    parentId: string;
+  }): Promise<{ parentId: string; phone: string; studentIds: string[]; mustChangePassword: boolean }> {
+    const parent = await this.repository.findParentById(input.parentId);
+    if (!parent || !parent.is_active) {
+      throw new ParentPortalError('Invalid credentials', 401, 'UNAUTHORIZED');
+    }
+
+    const studentIds = await this.repository.listActiveStudentIds(parent.id);
+    if (studentIds.length === 0) {
+      throw new ParentPortalError(
+        "Votre abonnement a expiré. Contactez l'établissement.",
+        403,
+        'SUBSCRIPTION_EXPIRED'
+      );
+    }
+
+    return {
+      parentId: parent.id,
+      phone: parent.phone,
+      studentIds,
+      mustChangePassword: parent.must_change_password,
+    };
   }
 
   async listStudents(context: ServiceContext): Promise<ParentStudentSummary[]> {

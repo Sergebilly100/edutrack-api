@@ -456,6 +456,7 @@ export default async function authController(app: FastifyInstance): Promise<void
           role: 'parent' as const,
           tenantId: tenant.id,
           schemaName,
+          phone: auth.phone,
           studentIds: auth.studentIds,
           mustChangePassword: auth.mustChangePassword,
         };
@@ -470,7 +471,7 @@ export default async function authController(app: FastifyInstance): Promise<void
           user: {
             id: auth.parentId,
             role: 'parent',
-            phone: body.phone,
+            phone: auth.phone,
             studentIds: auth.studentIds,
             mustChangePassword: auth.mustChangePassword,
           },

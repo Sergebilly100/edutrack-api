@@ -2,19 +2,13 @@ import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { todayInBusinessTimezone } from '../../shared/utils/business-time.js';
 
-export type TenantDb = NodePgDatabase<Record<string, unknown>>;
+export type TenantDb = Pick<NodePgDatabase<Record<string, unknown>>, 'execute'>;
 
-type ParentAuthRow = {
+type ParentRow = {
   id: string;
   phone: string;
   password_hash: string;
   must_change_password: boolean;
-  is_active: boolean;
-};
-
-type ParentByIdRow = {
-  id: string;
-  password_hash: string;
   is_active: boolean;
 };
 
@@ -64,34 +58,23 @@ type AbsenceRow = {
 export class ParentPortalRepository {
   constructor(private readonly db: TenantDb) {}
 
-  async findParentByPhone(phone: string): Promise<ParentAuthRow | null> {
-    try {
-      const result = await this.db.execute<ParentAuthRow>(sql`
-        SELECT id::text, phone, password_hash, must_change_password, is_active
-        FROM parents
-        WHERE phone = ${phone}
-        LIMIT 1
-      `);
-      return result.rows[0] ?? null;
-    } catch {
-      const fallback = await this.db.execute<ParentAuthRow>(sql`
-        SELECT id::text, phone, password_hash, false AS must_change_password, is_active
-        FROM parents
-        WHERE phone = ${phone}
-        LIMIT 1
-      `);
-      return fallback.rows[0] ?? null;
-    }
+  async findParentByPhone(phone: string): Promise<ParentRow | null> {
+    const result = await this.db.execute<ParentRow>(sql`
+      SELECT id::text, phone, password_hash, must_change_password, is_active
+      FROM parents
+      WHERE phone = ${phone}
+      LIMIT 1
+    `);
+    return result.rows[0] ?? null;
   }
 
-  async findParentById(parentId: string): Promise<ParentByIdRow | null> {
-    const result = await this.db.execute<ParentByIdRow>(sql`
-      SELECT id::text, password_hash, is_active
+  async findParentById(parentId: string): Promise<ParentRow | null> {
+    const result = await this.db.execute<ParentRow>(sql`
+      SELECT id::text, phone, password_hash, must_change_password, is_active
       FROM parents
       WHERE id = ${parentId}::uuid
       LIMIT 1
     `);
-
     return result.rows[0] ?? null;
   }
 

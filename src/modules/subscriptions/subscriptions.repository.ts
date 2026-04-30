@@ -720,8 +720,13 @@ export class SubscriptionsRepository {
       `);
     } catch {
       await this.tenantDb.execute(sql`
+        ALTER TABLE parents
+        ADD COLUMN IF NOT EXISTS must_change_password boolean NOT NULL DEFAULT false
+      `);
+      await this.tenantDb.execute(sql`
         UPDATE parents
         SET password_hash = ${passwordHash}
+          , must_change_password = true
         WHERE id = ${parentId}::uuid
       `);
     }

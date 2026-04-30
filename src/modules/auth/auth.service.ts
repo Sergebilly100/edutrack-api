@@ -1,5 +1,6 @@
 import argon2 from 'argon2';
 import { createHash, randomUUID } from 'node:crypto';
+import { sql } from 'drizzle-orm';
 
 import {
   bindKeycloakSubjectIfNeeded,
@@ -45,6 +46,7 @@ export type AccessTokenClaims = JwtPayload & {
   impersonation?: boolean;
   impersonatedBy?: string;
   tenantId?: string;
+  phone?: string;
 };
 
 type RefreshTokenClaims = JwtPayload & {
@@ -80,6 +82,14 @@ const normalizeRole = (role: LegacyUserRole): UserRole => {
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
+
+const getRows = <TRow,>(result: unknown): TRow[] => {
+  if (typeof result !== 'object' || result === null || !('rows' in result)) {
+    return [];
+  }
+  const rows = (result as { rows: TRow[] }).rows;
+  return Array.isArray(rows) ? rows : [];
+};
 
 const parseBooleanEnv = (value: string | undefined, fallback: boolean): boolean => {
   if (!value) {
@@ -516,43 +526,105 @@ export const refreshAccessToken = async (
   context?: { userAgent?: string | null; ipAddress?: string | null } | null
 ) => {
   const payload = await verifyRefreshToken(refreshToken);
-  const status = await getRefreshTokenStatus(db, refreshToken);
-  const shouldInvalidatePreviousToken = status !== 'inactive';
-  if (status !== 'active') {
-    if (status === 'inactive') {
-      throw new Error('Invalid refresh token');
+  const profile = await findUserProfileById(db, payload.sub);
+  if (profile && profile.isActive) {
+    const status = await getRefreshTokenStatus(db, refreshToken);
+    const shouldInvalidatePreviousToken = status !== 'inactive';
+    if (status !== 'active') {
+      if (status === 'inactive') {
+        throw new Error('Invalid refresh token');
+      }
+
+      if (!isLegacyRefreshFallbackEnabled()) {
+        throw new Error('Invalid refresh token');
+      }
+
+      await storeRefreshToken(db, {
+        userId: payload.sub,
+        token: refreshToken,
+        expiresAt: getRefreshTokenExpiryIso(refreshToken),
+      });
     }
 
-    if (!isLegacyRefreshFallbackEnabled()) {
-      throw new Error('Invalid refresh token');
+    const claims = buildClaims(profile, payload.schemaName);
+    const accessToken = await signAccessToken(claims);
+    const nextRefreshToken = await signRefreshToken(payload.sub, payload.schemaName);
+    await registerRefreshToken(db, nextRefreshToken, context ?? null);
+    if (shouldInvalidatePreviousToken) {
+      await invalidateRefreshTokenIfSupported(db, {
+        refreshToken,
+        userId: payload.sub,
+      });
     }
 
-    await storeRefreshToken(db, {
-      userId: payload.sub,
-      token: refreshToken,
-      expiresAt: getRefreshTokenExpiryIso(refreshToken),
-    });
+    return {
+      accessToken,
+      refreshToken: nextRefreshToken,
+      tokenType: 'Bearer' as const,
+      expiresIn: process.env.JWT_EXPIRY ?? '15m',
+    };
   }
 
-  const profile = await findUserProfileById(db, payload.sub);
-  if (!profile || !profile.isActive) {
+  let parentResult: unknown;
+  try {
+    parentResult = await db.execute(sql`
+      SELECT
+        id::text AS id,
+        phone,
+        is_active,
+        must_change_password
+      FROM parents
+      WHERE id = ${payload.sub}::uuid
+      LIMIT 1
+    `);
+  } catch {
+    parentResult = await db.execute(sql`
+      SELECT
+        id::text AS id,
+        phone,
+        is_active,
+        false AS must_change_password
+      FROM parents
+      WHERE id = ${payload.sub}::uuid
+      LIMIT 1
+    `);
+  }
+  const parent = getRows<{
+    id: string;
+    phone: string;
+    is_active: boolean;
+    must_change_password: boolean;
+  }>(parentResult)[0];
+  if (!parent || !parent.is_active) {
     throw new Error('Invalid credentials');
   }
 
-  const claims = buildClaims(profile, payload.schemaName);
-  const accessToken = await signAccessToken(claims);
-  const nextRefreshToken = await signRefreshToken(payload.sub, payload.schemaName);
-  await registerRefreshToken(db, nextRefreshToken, context ?? null);
-  if (shouldInvalidatePreviousToken) {
-    await invalidateRefreshTokenIfSupported(db, {
-      refreshToken,
-      userId: payload.sub,
-    });
+  const studentRows = await db.execute(sql`
+    SELECT DISTINCT psl.student_id::text AS student_id
+    FROM parent_student_links psl
+    INNER JOIN parent_subscriptions ps ON ps.id = psl.subscription_id
+    WHERE psl.parent_id = ${parent.id}::uuid
+      AND ps.status = 'active'
+      AND ps.ends_at >= CURRENT_DATE
+  `);
+  const studentIds = getRows<{ student_id: string }>(studentRows).map((row) => row.student_id);
+  if (studentIds.length === 0) {
+    throw new Error('Invalid credentials');
   }
 
+  const parentClaims: AccessTokenClaims = {
+    sub: parent.id,
+    role: 'parent',
+    schemaName: payload.schemaName,
+    phone: parent.phone,
+    studentIds,
+    mustChangePassword: parent.must_change_password,
+  };
+  const parentAccessToken = await signAccessToken(parentClaims);
+  const parentNextRefreshToken = await signRefreshToken(payload.sub, payload.schemaName);
   return {
-    accessToken,
-    refreshToken: nextRefreshToken,
+    accessToken: parentAccessToken,
+    refreshToken: parentNextRefreshToken,
     tokenType: 'Bearer' as const,
     expiresIn: process.env.JWT_EXPIRY ?? '15m',
   };
