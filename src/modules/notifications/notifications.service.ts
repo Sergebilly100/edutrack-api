@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { sql } from 'drizzle-orm';
 import type { Queue } from 'bullmq';
+import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import { db, withTenantSchema } from '../../shared/database/db.js';
 import { off as defaultOff, on as defaultOn } from '../../shared/events/event-bus.js';
@@ -508,7 +509,7 @@ export class NotificationsService {
   async handleStudentAbsent(payload: StudentAbsentPayload): Promise<void> {
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
       const subscriptionsService = new SubscriptionsService(
-        new SubscriptionsRepository(tenantDb as any)
+        new SubscriptionsRepository(tenantDb as NodePgDatabase<Record<string, unknown>>)
       );
       const canSend = await subscriptionsService
         .canSendNotification({

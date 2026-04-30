@@ -473,7 +473,7 @@ export class SubscriptionsService {
     return { success: true, idempotency_replayed: result.replayed };
   }
 
-  async runDailyMaintenance(schemaName: string): Promise<{ expired: number; alerts: number }> {
+  async runDailyMaintenance(): Promise<{ expired: number; alerts: number }> {
     const expired = await this.repository.expireOutdatedSubscriptions();
     const alerts = await this.repository.listRenewalAlertsInSevenDays();
     for (const item of alerts) {

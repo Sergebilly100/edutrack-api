@@ -23,7 +23,7 @@ export const createSubscriptionMaintenanceWorker = (
     async (job) => {
       await withTenantSchema(job.data.schemaName, async (tenantDb) => {
         const service = new SubscriptionsService(new SubscriptionsRepository(tenantDb));
-        await service.runDailyMaintenance(job.data.schemaName);
+        await service.runDailyMaintenance();
       });
     },
     { connection }

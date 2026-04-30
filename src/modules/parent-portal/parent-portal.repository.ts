@@ -7,6 +7,8 @@ export type TenantDb = Pick<NodePgDatabase<Record<string, unknown>>, 'execute'>;
 type ParentRow = {
   id: string;
   phone: string;
+  full_name: string;
+  email: string;
   password_hash: string;
   must_change_password: boolean;
   is_active: boolean;
@@ -60,7 +62,7 @@ export class ParentPortalRepository {
 
   async findParentByPhone(phone: string): Promise<ParentRow | null> {
     const result = await this.db.execute<ParentRow>(sql`
-      SELECT id::text, phone, password_hash, must_change_password, is_active
+      SELECT id::text, phone, full_name, email, password_hash, must_change_password, is_active
       FROM parents
       WHERE phone = ${phone}
       LIMIT 1

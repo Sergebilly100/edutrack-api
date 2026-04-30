@@ -64,7 +64,7 @@ export class ParentPortalService {
   async loginParent(input: {
     phone: string;
     password: string;
-  }): Promise<{ parentId: string; phone: string; studentIds: string[]; mustChangePassword: boolean }> {
+  }): Promise<{ parentId: string; phone: string; full_name: string; email: string; studentIds: string[]; mustChangePassword: boolean }> {
     const parent = await this.repository.findParentByPhone(input.phone);
     if (!parent || !parent.is_active) {
       throw new ParentPortalError('Invalid credentials', 401, 'UNAUTHORIZED');
@@ -88,6 +88,8 @@ export class ParentPortalService {
     return {
       parentId: parent.id,
       phone: parent.phone,
+      full_name: parent.full_name,
+      email: parent.email,
       studentIds,
       mustChangePassword: parent.must_change_password,
     };
@@ -162,6 +164,9 @@ export class ParentPortalService {
             status = 'absent';
           } else if (endAt > now) {
             status = 'upcoming';
+          } else {
+            // Règle métier parent: cours terminé non pointé => élève présent par défaut.
+            status = 'present';
           }
 
           return {
