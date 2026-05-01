@@ -243,9 +243,12 @@ export class ParentPortalService {
       }),
     ]);
 
-    const attendanceRateMonth =
-      monthBreakdown.total > 0 ? Math.round((monthBreakdown.present / monthBreakdown.total) * 100) : 0;
-
+    // si le mois en cours n'a pas encore commencé ou si l'élève n'a pas encore eu de cours ce mois-ci, on considère que le taux de présence est de 100%
+    const attendanceRateMonth = monthAbsences === 0
+      ? 100
+      : monthBreakdown.total > 0 ? Math.round((monthBreakdown.present / monthBreakdown.total) * 100) : 0;
+      
+    // Le taux de présence est arrondi à l'entier le plus proche. Si l'élève a été présent à tous les cours, le taux de présence est de 100%, même s'il n'a pas encore eu de cours ce mois-ci.
     return {
       absences_this_week: weekAbsences,
       absences_this_month: monthAbsences,
