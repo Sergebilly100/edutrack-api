@@ -47,6 +47,8 @@ export type AccessTokenClaims = JwtPayload & {
   impersonatedBy?: string;
   tenantId?: string;
   phone?: string;
+  fullName?: string;
+  email?: string | null;
 };
 
 type RefreshTokenClaims = JwtPayload & {
@@ -571,6 +573,8 @@ export const refreshAccessToken = async (
       SELECT
         id::text AS id,
         phone,
+        full_name,
+        email,
         is_active,
         must_change_password
       FROM parents
@@ -582,6 +586,8 @@ export const refreshAccessToken = async (
       SELECT
         id::text AS id,
         phone,
+        full_name,
+        email,
         is_active,
         false AS must_change_password
       FROM parents
@@ -592,6 +598,8 @@ export const refreshAccessToken = async (
   const parent = getRows<{
     id: string;
     phone: string;
+    full_name: string;
+    email: string | null;
     is_active: boolean;
     must_change_password: boolean;
   }>(parentResult)[0];
@@ -617,6 +625,8 @@ export const refreshAccessToken = async (
     role: 'parent',
     schemaName: payload.schemaName,
     phone: parent.phone,
+    fullName: parent.full_name,
+    email: parent.email,
     studentIds,
     mustChangePassword: parent.must_change_password,
   };
