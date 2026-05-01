@@ -983,7 +983,7 @@ export class StudentsRepository {
       )
       SELECT
         st.id::text AS student_id,
-        (st.first_name || ' ' || st.last_name) AS student_name,
+        (st.last_name || ' ' || st.first_name) AS student_name,
         c.name AS class_name,
         c.id::text AS class_id,
         st.parent_phone,
