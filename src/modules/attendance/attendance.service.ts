@@ -1,4 +1,5 @@
 import {
+  emitStudentAbsent,
   emitTeacherCheckedIn,
   emitTeacherLate,
   emitTeacherQrAlert,
@@ -34,6 +35,7 @@ const dayOfWeekFromDate = (date: Date): number => {
 const toSlotDateTime = (date: string, time: string): Date => new Date(`${date}T${time}.000Z`);
 
 const toIso = (date: Date): string => date.toISOString();
+const DEFAULT_SCHOOL_PHONE = process.env.DEFAULT_SCHOOL_PHONE ?? '2250000000000';
 
 export class AttendanceService {
   constructor(private readonly repository: AttendanceRepository) {}
@@ -364,13 +366,37 @@ export class AttendanceService {
 
     const allStudentIds = allStudents.map((s) => s.id);
 
-    return this.repository.bulkUpsertStudentAttendance({
+    const result = await this.repository.bulkUpsertStudentAttendance({
       scheduleId: input.scheduleId,
       date: input.date,
       absentStudentIds: input.absentStudentIds,
       markedByUserId: context.userId,
       allStudentIds,
     });
+
+    const notificationCandidates =
+      await this.repository.listStudentAbsenceNotificationCandidates({
+        schemaName: context.schemaName,
+        scheduleId: input.scheduleId,
+        date: input.date,
+        absentStudentIds: input.absentStudentIds,
+      });
+
+    for (const student of notificationCandidates) {
+      emitStudentAbsent({
+        tenantId: student.tenantId,
+        schemaName: context.schemaName,
+        studentId: student.studentId,
+        scheduleId: input.scheduleId,
+        studentFirstName: student.studentFirstName,
+        parentPhone: student.parentPhone,
+        subject: student.subject,
+        date: input.date,
+        schoolPhone: student.schoolPhone ?? DEFAULT_SCHOOL_PHONE,
+      });
+    }
+
+    return result;
   }
 
   async detectMissingQrScans(context: { schemaName: string; date?: string }): Promise<number> {

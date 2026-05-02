@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const eventMocks = vi.hoisted(() => ({
+  emitStudentAbsent: vi.fn(),
   emitTeacherCheckedIn: vi.fn(),
   emitTeacherLate: vi.fn(),
   emitTeacherQrAlert: vi.fn(),
@@ -11,6 +12,7 @@ const schedulerMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../../src/modules/attendance/attendance.events.js', () => ({
+  emitStudentAbsent: eventMocks.emitStudentAbsent,
   emitTeacherCheckedIn: eventMocks.emitTeacherCheckedIn,
   emitTeacherLate: eventMocks.emitTeacherLate,
   emitTeacherQrAlert: eventMocks.emitTeacherQrAlert,
@@ -32,6 +34,9 @@ const repository = {
   listActiveAttendanceForTeacher: vi.fn(),
   listMissingQrScans: vi.fn(),
   markQrAlertSent: vi.fn(),
+  listStudentsByClass: vi.fn(),
+  bulkUpsertStudentAttendance: vi.fn(),
+  listStudentAbsenceNotificationCandidates: vi.fn(),
 };
 
 beforeEach(() => {
@@ -252,6 +257,78 @@ describe('attendance.service', () => {
       teacherId: 'teacher-2',
       scheduleId: 'schedule-2',
       date: '2026-04-14',
+    });
+  });
+
+  it('submitStudentAttendance() émet student.absent uniquement pour les absences à notifier', async () => {
+    repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1' });
+    repository.findScheduleContextForTeacher.mockResolvedValue({
+      scheduleId: 'schedule-1',
+      teacherId: 'teacher-1',
+      teacherName: 'Teacher 1',
+      classId: 'class-1',
+      className: '3eme A',
+      subject: 'Maths',
+      plannedRoomId: 'room-1',
+      plannedRoomName: 'A1',
+      plannedRoomToken: 'expected-token',
+      timeSlotId: 'slot-1',
+      slotLabel: '07h30-09h00',
+      slotStartTime: '07:30:00',
+      slotEndTime: '09:00:00',
+    });
+    repository.listStudentsByClass.mockResolvedValue([
+      { id: 'student-1' },
+      { id: 'student-2' },
+      { id: 'student-3' },
+    ]);
+    repository.bulkUpsertStudentAttendance.mockResolvedValue({ upsertedCount: 3 });
+    repository.listStudentAbsenceNotificationCandidates.mockResolvedValue([
+      {
+        tenantId: 'tenant-1',
+        studentId: 'student-1',
+        studentFirstName: 'Awa',
+        parentPhone: '2250700000001',
+        subject: 'Maths',
+        schoolPhone: '2250700000099',
+      },
+    ]);
+
+    const service = new AttendanceService(repository as never);
+    const result = await service.submitStudentAttendance(
+      {
+        scheduleId: 'schedule-1',
+        date: '2026-04-14',
+        absentStudentIds: ['student-1', 'student-2'],
+      },
+      { schemaName: 'school_sainte_marie', userId: 'user-1' }
+    );
+
+    expect(result).toEqual({ upsertedCount: 3 });
+    expect(repository.bulkUpsertStudentAttendance).toHaveBeenCalledWith({
+      scheduleId: 'schedule-1',
+      date: '2026-04-14',
+      absentStudentIds: ['student-1', 'student-2'],
+      markedByUserId: 'user-1',
+      allStudentIds: ['student-1', 'student-2', 'student-3'],
+    });
+    expect(repository.listStudentAbsenceNotificationCandidates).toHaveBeenCalledWith({
+      schemaName: 'school_sainte_marie',
+      scheduleId: 'schedule-1',
+      date: '2026-04-14',
+      absentStudentIds: ['student-1', 'student-2'],
+    });
+    expect(eventMocks.emitStudentAbsent).toHaveBeenCalledTimes(1);
+    expect(eventMocks.emitStudentAbsent).toHaveBeenCalledWith({
+      tenantId: 'tenant-1',
+      schemaName: 'school_sainte_marie',
+      studentId: 'student-1',
+      scheduleId: 'schedule-1',
+      studentFirstName: 'Awa',
+      parentPhone: '2250700000001',
+      subject: 'Maths',
+      date: '2026-04-14',
+      schoolPhone: '2250700000099',
     });
   });
 });

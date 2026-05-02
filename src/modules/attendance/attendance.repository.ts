@@ -67,6 +67,15 @@ type StudentIdRow = {
   id: string;
 };
 
+type StudentAbsenceNotificationCandidateRow = {
+  tenant_id: string;
+  student_id: string;
+  student_first_name: string;
+  parent_phone: string;
+  subject: string;
+  school_phone: string | null;
+};
+
 // ── Nouveau type pour getTeacherAttendanceByDate ──────────────────────────────
 type TeacherAttendanceByDateRow = {
   id: string;
@@ -509,6 +518,87 @@ export class AttendanceRepository {
     }
 
     return { upsertedCount };
+  }
+
+  async listStudentAbsenceNotificationCandidates(params: {
+    schemaName: string;
+    scheduleId: string;
+    date: string;
+    absentStudentIds: string[];
+  }): Promise<
+    Array<{
+      tenantId: string;
+      studentId: string;
+      studentFirstName: string;
+      parentPhone: string;
+      subject: string;
+      schoolPhone: string | null;
+    }>
+  > {
+    if (params.absentStudentIds.length === 0) {
+      return [];
+    }
+
+    const ids = Array.from(new Set(params.absentStudentIds));
+    const placeholders = sql.join(
+      ids.map((id) => sql`${id}`),
+      sql`, `
+    );
+
+    const result = await this.db.execute<StudentAbsenceNotificationCandidateRow>(sql`
+      WITH tenant_ctx AS (
+        SELECT id::text AS tenant_id
+        FROM public.tenants
+        WHERE schema_name = ${params.schemaName}
+        LIMIT 1
+      ),
+      school_phone_ctx AS (
+        SELECT phone AS school_phone
+        FROM users
+        WHERE role = 'director'
+          AND is_active = true
+          AND phone IS NOT NULL
+        ORDER BY created_at ASC
+        LIMIT 1
+      )
+      SELECT
+        tc.tenant_id,
+        st.id::text AS student_id,
+        st.first_name AS student_first_name,
+        st.parent_phone,
+        s.subject,
+        sp.school_phone
+      FROM attendances_student ast
+      INNER JOIN students st ON st.id = ast.student_id
+      INNER JOIN schedules s ON s.id = ast.schedule_id
+      CROSS JOIN tenant_ctx tc
+      LEFT JOIN school_phone_ctx sp ON true
+      WHERE ast.schedule_id = ${params.scheduleId}
+        AND ast.date = ${params.date}::date
+        AND ast.status = 'absent'
+        AND ast.student_id IN (${placeholders})
+        AND st.parent_phone IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM notifications_log n
+          WHERE n.type = 'student_absent_parent'
+            AND n.channel = 'sms'
+            AND n.related_id = ast.schedule_id
+            AND n.recipient_phone = st.parent_phone
+            AND COALESCE(n.sent_at::date, n.created_at::date) = ast.date::date
+            AND n.status <> 'failed'
+        )
+      ORDER BY st.last_name ASC, st.first_name ASC
+    `);
+
+    return getRows(result).map((row) => ({
+      tenantId: row.tenant_id,
+      studentId: row.student_id,
+      studentFirstName: row.student_first_name,
+      parentPhone: row.parent_phone,
+      subject: row.subject,
+      schoolPhone: row.school_phone,
+    }));
   }
 
   // ── NOUVEAU — liste des IDs élèves d'une classe ───────────────────────────
