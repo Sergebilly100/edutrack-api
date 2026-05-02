@@ -1953,7 +1953,11 @@ export const listAllRecentPayments = async (
       pe.status::text AS status
     FROM public.payment_events pe
     INNER JOIN public.subscriptions s ON s.id = pe.subscription_id
-    WHERE (${tenantId ?? null}::uuid IS NULL OR s.tenant_id = ${tenantId ?? null})
+    INNER JOIN public.tenants t ON t.id = s.tenant_id
+    WHERE (
+      (${tenantId ?? null}::uuid IS NOT NULL AND s.tenant_id = ${tenantId ?? null})
+      OR (${tenantId ?? null}::uuid IS NULL AND t.status = 'active')
+    )
     ORDER BY pe.created_at DESC
     LIMIT 100
   `);
