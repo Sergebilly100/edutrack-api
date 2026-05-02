@@ -5,10 +5,7 @@ import type {
   UpdateTeacherInput,
 } from './teachers.types.js';
 import { TeachersRepository } from './teachers.repository.js';
-import {
-  buildUsersLimitReachedMessage,
-  getMaxUsersBySchemaName,
-} from '../../shared/utils/users-limit.js';
+import { getMaxUsersBySchemaName } from '../../shared/utils/users-limit.js';
 import { canonicalizeSubjectList } from '../../shared/utils/subject-normalization.js';
 
 export class TeachersModuleError extends Error {
@@ -110,9 +107,9 @@ export class TeachersService {
 
     if (currentCount >= maxUsers) {
       throw new TeachersModuleError(
-        buildUsersLimitReachedMessage(currentCount, maxUsers),
+        'Limite du plan atteinte',
         403,
-        'USERS_LIMIT_REACHED'
+        'PLAN_LIMIT_REACHED'
       );
     }
 

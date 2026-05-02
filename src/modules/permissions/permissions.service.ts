@@ -5,6 +5,7 @@ import type { AccessTokenClaims } from '../auth/auth.service.js';
 import { PermissionsRepository } from './permissions.repository.js';
 import { PERMISSION_KEYS, STAFF_BASE_PERMISSIONS } from './permissions.types.js';
 import type { PermissionKey } from '../../shared/types/index.js';
+import { getPlanLimitsBySchemaName } from '../../shared/utils/users-limit.js';
 
 const ALL_PERMISSIONS_SET = new Set<PermissionKey>(PERMISSION_KEYS);
 const STAFF_BASE_PERMISSIONS_SET = new Set<PermissionKey>(STAFF_BASE_PERMISSIONS);
@@ -256,8 +257,10 @@ export class PermissionsService {
     },
     context: { schemaName: string }
   ) {
-    const [schoolConfig, currentAdminCount] = await Promise.all([
+    const [schoolConfig, planLimits, currentUsersCount, currentAdminCount] = await Promise.all([
       this.repository.getSchoolConfigBySchemaName(context.schemaName),
+      getPlanLimitsBySchemaName(context.schemaName),
+      this.repository.countActiveUsers(),
       this.repository.countActiveAdministrativeUsers(),
     ]);
 
@@ -265,11 +268,19 @@ export class PermissionsService {
       throw new PermissionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
     }
 
-    if (currentAdminCount >= schoolConfig.max_admin_positions) {
+    if (currentUsersCount >= planLimits.max_users) {
       throw new PermissionsModuleError(
-        `Limite d'utilisateurs administratifs atteinte (${currentAdminCount}/${schoolConfig.max_admin_positions}).`,
+        'Limite du plan atteinte',
         403,
-        'ADMIN_USERS_LIMIT_REACHED'
+        'PLAN_LIMIT_REACHED'
+      );
+    }
+
+    if (currentAdminCount >= planLimits.max_admin_positions) {
+      throw new PermissionsModuleError(
+        'Limite du plan atteinte',
+        403,
+        'PLAN_LIMIT_REACHED'
       );
     }
 

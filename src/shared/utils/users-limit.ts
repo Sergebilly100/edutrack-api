@@ -2,11 +2,9 @@ import { sql } from 'drizzle-orm';
 
 import { db } from '../database/db.js';
 
-type TenantPlan = 'essential' | 'pro' | 'establishment';
-
 type TenantLimitRow = {
-  max_users: number | null;
-  plan: TenantPlan;
+  max_users: number;
+  max_admin_positions: number;
 };
 
 const getRows = <TRow>(result: unknown): TRow[] => {
@@ -18,34 +16,32 @@ const getRows = <TRow>(result: unknown): TRow[] => {
   return Array.isArray(rows) ? rows : [];
 };
 
-const PLAN_MAX_USERS: Record<TenantPlan, number> = {
-  essential: 5,
-  pro: 20,
-  establishment: 50,
-};
-
-export const getDefaultMaxUsersForPlan = (plan: TenantPlan): number => PLAN_MAX_USERS[plan];
-
 export const buildUsersLimitReachedMessage = (currentCount: number, maxUsers: number): string => {
   return `Limite d'utilisateurs atteinte (${currentCount}/${maxUsers}). Contactez EduTrack CI pour augmenter votre quota.`;
 };
 
-export const getMaxUsersBySchemaName = async (schemaName: string): Promise<number> => {
+export const getPlanLimitsBySchemaName = async (schemaName: string): Promise<TenantLimitRow> => {
   const result = await db.execute<TenantLimitRow>(sql`
-    SELECT max_users, plan
-    FROM public.tenants
-    WHERE schema_name = ${schemaName}
+    SELECT pc.max_users, pc.max_admin_positions
+    FROM public.plan_catalog pc
+    WHERE pc.plan = (
+      SELECT plan
+      FROM public.tenants
+      WHERE schema_name = ${schemaName}
+      LIMIT 1
+    )
     LIMIT 1
   `);
 
-  const tenant = getRows<TenantLimitRow>(result)[0];
-  if (!tenant) {
+  const planLimits = getRows<TenantLimitRow>(result)[0];
+  if (!planLimits) {
     throw new Error('Tenant not found');
   }
 
-  if (typeof tenant.max_users === 'number' && tenant.max_users > 0) {
-    return tenant.max_users;
-  }
+  return planLimits;
+};
 
-  return getDefaultMaxUsersForPlan(tenant.plan);
+export const getMaxUsersBySchemaName = async (schemaName: string): Promise<number> => {
+  const limits = await getPlanLimitsBySchemaName(schemaName);
+  return limits.max_users;
 };

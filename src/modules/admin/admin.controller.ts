@@ -46,6 +46,7 @@ import {
   getSmsPlatformConfig,
   getTenantStats,
   listPlanCatalog,
+  listAllRecentPayments,
   listSmsPlatformAudit,
   listSchoolPayments,
   listSmsTemplates,
@@ -152,6 +153,10 @@ export default async function adminController(app: FastifyInstance): Promise<voi
     period_to: z.string().optional(),
   });
 
+  const recentPaymentsQuerySchema = z.object({
+    tenantId: z.string().uuid().optional(),
+  });
+
   app.get('/api/v1/admin/tenants', { preHandler: preHandlers }, async (request, reply) => {
     try {
       const query = listTenantsQuerySchema.parse(request.query);
@@ -211,6 +216,20 @@ export default async function adminController(app: FastifyInstance): Promise<voi
         const payload = updateSchoolConfigBodySchema.parse(request.body);
         await updateSchoolConfig(ensurePublicDb(request), tenantId, payload);
         return reply.send({ success: true });
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.get(
+    '/api/v1/admin/payments/recent',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const query = recentPaymentsQuerySchema.parse(request.query ?? {});
+        const data = await listAllRecentPayments(ensurePublicDb(request), query.tenantId);
+        return reply.send(data);
       } catch (error) {
         return handleError(reply, error);
       }

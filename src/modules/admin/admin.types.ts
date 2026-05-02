@@ -46,8 +46,13 @@ export const createSchoolBodySchema = z.object({
   director_name: z.string().trim().min(2).max(255),
   director_phone: z.string().regex(/^225\d{10}$/),
   director_email: z.string().email().max(255).optional(),
-  max_admin_positions: z.coerce.number().int().min(1).max(50).default(5),
-  active_school_year: z.string().trim().regex(/^\d{4}-\d{4}$/),
+  trial_days: z.coerce.number().int().min(0).max(365).default(0),
+  active_school_year: z
+    .string()
+    .trim()
+    .regex(/^\d{2}\/\d{4} - \d{2}\/\d{4}$/, {
+      message: 'Format attendu : MM/YYYY - MM/YYYY (ex: 09/2025 - 06/2026)',
+    }),
   plan: z.enum(TENANT_PLAN_VALUES).default('essential'),
 });
 
@@ -103,10 +108,14 @@ export const smsFeatureCommissionPaymentBodySchema = z.object({
 export const listSchoolsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(200).default(25),
+  plan: z.enum(TENANT_PLAN_VALUES).optional(),
+  status: z.enum(TENANT_STATUS_VALUES).optional(),
+  search: z.string().trim().max(255).optional(),
 });
 
 export const updateSchoolConfigBodySchema = z
   .object({
+    name: z.string().trim().min(2).max(255).optional(),
     max_admin_positions: z.coerce.number().int().min(1).max(50).optional(),
     max_users: z.coerce.number().int().min(1).max(500).optional(),
     max_sms_per_month: z.coerce.number().int().min(0).max(200000).optional(),
@@ -116,13 +125,20 @@ export const updateSchoolConfigBodySchema = z
     director_title: z.string().trim().min(1).max(120).optional(),
     can_edit_sms_template: z.boolean().optional(),
     can_export_data: z.boolean().optional(),
-    active_school_year: z.string().trim().regex(/^\d{4}-\d{4}$/).optional(),
+    active_school_year: z
+      .string()
+      .trim()
+      .regex(/^\d{2}\/\d{4} - \d{2}\/\d{4}$/, {
+        message: 'Format attendu : MM/YYYY - MM/YYYY (ex: 09/2025 - 06/2026)',
+      })
+      .optional(),
     logo_url: z.string().trim().max(2_000_000).nullable().optional(),
     plan: z.enum(TENANT_PLAN_VALUES).optional(),
     status: z.enum(TENANT_STATUS_VALUES).optional(),
   })
   .refine(
     (value) =>
+      value.name !== undefined ||
       value.max_admin_positions !== undefined ||
       value.max_users !== undefined ||
       value.max_sms_per_month !== undefined ||
@@ -200,6 +216,7 @@ export type TenantStatsResult = {
 export type SchoolListItem = {
   tenantId: string;
   name: string;
+  city: string | null;
   plan: TenantPlan;
   status: TenantStatus;
   nbUsers: number;
@@ -415,20 +432,14 @@ export const planParamsSchema = z.object({
 export const updatePlanCatalogBodySchema = z
   .object({
     monthly_price_fcfa: z.coerce.number().int().min(0).max(100_000_000).optional(),
-    annual_price_fcfa: z.coerce.number().int().min(0).max(200_000_000).optional(),
-    default_billing_cycle: z.enum(['monthly', 'annual']).optional(),
     max_users: z.coerce.number().int().min(1).max(5000).optional(),
     max_admin_positions: z.coerce.number().int().min(1).max(500).optional(),
-    max_sms_per_month: z.coerce.number().int().min(0).max(2_000_000).optional(),
   })
   .refine(
     (value) =>
       value.monthly_price_fcfa !== undefined ||
-      value.annual_price_fcfa !== undefined ||
-      value.default_billing_cycle !== undefined ||
       value.max_users !== undefined ||
-      value.max_admin_positions !== undefined ||
-      value.max_sms_per_month !== undefined,
+      value.max_admin_positions !== undefined,
     {
       message: 'At least one field must be provided',
     }
@@ -461,11 +472,8 @@ export type SchoolUsersResult = {
 export type PlanCatalogItem = {
   plan: TenantPlan;
   monthlyPriceFcfa: number;
-  annualPriceFcfa: number;
-  defaultBillingCycle: 'monthly' | 'annual';
   maxUsers: number;
   maxAdminPositions: number;
-  maxSmsPerMonth: number;
   updatedAt: string;
 };
 
