@@ -64,15 +64,17 @@ const defaultDeps = {
 };
 
 type SmsPlatformRuntimeConfig = {
-  provider: 'mock' | 'infobip' | 'twilio' | 'orange_api' | 'custom';
+  provider: 'mock' | 'infobip' | 'africas_talking' | 'twilio' | 'orange_api' | 'custom';
   apiBaseUrl: string | null;
   apiKey: string | null;
   senderId: string;
+  fallbackSenderId: string | null;
   smsMaintenanceMode: boolean;
   smsMaintenanceMessage: string;
 };
 
 let smsConfigCache: { fetchedAt: number; value: SmsPlatformRuntimeConfig } | null = null;
+let orangeTokenCache: { cacheKey: string; value: string; expiresAt: number } | null = null;
 
 const SMS_TEMPLATE_STUDENT_ABSENT_TYPE = 'student_absent_parent';
 const SMS_TEMPLATE_PAYMENT_REMINDER_TYPE = 'payment_reminder';
@@ -96,6 +98,7 @@ const loadSmsPlatformConfig = async (): Promise<SmsPlatformRuntimeConfig> => {
     sms_api_base_url: string | null;
     sms_api_key: string | null;
     sms_sender_id: string | null;
+    sms_fallback_sender_id: string | null;
     sms_maintenance_mode: boolean | null;
     sms_maintenance_message: string | null;
   }>(sql.raw(`
@@ -104,6 +107,7 @@ const loadSmsPlatformConfig = async (): Promise<SmsPlatformRuntimeConfig> => {
       sms_api_base_url,
       sms_api_key,
       sms_sender_id,
+      sms_fallback_sender_id,
       sms_maintenance_mode,
       sms_maintenance_message
     FROM public.app_settings
@@ -117,6 +121,7 @@ const loadSmsPlatformConfig = async (): Promise<SmsPlatformRuntimeConfig> => {
     apiBaseUrl: row?.sms_api_base_url ?? null,
     apiKey: row?.sms_api_key ?? null,
     senderId: row?.sms_sender_id ?? 'EduTrack',
+    fallbackSenderId: row?.sms_fallback_sender_id ?? null,
     smsMaintenanceMode: row?.sms_maintenance_mode ?? false,
     smsMaintenanceMessage: row?.sms_maintenance_message ?? 'Service SMS en maintenance',
   };
@@ -200,6 +205,293 @@ const sendInfobipSms = async (params: {
   return { status: 'sent', providerRef };
 };
 
+const normalizeSmsRecipient = (phone: string): string => {
+  const digits = phone.replace(/\D/g, '');
+  if (!digits) {
+    return phone;
+  }
+
+  if (digits.startsWith('225')) {
+    return `+${digits}`;
+  }
+
+  if (digits.startsWith('0') && digits.length === 10) {
+    return `+225${digits}`;
+  }
+
+  if (digits.length === 8 || digits.length === 10) {
+    return `+225${digits}`;
+  }
+
+  return phone.trim().startsWith('+') ? phone.trim() : `+${digits}`;
+};
+
+const sendAfricasTalkingSms = async (params: {
+  to: string;
+  message: string;
+  config: SmsPlatformRuntimeConfig;
+}): Promise<{ status: 'sent' | 'failed'; providerRef?: string; errorMessage?: string }> => {
+  const apiKey = params.config.apiKey?.trim() || process.env.AFRICASTALKING_API_KEY?.trim();
+  const username = process.env.AFRICASTALKING_USERNAME?.trim();
+  if (!apiKey || !username) {
+    return { status: 'failed', errorMessage: 'Missing Africa’s Talking API key or username' };
+  }
+
+  const endpoint =
+    params.config.apiBaseUrl?.trim() ||
+    process.env.AFRICASTALKING_BASE_URL?.trim() ||
+    'https://api.africastalking.com/version1/messaging';
+  const recipient = normalizeSmsRecipient(params.to);
+  const senderId = params.config.senderId.trim();
+  const isBulkEndpoint = /\/messaging\/bulk\/?$/.test(endpoint);
+  const headers: Record<string, string> = {
+    apiKey,
+    Accept: 'application/json',
+    'Content-Type': isBulkEndpoint ? 'application/json' : 'application/x-www-form-urlencoded',
+  };
+  let body: BodyInit;
+
+  if (isBulkEndpoint) {
+    body = JSON.stringify({
+      username,
+      message: params.message,
+      phoneNumbers: [recipient],
+      ...(senderId ? { senderId } : {}),
+    });
+  } else {
+    const formBody = new URLSearchParams({
+      username,
+      to: recipient,
+      message: params.message,
+      enqueue: '1',
+    });
+    if (senderId) {
+      formBody.set('from', senderId);
+    }
+    body = formBody;
+  }
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers,
+    body,
+  });
+
+  const payload = (await response.json().catch(() => ({} as Record<string, unknown>))) as {
+    SMSMessageData?: {
+      Message?: string;
+      Recipients?: Array<{
+        messageId?: string;
+        number?: string;
+        status?: string;
+        statusCode?: number;
+      }>;
+    };
+  };
+  if (!response.ok) {
+    return { status: 'failed', errorMessage: `Africa's Talking error (${response.status})` };
+  }
+
+  const recipients = payload.SMSMessageData?.Recipients ?? [];
+  const failedRecipient = recipients.find((recipient) => recipient.status !== 'Success');
+  if (failedRecipient) {
+    return {
+      status: 'failed',
+      providerRef: failedRecipient.messageId,
+      errorMessage: `Africa's Talking recipient failed: ${failedRecipient.status ?? 'unknown'}`,
+    };
+  }
+
+  const providerRef = recipients[0]?.messageId ?? payload.SMSMessageData?.Message ?? randomUUID();
+  return { status: 'sent', providerRef };
+};
+
+const resolveOrangeCredentials = (config: SmsPlatformRuntimeConfig): {
+  clientId: string;
+  clientSecret: string;
+  senderAddress: string;
+  senderName: string;
+  smsBaseUrl: string;
+  tokenUrl: string;
+} | null => {
+  const configuredKey = config.apiKey?.trim();
+  const separatorIndex = configuredKey?.indexOf(':') ?? -1;
+  const clientId =
+    (separatorIndex > 0 ? configuredKey?.slice(0, separatorIndex).trim() : '') ||
+    process.env.ORANGE_CLIENT_ID?.trim() ||
+    '';
+  const clientSecret =
+    (separatorIndex > 0 ? configuredKey?.slice(separatorIndex + 1).trim() : configuredKey ?? '') ||
+    process.env.ORANGE_CLIENT_SECRET?.trim() ||
+    '';
+  const configuredSenderAddress =
+    config.senderId.trim() && config.senderId.trim() !== 'EduTrack'
+      ? config.senderId.trim()
+      : '';
+  const senderAddress = normalizeSmsRecipient(
+    configuredSenderAddress || process.env.ORANGE_SENDER_ADDRESS?.trim() || ''
+  );
+  const senderName =
+    config.fallbackSenderId !== null
+      ? config.fallbackSenderId.trim()
+      : process.env.ORANGE_SENDER_NAME?.trim() || '';
+  const smsBaseUrl =
+    config.apiBaseUrl?.trim() ||
+    process.env.ORANGE_SMS_BASE_URL?.trim() ||
+    'https://api.orange.com/smsmessaging/v1/outbound';
+  const tokenUrl =
+    process.env.ORANGE_TOKEN_URL?.trim() || 'https://api.orange.com/oauth/v3/token';
+
+  if (!clientId || !clientSecret || !senderAddress) {
+    return null;
+  }
+
+  return {
+    clientId,
+    clientSecret,
+    senderAddress,
+    senderName,
+    smsBaseUrl,
+    tokenUrl,
+  };
+};
+
+const getOrangeAccessToken = async (credentials: {
+  clientId: string;
+  clientSecret: string;
+  tokenUrl: string;
+}): Promise<string> => {
+  const now = Date.now();
+  const cacheKey = `${credentials.tokenUrl}:${credentials.clientId}`;
+  if (orangeTokenCache?.cacheKey === cacheKey && orangeTokenCache.expiresAt > now) {
+    return orangeTokenCache.value;
+  }
+
+  const basicCredentials = Buffer.from(
+    `${credentials.clientId}:${credentials.clientSecret}`
+  ).toString('base64');
+  const response = await fetch(credentials.tokenUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${basicCredentials}`,
+      Accept: 'application/json',
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: 'grant_type=client_credentials',
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '');
+    return Promise.reject(
+      new Error(`Orange OAuth2 error (${response.status})${errorText ? `: ${errorText}` : ''}`)
+    );
+  }
+
+  const payload = (await response.json().catch(() => ({} as Record<string, unknown>))) as {
+    access_token?: string;
+    expires_in?: number;
+  };
+  if (!payload.access_token) {
+    return Promise.reject(new Error('Orange OAuth2 response missing access_token'));
+  }
+
+  const expiresInSeconds = Math.max((payload.expires_in ?? 3600) - 300, 60);
+  orangeTokenCache = {
+    cacheKey,
+    value: payload.access_token,
+    expiresAt: now + expiresInSeconds * 1000,
+  };
+  return payload.access_token;
+};
+
+const sendOrangeSms = async (params: {
+  to: string;
+  message: string;
+  config: SmsPlatformRuntimeConfig;
+}): Promise<{ status: 'sent' | 'failed'; providerRef?: string; errorMessage?: string }> => {
+  const credentials = resolveOrangeCredentials(params.config);
+  if (!credentials) {
+    return {
+      status: 'failed',
+      errorMessage:
+        'Missing Orange SMS client credentials or sender address',
+    };
+  }
+
+  const recipient = normalizeSmsRecipient(params.to);
+  if (!recipient) {
+    return { status: 'failed', errorMessage: 'Missing Orange SMS recipient' };
+  }
+
+  try {
+    const accessToken = await getOrangeAccessToken(credentials);
+    const senderAddress = `tel:${credentials.senderAddress}`;
+    const smsBaseUrl = credentials.smsBaseUrl.replace(/\/+$/, '');
+    const outboundBaseUrl = /\/outbound$/.test(smsBaseUrl)
+      ? smsBaseUrl
+      : `${smsBaseUrl}/outbound`;
+    const endpoint = `${outboundBaseUrl}/${encodeURIComponent(
+      senderAddress
+    )}/requests`;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        outboundSMSMessageRequest: {
+          address: `tel:${recipient}`,
+          senderAddress,
+          outboundSMSTextMessage: {
+            message: params.message,
+          },
+          ...(credentials.senderName ? { senderName: credentials.senderName } : {}),
+        },
+      }),
+    });
+
+    const payloadText = await response.text().catch(() => '');
+    let payload: {
+      outboundSMSMessageRequest?: { resourceURL?: string };
+      resourceURL?: string;
+      status?: string;
+      message?: string;
+    } = {};
+    if (payloadText) {
+      try {
+        payload = JSON.parse(payloadText) as typeof payload;
+      } catch {
+        payload = {};
+      }
+    }
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        orangeTokenCache = null;
+      }
+      return {
+        status: 'failed',
+        errorMessage: `Orange SMS error (${response.status})${payloadText ? `: ${payloadText}` : ''}`,
+      };
+    }
+
+    return {
+      status: 'sent',
+      providerRef:
+        payload.outboundSMSMessageRequest?.resourceURL ??
+        payload.resourceURL ??
+        randomUUID(),
+    };
+  } catch (error) {
+    return {
+      status: 'failed',
+      errorMessage: error instanceof Error ? error.message : 'Orange SMS error',
+    };
+  }
+};
+
 export const defaultSmsSender: SmsSender = async ({ to, message, type, schemaName }) => {
   const config = await loadSmsPlatformConfig();
 
@@ -222,6 +514,22 @@ export const defaultSmsSender: SmsSender = async ({ to, message, type, schemaNam
 
   if (config.provider === 'infobip') {
     return sendInfobipSms({
+      to,
+      message,
+      config,
+    });
+  }
+
+  if (config.provider === 'africas_talking') {
+    return sendAfricasTalkingSms({
+      to,
+      message,
+      config,
+    });
+  }
+
+  if (config.provider === 'orange_api') {
+    return sendOrangeSms({
       to,
       message,
       config,

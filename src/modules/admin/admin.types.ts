@@ -3,7 +3,7 @@ import { z } from 'zod';
 const TENANT_PLAN_VALUES = ['essential', 'pro', 'establishment'] as const;
 const TENANT_STATUS_VALUES = ['trial', 'active', 'suspended', 'cancelled'] as const;
 const TEACHING_TYPE_VALUES = ['primaire', 'secondaire', 'superieur', 'mixte'] as const;
-const SMS_PROVIDER_VALUES = ['mock', 'infobip', 'twilio', 'orange_api', 'custom'] as const;
+const SMS_PROVIDER_VALUES = ['mock', 'infobip', 'africas_talking', 'twilio', 'orange_api', 'custom'] as const;
 
 export type TenantPlan = (typeof TENANT_PLAN_VALUES)[number];
 export type TenantStatus = (typeof TENANT_STATUS_VALUES)[number];
@@ -393,7 +393,7 @@ export const updateSmsPlatformConfigBodySchema = z
   .object({
     provider: z.enum(SMS_PROVIDER_VALUES).optional(),
     api_base_url: z.string().trim().url().max(255).optional(),
-    api_key: z.string().trim().min(8).max(255).optional(),
+    api_key: z.string().trim().min(8).max(1000).optional(),
     sender_id: z.string().trim().min(3).max(20).optional(),
     fallback_sender_id: z.string().trim().max(20).nullable().optional(),
     default_country_code: z.string().trim().regex(/^\+\d{1,4}$/).optional(),

@@ -422,6 +422,14 @@ const ensureAdminPublicInfrastructure = async (publicDb: TenantDb): Promise<void
   `));
 
   await publicDb.execute(sql.raw(`
+    ALTER TABLE public.app_settings
+      DROP CONSTRAINT IF EXISTS app_settings_sms_provider_check;
+    ALTER TABLE public.app_settings
+      ADD CONSTRAINT app_settings_sms_provider_check
+      CHECK (sms_provider IN ('mock', 'infobip', 'africas_talking', 'twilio', 'orange_api', 'custom'));
+  `));
+
+  await publicDb.execute(sql.raw(`
     CREATE TABLE IF NOT EXISTS public.sms_admin_audit_log (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
       admin_id uuid,
