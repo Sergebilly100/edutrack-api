@@ -47,6 +47,14 @@ type PaymentReminderSmsParams = {
   remainingAmountFcfa: number;
 };
 
+type TeacherDailySummarySmsParams = {
+  date: string;
+  absentCount: number;
+  lateCount: number;
+  presentCount: number;
+  totalCourses: number;
+};
+
 const ELLIPSIS = '...';
 
 const normalizeText = (value: string): string => value.replace(/\s+/g, ' ').trim();
@@ -127,5 +135,11 @@ export const buildPaymentReminderSms = (params: PaymentReminderSmsParams): strin
 
   return limitSmsLength(
     `EduTrack: relance paiement ${safeText(params.schoolName)}. Échéance ${safeText(params.dueDate)}, période ${safeText(params.periodLabel)}, reste ${amount} FCFA.`
+  );
+};
+
+export const buildTeacherDailySummarySms = (params: TeacherDailySummarySmsParams): string => {
+  return limitSmsLength(
+    `EduTrack: Point profs ${safeText(params.date)} - ${params.absentCount} absent(s), ${params.lateCount} retard(s), ${params.presentCount}/${params.totalCourses} cours assures. Voir dashboard.`
   );
 };

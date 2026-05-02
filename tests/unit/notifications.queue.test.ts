@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  dbExecute: vi.fn(),
   withTenantSchema: vi.fn(),
 }));
 
 vi.mock('../../src/shared/database/db.js', () => ({
+  db: {
+    execute: mocks.dbExecute,
+  },
   withTenantSchema: mocks.withTenantSchema,
 }));
 
@@ -18,6 +22,7 @@ const repository = {
   insertNotificationLog: vi.fn(),
   updateNotificationLogStatus: vi.fn(),
   markQrAlertSent: vi.fn(),
+  getTeacherDailySummaryContext: vi.fn(),
 };
 
 const smsSender = vi.fn();
@@ -25,6 +30,7 @@ const emailSender = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.dbExecute.mockResolvedValue({ rows: [] });
   mocks.withTenantSchema.mockImplementation(async (_schemaName, callback) => callback(tenantDb));
   smsSender.mockResolvedValue({ status: 'sent', providerRef: 'provider-1' });
   emailSender.mockResolvedValue({ status: 'sent', providerRef: 'email-provider-1' });
@@ -95,5 +101,67 @@ describe('notifications.queue', () => {
       status: 'failed',
     });
     expect(repository.markQrAlertSent).not.toHaveBeenCalled();
+  });
+
+  it('envoie le résumé quotidien profs aux directeurs des écoles actives', async () => {
+    mocks.dbExecute.mockResolvedValueOnce({
+      rows: [
+        { id: 'tenant-1', schema_name: 'school_sainte_marie' },
+        { id: 'tenant-2', schema_name: 'school_belle_vue' },
+      ],
+    });
+    repository.getTeacherDailySummaryContext
+      .mockResolvedValueOnce({
+        directorPhone: '2250700000001',
+        totalCourses: 8,
+        presentCount: 5,
+        lateCount: 1,
+        absentCount: 2,
+      })
+      .mockResolvedValueOnce({
+        directorPhone: null,
+        totalCourses: 4,
+        presentCount: 4,
+        lateCount: 0,
+        absentCount: 0,
+      });
+
+    await processNotificationJob(
+      {
+        type: 'teacher-daily-summary-all',
+        date: '2026-05-02',
+      },
+      {
+        repository,
+        smsSender,
+        emailSender,
+      }
+    );
+
+    expect(mocks.withTenantSchema).toHaveBeenCalledTimes(2);
+    expect(repository.insertNotificationLog).toHaveBeenCalledTimes(1);
+    expect(repository.insertNotificationLog).toHaveBeenCalledWith(
+      tenantDb,
+      expect.objectContaining({
+        type: 'teacher_absent_director',
+        recipientPhone: '2250700000001',
+        status: 'queued',
+      })
+    );
+    expect(smsSender).toHaveBeenCalledTimes(1);
+    expect(smsSender).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: '2250700000001',
+        type: 'teacher_absent_director',
+        schemaName: 'school_sainte_marie',
+      })
+    );
+    expect(repository.updateNotificationLogStatus).toHaveBeenCalledWith(
+      tenantDb,
+      expect.objectContaining({
+        status: 'sent',
+        providerRef: 'provider-1',
+      })
+    );
   });
 });

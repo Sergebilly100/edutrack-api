@@ -190,6 +190,17 @@ const start = async (): Promise<void> => {
         data: { schemaName: subscriptionMaintenanceSchemaName },
       }
     );
+    await notificationsQueue.upsertJobScheduler(
+      'teacher-daily-summary-18h',
+      {
+        pattern: '0 18 * * *',
+        tz: 'Africa/Abidjan',
+      },
+      {
+        name: 'teacher-daily-summary-all',
+        data: { type: 'teacher-daily-summary-all' },
+      }
+    );
     await app.listen({ port, host: '0.0.0.0' });
     console.log(`Server listening on port ${port}`);
   } catch (error) {

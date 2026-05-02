@@ -80,6 +80,7 @@ type TenantLookupRow = {
   id: string;
   name?: string;
   schema_name: string;
+  status: TenantListItem['status'];
 };
 
 type SchoolContactRow = {
@@ -835,7 +836,7 @@ export const updateTenant = async (
 
 const getTenantById = async (publicDb: TenantDb, tenantId: string): Promise<TenantLookupRow> => {
   const result = await publicDb.execute<TenantLookupRow>(sql`
-    SELECT id, name, schema_name
+    SELECT id, name, schema_name, status
     FROM public.tenants
     WHERE id = ${tenantId}
     LIMIT 1
@@ -2073,6 +2074,10 @@ export const sendSchoolPaymentReminder = async (
   tenantId: string
 ): Promise<SchoolPaymentReminderResult> => {
   const tenant = await getTenantById(publicDb, tenantId);
+  if (tenant.status === 'suspended' || tenant.status === 'cancelled') {
+    throw new Error("Relance SMS indisponible: l'école est suspendue ou annulée");
+  }
+
   const subscription = await getSchoolSubscriptionSnapshot(publicDb, tenantId);
 
   if (!subscription.nextDueDate || subscription.remainingCurrentPeriodFcfa <= 0) {

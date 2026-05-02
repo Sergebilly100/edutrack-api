@@ -5,6 +5,7 @@ import { NotificationsService } from '../../src/modules/notifications/notificati
 import { SubscriptionsService } from '../../src/modules/subscriptions/subscriptions.service.js';
 import type {
   StudentAbsentPayload,
+  SubscriptionExpiredPayload,
   TeacherLatePayload,
   TeacherQrAlertPayload,
 } from '../../src/shared/events/events.types.js';
@@ -15,6 +16,7 @@ const repository = {
   insertNotificationLog: vi.fn(),
   updateNotificationLogStatus: vi.fn(),
   markQrAlertSent: vi.fn(),
+  getTeacherDailySummaryContext: vi.fn(),
 };
 
 const smsQueue = {
@@ -28,12 +30,13 @@ const eventBusHandlers: {
   'teacher.late'?: (payload: TeacherLatePayload) => void;
   'teacher.qr_alert'?: (payload: TeacherQrAlertPayload) => void;
   'student.absent'?: (payload: StudentAbsentPayload) => void;
+  'subscription.expired'?: (payload: SubscriptionExpiredPayload) => void;
 } = {};
 
 const eventBus = {
   on: vi.fn(
     (
-      event: 'teacher.late' | 'teacher.qr_alert' | 'student.absent',
+      event: 'teacher.late' | 'teacher.qr_alert' | 'student.absent' | 'subscription.expired',
       handler: (payload: unknown) => void
     ) => {
     if (event === 'teacher.late') {
@@ -46,7 +49,14 @@ const eventBus = {
         return;
       }
 
-      eventBusHandlers['student.absent'] = handler as (payload: StudentAbsentPayload) => void;
+      if (event === 'student.absent') {
+        eventBusHandlers['student.absent'] = handler as (payload: StudentAbsentPayload) => void;
+        return;
+      }
+
+      if (event === 'subscription.expired') {
+        eventBusHandlers['subscription.expired'] = handler as (payload: SubscriptionExpiredPayload) => void;
+      }
     }
   ),
   off: vi.fn(),
@@ -78,6 +88,7 @@ beforeEach(() => {
   eventBusHandlers['teacher.late'] = undefined;
   eventBusHandlers['teacher.qr_alert'] = undefined;
   eventBusHandlers['student.absent'] = undefined;
+  eventBusHandlers['subscription.expired'] = undefined;
 
   withTenantSchema.mockImplementation(async (_schemaName, callback) => callback(tenantDb));
   smsQueue.add.mockResolvedValue({ id: 'job-1' });
@@ -92,7 +103,7 @@ beforeEach(() => {
 });
 
 describe('notifications.service', () => {
-  it('start() subscribe aux events teacher.late, teacher.qr_alert et student.absent', () => {
+  it('start() subscribe uniquement aux events SMS actifs', () => {
     const service = new NotificationsService({
       withTenantSchema,
       repository,
@@ -102,15 +113,17 @@ describe('notifications.service', () => {
 
     service.start();
 
-    expect(eventBus.on).toHaveBeenCalledWith('teacher.late', expect.any(Function));
-    expect(eventBus.on).toHaveBeenCalledWith('teacher.qr_alert', expect.any(Function));
+    expect(eventBus.on).not.toHaveBeenCalledWith('teacher.late', expect.any(Function));
+    expect(eventBus.on).not.toHaveBeenCalledWith('teacher.qr_alert', expect.any(Function));
     expect(eventBus.on).toHaveBeenCalledWith('student.absent', expect.any(Function));
-    expect(eventBusHandlers['teacher.late']).toBeTypeOf('function');
-    expect(eventBusHandlers['teacher.qr_alert']).toBeTypeOf('function');
+    expect(eventBus.on).toHaveBeenCalledWith('subscription.expired', expect.any(Function));
+    expect(eventBusHandlers['teacher.late']).toBeUndefined();
+    expect(eventBusHandlers['teacher.qr_alert']).toBeUndefined();
     expect(eventBusHandlers['student.absent']).toBeTypeOf('function');
+    expect(eventBusHandlers['subscription.expired']).toBeTypeOf('function');
   });
 
-  it('stop() désinscrit les deux listeners', () => {
+  it('stop() désinscrit les listeners SMS actifs', () => {
     const service = new NotificationsService({
       withTenantSchema,
       repository,
@@ -121,9 +134,10 @@ describe('notifications.service', () => {
     service.start();
     service.stop();
 
-    expect(eventBus.off).toHaveBeenCalledWith('teacher.late', expect.any(Function));
-    expect(eventBus.off).toHaveBeenCalledWith('teacher.qr_alert', expect.any(Function));
+    expect(eventBus.off).not.toHaveBeenCalledWith('teacher.late', expect.any(Function));
+    expect(eventBus.off).not.toHaveBeenCalledWith('teacher.qr_alert', expect.any(Function));
     expect(eventBus.off).toHaveBeenCalledWith('student.absent', expect.any(Function));
+    expect(eventBus.off).toHaveBeenCalledWith('subscription.expired', expect.any(Function));
   });
 
   it('teacher.late queue le SMS et loggue queued', async () => {
@@ -322,6 +336,37 @@ describe('notifications.service', () => {
       allowed: false,
       reason: 'no_active_subscription',
     });
+
+    const service = new NotificationsService({
+      withTenantSchema,
+      repository,
+      eventBus,
+      smsQueue: smsQueue as never,
+    });
+
+    await service.handleStudentAbsent({
+      tenantId: 'tenant-1',
+      schemaName: 'school_sainte_marie',
+      studentId: 'student-1',
+      scheduleId: 'schedule-1',
+      studentFirstName: 'Awa',
+      parentPhone: '2250700000001',
+      subject: 'Maths',
+      date: '2026-04-14',
+      schoolPhone: '2250701234567',
+    });
+
+    expect(smsQueue.add).not.toHaveBeenCalled();
+    expect(repository.insertNotificationLog).toHaveBeenCalledWith(
+      tenantDb,
+      expect.objectContaining({ status: 'skipped_no_active_subscription' })
+    );
+  });
+
+  it('student.absent ne queue pas de SMS si la vérification de souscription échoue', async () => {
+    vi.spyOn(SubscriptionsService.prototype, 'canSendNotification').mockRejectedValueOnce(
+      new Error('subscription check failed')
+    );
 
     const service = new NotificationsService({
       withTenantSchema,

@@ -41,11 +41,11 @@ type NotificationsServiceDeps = {
     callback: (tenantDb: TenantDbLike) => Promise<T>
   ) => Promise<T>;
   eventBus: {
-    on: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'student.absent' | 'subscription.expired'>>(
+    on: <K extends keyof Pick<EventMap, 'student.absent' | 'subscription.expired'>>(
       event: K,
       handler: (payload: EventMap[K]) => void
     ) => void;
-    off: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'student.absent' | 'subscription.expired'>>(
+    off: <K extends keyof Pick<EventMap, 'student.absent' | 'subscription.expired'>>(
       event: K,
       handler: (payload: EventMap[K]) => void
     ) => void;
@@ -389,15 +389,11 @@ export class NotificationsService {
   };
 
   start(): void {
-    this.deps.eventBus.on('teacher.late', this.teacherLateListener);
-    this.deps.eventBus.on('teacher.qr_alert', this.teacherQrAlertListener);
     this.deps.eventBus.on('student.absent', this.studentAbsentListener);
     this.deps.eventBus.on('subscription.expired', this.subscriptionExpiredListener);
   }
 
   stop(): void {
-    this.deps.eventBus.off('teacher.late', this.teacherLateListener);
-    this.deps.eventBus.off('teacher.qr_alert', this.teacherQrAlertListener);
     this.deps.eventBus.off('student.absent', this.studentAbsentListener);
     this.deps.eventBus.off('subscription.expired', this.subscriptionExpiredListener);
   }
@@ -519,10 +515,8 @@ export class NotificationsService {
           type: 'sms',
         })
         .catch(() => ({
-          allowed: true as const,
-          subscriptionId: '',
-          parentPhone: payload.parentPhone,
-          parentEmail: null,
+          allowed: false as const,
+          reason: 'no_active_subscription' as const,
         }));
       if (!canSend.allowed) {
         await this.deps.repository.insertNotificationLog(tenantDb, {
@@ -574,7 +568,7 @@ export class NotificationsService {
         'send-sms',
         toSmsJobData({
           queueRef,
-          to: payload.parentPhone,
+          to: canSend.parentPhone ?? payload.parentPhone,
           message,
           notificationType: 'student_absent_parent',
           schemaName: payload.schemaName,
@@ -627,10 +621,8 @@ export class NotificationsService {
           type: 'email',
         })
         .catch(() => ({
-          allowed: true as const,
-          subscriptionId: canSend.subscriptionId,
-          parentPhone: canSend.parentPhone,
-          parentEmail: emailAddress,
+          allowed: false as const,
+          reason: 'no_active_subscription' as const,
         }));
 
       if (!canSendEmail.allowed) {

@@ -42,6 +42,14 @@ export type NotificationLogRow = {
     | 'skipped_unknown';
 };
 
+export type TeacherDailySummaryContext = {
+  directorPhone: string | null;
+  totalCourses: number;
+  presentCount: number;
+  lateCount: number;
+  absentCount: number;
+};
+
 export type NotificationsRepository = {
   getLateAlertContext: (
     tenantDb: TenantDbLike,
@@ -87,6 +95,10 @@ export type NotificationsRepository = {
     tenantDb: TenantDbLike,
     payload: Pick<TeacherQrAlertPayload, 'teacherId' | 'scheduleId' | 'date'>
   ) => Promise<void>;
+  getTeacherDailySummaryContext: (
+    tenantDb: TenantDbLike,
+    params: { date: string }
+  ) => Promise<TeacherDailySummaryContext>;
   listNotificationLog: (
     tenantDb: TenantDbLike,
     params: {
@@ -258,6 +270,68 @@ export const defaultRepository: NotificationsRepository = {
         AND schedule_id = ${payload.scheduleId}
         AND date = ${payload.date}
     `);
+  },
+
+  async getTeacherDailySummaryContext(tenantDb, params) {
+    const result = await asExecutor(tenantDb).execute<{
+      director_phone: string | null;
+      total_courses: number;
+      present_count: number;
+      late_count: number;
+      absent_count: number;
+    }>(sql`
+      WITH date_ctx AS (
+        SELECT
+          ${params.date}::date AS target_date,
+          EXTRACT(ISODOW FROM ${params.date}::date)::int AS day_of_week
+      ),
+      active_period AS (
+        SELECT id
+        FROM schedule_periods
+        WHERE is_active = true
+          AND valid_from <= (SELECT target_date FROM date_ctx)
+          AND valid_to >= (SELECT target_date FROM date_ctx)
+        ORDER BY created_at DESC
+        LIMIT 1
+      ),
+      scheduled_courses AS (
+        SELECT s.id AS schedule_id
+        FROM schedules s
+        INNER JOIN active_period ap ON ap.id = s.schedule_period_id
+        INNER JOIN date_ctx dc ON dc.day_of_week = s.day_of_week
+        WHERE s.is_active = true
+          AND (s.start_date IS NULL OR s.start_date <= dc.target_date)
+          AND (s.end_date IS NULL OR s.end_date > dc.target_date)
+      ),
+      director AS (
+        SELECT u.phone
+        FROM users u
+        WHERE u.role = 'director'
+          AND u.is_active = true
+          AND u.phone IS NOT NULL
+        ORDER BY u.created_at ASC
+        LIMIT 1
+      )
+      SELECT
+        (SELECT phone FROM director) AS director_phone,
+        COUNT(sc.schedule_id)::int AS total_courses,
+        COUNT(*) FILTER (WHERE at.status IN ('present', 'excused'))::int AS present_count,
+        COUNT(*) FILTER (WHERE at.status = 'late')::int AS late_count,
+        COUNT(*) FILTER (WHERE at.status = 'absent' OR at.status IS NULL)::int AS absent_count
+      FROM scheduled_courses sc
+      LEFT JOIN attendances_teacher at
+        ON at.schedule_id = sc.schedule_id
+        AND at.date = (SELECT target_date FROM date_ctx)
+    `);
+
+    const row = getFirstRow(result);
+    return {
+      directorPhone: row?.director_phone ?? null,
+      totalCourses: Number(row?.total_courses ?? 0),
+      presentCount: Number(row?.present_count ?? 0),
+      lateCount: Number(row?.late_count ?? 0),
+      absentCount: Number(row?.absent_count ?? 0),
+    };
   },
 
   async listNotificationLog(tenantDb, params) {
