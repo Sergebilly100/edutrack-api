@@ -180,6 +180,13 @@ type SmsStatsBySchoolRow = {
   used_pct: number;
 };
 
+type SchoolSmsFeatureConfigResult = {
+  is_enabled: boolean;
+  commission_pct: number;
+  sms_cap_per_student: number;
+  monetize_parent_alerts: boolean;
+};
+
 type SmsHistoryRow = {
   id: string;
   tenant_id: string;
@@ -1306,6 +1313,30 @@ export const createSchool = async (
         ${subscriptionPeriodStart},
         ${subscriptionPeriodEnd}
       )
+    `);
+
+    await ensureSchoolSmsFeatureMonetizationColumn(publicDb);
+    await publicDb.execute(sql`
+      INSERT INTO public.school_sms_features (
+        tenant_id,
+        is_enabled,
+        commission_pct,
+        sms_cap_per_student,
+        monetize_parent_alerts,
+        updated_at
+      )
+      VALUES (
+        ${tenant.id},
+        false,
+        0,
+        60,
+        ${payload.monetizeParentAlerts},
+        NOW()
+      )
+      ON CONFLICT (tenant_id)
+      DO UPDATE SET
+        monetize_parent_alerts = EXCLUDED.monetize_parent_alerts,
+        updated_at = NOW()
     `);
   } catch (error) {
     await publicDb.execute(sql`
@@ -2454,13 +2485,15 @@ const monthFromDate = (date: Date): string =>
 const getTenantSmsFeatureConfig = async (
   publicDb: TenantDb,
   tenantId: string
-): Promise<{ is_enabled: boolean; commission_pct: number; sms_cap_per_student: number } | null> => {
+): Promise<SchoolSmsFeatureConfigResult | null> => {
+  await ensureSchoolSmsFeatureMonetizationColumn(publicDb);
   const result = await publicDb.execute<{
     is_enabled: boolean;
     commission_pct: string | number;
     sms_cap_per_student: number;
+    monetize_parent_alerts: boolean;
   }>(sql`
-    SELECT is_enabled, commission_pct, sms_cap_per_student
+    SELECT is_enabled, commission_pct, sms_cap_per_student, COALESCE(monetize_parent_alerts, false) AS monetize_parent_alerts
     FROM public.school_sms_features
     WHERE tenant_id = ${tenantId}::uuid
     LIMIT 1
@@ -2470,6 +2503,7 @@ const getTenantSmsFeatureConfig = async (
     is_enabled: boolean;
     commission_pct: string | number;
     sms_cap_per_student: number;
+    monetize_parent_alerts: boolean;
   }>(result)[0];
   if (!row) {
     return null;
@@ -2479,7 +2513,15 @@ const getTenantSmsFeatureConfig = async (
     is_enabled: row.is_enabled,
     commission_pct: parseNumeric(row.commission_pct),
     sms_cap_per_student: row.sms_cap_per_student,
+    monetize_parent_alerts: row.monetize_parent_alerts,
   };
+};
+
+const ensureSchoolSmsFeatureMonetizationColumn = async (publicDb: TenantDb): Promise<void> => {
+  await publicDb.execute(sql`
+    ALTER TABLE public.school_sms_features
+    ADD COLUMN IF NOT EXISTS monetize_parent_alerts boolean NOT NULL DEFAULT false
+  `);
 };
 
 export const activateSchoolSmsFeature = async (
@@ -2543,20 +2585,23 @@ export const deactivateSchoolSmsFeature = async (
 export const updateSchoolSmsFeatureConfig = async (
   publicDb: TenantDb,
   tenantId: string,
-  payload: { commission_pct?: number; sms_cap_per_student?: number }
-): Promise<{ is_enabled: boolean; commission_pct: number; sms_cap_per_student: number }> => {
+  payload: { commission_pct?: number; sms_cap_per_student?: number; monetizeParentAlerts?: boolean },
+  audit?: { actorId?: string | null; actorRole?: string | null }
+): Promise<SchoolSmsFeatureConfigResult> => {
   await ensureAdminPublicInfrastructure(publicDb);
   await getTenantById(publicDb, tenantId);
+  const before = await getTenantSmsFeatureConfig(publicDb, tenantId);
 
   await publicDb.execute(sql`
     INSERT INTO public.school_sms_features (
-      tenant_id, is_enabled, commission_pct, sms_cap_per_student, updated_at
+      tenant_id, is_enabled, commission_pct, sms_cap_per_student, monetize_parent_alerts, updated_at
     )
     VALUES (
       ${tenantId}::uuid,
       false,
       ${payload.commission_pct ?? 0},
       ${payload.sms_cap_per_student ?? 60},
+      ${payload.monetizeParentAlerts ?? false},
       NOW()
     )
     ON CONFLICT (tenant_id)
@@ -2571,17 +2616,46 @@ export const updateSchoolSmsFeatureConfig = async (
           THEN ${payload.sms_cap_per_student ?? 60}
         ELSE public.school_sms_features.sms_cap_per_student
       END,
+      monetize_parent_alerts = CASE
+        WHEN ${payload.monetizeParentAlerts !== undefined}
+          THEN ${payload.monetizeParentAlerts ?? false}
+        ELSE public.school_sms_features.monetize_parent_alerts
+      END,
       updated_at = NOW()
   `);
 
   const config = await getTenantSmsFeatureConfig(publicDb, tenantId);
-  return (
+  const resolved = (
     config ?? {
       is_enabled: false,
       commission_pct: payload.commission_pct ?? 0,
       sms_cap_per_student: payload.sms_cap_per_student ?? 60,
+      monetize_parent_alerts: payload.monetizeParentAlerts ?? false,
     }
   );
+
+  if (payload.monetizeParentAlerts !== undefined) {
+    await publicDb.execute(sql`
+      INSERT INTO public.audit_financial_events (
+        tenant_id,
+        actor_id,
+        actor_role,
+        action,
+        payload_before,
+        payload_after
+      )
+      VALUES (
+        ${tenantId}::uuid,
+        ${audit?.actorId ?? null}::uuid,
+        ${audit?.actorRole ?? 'super_admin'},
+        'update_monetize_parent_alerts',
+        ${before ? JSON.stringify({ value: before.monetize_parent_alerts }) : null}::jsonb,
+        ${JSON.stringify({ value: payload.monetizeParentAlerts })}::jsonb
+      )
+    `);
+  }
+
+  return resolved;
 };
 
 export const syncSchoolSmsCommission = async (
@@ -2941,7 +3015,7 @@ export const getSchoolSmsFeatureStats = async (
   publicDb: TenantDb,
   tenantId: string
 ): Promise<{
-  config: { is_enabled: boolean; commission_pct: number; sms_cap_per_student: number };
+  config: SchoolSmsFeatureConfigResult;
   current_month: {
     subscriptions_active: number;
     subscriptions_new: number;
@@ -2967,6 +3041,7 @@ export const getSchoolSmsFeatureStats = async (
       is_enabled: false,
       commission_pct: 0,
       sms_cap_per_student: 60,
+      monetize_parent_alerts: false,
     };
   const currentMonth = monthFromDate(new Date());
 

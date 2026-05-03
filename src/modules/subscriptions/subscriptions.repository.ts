@@ -15,6 +15,7 @@ type TenantDb = NodePgDatabase<Record<string, unknown>>;
 type PublicFeatureRow = {
   tenant_id: string;
   is_enabled: boolean;
+  monetize_parent_alerts: boolean;
   sms_cap_per_student: number;
   commission_pct: string | number;
   sms_unit_price_fcfa: number | null;
@@ -38,7 +39,9 @@ type ParentListRow = {
   month_total_amount_fcfa: number | null;
   month_duration_months: number | null;
   month_ends_at: string | null;
+  month_starts_at: string | null;
   month_created_at: string | null;
+  month_days_remaining: number | null;
   students: Array<{ id: string; full_name: string }>;
 };
 
@@ -93,11 +96,35 @@ type PaymentRow = {
   notes: string | null;
 };
 
+type RevenueSubscriptionDetailRow = {
+  payment_id: string;
+  parent_id: string;
+  full_name: string;
+  phone: string;
+  subscription_id: string;
+  paid_at: string;
+  amount_fcfa: number;
+  payment_method: string;
+  duration_months: number;
+  starts_at: string;
+  ends_at: string;
+  students_count: number;
+};
+
 type ActiveLinkRow = {
   subscription_id: string;
   parent_phone: string;
   parent_email: string | null;
   ends_at: string;
+};
+
+export type ParentAlertContactRow = {
+  parent_id: string | null;
+  subscription_id: string | null;
+  parent_phone: string;
+  parent_email: string | null;
+  ends_at: string | null;
+  subscription_status: SubscriptionStatus | null;
 };
 
 const monthToDate = (month: string): string => `${month}-01`;
@@ -141,25 +168,45 @@ export class SubscriptionsRepository {
   }
 
   async getSmsFeatureByTenantId(tenantId: string): Promise<PublicFeatureRow | null> {
-    const result = await publicDb.execute<PublicFeatureRow>(sql`
-      SELECT
-        tenant_id::text,
-        is_enabled,
-        sms_cap_per_student,
-        commission_pct,
-        sms_unit_price_fcfa
-      FROM public.school_sms_features
-      WHERE tenant_id = ${tenantId}::uuid
-      LIMIT 1
-    `);
-    return result.rows[0] ?? null;
+    try {
+      const result = await publicDb.execute<PublicFeatureRow>(sql`
+        SELECT
+          tenant_id::text,
+          is_enabled,
+          COALESCE(monetize_parent_alerts, false) AS monetize_parent_alerts,
+          sms_cap_per_student,
+          commission_pct,
+          sms_unit_price_fcfa
+        FROM public.school_sms_features
+        WHERE tenant_id = ${tenantId}::uuid
+        LIMIT 1
+      `);
+      return result.rows[0] ?? null;
+    } catch (error) {
+      if ((error as { cause?: { code?: string }; code?: string }).cause?.code !== '42703') {
+        throw error;
+      }
+      const fallback = await publicDb.execute<Omit<PublicFeatureRow, 'monetize_parent_alerts'>>(sql`
+        SELECT
+          tenant_id::text,
+          is_enabled,
+          sms_cap_per_student,
+          commission_pct,
+          sms_unit_price_fcfa
+        FROM public.school_sms_features
+        WHERE tenant_id = ${tenantId}::uuid
+        LIMIT 1
+      `);
+      const row = fallback.rows[0];
+      return row ? { ...row, monetize_parent_alerts: false } : null;
+    }
   }
 
   async updateSmsUnitPriceByTenantId(
     tenantId: string,
     smsUnitPriceFcfa: number
   ): Promise<PublicFeatureRow> {
-    const result = await publicDb.execute<PublicFeatureRow>(sql`
+    const result = await publicDb.execute<Omit<PublicFeatureRow, 'monetize_parent_alerts'>>(sql`
       INSERT INTO public.school_sms_features (
         tenant_id,
         is_enabled,
@@ -192,7 +239,7 @@ export class SubscriptionsRepository {
     if (!row) {
       throw new Error('Failed to update sms feature price');
     }
-    return row;
+    return { ...row, monetize_parent_alerts: false };
   }
 
   async getActiveSubscriptionLinkByStudent(studentId: string): Promise<ActiveLinkRow | null> {
@@ -211,6 +258,67 @@ export class SubscriptionsRepository {
       LIMIT 1
     `);
     return result.rows[0] ?? null;
+  }
+
+  async listParentAlertContactsByStudent(studentId: string): Promise<ParentAlertContactRow[]> {
+    const result = await this.tenantDb.execute<ParentAlertContactRow>(sql`
+      WITH student_contacts AS (
+        SELECT
+          NULL::uuid AS parent_id,
+          NULL::uuid AS subscription_id,
+          NULLIF(parent_phone, '') AS parent_phone,
+          NULL::varchar(255) AS parent_email,
+          NULL::date AS ends_at,
+          NULL::varchar(20) AS subscription_status,
+          1 AS priority
+        FROM students
+        WHERE id = ${studentId}::uuid
+          AND parent_phone IS NOT NULL
+        UNION ALL
+        SELECT
+          NULL::uuid AS parent_id,
+          NULL::uuid AS subscription_id,
+          NULLIF(parent_phone_2, '') AS parent_phone,
+          NULL::varchar(255) AS parent_email,
+          NULL::date AS ends_at,
+          NULL::varchar(20) AS subscription_status,
+          2 AS priority
+        FROM students
+        WHERE id = ${studentId}::uuid
+          AND parent_phone_2 IS NOT NULL
+      ),
+      linked_contacts AS (
+        SELECT
+          p.id AS parent_id,
+          ps.id AS subscription_id,
+          p.phone AS parent_phone,
+          p.email AS parent_email,
+          ps.ends_at,
+          ps.status AS subscription_status,
+          CASE WHEN ps.status = 'active' THEN 0 ELSE 3 END AS priority
+        FROM parent_student_links psl
+        INNER JOIN parents p ON p.id = psl.parent_id
+        INNER JOIN parent_subscriptions ps ON ps.id = psl.subscription_id
+        WHERE psl.student_id = ${studentId}::uuid
+          AND p.is_active = true
+          AND p.phone IS NOT NULL
+      )
+      SELECT DISTINCT ON (parent_phone)
+        parent_id::text,
+        subscription_id::text,
+        parent_phone,
+        parent_email,
+        ends_at::text,
+        subscription_status::text
+      FROM (
+        SELECT * FROM linked_contacts
+        UNION ALL
+        SELECT * FROM student_contacts
+      ) contacts
+      WHERE parent_phone IS NOT NULL
+      ORDER BY parent_phone, priority ASC, ends_at DESC NULLS LAST
+    `);
+    return result.rows;
   }
 
   async getUsageByStudentMonth(studentId: string, month: string): Promise<{ sms: number; email: number }> {
@@ -266,6 +374,7 @@ export class SubscriptionsRepository {
     const searchLike = params.search ? `%${params.search}%` : null;
     const statusFilter = params.status ?? null;
     const monthDate = params.month ? `${params.month}-01` : null;
+    const today = todayInBusinessTimezone();
     const countResult = await this.tenantDb.execute<{ total: number }>(sql`
       WITH latest_sub AS (
         SELECT DISTINCT ON (ps.parent_id)
@@ -279,12 +388,27 @@ export class SubscriptionsRepository {
       month_rollup AS (
         SELECT
           ps.parent_id,
+          CASE
+            WHEN BOOL_AND(ps.status = 'cancelled') THEN 'cancelled'
+            WHEN MAX(ps.ends_at) >= ${today}::date AND BOOL_OR(ps.status = 'active') THEN 'active'
+            ELSE 'expired'
+          END::varchar(20) AS month_status,
           SUM(ps.total_amount_fcfa)::int AS month_total_amount_fcfa,
           SUM(ps.duration_months)::int AS month_duration_months,
           MAX(ps.ends_at)::text AS month_ends_at,
-          MAX(ps.created_at)::text AS month_created_at
+          MIN(ps.starts_at)::text AS month_starts_at,
+          MIN(ps.created_at)::text AS month_created_at,
+          GREATEST((MAX(ps.ends_at) - ${today}::date), 0)::int AS month_days_remaining
         FROM parent_subscriptions ps
-        WHERE DATE_TRUNC('month', ps.created_at)::date = ${monthDate}::date
+        WHERE ${monthDate}::date IS NOT NULL
+          AND ps.created_at < (${monthDate}::date + INTERVAL '1 month')
+          AND EXISTS (
+            SELECT 1
+            FROM parent_subscriptions covered
+            WHERE covered.parent_id = ps.parent_id
+              AND covered.starts_at <= (${monthDate}::date + INTERVAL '1 month - 1 day')::date
+              AND covered.ends_at >= ${monthDate}::date
+          )
         GROUP BY ps.parent_id
       )
       SELECT COUNT(*)::int AS total
@@ -292,7 +416,7 @@ export class SubscriptionsRepository {
       LEFT JOIN latest_sub ls ON ls.parent_id = p.id
       LEFT JOIN month_rollup mr ON mr.parent_id = p.id
       WHERE (${searchLike}::text IS NULL OR p.full_name ILIKE ${searchLike} OR p.phone ILIKE ${searchLike})
-        AND (${statusFilter}::text IS NULL OR ls.status::text = ${statusFilter})
+        AND (${statusFilter}::text IS NULL OR COALESCE(mr.month_status, ls.status)::text = ${statusFilter})
         AND (${monthDate}::date IS NULL OR mr.parent_id IS NOT NULL)
     `);
     const total = countResult.rows[0]?.total ?? 0;
@@ -314,12 +438,28 @@ export class SubscriptionsRepository {
       month_rollup AS (
         SELECT
           ps.parent_id,
+          (ARRAY_AGG(ps.id ORDER BY ps.created_at DESC))[1] AS month_subscription_id,
+          CASE
+            WHEN BOOL_AND(ps.status = 'cancelled') THEN 'cancelled'
+            WHEN MAX(ps.ends_at) >= ${today}::date AND BOOL_OR(ps.status = 'active') THEN 'active'
+            ELSE 'expired'
+          END::varchar(20) AS month_status,
           SUM(ps.total_amount_fcfa)::int AS month_total_amount_fcfa,
           SUM(ps.duration_months)::int AS month_duration_months,
           MAX(ps.ends_at)::text AS month_ends_at,
-          MAX(ps.created_at)::text AS month_created_at
+          MIN(ps.starts_at)::text AS month_starts_at,
+          MIN(ps.created_at)::text AS month_created_at,
+          GREATEST((MAX(ps.ends_at) - ${today}::date), 0)::int AS month_days_remaining
         FROM parent_subscriptions ps
-        WHERE (${monthDate}::date IS NOT NULL AND DATE_TRUNC('month', ps.created_at)::date = ${monthDate}::date)
+        WHERE ${monthDate}::date IS NOT NULL
+          AND ps.created_at < (${monthDate}::date + INTERVAL '1 month')
+          AND EXISTS (
+            SELECT 1
+            FROM parent_subscriptions covered
+            WHERE covered.parent_id = ps.parent_id
+              AND covered.starts_at <= (${monthDate}::date + INTERVAL '1 month - 1 day')::date
+              AND covered.ends_at >= ${monthDate}::date
+          )
         GROUP BY ps.parent_id
       ),
       active_rollup AS (
@@ -337,20 +477,22 @@ export class SubscriptionsRepository {
         p.full_name,
         p.phone,
         p.email,
-        ls.subscription_id::text AS subscription_id,
-        ls.status,
-        ls.ends_at::text AS ends_at,
-        ls.starts_at::text AS starts_at,
-        ls.total_amount_fcfa,
-        ls.duration_months,
-        ls.created_at::text AS created_at,
+        COALESCE(mr.month_subscription_id, ls.subscription_id)::text AS subscription_id,
+        COALESCE(mr.month_status, ls.status) AS status,
+        COALESCE(mr.month_ends_at, ls.ends_at::text) AS ends_at,
+        COALESCE(mr.month_starts_at, ls.starts_at::text) AS starts_at,
+        COALESCE(mr.month_total_amount_fcfa, ls.total_amount_fcfa) AS total_amount_fcfa,
+        COALESCE(mr.month_duration_months, ls.duration_months) AS duration_months,
+        COALESCE(mr.month_created_at, ls.created_at::text) AS created_at,
         ar.active_total_amount_fcfa,
         ar.active_duration_months,
         ar.active_ends_at,
         mr.month_total_amount_fcfa,
         mr.month_duration_months,
         mr.month_ends_at,
+        mr.month_starts_at,
         mr.month_created_at,
+        mr.month_days_remaining,
         COALESCE(
           (
             SELECT json_agg(json_build_object('id', s.id::text, 'full_name', CONCAT(s.first_name, ' ', s.last_name)))
@@ -365,13 +507,59 @@ export class SubscriptionsRepository {
       LEFT JOIN active_rollup ar ON ar.parent_id = p.id
       LEFT JOIN month_rollup mr ON mr.parent_id = p.id
       WHERE (${searchLike}::text IS NULL OR p.full_name ILIKE ${searchLike} OR p.phone ILIKE ${searchLike})
-        AND (${statusFilter}::text IS NULL OR ls.status::text = ${statusFilter})
+        AND (${statusFilter}::text IS NULL OR COALESCE(mr.month_status, ls.status)::text = ${statusFilter})
         AND (${monthDate}::date IS NULL OR mr.parent_id IS NOT NULL)
       ORDER BY p.created_at DESC
       LIMIT ${params.limit}
       OFFSET ${offset}
     `);
     return { rows: result.rows, total };
+  }
+
+  async listRevenueSubscriptionDetails(month: string): Promise<RevenueSubscriptionDetailRow[]> {
+    const monthDate = firstDayOfMonth(month);
+    const result = await this.tenantDb.execute<RevenueSubscriptionDetailRow>(sql`
+      WITH paid_subscriptions AS (
+        SELECT
+          ps.id AS subscription_id,
+          ps.parent_id,
+          SUM(sp.amount_fcfa)::int AS amount_fcfa,
+          MAX(sp.paid_at) AS paid_at,
+          (ARRAY_AGG(sp.payment_method ORDER BY sp.paid_at DESC))[1] AS payment_method,
+          ps.duration_months,
+          ps.starts_at,
+          ps.ends_at
+        FROM subscription_payments sp
+        INNER JOIN parent_subscriptions ps ON ps.id = sp.subscription_id
+        WHERE DATE_TRUNC('month', sp.paid_at)::date = ${monthDate}::date
+          AND ps.status <> 'cancelled'
+        GROUP BY ps.id, ps.parent_id, ps.duration_months, ps.starts_at, ps.ends_at
+      )
+      SELECT
+        ('revenue-' || p.id::text || '-' || ${month}) AS payment_id,
+        p.id::text AS parent_id,
+        p.full_name,
+        p.phone,
+        (ARRAY_AGG(ps.subscription_id::text ORDER BY ps.paid_at DESC))[1] AS subscription_id,
+        MAX(ps.paid_at)::text AS paid_at,
+        SUM(ps.amount_fcfa)::int AS amount_fcfa,
+        (ARRAY_AGG(ps.payment_method ORDER BY ps.paid_at DESC))[1] AS payment_method,
+        SUM(ps.duration_months)::int AS duration_months,
+        MIN(ps.starts_at)::text AS starts_at,
+        MAX(ps.ends_at)::text AS ends_at,
+        COALESCE(students.students_count, 0)::int AS students_count
+      FROM paid_subscriptions ps
+      INNER JOIN parents p ON p.id = ps.parent_id
+      LEFT JOIN LATERAL (
+        SELECT COUNT(DISTINCT psl.student_id)::int AS students_count
+        FROM parent_student_links psl
+        WHERE psl.parent_id = p.id
+      ) students ON true
+      GROUP BY p.id, p.full_name, p.phone, students.students_count
+      ORDER BY MAX(ps.paid_at) DESC
+    `);
+
+    return result.rows;
   }
 
   async listSubscriptionClasses(params: {

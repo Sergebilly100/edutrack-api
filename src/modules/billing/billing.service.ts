@@ -31,31 +31,22 @@ const EPSILON = 0.0001;
 const hasMeaningfulValue = (value: number): boolean => value > EPSILON;
 const isZeroDueVacataire = (hoursDone: number, totalFcfa: number): boolean =>
   hoursDone <= EPSILON || totalFcfa <= 0;
-const resolveEffectivePaidHoursFromMetrics = (input: {
+const resolveVacataireStatus = (input: {
+  currentStatus: SalaryRecordStatus | null;
   hoursDone: number;
-  paidAt: string | null;
-  hoursDoneSincePaid: number;
-  paidHoursTotal: number;
-  paidHoursBeforeCutoff: number;
-  paidHoursAfterCutoff: number;
-}): { effectivePaidHours: number; legacyPaidHours: number } => {
-  if (!input.paidAt) {
-    return {
-      effectivePaidHours: Math.max(0, roundHours(input.paidHoursTotal)),
-      legacyPaidHours: 0,
-    };
+  totalFcfa: number;
+  paidHours: number;
+}): SalaryRecordStatus => {
+  if (input.currentStatus === 'disputed') {
+    return 'disputed';
   }
 
-  const baselinePaidAtCutoff = Math.max(0, roundHours(input.hoursDone - input.hoursDoneSincePaid));
-  const legacyPaidHours = Math.max(0, roundHours(baselinePaidAtCutoff - input.paidHoursBeforeCutoff));
-  const effectivePaidHours = Math.max(0, roundHours(baselinePaidAtCutoff + input.paidHoursAfterCutoff));
+  if (isZeroDueVacataire(input.hoursDone, input.totalFcfa)) {
+    return 'nothing_to_pay';
+  }
 
-  return {
-    effectivePaidHours,
-    legacyPaidHours,
-  };
+  return input.paidHours + EPSILON >= input.hoursDone ? 'paid' : 'pending';
 };
-
 export class BillingService {
   constructor(private readonly repository: BillingRepository) {}
 
@@ -89,25 +80,15 @@ export class BillingService {
       }
 
       const paidHoursFromPayments = BillingRepository.toNumber(row.paid_hours);
-      const paidHoursBeforeCutoff = BillingRepository.toNumber(row.paid_hours_before_paid_at);
-      const paidHoursAfterCutoff = BillingRepository.toNumber(row.paid_hours_after_paid_at);
-      const hoursDoneSincePaid = BillingRepository.toNumber(row.hours_done_since_paid);
-      const { effectivePaidHours } = resolveEffectivePaidHoursFromMetrics({
-        hoursDone,
-        paidAt: row.paid_at,
-        hoursDoneSincePaid,
-        paidHoursTotal: paidHoursFromPayments,
-        paidHoursBeforeCutoff,
-        paidHoursAfterCutoff,
-      });
-      const isPartiallyPaid = hasMeaningfulValue(effectivePaidHours) && effectivePaidHours + EPSILON < hoursDone;
+      const paidHoursForStatus = paidHoursFromPayments;
+      const isPartiallyPaid = hasMeaningfulValue(paidHoursForStatus) && paidHoursForStatus + EPSILON < hoursDone;
       const baseStatus = row.salary_status ?? 'pending';
-      const normalizedStatus: SalaryRecordStatus =
-        baseStatus === 'disputed'
-          ? 'disputed'
-          : isZeroDueVacataire(hoursDone, totalFcfa)
-            ? 'paid'
-            : baseStatus;
+      const normalizedStatus = resolveVacataireStatus({
+        currentStatus: baseStatus,
+        hoursDone,
+        totalFcfa,
+        paidHours: paidHoursForStatus,
+      });
 
       return {
         teacherId: row.teacher_id,
@@ -212,25 +193,7 @@ export class BillingService {
     const paidHoursFromPayments = BillingRepository.toNumber(paidSummary.paid_hours);
     const paidAmountFromPayments = BillingRepository.toNumber(paidSummary.paid_amount);
     const hoursDoneSincePaid = teacherMetrics ? BillingRepository.toNumber(teacherMetrics.hours_done_since_paid) : 0;
-    const paidHoursBeforeCutoff = teacherMetrics
-      ? BillingRepository.toNumber(teacherMetrics.paid_hours_before_paid_at)
-      : 0;
-    const paidHoursAfterCutoff = teacherMetrics
-      ? BillingRepository.toNumber(teacherMetrics.paid_hours_after_paid_at)
-      : 0;
-    const { effectivePaidHours: computedEffectivePaidHours } =
-      teacher.teacher_type === 'vacataire'
-        ? resolveEffectivePaidHoursFromMetrics({
-            hoursDone: totals.hoursDone,
-            paidAt: teacherMetrics?.paid_at ?? null,
-            hoursDoneSincePaid,
-            paidHoursTotal: paidHoursFromPayments,
-            paidHoursBeforeCutoff,
-            paidHoursAfterCutoff,
-          })
-        : { effectivePaidHours: 0 };
-    const effectivePaidHours =
-      teacher.teacher_type === 'vacataire' ? computedEffectivePaidHours : 0;
+    const effectivePaidHours = teacher.teacher_type === 'vacataire' ? paidHoursFromPayments : 0;
     const effectivePaidAmount =
       teacher.teacher_type === 'permanent'
         ? hasMeaningfulValue(paidAmountFromPayments)
@@ -238,9 +201,7 @@ export class BillingService {
           : teacherMetrics?.paid_at
             ? teacher.monthly_salary ?? 0
             : 0
-        : hourlyRate === null
-          ? 0
-          : Math.max(paidAmountFromPayments, Math.round(effectivePaidHours * hourlyRate));
+        : paidAmountFromPayments;
     const remainingHoursToPay = Math.max(
       0,
       totals.hoursDone - (teacher.teacher_type === 'vacataire' ? effectivePaidHours : 0)
@@ -290,11 +251,14 @@ export class BillingService {
       effectivePaidHours + EPSILON < totals.hoursDone;
     const baseStatus = teacherMetrics?.salary_status ?? 'pending';
     const normalizedStatus: SalaryRecordStatus =
-      baseStatus === 'disputed'
-        ? 'disputed'
-        : teacher.teacher_type === 'vacataire' && totalFcfa !== null && isZeroDueVacataire(totals.hoursDone, totalFcfa)
-          ? 'paid'
-          : baseStatus;
+      teacher.teacher_type === 'vacataire' && totalFcfa !== null
+        ? resolveVacataireStatus({
+            currentStatus: baseStatus,
+            hoursDone: totals.hoursDone,
+            totalFcfa,
+            paidHours: effectivePaidHours,
+          })
+        : baseStatus;
 
     const normalizedPaymentRows =
       paymentRows.length > 0
@@ -361,6 +325,7 @@ export class BillingService {
   async computeSalaryRecords(month: string) {
     const { monthStart, monthEnd } = monthToBounds(month);
     const rows = await this.repository.listTeacherMonthlyMetrics(monthStart, monthEnd);
+    const canStoreNothingToPay = await this.repository.hasSalaryStatusValue('nothing_to_pay');
 
     let updatedCount = 0;
     for (const row of rows) {
@@ -384,15 +349,7 @@ export class BillingService {
           : Math.round(hoursDone * (row.hourly_rate ?? 0));
       const currentStatus = row.salary_status;
       const paidHoursFromPayments = BillingRepository.toNumber(row.paid_hours);
-      const { effectivePaidHours } = resolveEffectivePaidHoursFromMetrics({
-        hoursDone,
-        paidAt: row.paid_at,
-        hoursDoneSincePaid: BillingRepository.toNumber(row.hours_done_since_paid),
-        paidHoursTotal: paidHoursFromPayments,
-        paidHoursBeforeCutoff: BillingRepository.toNumber(row.paid_hours_before_paid_at),
-        paidHoursAfterCutoff: BillingRepository.toNumber(row.paid_hours_after_paid_at),
-      });
-      const paidHours = effectivePaidHours;
+      const paidHours = paidHoursFromPayments;
       const paidAmountFromPayments = BillingRepository.toNumber(row.paid_amount);
       const paidAmount =
         hasMeaningfulValue(paidAmountFromPayments) || !row.paid_at ? paidAmountFromPayments : totalFcfa;
@@ -400,9 +357,13 @@ export class BillingService {
       const nextStatus: SalaryRecordStatus =
         currentStatus === 'disputed'
           ? 'disputed'
-          : row.teacher_type === 'permanent'
-            ? (paidAmount + EPSILON >= totalFcfa ? 'paid' : 'pending')
-            : (paidHours + EPSILON >= hoursDone ? 'paid' : 'pending');
+          : row.teacher_type === 'vacataire' && hoursDone <= EPSILON
+            ? 'nothing_to_pay'
+            : row.teacher_type === 'permanent'
+              ? (paidAmount + EPSILON >= totalFcfa ? 'paid' : 'pending')
+              : (paidHours + EPSILON >= hoursDone ? 'paid' : 'pending');
+      const storedStatus =
+        nextStatus === 'nothing_to_pay' && !canStoreNothingToPay ? 'pending' : nextStatus;
 
       await this.repository.upsertSalaryRecord({
         teacherId: row.teacher_id,
@@ -411,7 +372,7 @@ export class BillingService {
         hoursDone,
         hourlyRate: row.hourly_rate ?? 0,
         totalFcfa,
-        status: nextStatus,
+        status: storedStatus,
         notes: row.notes,
       });
 
@@ -421,6 +382,23 @@ export class BillingService {
     return {
       month,
       updatedCount,
+    };
+  }
+
+  async getPastUnpaidSalaryAlerts(referenceMonth: string) {
+    const { monthStart } = monthToBounds(referenceMonth);
+    const rows = await this.repository.listPastUnpaidSalaryAlerts(monthStart);
+    const months = rows.map((row) => ({
+      month: row.period_month.slice(0, 7),
+      recordsCount: BillingRepository.toNumber(row.records_count),
+      totalRemainingFcfa: BillingRepository.toNumber(row.total_remaining_fcfa),
+    }));
+
+    return {
+      referenceMonth,
+      count: months.reduce((sum, row) => sum + row.recordsCount, 0),
+      totalRemainingFcfa: months.reduce((sum, row) => sum + row.totalRemainingFcfa, 0),
+      months,
     };
   }
 
@@ -484,20 +462,7 @@ export class BillingService {
       } else {
         const paidHoursFromPayments = BillingRepository.toNumber(paidSummary.paid_hours);
         const doneHours = BillingRepository.toNumber(existing.hours_done);
-        const periodMonth = existing.period_month.slice(0, 7);
-        const { monthStart, monthEnd } = monthToBounds(periodMonth);
-        const monthMetrics = (
-          await this.repository.listTeacherMonthlyMetrics(monthStart, monthEnd)
-        ).find((row) => row.teacher_id === existing.teacher_id);
-        const { effectivePaidHours } = resolveEffectivePaidHoursFromMetrics({
-          hoursDone: doneHours,
-          paidAt: existing.paid_at,
-          hoursDoneSincePaid: monthMetrics ? BillingRepository.toNumber(monthMetrics.hours_done_since_paid) : 0,
-          paidHoursTotal: paidHoursFromPayments,
-          paidHoursBeforeCutoff: monthMetrics ? BillingRepository.toNumber(monthMetrics.paid_hours_before_paid_at) : 0,
-          paidHoursAfterCutoff: monthMetrics ? BillingRepository.toNumber(monthMetrics.paid_hours_after_paid_at) : 0,
-        });
-        const paidHours = effectivePaidHours;
+        const paidHours = paidHoursFromPayments;
         const remainingHours = Math.max(0, doneHours - paidHours);
 
         if (remainingHours <= EPSILON) {

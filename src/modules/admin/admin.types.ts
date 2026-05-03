@@ -54,6 +54,7 @@ export const createSchoolBodySchema = z.object({
       message: 'Format attendu : MM/YYYY - MM/YYYY (ex: 09/2025 - 06/2026)',
     }),
   plan: z.enum(TENANT_PLAN_VALUES).default('essential'),
+  monetizeParentAlerts: z.boolean().default(false),
 });
 
 export const updateTenantParamsSchema = z.object({
@@ -85,9 +86,13 @@ export const smsFeatureConfigBodySchema = z
   .object({
     commission_pct: z.coerce.number().min(0).max(100).optional(),
     sms_cap_per_student: z.coerce.number().int().min(0).max(10000).optional(),
+    monetizeParentAlerts: z.boolean().optional(),
   })
   .refine(
-    (value) => value.commission_pct !== undefined || value.sms_cap_per_student !== undefined,
+    (value) =>
+      value.commission_pct !== undefined ||
+      value.sms_cap_per_student !== undefined ||
+      value.monetizeParentAlerts !== undefined,
     {
       message: 'At least one field must be provided',
     }

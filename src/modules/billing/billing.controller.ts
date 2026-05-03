@@ -180,6 +180,25 @@ export default async function billingController(app: FastifyInstance): Promise<v
   );
 
   app.get(
+    '/api/v1/billing/salary/unpaid-alerts',
+    { preHandler: requirePermission('salary.view') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const query = monthQuerySchema.parse(request.query ?? {});
+
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          return buildBillingService(tenantDb).getPastUnpaidSalaryAlerts(query.month);
+        });
+
+        return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.get(
     '/api/v1/billing/salary/:teacherId',
     { preHandler: requirePermission('salary.view') },
     async (request, reply) => {

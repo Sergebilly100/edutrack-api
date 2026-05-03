@@ -120,7 +120,21 @@ export class SubscriptionsService {
           : isActive && row.active_ends_at
             ? row.active_ends_at
             : row.ends_at;
+        const resolvedStartsAt = isMonthHistory ? row.month_starts_at ?? row.starts_at : row.starts_at;
         const resolvedCreatedAt = isMonthHistory ? row.month_created_at ?? row.created_at : row.created_at;
+        const daysRemaining =
+          typeof row.month_days_remaining === 'number'
+            ? row.month_days_remaining
+            : resolvedEndsAt
+              ? Math.max(
+                  0,
+                  Math.ceil(
+                    (new Date(`${resolvedEndsAt}T00:00:00.000Z`).getTime() -
+                      new Date(`${todayInBusinessTimezone()}T00:00:00.000Z`).getTime()) /
+                      86_400_000
+                  )
+                )
+              : null;
         const monthlyAmount =
           resolvedTotalAmount && resolvedDurationMonths
             ? Math.round(resolvedTotalAmount / resolvedDurationMonths)
@@ -134,13 +148,14 @@ export class SubscriptionsService {
             ? {
                 id: row.subscription_id,
                 status: row.status,
-                starts_at: row.starts_at,
+                starts_at: resolvedStartsAt,
                 ends_at: resolvedEndsAt,
                 created_at: resolvedCreatedAt,
                 duration_months: resolvedDurationMonths,
                 total_amount_fcfa: resolvedTotalAmount,
                 monthly_amount_fcfa: monthlyAmount,
                 expires_soon: Boolean(resolvedEndsAt && resolvedEndsAt < in30Iso),
+                days_remaining: daysRemaining,
               }
             : null,
           students: row.students ?? [],
@@ -354,6 +369,7 @@ export class SubscriptionsService {
     const feature = await this.repository.getSmsFeatureByTenantId(tenantId);
     return {
       is_enabled: feature?.is_enabled ?? false,
+      monetize_parent_alerts: feature?.monetize_parent_alerts ?? false,
       commission_pct: EDUTRACK_COMMISSION_PCT,
       sms_unit_price_fcfa: feature?.sms_unit_price_fcfa ?? null,
     };
@@ -371,6 +387,7 @@ export class SubscriptionsService {
     );
     return {
       is_enabled: feature.is_enabled,
+      monetize_parent_alerts: feature.monetize_parent_alerts,
       commission_pct: EDUTRACK_COMMISSION_PCT,
       sms_unit_price_fcfa: feature.sms_unit_price_fcfa,
     };
@@ -425,6 +442,15 @@ export class SubscriptionsService {
       throw new SubscriptionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
     }
     return this.repository.listCommissionPaymentsForMonth({ tenantId, month });
+  }
+
+  async revenueSubscriptionDetails(schemaName: string, month: string) {
+    const tenantId = await this.repository.getTenantIdBySchemaName(schemaName);
+    if (!tenantId) {
+      throw new SubscriptionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
+    }
+    void tenantId;
+    return this.repository.listRevenueSubscriptionDetails(month);
   }
 
   async recordCommissionPayment(input: {

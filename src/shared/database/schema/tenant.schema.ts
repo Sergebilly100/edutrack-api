@@ -81,6 +81,7 @@ export const salaryStatusEnum = tenant.enum('salary_status', [
   'pending',
   'paid',
   'disputed',
+  'nothing_to_pay',
 ]);
 
 export const users = tenant.table('users', {

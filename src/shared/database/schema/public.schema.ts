@@ -171,6 +171,7 @@ export const schoolSmsFeatures = pgTable(
       .notNull()
       .references(() => tenants.id, { onDelete: 'cascade' }),
     isEnabled: boolean('is_enabled').notNull().default(false),
+    monetizeParentAlerts: boolean('monetize_parent_alerts').notNull().default(false),
     commissionPct: numeric('commission_pct', { precision: 5, scale: 2 }).notNull().default('0'),
     smsCapPerStudent: integer('sms_cap_per_student').notNull().default(60),
     smsUnitPriceFcfa: integer('sms_unit_price_fcfa'),

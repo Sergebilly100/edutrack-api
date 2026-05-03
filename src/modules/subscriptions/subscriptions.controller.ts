@@ -304,6 +304,24 @@ export default async function subscriptionsController(app: FastifyInstance): Pro
     }
   );
 
+  app.get(
+    '/api/v1/subscriptions/revenue/subscriptions',
+    { preHandler: requirePermission('subscriptions.revenue') },
+    async (request, reply) => {
+      try {
+        const query = revenuePaymentsQuerySchema.parse(request.query ?? {});
+        const claims = request.claims!;
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          const service = new SubscriptionsService(new SubscriptionsRepository(tenantDb));
+          return service.revenueSubscriptionDetails(claims.schemaName, query.month);
+        });
+        return reply.send({ data: result });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
   app.post(
     '/api/v1/subscriptions/revenue/commission/record-payment',
     { preHandler: requirePermission('subscriptions.revenue') },

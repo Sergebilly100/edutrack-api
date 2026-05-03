@@ -335,7 +335,28 @@ export default async function adminController(app: FastifyInstance): Promise<voi
       try {
         const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
         const body = smsFeatureConfigBodySchema.parse(request.body);
-        const result = await updateSchoolSmsFeatureConfig(ensurePublicDb(request), tenantId, body);
+        const result = await updateSchoolSmsFeatureConfig(ensurePublicDb(request), tenantId, body, {
+          actorId: request.auth?.sub,
+          actorRole: request.auth?.role,
+        });
+        return reply.send(result);
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.patch(
+    '/api/v1/admin/schools/:tenantId/sms-features',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+        const body = smsFeatureConfigBodySchema.parse(request.body);
+        const result = await updateSchoolSmsFeatureConfig(ensurePublicDb(request), tenantId, body, {
+          actorId: request.auth?.sub,
+          actorRole: request.auth?.role,
+        });
         return reply.send(result);
       } catch (error) {
         return handleError(reply, error);

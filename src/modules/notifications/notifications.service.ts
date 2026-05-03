@@ -6,6 +6,10 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import { db, withTenantSchema } from '../../shared/database/db.js';
 import { off as defaultOff, on as defaultOn } from '../../shared/events/event-bus.js';
+import {
+  monthKeyInBusinessTimezone,
+  todayInBusinessTimezone,
+} from '../../shared/utils/business-time.js';
 import type {
   EventMap,
   StudentAbsentPayload,
@@ -811,36 +815,204 @@ export class NotificationsService {
     });
   }
 
+  private async handleStudentAbsentWithLegacySubscriptionCheck(
+    tenantDb: TenantDbLike,
+    payload: StudentAbsentPayload
+  ): Promise<void> {
+    const subscriptionsService = new SubscriptionsService(
+      new SubscriptionsRepository(tenantDb as NodePgDatabase<Record<string, unknown>>)
+    );
+    const canSend = await subscriptionsService
+      .canSendNotification({
+        studentId: payload.studentId,
+        tenantId: payload.tenantId,
+        schemaName: payload.schemaName,
+        type: 'sms',
+      })
+      .catch(() => ({
+        allowed: false as const,
+        reason: 'no_active_subscription' as const,
+      }));
+
+    if (!canSend.allowed) {
+      await this.deps.repository.insertNotificationLog(tenantDb, {
+        type: 'student_absent_parent',
+        channel: 'sms',
+        recipientPhone: payload.parentPhone,
+        message: '',
+        status:
+          canSend.reason === 'feature_disabled'
+            ? 'skipped_feature_disabled'
+            : canSend.reason === 'cap_reached'
+              ? 'skipped_cap_reached'
+              : canSend.reason === 'subscription_expired'
+                ? 'skipped_subscription_expired'
+                : 'skipped_no_active_subscription',
+        relatedId: payload.scheduleId,
+      });
+      return;
+    }
+
+    const template = await resolveSmsTemplateMessage(
+      payload.schemaName,
+      SMS_TEMPLATE_STUDENT_ABSENT_TYPE,
+      DEFAULT_STUDENT_ABSENT_TEMPLATE
+    );
+    const message = renderSmsTemplate(template, {
+      studentFirstName: payload.studentFirstName,
+      subject: payload.subject,
+      date: payload.date,
+      schoolPhone: payload.schoolPhone,
+    });
+    const queueRef = buildQueueRef(payload.schemaName, 'student_absent_parent');
+    const recipientPhone = canSend.parentPhone ?? payload.parentPhone;
+
+    await this.deps.smsQueue.add(
+      'send-sms',
+      toSmsJobData({
+        queueRef,
+        to: recipientPhone,
+        message,
+        notificationType: 'student_absent_parent',
+        schemaName: payload.schemaName,
+        relatedId: payload.scheduleId,
+      }),
+      {
+        jobId: queueRef,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5_000 },
+        removeOnComplete: true,
+        removeOnFail: true,
+      }
+    );
+    await this.deps.repository.insertNotificationLog(tenantDb, {
+      type: 'student_absent_parent',
+      channel: 'sms',
+      recipientPhone,
+      message,
+      status: 'queued',
+      providerRef: queueRef,
+      relatedId: payload.scheduleId,
+    });
+    if (canSend.subscriptionId) {
+      await subscriptionsService.incrementUsage({
+        studentId: payload.studentId,
+        subscriptionId: canSend.subscriptionId,
+        type: 'sms',
+      });
+    }
+
+    const emailAddress = canSend.parentEmail ?? payload.parentEmail;
+    if (!emailAddress) {
+      await this.deps.repository.insertNotificationLog(tenantDb, {
+        type: 'student_absent_parent',
+        channel: 'email',
+        recipientPhone,
+        message: '',
+        status: 'skipped_unknown',
+        relatedId: payload.scheduleId,
+      });
+      return;
+    }
+
+    const canSendEmail = await subscriptionsService
+      .canSendNotification({
+        studentId: payload.studentId,
+        tenantId: payload.tenantId,
+        schemaName: payload.schemaName,
+        type: 'email',
+      })
+      .catch(() => ({
+        allowed: false as const,
+        reason: 'no_active_subscription' as const,
+      }));
+    if (!canSendEmail.allowed) {
+      await this.deps.repository.insertNotificationLog(tenantDb, {
+        type: 'student_absent_parent',
+        channel: 'email',
+        recipientPhone,
+        recipientEmail: emailAddress,
+        message: '',
+        status:
+          canSendEmail.reason === 'feature_disabled'
+            ? 'skipped_feature_disabled'
+            : canSendEmail.reason === 'subscription_expired'
+              ? 'skipped_subscription_expired'
+              : 'skipped_no_active_subscription',
+        relatedId: payload.scheduleId,
+      });
+      return;
+    }
+
+    const emailText = renderSmsTemplate(DEFAULT_STUDENT_ABSENT_EMAIL_TEMPLATE, {
+      studentFirstName: payload.studentFirstName,
+      subject: payload.subject,
+      date: payload.date,
+      schoolPhone: payload.schoolPhone,
+    });
+    const emailQueueRef = buildQueueRef(payload.schemaName, 'student_absent_parent');
+    await this.deps.smsQueue.add(
+      'send-email',
+      toEmailJobData({
+        queueRef: emailQueueRef,
+        to: emailAddress,
+        subject: DEFAULT_STUDENT_ABSENT_EMAIL_SUBJECT,
+        text: emailText,
+        recipientPhone,
+        notificationType: 'student_absent_parent',
+        schemaName: payload.schemaName,
+        relatedId: payload.scheduleId,
+      }),
+      {
+        jobId: emailQueueRef,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5_000 },
+        removeOnComplete: true,
+        removeOnFail: true,
+      }
+    );
+    await this.deps.repository.insertNotificationLog(tenantDb, {
+      type: 'student_absent_parent',
+      channel: 'email',
+      recipientPhone,
+      recipientEmail: emailAddress,
+      message: emailText,
+      status: 'queued',
+      providerRef: emailQueueRef,
+      relatedId: payload.scheduleId,
+    });
+    if (canSendEmail.subscriptionId) {
+      await subscriptionsService.incrementUsage({
+        studentId: payload.studentId,
+        subscriptionId: canSendEmail.subscriptionId,
+        type: 'email',
+      });
+    }
+  }
+
   async handleStudentAbsent(payload: StudentAbsentPayload): Promise<void> {
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
-      const subscriptionsService = new SubscriptionsService(
-        new SubscriptionsRepository(tenantDb as NodePgDatabase<Record<string, unknown>>)
+      const subscriptionsRepository = new SubscriptionsRepository(
+        tenantDb as NodePgDatabase<Record<string, unknown>>
       );
-      const canSend = await subscriptionsService
-        .canSendNotification({
-          studentId: payload.studentId,
-          tenantId: payload.tenantId,
-          schemaName: payload.schemaName,
-          type: 'sms',
-        })
-        .catch(() => ({
-          allowed: false as const,
-          reason: 'no_active_subscription' as const,
-        }));
-      if (!canSend.allowed) {
+      const tenantId = payload.tenantId ?? (await subscriptionsRepository.getTenantIdBySchemaName(payload.schemaName));
+      const feature = tenantId
+        ? await subscriptionsRepository.getSmsFeatureByTenantId(tenantId).catch(async () => {
+            await this.handleStudentAbsentWithLegacySubscriptionCheck(tenantDb, payload);
+            return null;
+          })
+        : null;
+      if (tenantId && !feature) {
+        return;
+      }
+
+      if (!feature?.is_enabled) {
         await this.deps.repository.insertNotificationLog(tenantDb, {
           type: 'student_absent_parent',
           channel: 'sms',
           recipientPhone: payload.parentPhone,
           message: '',
-          status:
-            canSend.reason === 'feature_disabled'
-              ? 'skipped_feature_disabled'
-              : canSend.reason === 'cap_reached'
-                ? 'skipped_cap_reached'
-                : canSend.reason === 'subscription_expired'
-                  ? 'skipped_subscription_expired'
-                  : 'skipped_no_active_subscription',
+          status: 'skipped_feature_disabled',
           relatedId: payload.scheduleId,
         });
         await this.deps.repository.insertNotificationLog(tenantDb, {
@@ -848,12 +1020,7 @@ export class NotificationsService {
           channel: 'email',
           recipientPhone: payload.parentPhone,
           message: '',
-          status:
-            canSend.reason === 'feature_disabled'
-              ? 'skipped_feature_disabled'
-              : canSend.reason === 'subscription_expired'
-                ? 'skipped_subscription_expired'
-                : 'skipped_no_active_subscription',
+          status: 'skipped_feature_disabled',
           relatedId: payload.scheduleId,
         });
         return;
@@ -871,132 +1038,166 @@ export class NotificationsService {
         schoolPhone: payload.schoolPhone,
       });
 
-      const queueRef = buildQueueRef(payload.schemaName, 'student_absent_parent');
-
-      await this.deps.smsQueue.add(
-        'send-sms',
-        toSmsJobData({
-          queueRef,
-          to: canSend.parentPhone ?? payload.parentPhone,
-          message,
-          notificationType: 'student_absent_parent',
-          schemaName: payload.schemaName,
-          relatedId: payload.scheduleId,
-        }),
-        {
-          jobId: queueRef,
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 5_000 },
-          removeOnComplete: true,
-          removeOnFail: true,
-        }
-      );
-
-      await this.deps.repository.insertNotificationLog(tenantDb, {
-        type: 'student_absent_parent',
-        channel: 'sms',
-        recipientPhone: canSend.parentPhone ?? payload.parentPhone,
-        message,
-        status: 'queued',
-        providerRef: queueRef,
-        relatedId: payload.scheduleId,
-      });
-      if (canSend.subscriptionId) {
-        await subscriptionsService.incrementUsage({
-          studentId: payload.studentId,
-          subscriptionId: canSend.subscriptionId,
-          type: 'sms',
-        });
-      }
-
-      const emailAddress = canSend.parentEmail ?? payload.parentEmail;
-      if (!emailAddress) {
-        await this.deps.repository.insertNotificationLog(tenantDb, {
-          type: 'student_absent_parent',
-          channel: 'email',
-          recipientPhone: canSend.parentPhone ?? payload.parentPhone,
-          message: '',
-          status: 'skipped_unknown',
-          relatedId: payload.scheduleId,
-        });
-        return;
-      }
-
-      const canSendEmail = await subscriptionsService
-        .canSendNotification({
-          studentId: payload.studentId,
-          tenantId: payload.tenantId,
-          schemaName: payload.schemaName,
-          type: 'email',
-        })
-        .catch(() => ({
-          allowed: false as const,
-          reason: 'no_active_subscription' as const,
-        }));
-
-      if (!canSendEmail.allowed) {
-        await this.deps.repository.insertNotificationLog(tenantDb, {
-          type: 'student_absent_parent',
-          channel: 'email',
-          recipientPhone: canSend.parentPhone ?? payload.parentPhone,
-          recipientEmail: emailAddress,
-          message: '',
-          status:
-            canSendEmail.reason === 'feature_disabled'
-              ? 'skipped_feature_disabled'
-              : canSendEmail.reason === 'subscription_expired'
-                ? 'skipped_subscription_expired'
-                : 'skipped_no_active_subscription',
-          relatedId: payload.scheduleId,
-        });
-        return;
-      }
-
       const emailText = renderSmsTemplate(DEFAULT_STUDENT_ABSENT_EMAIL_TEMPLATE, {
         studentFirstName: payload.studentFirstName,
         subject: payload.subject,
         date: payload.date,
         schoolPhone: payload.schoolPhone,
       });
-      const emailQueueRef = buildQueueRef(payload.schemaName, 'student_absent_parent');
 
-      await this.deps.smsQueue.add(
-        'send-email',
-        toEmailJobData({
-          queueRef: emailQueueRef,
-          to: emailAddress,
-          subject: DEFAULT_STUDENT_ABSENT_EMAIL_SUBJECT,
-          text: emailText,
-          recipientPhone: canSend.parentPhone ?? payload.parentPhone,
-          notificationType: 'student_absent_parent',
-          schemaName: payload.schemaName,
-          relatedId: payload.scheduleId,
-        }),
-        {
-          jobId: emailQueueRef,
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 5_000 },
-          removeOnComplete: true,
-          removeOnFail: true,
+      const contactsFromDb = await subscriptionsRepository.listParentAlertContactsByStudent(payload.studentId);
+      const contacts = contactsFromDb.length > 0
+        ? contactsFromDb
+        : [
+            {
+              parent_id: null,
+              subscription_id: null,
+              parent_phone: payload.parentPhone,
+              parent_email: payload.parentEmail ?? null,
+              ends_at: null,
+              subscription_status: null,
+            },
+          ];
+      const today = todayInBusinessTimezone();
+      const currentMonth = monthKeyInBusinessTimezone();
+
+      for (const contact of contacts) {
+        const hasActiveSubscription =
+          contact.subscription_status === 'active' &&
+          contact.subscription_id !== null &&
+          contact.ends_at !== null &&
+          contact.ends_at >= today;
+
+        if (feature.monetize_parent_alerts && !hasActiveSubscription) {
+          await this.deps.repository.insertNotificationLog(tenantDb, {
+            type: 'student_absent_parent',
+            channel: 'sms',
+            recipientPhone: contact.parent_phone,
+            message: '',
+            status: contact.subscription_status === 'active' ? 'skipped_subscription_expired' : 'skipped_no_active_subscription',
+            relatedId: payload.scheduleId,
+          });
+          if (contact.parent_email) {
+            await this.deps.repository.insertNotificationLog(tenantDb, {
+              type: 'student_absent_parent',
+              channel: 'email',
+              recipientPhone: contact.parent_phone,
+              recipientEmail: contact.parent_email,
+              message: '',
+              status: contact.subscription_status === 'active' ? 'skipped_subscription_expired' : 'skipped_no_active_subscription',
+              relatedId: payload.scheduleId,
+            });
+          }
+          continue;
         }
-      );
 
-      await this.deps.repository.insertNotificationLog(tenantDb, {
-        type: 'student_absent_parent',
-        channel: 'email',
-        recipientPhone: canSend.parentPhone ?? payload.parentPhone,
-        recipientEmail: emailAddress,
-        message: emailText,
-        status: 'queued',
-        providerRef: emailQueueRef,
-        relatedId: payload.scheduleId,
-      });
-      if (canSendEmail.subscriptionId) {
-        await subscriptionsService.incrementUsage({
-          studentId: payload.studentId,
-          subscriptionId: canSendEmail.subscriptionId,
-          type: 'email',
+        if (feature.monetize_parent_alerts) {
+          const usage = await subscriptionsRepository.getUsageByStudentMonth(payload.studentId, currentMonth);
+          if (usage.sms >= feature.sms_cap_per_student) {
+            await this.deps.repository.insertNotificationLog(tenantDb, {
+              type: 'student_absent_parent',
+              channel: 'sms',
+              recipientPhone: contact.parent_phone,
+              message: '',
+              status: 'skipped_cap_reached',
+              relatedId: payload.scheduleId,
+            });
+            continue;
+          }
+        }
+
+        const queueRef = buildQueueRef(payload.schemaName, 'student_absent_parent');
+        await this.deps.smsQueue.add(
+          'send-sms',
+          toSmsJobData({
+            queueRef,
+            to: contact.parent_phone,
+            message,
+            notificationType: 'student_absent_parent',
+            schemaName: payload.schemaName,
+            relatedId: payload.scheduleId,
+          }),
+          {
+            jobId: queueRef,
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 5_000 },
+            removeOnComplete: true,
+            removeOnFail: true,
+          }
+        );
+
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'student_absent_parent',
+          channel: 'sms',
+          recipientPhone: contact.parent_phone,
+          message,
+          status: 'queued',
+          providerRef: queueRef,
+          relatedId: payload.scheduleId,
         });
+
+        if (feature.monetize_parent_alerts && contact.subscription_id) {
+          await subscriptionsRepository.incrementUsage({
+            studentId: payload.studentId,
+            subscriptionId: contact.subscription_id,
+            month: currentMonth,
+            type: 'sms',
+          });
+        }
+
+        if (!contact.parent_email) {
+          await this.deps.repository.insertNotificationLog(tenantDb, {
+            type: 'student_absent_parent',
+            channel: 'email',
+            recipientPhone: contact.parent_phone,
+            message: '',
+            status: 'skipped_unknown',
+            relatedId: payload.scheduleId,
+          });
+          continue;
+        }
+
+        const emailQueueRef = buildQueueRef(payload.schemaName, 'student_absent_parent');
+        await this.deps.smsQueue.add(
+          'send-email',
+          toEmailJobData({
+            queueRef: emailQueueRef,
+            to: contact.parent_email,
+            subject: DEFAULT_STUDENT_ABSENT_EMAIL_SUBJECT,
+            text: emailText,
+            recipientPhone: contact.parent_phone,
+            notificationType: 'student_absent_parent',
+            schemaName: payload.schemaName,
+            relatedId: payload.scheduleId,
+          }),
+          {
+            jobId: emailQueueRef,
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 5_000 },
+            removeOnComplete: true,
+            removeOnFail: true,
+          }
+        );
+
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'student_absent_parent',
+          channel: 'email',
+          recipientPhone: contact.parent_phone,
+          recipientEmail: contact.parent_email,
+          message: emailText,
+          status: 'queued',
+          providerRef: emailQueueRef,
+          relatedId: payload.scheduleId,
+        });
+
+        if (feature.monetize_parent_alerts && contact.subscription_id) {
+          await subscriptionsRepository.incrementUsage({
+            studentId: payload.studentId,
+            subscriptionId: contact.subscription_id,
+            month: currentMonth,
+            type: 'email',
+          });
+        }
       }
     });
   }

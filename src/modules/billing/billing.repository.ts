@@ -4,7 +4,7 @@ import type { QueryResult, QueryResultRow } from 'pg';
 
 export type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
 
-export type SalaryRecordStatus = 'pending' | 'paid' | 'disputed';
+export type SalaryRecordStatus = 'pending' | 'paid' | 'disputed' | 'nothing_to_pay';
 
 type SalaryMetricRow = {
   teacher_id: string;
@@ -89,6 +89,12 @@ type SalaryPaymentsSummaryRow = {
   paid_amount: string | number;
   payments_count: string | number;
   last_paid_at: string | null;
+};
+
+type PastUnpaidSalaryAlertRow = {
+  period_month: string;
+  records_count: string | number;
+  total_remaining_fcfa: string | number;
 };
 
 type SalaryPaymentRow = {
@@ -413,6 +419,21 @@ export class BillingRepository {
     return row;
   }
 
+  async hasSalaryStatusValue(status: SalaryRecordStatus): Promise<boolean> {
+    const result = await this.db.execute<{ exists: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1
+        FROM pg_type t
+        INNER JOIN pg_enum e ON e.enumtypid = t.oid
+        WHERE t.typname = 'salary_status'
+          AND t.typnamespace = current_schema()::regnamespace
+          AND e.enumlabel = ${status}
+      ) AS exists
+    `);
+
+    return result.rows[0]?.exists === true;
+  }
+
   async updateSalaryStatus(input: {
     recordId: string;
     status: 'paid' | 'disputed';
@@ -425,7 +446,6 @@ export class BillingRepository {
         status = ${input.status}::salary_status,
         notes = CASE WHEN ${input.notes !== undefined} THEN ${input.notes ?? null} ELSE notes END,
         paid_at = CASE WHEN ${input.status === 'paid'} THEN NOW() ELSE paid_at END,
-        paid_by = CASE WHEN ${input.status === 'paid'} THEN ${input.paidBy ?? null}::uuid ELSE paid_by END
         paid_by = CASE WHEN ${input.status === 'paid'} THEN ${input.paidBy ?? null}::uuid ELSE NULL END
       WHERE id = ${input.recordId}
       RETURNING
@@ -733,6 +753,35 @@ export class BillingRepository {
       FROM salary_records sr
       WHERE sr.teacher_id = ${input.teacherId}
         AND sr.period_month BETWEEN ${input.periodFrom}::date AND ${input.periodTo}::date
+      ORDER BY sr.period_month ASC
+    `);
+
+    return getRows(result);
+  }
+
+  async listPastUnpaidSalaryAlerts(beforeMonthStart: string): Promise<PastUnpaidSalaryAlertRow[]> {
+    const result = await this.db.execute<PastUnpaidSalaryAlertRow>(sql`
+      WITH payments AS (
+        SELECT
+          salary_record_id,
+          COALESCE(SUM(amount_fcfa), 0)::int AS paid_amount
+        FROM salary_payments
+        GROUP BY salary_record_id
+      )
+      SELECT
+        sr.period_month::text AS period_month,
+        COUNT(*)::int AS records_count,
+        SUM(GREATEST(sr.total_fcfa - COALESCE(payments.paid_amount, 0), 0))::int AS total_remaining_fcfa
+      FROM salary_records sr
+      LEFT JOIN payments ON payments.salary_record_id = sr.id
+      WHERE sr.period_month < ${beforeMonthStart}::date
+        AND sr.status::text <> 'nothing_to_pay'
+        AND (
+          sr.status <> 'paid'::salary_status
+          OR GREATEST(sr.total_fcfa - COALESCE(payments.paid_amount, 0), 0) > 0
+        )
+      GROUP BY sr.period_month
+      HAVING SUM(GREATEST(sr.total_fcfa - COALESCE(payments.paid_amount, 0), 0)) > 0
       ORDER BY sr.period_month ASC
     `);
 
