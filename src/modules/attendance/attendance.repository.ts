@@ -72,6 +72,7 @@ type StudentAbsenceNotificationCandidateRow = {
   student_id: string;
   student_first_name: string;
   parent_phone: string;
+  parent_email: string | null;
   subject: string;
   school_phone: string | null;
 };
@@ -531,6 +532,7 @@ export class AttendanceRepository {
       studentId: string;
       studentFirstName: string;
       parentPhone: string;
+      parentEmail: string | null;
       subject: string;
       schoolPhone: string | null;
     }>
@@ -566,6 +568,7 @@ export class AttendanceRepository {
         st.id::text AS student_id,
         st.first_name AS student_first_name,
         st.parent_phone,
+        parent_contact.email AS parent_email,
         s.subject,
         sp.school_phone
       FROM attendances_student ast
@@ -573,6 +576,17 @@ export class AttendanceRepository {
       INNER JOIN schedules s ON s.id = ast.schedule_id
       CROSS JOIN tenant_ctx tc
       LEFT JOIN school_phone_ctx sp ON true
+      LEFT JOIN LATERAL (
+        SELECT p.email
+        FROM parent_student_links psl
+        INNER JOIN parent_subscriptions ps ON ps.id = psl.subscription_id
+        INNER JOIN parents p ON p.id = psl.parent_id
+        WHERE psl.student_id = st.id
+          AND ps.status = 'active'
+          AND p.email IS NOT NULL
+        ORDER BY ps.ends_at DESC
+        LIMIT 1
+      ) parent_contact ON true
       WHERE ast.schedule_id = ${params.scheduleId}
         AND ast.date = ${params.date}::date
         AND ast.status = 'absent'
@@ -596,6 +610,7 @@ export class AttendanceRepository {
       studentId: row.student_id,
       studentFirstName: row.student_first_name,
       parentPhone: row.parent_phone,
+      parentEmail: row.parent_email,
       subject: row.subject,
       schoolPhone: row.school_phone,
     }));

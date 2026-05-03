@@ -86,6 +86,7 @@ type TenantLookupRow = {
 type SchoolContactRow = {
   name: string;
   phone: string | null;
+  email: string | null;
 };
 
 type SchoolLookupRow = {
@@ -1069,7 +1070,7 @@ const getSchoolContactForPaymentReminder = async (
 ): Promise<SchoolContactRow | null> => {
   return withTenantSchema(schemaName, async (tenantDb) => {
     const directorResult = await tenantDb.execute<SchoolContactRow>(sql`
-      SELECT name, phone
+      SELECT name, phone, email
       FROM users
       WHERE is_active = true
         AND role = 'director'
@@ -1083,11 +1084,11 @@ const getSchoolContactForPaymentReminder = async (
     }
 
     const staffResult = await tenantDb.execute<SchoolContactRow>(sql`
-      SELECT name, phone
+      SELECT name, phone, email
       FROM users
       WHERE is_active = true
         AND role = 'staff'
-        AND phone IS NOT NULL
+        AND (phone IS NOT NULL OR email IS NOT NULL)
       ORDER BY created_at ASC
       LIMIT 1
     `);
@@ -2116,6 +2117,7 @@ export const sendSchoolPaymentReminder = async (
     dueDate: toDateLabel(subscription.nextDueDate),
     remainingAmountFcfa: subscription.remainingCurrentPeriodFcfa,
     directorPhone: contact.phone,
+    directorEmail: contact.email,
   });
 
   return {

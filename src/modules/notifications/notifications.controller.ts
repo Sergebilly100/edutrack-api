@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { sql } from 'drizzle-orm';
 import { ZodError, z } from 'zod';
+import { randomUUID } from 'node:crypto';
 
 import { db as publicDb, withTenantSchema } from '../../shared/database/db.js';
 import { requireDirector, requirePermission } from '../../shared/middleware/auth.middleware.js';
@@ -66,6 +67,70 @@ const querySchema = z.object({
     }),
 });
 
+const orangeDeliveryStatusSchema = z.enum([
+  'DeliveredToNetwork',
+  'DeliveryUncertain',
+  'DeliveryImpossible',
+  'MessageWaiting',
+  'DeliveredToTerminal',
+]);
+
+const orangeDeliveryReceiptSchema = z.object({
+  deliveryInfoNotification: z.object({
+    callbackData: z.string().trim().min(1),
+    deliveryInfo: z.object({
+      address: z.string().trim().min(1),
+      deliveryStatus: orangeDeliveryStatusSchema,
+    }),
+  }),
+});
+
+const orangeTestSendBodySchema = z.object({
+  tokenUrl: z.string().trim().url().default('https://api.orange.com/oauth/v3/token'),
+  smsBaseUrl: z.string().trim().url().default('https://api.orange.com/smsmessaging/v1/outbound'),
+  clientId: z.string().trim().min(1),
+  clientSecret: z.string().trim().min(1),
+  senderAddress: z.string().trim().min(1),
+  senderName: z.string().trim().optional().default(''),
+  recipient: z.string().trim().min(1),
+  message: z.string().trim().min(1).max(1000),
+  notifyUrl: z.string().trim().url().optional().or(z.literal('')).default(''),
+  callbackData: z.string().trim().optional().default(''),
+});
+
+const mapOrangeDeliveryStatus = (
+  deliveryStatus: z.infer<typeof orangeDeliveryStatusSchema>
+): 'sent' | 'failed' | 'delivered' => {
+  if (deliveryStatus === 'DeliveredToTerminal') {
+    return 'delivered';
+  }
+
+  if (deliveryStatus === 'DeliveryImpossible') {
+    return 'failed';
+  }
+
+  return 'sent';
+};
+
+const normalizeSmsPhone = (phone: string): string => {
+  const digits = phone.replace(/\D/g, '');
+  if (!digits) return phone;
+  if (digits.startsWith('225')) return `+${digits}`;
+  if (digits.startsWith('0') && digits.length === 10) return `+225${digits}`;
+  if (digits.length === 8 || digits.length === 10) return `+225${digits}`;
+  return phone.trim().startsWith('+') ? phone.trim() : `+${digits}`;
+};
+
+const readJsonOrText = async (response: Response): Promise<unknown> => {
+  const text = await response.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+};
+
 const handleError = (
   request: FastifyRequest,
   reply: FastifyReply,
@@ -92,6 +157,148 @@ const handleError = (
 };
 
 export default async function notificationsController(app: FastifyInstance): Promise<void> {
+  app.post('/api/v1/notifications/orange/test-send', async (request, reply) => {
+    try {
+      if (process.env.NODE_ENV === 'production') {
+        return reply.code(404).send({
+          error: 'Not found',
+          code: 'NOT_FOUND',
+          statusCode: 404,
+        });
+      }
+
+      const body = orangeTestSendBodySchema.parse(request.body ?? {});
+      const basicCredentials = Buffer.from(`${body.clientId}:${body.clientSecret}`).toString('base64');
+      const tokenResponse = await fetch(body.tokenUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${basicCredentials}`,
+          Accept: 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: 'grant_type=client_credentials',
+      });
+      const tokenPayload = (await readJsonOrText(tokenResponse)) as { access_token?: string } | string | null;
+      if (!tokenResponse.ok || typeof tokenPayload !== 'object' || !tokenPayload?.access_token) {
+        return reply.code(502).send({
+          success: false,
+          step: 'token',
+          token: {
+            status: tokenResponse.status,
+            response: tokenPayload,
+          },
+        });
+      }
+
+      const senderAddress = `tel:${normalizeSmsPhone(body.senderAddress)}`;
+      const recipient = normalizeSmsPhone(body.recipient);
+      const smsBaseUrl = body.smsBaseUrl.replace(/\/+$/, '');
+      const outboundBaseUrl = /\/outbound$/.test(smsBaseUrl)
+        ? smsBaseUrl
+        : `${smsBaseUrl}/outbound`;
+      const smsUrl = `${outboundBaseUrl}/${encodeURIComponent(senderAddress)}/requests`;
+      const smsBody: {
+        outboundSMSMessageRequest: {
+          address: string;
+          senderAddress: string;
+          outboundSMSTextMessage: { message: string };
+          senderName?: string;
+          receiptRequest?: {
+            notifyURL: string;
+            callbackData: string;
+          };
+        };
+      } = {
+        outboundSMSMessageRequest: {
+          address: `tel:${recipient}`,
+          senderAddress,
+          outboundSMSTextMessage: {
+            message: body.message,
+          },
+        },
+      };
+      if (body.senderName) {
+        smsBody.outboundSMSMessageRequest.senderName = body.senderName;
+      }
+      if (body.notifyUrl) {
+        smsBody.outboundSMSMessageRequest.receiptRequest = {
+          notifyURL: body.notifyUrl,
+          callbackData: body.callbackData || randomUUID(),
+        };
+      }
+
+      const smsResponse = await fetch(smsUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${tokenPayload.access_token}`,
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(smsBody),
+      });
+      const smsPayload = await readJsonOrText(smsResponse);
+
+      return reply.code(smsResponse.ok ? 200 : 502).send({
+        success: smsResponse.ok,
+        token: {
+          status: tokenResponse.status,
+          response: {
+            access_token: '<redacted>',
+          },
+        },
+        sms: {
+          url: smsUrl,
+          status: smsResponse.status,
+          request: smsBody,
+          response: smsPayload,
+        },
+      });
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.post('/api/v1/notifications/orange/delivery-receipt', async (request, reply) => {
+    try {
+      const body = orangeDeliveryReceiptSchema.parse(request.body ?? {});
+      const callbackData = body.deliveryInfoNotification.callbackData;
+      const deliveryStatus = body.deliveryInfoNotification.deliveryInfo.deliveryStatus;
+      const status = mapOrangeDeliveryStatus(deliveryStatus);
+
+      const tenantsResult = await publicDb.execute<{ schema_name: string }>(sql`
+        SELECT schema_name
+        FROM public.tenants
+        WHERE status IN ('trial', 'active', 'suspended')
+        ORDER BY created_at ASC
+      `);
+
+      let updated = 0;
+      for (const tenant of tenantsResult.rows) {
+        updated += await withTenantSchema(tenant.schema_name, async (tenantDb) => {
+          return defaultRepository.updateNotificationLogDeliveryStatus(tenantDb, {
+            providerRef: callbackData,
+            status,
+          });
+        });
+      }
+
+      request.log.info(
+        {
+          provider: 'orange_api',
+          callbackData,
+          deliveryStatus,
+          status,
+          updated,
+        },
+        '[notifications] orange delivery receipt received'
+      );
+
+      return reply.send({ success: true, updated });
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
   app.get('/api/v1/notifications/log', { preHandler: requireDirector }, async (request, reply) => {
     try {
       const claims = request.claims!;

@@ -55,6 +55,10 @@ type TeacherDailySummarySmsParams = {
   totalCourses: number;
 };
 
+type TeacherDailySummaryEmailParams = TeacherDailySummarySmsParams & {
+  schoolName: string;
+};
+
 const ELLIPSIS = '...';
 
 const normalizeText = (value: string): string => value.replace(/\s+/g, ' ').trim();
@@ -142,4 +146,33 @@ export const buildTeacherDailySummarySms = (params: TeacherDailySummarySmsParams
   return limitSmsLength(
     `EduTrack: Point profs ${safeText(params.date)} - ${params.absentCount} absent(s), ${params.lateCount} retard(s), ${params.presentCount}/${params.totalCourses} cours assures. Voir dashboard.`
   );
+};
+
+export const buildTeacherDailySummaryEmailText = (
+  params: TeacherDailySummaryEmailParams
+): string => {
+  return (
+    `Bilan des présences professeurs du ${safeText(params.date)} pour ${safeText(params.schoolName)}.
+Total cours: ${params.totalCourses}
+Présents: ${params.presentCount}
+Retards: ${params.lateCount}
+Absents: ${params.absentCount}
+
+Connectez-vous au dashboard EduTrack pour consulter le détail.`
+  ).trim();
+};
+
+export const buildPaymentReminderEmailText = (params: PaymentReminderSmsParams): string => {
+  const amount = new Intl.NumberFormat('fr-FR', {
+    maximumFractionDigits: 0,
+  }).format(Math.max(0, params.remainingAmountFcfa));
+
+  return (
+    `Relance paiement EduTrack pour ${safeText(params.schoolName)}.
+Période: ${safeText(params.periodLabel)}
+Échéance: ${safeText(params.dueDate)}
+Montant restant: ${amount} FCFA.
+
+Merci de régulariser votre abonnement pour conserver l'accès au service.`
+  ).trim();
 };

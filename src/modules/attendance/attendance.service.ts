@@ -390,6 +390,7 @@ export class AttendanceService {
         scheduleId: input.scheduleId,
         studentFirstName: student.studentFirstName,
         parentPhone: student.parentPhone,
+        parentEmail: student.parentEmail,
         subject: student.subject,
         date: input.date,
         schoolPhone: student.schoolPhone ?? DEFAULT_SCHOOL_PHONE,

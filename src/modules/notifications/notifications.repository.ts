@@ -44,6 +44,7 @@ export type NotificationLogRow = {
 
 export type TeacherDailySummaryContext = {
   directorPhone: string | null;
+  directorEmail: string | null;
   totalCourses: number;
   presentCount: number;
   lateCount: number;
@@ -91,6 +92,13 @@ export type NotificationsRepository = {
       sentAt?: Date;
     }
   ) => Promise<void>;
+  updateNotificationLogDeliveryStatus: (
+    tenantDb: TenantDbLike,
+    params: {
+      providerRef: string;
+      status: 'sent' | 'failed' | 'delivered';
+    }
+  ) => Promise<number>;
   markQrAlertSent: (
     tenantDb: TenantDbLike,
     payload: Pick<TeacherQrAlertPayload, 'teacherId' | 'scheduleId' | 'date'>
@@ -262,6 +270,20 @@ export const defaultRepository: NotificationsRepository = {
     `);
   },
 
+  async updateNotificationLogDeliveryStatus(tenantDb, params) {
+    const result = await asExecutor(tenantDb).execute<{ id: string }>(sql`
+      UPDATE notifications_log
+      SET status = ${params.status}
+      WHERE channel = 'sms'
+        AND (
+          provider_ref = ${params.providerRef}
+          OR provider_ref LIKE ${`%${params.providerRef}`}
+        )
+      RETURNING id::text
+    `);
+    return result.rows.length;
+  },
+
   async markQrAlertSent(tenantDb, payload) {
     await asExecutor(tenantDb).execute(sql`
       UPDATE attendances_teacher
@@ -275,6 +297,7 @@ export const defaultRepository: NotificationsRepository = {
   async getTeacherDailySummaryContext(tenantDb, params) {
     const result = await asExecutor(tenantDb).execute<{
       director_phone: string | null;
+      director_email: string | null;
       total_courses: number;
       present_count: number;
       late_count: number;
@@ -304,16 +327,17 @@ export const defaultRepository: NotificationsRepository = {
           AND (s.end_date IS NULL OR s.end_date > dc.target_date)
       ),
       director AS (
-        SELECT u.phone
+        SELECT u.phone, u.email
         FROM users u
         WHERE u.role = 'director'
           AND u.is_active = true
-          AND u.phone IS NOT NULL
+          AND (u.phone IS NOT NULL OR u.email IS NOT NULL)
         ORDER BY u.created_at ASC
         LIMIT 1
       )
       SELECT
         (SELECT phone FROM director) AS director_phone,
+        (SELECT email FROM director) AS director_email,
         COUNT(sc.schedule_id)::int AS total_courses,
         COUNT(*) FILTER (WHERE at.status IN ('present', 'excused'))::int AS present_count,
         COUNT(*) FILTER (WHERE at.status = 'late')::int AS late_count,
@@ -327,6 +351,7 @@ export const defaultRepository: NotificationsRepository = {
     const row = getFirstRow(result);
     return {
       directorPhone: row?.director_phone ?? null,
+      directorEmail: row?.director_email ?? null,
       totalCourses: Number(row?.total_courses ?? 0),
       presentCount: Number(row?.present_count ?? 0),
       lateCount: Number(row?.late_count ?? 0),

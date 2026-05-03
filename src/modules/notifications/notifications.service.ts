@@ -23,6 +23,7 @@ import type {
   EmailSender,
 } from './notifications.queue.js';
 import {
+  buildPaymentReminderEmailText,
   buildTeacherLateSms,
   buildTeacherQrAlertSms,
   renderSmsTemplate,
@@ -540,37 +541,37 @@ export const defaultSmsSender: SmsSender = async ({ to, message, type, schemaNam
   return { status: 'failed', errorMessage: `SMS provider not implemented: ${config.provider}` };
 };
 
-const sendResendEmail = async (params: {
+const sendBrevoEmail = async (params: {
   to: string;
   subject: string;
   text: string;
 }): Promise<{ status: 'sent' | 'failed'; providerRef?: string; errorMessage?: string }> => {
-  const apiKey = process.env.EMAIL_RESEND_API_KEY?.trim();
+  const apiKey = process.env.BREVO_API_KEY?.trim();
   const from = process.env.EMAIL_FROM?.trim();
   if (!apiKey || !from) {
-    return { status: 'failed', errorMessage: 'Missing EMAIL_RESEND_API_KEY or EMAIL_FROM' };
+    return { status: 'failed', errorMessage: 'Missing BREVO_API_KEY or EMAIL_FROM' };
   }
 
-  const response = await fetch('https://api.resend.com/emails', {
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      'api-key': apiKey,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from,
-      to: [params.to],
+      sender: { name: 'EduTrack', email: from },
+      to: [{ email: params.to }],
       subject: params.subject,
-      text: params.text,
+      textContent: params.text,
     }),
   });
   const payload = (await response.json().catch(() => ({} as Record<string, unknown>))) as {
-    id?: string;
+    messageId?: string;
   };
   if (!response.ok) {
-    return { status: 'failed', errorMessage: `Resend error (${response.status})` };
+    return { status: 'failed', errorMessage: `Brevo error (${response.status})` };
   }
-  return { status: 'sent', providerRef: payload.id ?? randomUUID() };
+  return { status: 'sent', providerRef: payload.messageId ?? randomUUID() };
 };
 
 export const defaultEmailSender: EmailSender = async ({ to, subject, text }) => {
@@ -580,8 +581,8 @@ export const defaultEmailSender: EmailSender = async ({ to, subject, text }) => 
     console.info(`[email][mock] to=${to}`);
     return { status: 'sent', providerRef: 'mock-email' };
   }
-  if (provider === 'resend') {
-    return sendResendEmail({ to, subject, text });
+  if (provider === 'brevo') {
+    return sendBrevoEmail({ to, subject, text });
   }
   return { status: 'failed', errorMessage: `Email provider not implemented: ${provider}` };
 };
@@ -908,7 +909,7 @@ export class NotificationsService {
         });
       }
 
-      const emailAddress = canSend.parentEmail;
+      const emailAddress = canSend.parentEmail ?? payload.parentEmail;
       if (!emailAddress) {
         await this.deps.repository.insertNotificationLog(tenantDb, {
           type: 'student_absent_parent',
@@ -1039,10 +1040,60 @@ export class NotificationsService {
 
       await this.deps.repository.insertNotificationLog(tenantDb, {
         type: 'payment_reminder',
+        channel: 'sms',
         recipientPhone: payload.directorPhone,
         message,
         status: 'queued',
         providerRef: queueRef,
+      });
+
+      if (!payload.directorEmail) {
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'payment_reminder',
+          channel: 'email',
+          recipientPhone: payload.directorPhone,
+          message: '',
+          status: 'skipped_unknown',
+        });
+        return;
+      }
+
+      const emailText = buildPaymentReminderEmailText({
+        schoolName: payload.schoolName,
+        periodLabel: payload.periodLabel,
+        dueDate: payload.dueDate,
+        remainingAmountFcfa: payload.remainingAmountFcfa,
+      });
+      const emailQueueRef = buildQueueRef(payload.schemaName, 'payment_reminder');
+
+      await this.deps.smsQueue.add(
+        'send-email',
+        toEmailJobData({
+          queueRef: emailQueueRef,
+          to: payload.directorEmail,
+          subject: `[EduTrack] Relance paiement — ${payload.schoolName}`,
+          text: emailText,
+          recipientPhone: payload.directorPhone,
+          notificationType: 'payment_reminder',
+          schemaName: payload.schemaName,
+        }),
+        {
+          jobId: emailQueueRef,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5_000 },
+          removeOnComplete: true,
+          removeOnFail: true,
+        }
+      );
+
+      await this.deps.repository.insertNotificationLog(tenantDb, {
+        type: 'payment_reminder',
+        channel: 'email',
+        recipientPhone: payload.directorPhone,
+        recipientEmail: payload.directorEmail,
+        message: emailText,
+        status: 'queued',
+        providerRef: emailQueueRef,
       });
     });
   }

@@ -106,13 +106,14 @@ describe('notifications.queue', () => {
   it('envoie le résumé quotidien profs aux directeurs des écoles actives', async () => {
     mocks.dbExecute.mockResolvedValueOnce({
       rows: [
-        { id: 'tenant-1', schema_name: 'school_sainte_marie' },
-        { id: 'tenant-2', schema_name: 'school_belle_vue' },
+        { id: 'tenant-1', schema_name: 'school_sainte_marie', name: 'Sainte Marie' },
+        { id: 'tenant-2', schema_name: 'school_belle_vue', name: 'Belle Vue' },
       ],
     });
     repository.getTeacherDailySummaryContext
       .mockResolvedValueOnce({
         directorPhone: '2250700000001',
+        directorEmail: null,
         totalCourses: 8,
         presentCount: 5,
         lateCount: 1,
@@ -120,6 +121,7 @@ describe('notifications.queue', () => {
       })
       .mockResolvedValueOnce({
         directorPhone: null,
+        directorEmail: null,
         totalCourses: 4,
         presentCount: 4,
         lateCount: 0,
@@ -161,6 +163,56 @@ describe('notifications.queue', () => {
       expect.objectContaining({
         status: 'sent',
         providerRef: 'provider-1',
+      })
+    );
+  });
+
+  it('envoie aussi le résumé quotidien profs par email si le directeur a un email', async () => {
+    mocks.dbExecute.mockResolvedValueOnce({
+      rows: [{ id: 'tenant-1', schema_name: 'school_sainte_marie', name: 'Sainte Marie' }],
+    });
+    repository.getTeacherDailySummaryContext.mockResolvedValueOnce({
+      directorPhone: '2250700000001',
+      directorEmail: 'directeur@test.ci',
+      totalCourses: 8,
+      presentCount: 5,
+      lateCount: 1,
+      absentCount: 2,
+    });
+
+    await processNotificationJob(
+      {
+        type: 'teacher-daily-summary-all',
+        date: '2026-05-02',
+      },
+      {
+        repository,
+        smsSender,
+        emailSender,
+      }
+    );
+
+    expect(repository.insertNotificationLog).toHaveBeenCalledWith(
+      tenantDb,
+      expect.objectContaining({
+        type: 'teacher_absent_director',
+        channel: 'email',
+        recipientEmail: 'directeur@test.ci',
+        status: 'queued',
+      })
+    );
+    expect(emailSender).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: 'directeur@test.ci',
+        subject: '[EduTrack] Bilan présences du 2026-05-02 — Sainte Marie',
+        type: 'teacher_absent_director',
+      })
+    );
+    expect(repository.updateNotificationLogStatus).toHaveBeenCalledWith(
+      tenantDb,
+      expect.objectContaining({
+        status: 'sent',
+        providerRef: 'email-provider-1',
       })
     );
   });

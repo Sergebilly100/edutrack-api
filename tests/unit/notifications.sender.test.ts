@@ -176,7 +176,7 @@ describe('defaultSmsSender', () => {
           sms_provider: 'orange_api',
           sms_api_base_url: 'https://api.orange.com/smsmessaging/v1/outbound',
           sms_api_key: 'orange-client:orange-secret',
-          sms_sender_id: '+2250700000002',
+          sms_sender_id: '+2250000',
           sms_fallback_sender_id: 'EduTrack',
           sms_maintenance_mode: false,
           sms_maintenance_message: null,
@@ -195,7 +195,7 @@ describe('defaultSmsSender', () => {
         text: async () =>
           JSON.stringify({
             outboundSMSMessageRequest: {
-              resourceURL: 'https://api.orange.com/smsmessaging/v1/outbound/tel%3A%2B2250700000002/requests/ref-1',
+              resourceURL: 'https://api.orange.com/smsmessaging/v1/outbound/tel%3A%2B2250000/requests/ref-1',
             },
           }),
       });
@@ -203,7 +203,7 @@ describe('defaultSmsSender', () => {
 
     const { defaultSmsSender } = await import('../../src/modules/notifications/notifications.service.js');
     const result = await defaultSmsSender({
-      to: '0700000001',
+      to: '+2250787380274',
       message: 'Test EduTrack Orange',
       type: 'student_absent_parent',
       schemaName: 'school_demo',
@@ -212,7 +212,7 @@ describe('defaultSmsSender', () => {
     expect(result).toEqual({
       status: 'sent',
       providerRef:
-        'https://api.orange.com/smsmessaging/v1/outbound/tel%3A%2B2250700000002/requests/ref-1',
+        'https://api.orange.com/smsmessaging/v1/outbound/tel%3A%2B2250000/requests/ref-1',
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
@@ -227,7 +227,7 @@ describe('defaultSmsSender', () => {
 
     const [smsUrl, smsInit] = fetchMock.mock.calls[1]!;
     expect(smsUrl).toBe(
-      'https://api.orange.com/smsmessaging/v1/outbound/tel%3A%2B2250700000002/requests'
+      'https://api.orange.com/smsmessaging/v1/outbound/tel%3A%2B2250000/requests'
     );
     expect(smsInit.headers).toMatchObject({
       Authorization: 'Bearer orange-token',
@@ -236,8 +236,8 @@ describe('defaultSmsSender', () => {
     });
     expect(JSON.parse(smsInit.body as string)).toEqual({
       outboundSMSMessageRequest: {
-        address: 'tel:+2250700000001',
-        senderAddress: 'tel:+2250700000002',
+        address: 'tel:+2250787380274',
+        senderAddress: 'tel:+2250000',
         outboundSMSTextMessage: {
           message: 'Test EduTrack Orange',
         },

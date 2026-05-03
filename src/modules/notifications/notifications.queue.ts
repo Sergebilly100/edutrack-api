@@ -6,7 +6,10 @@ import { db, withTenantSchema } from '../../shared/database/db.js';
 import type { NotificationType } from '../../shared/types/index.js';
 
 import type { NotificationsRepository } from './notifications.repository.js';
-import { buildTeacherDailySummarySms } from './notifications.sms.js';
+import {
+  buildTeacherDailySummaryEmailText,
+  buildTeacherDailySummarySms,
+} from './notifications.sms.js';
 
 export const NOTIFICATIONS_QUEUE_NAME = 'notifications-sms';
 
@@ -84,13 +87,20 @@ type NotificationsWorkerDeps = {
 
 const currentBusinessDate = (): string => new Date().toISOString().slice(0, 10);
 
-const buildQueueRef = (schemaName: string, notificationType: NotificationType, date: string): string => {
-  return `notif:${schemaName}:${notificationType}:${date}:daily-teacher-summary`;
+const buildQueueRef = (
+  schemaName: string,
+  notificationType: NotificationType,
+  date: string,
+  channel: 'sms' | 'email' = 'sms'
+): string => {
+  return `notif:${schemaName}:${notificationType}:${date}:daily-teacher-summary:${channel}`;
 };
 
-const listActiveTenantSchemas = async (): Promise<Array<{ id: string; schemaName: string }>> => {
-  const result = await db.execute<{ id: string; schema_name: string }>(sql`
-    SELECT id::text, schema_name
+const listActiveTenantSchemas = async (): Promise<
+  Array<{ id: string; schemaName: string; schoolName: string }>
+> => {
+  const result = await db.execute<{ id: string; schema_name: string; name: string }>(sql`
+    SELECT id::text, schema_name, name
     FROM public.tenants
     WHERE status IN ('trial', 'active')
     ORDER BY created_at ASC
@@ -99,6 +109,7 @@ const listActiveTenantSchemas = async (): Promise<Array<{ id: string; schemaName
   return result.rows.map((row) => ({
     id: row.id,
     schemaName: row.schema_name,
+    schoolName: row.name,
   }));
 };
 
@@ -112,7 +123,7 @@ const processTeacherDailySummaryJob = async (
   for (const tenant of tenants) {
     await withTenantSchema(tenant.schemaName, async (tenantDb) => {
       const context = await deps.repository.getTeacherDailySummaryContext(tenantDb, { date });
-      if (!context.directorPhone || context.totalCourses === 0) {
+      if (context.totalCourses === 0 || (!context.directorPhone && !context.directorEmail)) {
         return;
       }
 
@@ -123,29 +134,98 @@ const processTeacherDailySummaryJob = async (
         presentCount: context.presentCount,
         totalCourses: context.totalCourses,
       });
-      const queueRef = buildQueueRef(tenant.schemaName, 'teacher_absent_director', date);
+      const tasks: Array<Promise<void>> = [];
 
-      await deps.repository.insertNotificationLog(tenantDb, {
-        type: 'teacher_absent_director',
-        recipientPhone: context.directorPhone,
-        message,
-        status: 'queued',
-        providerRef: queueRef,
-      });
+      if (context.directorPhone) {
+        const queueRef = buildQueueRef(tenant.schemaName, 'teacher_absent_director', date, 'sms');
 
-      const smsResult = await deps.smsSender({
-        to: context.directorPhone,
-        message,
-        type: 'teacher_absent_director',
-        schemaName: tenant.schemaName,
-      });
+        await deps.repository.insertNotificationLog(tenantDb, {
+          type: 'teacher_absent_director',
+          channel: 'sms',
+          recipientPhone: context.directorPhone,
+          message,
+          status: 'queued',
+          providerRef: queueRef,
+        });
 
-      await deps.repository.updateNotificationLogStatus(tenantDb, {
-        queueRef,
-        status: smsResult.status === 'sent' ? 'sent' : 'failed',
-        providerRef: smsResult.providerRef,
-        sentAt: smsResult.status === 'sent' ? new Date() : undefined,
-      });
+        tasks.push(
+          deps
+            .smsSender({
+              to: context.directorPhone,
+              message,
+              type: 'teacher_absent_director',
+              schemaName: tenant.schemaName,
+            })
+            .then((smsResult) =>
+              deps.repository.updateNotificationLogStatus(tenantDb, {
+                queueRef,
+                status: smsResult.status === 'sent' ? 'sent' : 'failed',
+                providerRef: smsResult.providerRef,
+                sentAt: smsResult.status === 'sent' ? new Date() : undefined,
+              })
+            )
+            .catch(() =>
+              deps.repository.updateNotificationLogStatus(tenantDb, {
+                queueRef,
+                status: 'failed',
+              })
+            )
+        );
+      }
+
+      if (context.directorEmail) {
+        const emailQueueRef = buildQueueRef(
+          tenant.schemaName,
+          'teacher_absent_director',
+          date,
+          'email'
+        );
+        const emailText = buildTeacherDailySummaryEmailText({
+          schoolName: tenant.schoolName,
+          date,
+          absentCount: context.absentCount,
+          lateCount: context.lateCount,
+          presentCount: context.presentCount,
+          totalCourses: context.totalCourses,
+        });
+
+        await deps.repository.insertNotificationLog(tenantDb, {
+          type: 'teacher_absent_director',
+          channel: 'email',
+          recipientPhone: context.directorPhone ?? '',
+          recipientEmail: context.directorEmail,
+          message: emailText,
+          status: 'queued',
+          providerRef: emailQueueRef,
+        });
+
+        tasks.push(
+          deps
+            .emailSender({
+              to: context.directorEmail,
+              subject: `[EduTrack] Bilan présences du ${date} — ${tenant.schoolName}`,
+              text: emailText,
+              type: 'teacher_absent_director',
+              schemaName: tenant.schemaName,
+            })
+            .then((emailResult) =>
+              deps.repository.updateNotificationLogStatus(tenantDb, {
+                queueRef: emailQueueRef,
+                status: emailResult.status === 'sent' ? 'sent' : 'failed',
+                providerRef: emailResult.providerRef,
+                sentAt: emailResult.status === 'sent' ? new Date() : undefined,
+              })
+            )
+            .catch(() =>
+              deps.repository.updateNotificationLogStatus(tenantDb, {
+                queueRef: emailQueueRef,
+                status: 'failed',
+              })
+            )
+        );
+      }
+
+      await Promise.all(tasks);
     });
   }
 };

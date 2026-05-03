@@ -209,6 +209,7 @@ export class StudentsService {
         scheduleId: input.scheduleId,
         studentFirstName: student.firstName,
         parentPhone: student.parentPhone,
+        parentEmail: student.parentEmail,
         subject: schedule.subject,
         date: input.date,
         schoolPhone,

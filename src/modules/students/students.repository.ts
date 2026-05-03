@@ -63,6 +63,7 @@ type StudentAbsenceSourceRow = {
   id: string;
   first_name: string;
   parent_phone: string | null;
+  parent_email: string | null;
 };
 
 type AttendanceRow = {
@@ -740,6 +741,7 @@ export class StudentsRepository {
       id: string;
       firstName: string;
       parentPhone: string | null;
+      parentEmail: string | null;
     }>
   > {
     const ids = deduplicateIds(studentIds);
@@ -753,17 +755,33 @@ export class StudentsRepository {
     );
 
     const result = await this.db.execute(sql`
-      SELECT id, first_name, parent_phone
-      FROM students
-      WHERE class_id = ${classId}
-        AND is_active = true
-        AND id IN (${placeholders})
+      SELECT
+        st.id,
+        st.first_name,
+        st.parent_phone,
+        parent_contact.email AS parent_email
+      FROM students st
+      LEFT JOIN LATERAL (
+        SELECT p.email
+        FROM parent_student_links psl
+        INNER JOIN parent_subscriptions ps ON ps.id = psl.subscription_id
+        INNER JOIN parents p ON p.id = psl.parent_id
+        WHERE psl.student_id = st.id
+          AND ps.status = 'active'
+          AND p.email IS NOT NULL
+        ORDER BY ps.ends_at DESC
+        LIMIT 1
+      ) parent_contact ON true
+      WHERE st.class_id = ${classId}
+        AND st.is_active = true
+        AND st.id IN (${placeholders})
     `);
 
     return getRows<StudentAbsenceSourceRow>(result).map((row) => ({
       id: row.id,
       firstName: row.first_name,
       parentPhone: row.parent_phone,
+      parentEmail: row.parent_email,
     }));
   }
 

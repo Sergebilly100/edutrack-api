@@ -45,6 +45,7 @@ export type StudentAbsentPayload = {
   scheduleId: string;
   studentFirstName: string;
   parentPhone: string;
+  parentEmail?: string | null;
   subject: string;
   date: string;
   schoolPhone: string;
@@ -58,6 +59,7 @@ export type SubscriptionExpiredPayload = {
   dueDate: string;
   remainingAmountFcfa: number;
   directorPhone: string;
+  directorEmail?: string | null;
 };
 
 export type EventMap = {

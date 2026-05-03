@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Test Orange SMS API</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: oklch(0.975 0.006 86);
+      --panel: oklch(0.995 0.004 86);
+      --text: oklch(0.19 0.012 82);
+      --muted: oklch(0.48 0.018 78);
+      --border: oklch(0.86 0.014 78);
+      --accent: oklch(0.66 0.17 51);
+      --accent-dark: oklch(0.51 0.15 48);
+      --danger: oklch(0.55 0.18 28);
+      --ok: oklch(0.51 0.13 148);
+      --code: oklch(0.24 0.013 84);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+    }
+
+    main {
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 32px 0 44px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      align-items: flex-end;
+      margin-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: clamp(1.6rem, 3vw, 2.4rem);
+      letter-spacing: 0;
+      line-height: 1.1;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+      max-width: 72ch;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(320px, 460px) minmax(0, 1fr);
+      gap: 20px;
+      align-items: start;
+    }
+
+    section {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 18px;
+    }
+
+    h2 {
+      margin: 0 0 16px;
+      font-size: 1.05rem;
+      line-height: 1.2;
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 0.84rem;
+      color: var(--muted);
+      font-weight: 650;
+    }
+
+    input,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: oklch(0.99 0.003 86);
+      color: var(--text);
+      padding: 10px 11px;
+      font: inherit;
+      font-size: 0.93rem;
+      outline: none;
+    }
+
+    input:focus,
+    textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px oklch(0.78 0.12 55 / 0.18);
+    }
+
+    textarea {
+      min-height: 94px;
+      resize: vertical;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-top: 18px;
+    }
+
+    button {
+      border: 1px solid transparent;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font: inherit;
+      font-weight: 750;
+      cursor: pointer;
+      background: var(--accent);
+      color: oklch(0.99 0.004 86);
+    }
+
+    button.secondary {
+      background: transparent;
+      color: var(--text);
+      border-color: var(--border);
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.62;
+    }
+
+    .status {
+      min-height: 24px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      font-weight: 650;
+    }
+
+    .status.ok { color: var(--ok); }
+    .status.fail { color: var(--danger); }
+
+    .output {
+      display: grid;
+      gap: 16px;
+    }
+
+    .box {
+      display: grid;
+      gap: 8px;
+    }
+
+    .box-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+      font-size: 0.82rem;
+      color: var(--muted);
+      font-weight: 750;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    pre {
+      margin: 0;
+      overflow: auto;
+      min-height: 96px;
+      max-height: 360px;
+      padding: 12px;
+      border-radius: 7px;
+      background: var(--code);
+      color: oklch(0.95 0.01 86);
+      font: 0.82rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .note {
+      margin-top: 14px;
+      font-size: 0.86rem;
+      color: var(--muted);
+    }
+
+    .note strong {
+      color: var(--text);
+    }
+
+    @media (max-width: 880px) {
+      header {
+        display: block;
+      }
+
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .row {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Orange SMS API</h1>
+        <p>Outil local pour obtenir un token OAuth, envoyer un SMS Orange, puis inspecter les requêtes et réponses brutes.</p>
+      </div>
+      <div class="status" id="status">Prêt</div>
+    </header>
+
+    <div class="layout">
+      <section>
+        <h2>Configuration</h2>
+        <div class="grid">
+          <label>
+            Token URL
+            <input id="tokenUrl" value="https://api.orange.com/oauth/v3/token" autocomplete="off">
+          </label>
+
+          <label>
+            Proxy EduTrack local
+            <input id="proxyUrl" value="http://localhost:3000/api/v1/notifications/orange/test-send" autocomplete="off">
+          </label>
+
+          <label>
+            SMS base URL
+            <input id="smsBaseUrl" value="https://api.orange.com/smsmessaging/v1/outbound" autocomplete="off">
+          </label>
+
+          <div class="row">
+            <label>
+              Client ID
+              <input id="clientId" placeholder="ORANGE_CLIENT_ID" autocomplete="off">
+            </label>
+            <label>
+              Client secret
+              <input id="clientSecret" type="password" placeholder="ORANGE_CLIENT_SECRET" autocomplete="off">
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
+              Sender address
+              <input id="senderAddress" value="+2250000" autocomplete="off">
+            </label>
+            <label>
+              Sender name, optionnel
+              <input id="senderName" placeholder="laisser vide pour le défaut Orange" autocomplete="off">
+            </label>
+          </div>
+
+          <div class="row">
+            <label>
+              Destinataire
+              <input id="recipient" value="+2250787380274" autocomplete="off">
+            </label>
+            <label>
+              Callback data, optionnel
+              <input id="callbackData" placeholder="request-id ou identifiant interne" autocomplete="off">
+            </label>
+          </div>
+
+          <label>
+            Notify URL Delivery Receipt, optionnel
+            <input id="notifyUrl" placeholder="https://ton-domaine/api/v1/notifications/orange/delivery-receipt" autocomplete="off">
+          </label>
+
+          <label>
+            Message
+            <textarea id="message">EduTrack: test Orange SMS depuis HTML</textarea>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="sendBtn" type="button">Envoyer via proxy</button>
+          <button id="directBtn" class="secondary" type="button">Envoyer direct Orange</button>
+          <button id="saveBtn" class="secondary" type="button">Sauvegarder localement</button>
+          <button id="clearBtn" class="secondary" type="button">Effacer sorties</button>
+        </div>
+
+        <p class="note">
+          <strong>Usage local uniquement.</strong> Le mode proxy appelle EduTrack sur localhost pour éviter CORS. Le mode direct peut être bloqué par le navigateur.
+        </p>
+      </section>
+
+      <section class="output">
+        <div class="box">
+          <div class="box-title">
+            <span>Requête token</span>
+            <span id="tokenMeta"></span>
+          </div>
+          <pre id="tokenOutput">Aucune requête.</pre>
+        </div>
+
+        <div class="box">
+          <div class="box-title">
+            <span>Requête SMS</span>
+            <span id="smsMeta"></span>
+          </div>
+          <pre id="smsOutput">Aucune requête.</pre>
+        </div>
+
+        <div class="box">
+          <div class="box-title">
+            <span>cURL équivalent</span>
+            <span>sans token affiché</span>
+          </div>
+          <pre id="curlOutput">Clique sur Envoyer pour générer les commandes.</pre>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const fields = [
+      "tokenUrl",
+      "proxyUrl",
+      "smsBaseUrl",
+      "clientId",
+      "clientSecret",
+      "senderAddress",
+      "senderName",
+      "recipient",
+      "callbackData",
+      "notifyUrl",
+      "message"
+    ];
+
+    const $ = (id) => document.getElementById(id);
+    const storageKey = "orange-sms-test-config";
+
+    function setStatus(text, type = "") {
+      const node = $("status");
+      node.textContent = text;
+      node.className = `status ${type}`.trim();
+    }
+
+    function getConfig() {
+      return Object.fromEntries(fields.map((field) => [field, $(field).value.trim()]));
+    }
+
+    function loadConfig() {
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return;
+
+      try {
+        const saved = JSON.parse(raw);
+        for (const field of fields) {
+          if (typeof saved[field] === "string") {
+            $(field).value = saved[field];
+          }
+        }
+      } catch {
+        localStorage.removeItem(storageKey);
+      }
+    }
+
+    function saveConfig() {
+      localStorage.setItem(storageKey, JSON.stringify(getConfig()));
+      setStatus("Configuration sauvegardée", "ok");
+    }
+
+    function format(value) {
+      if (typeof value === "string") return value;
+      return JSON.stringify(value, null, 2);
+    }
+
+    function normalizePhone(phone) {
+      const digits = phone.replace(/\D/g, "");
+      if (!digits) return phone;
+      if (digits.startsWith("225")) return `+${digits}`;
+      if (digits.startsWith("0") && digits.length === 10) return `+225${digits}`;
+      if (digits.length === 8 || digits.length === 10) return `+225${digits}`;
+      return phone.trim().startsWith("+") ? phone.trim() : `+${digits}`;
+    }
+
+    function outboundBaseUrl(url) {
+      const base = url.replace(/\/+$/, "");
+      return /\/outbound$/.test(base) ? base : `${base}/outbound`;
+    }
+
+    function escapeShell(value) {
+      return String(value).replace(/'/g, "'\"'\"'");
+    }
+
+    function buildSmsBody(config) {
+      const recipient = normalizePhone(config.recipient);
+      const senderAddress = `tel:${normalizePhone(config.senderAddress)}`;
+      const body = {
+        outboundSMSMessageRequest: {
+          address: `tel:${recipient}`,
+          senderAddress,
+          outboundSMSTextMessage: {
+            message: config.message
+          }
+        }
+      };
+
+      if (config.senderName) {
+        body.outboundSMSMessageRequest.senderName = config.senderName;
+      }
+
+      if (config.notifyUrl) {
+        body.outboundSMSMessageRequest.receiptRequest = {
+          notifyURL: config.notifyUrl,
+          callbackData: config.callbackData || crypto.randomUUID()
+        };
+      }
+
+      return body;
+    }
+
+    function buildCurl(config, smsUrl, smsBody) {
+      const basicPlaceholder = "base64(CLIENT_ID:CLIENT_SECRET)";
+      return [
+        "curl -X POST \\",
+        `  -H 'Authorization: Basic ${basicPlaceholder}' \\`,
+        "  -H 'Accept: application/json' \\",
+        "  -H 'Content-Type: application/x-www-form-urlencoded' \\",
+        "  --data 'grant_type=client_credentials' \\",
+        `  '${escapeShell(config.tokenUrl)}'`,
+        "",
+        "curl -X POST \\",
+        "  -H 'Authorization: Bearer ACCESS_TOKEN' \\",
+        "  -H 'Accept: application/json' \\",
+        "  -H 'Content-Type: application/json' \\",
+        `  --data '${escapeShell(JSON.stringify(smsBody))}' \\`,
+        `  '${escapeShell(smsUrl)}'`
+      ].join("\n");
+    }
+
+    async function readResponse(response) {
+      const text = await response.text();
+      try {
+        return JSON.parse(text);
+      } catch {
+        return text;
+      }
+    }
+
+    async function sendSmsDirect() {
+      const config = getConfig();
+      $("tokenOutput").textContent = "Demande du token...";
+      $("smsOutput").textContent = "En attente du token.";
+      $("curlOutput").textContent = "Génération en cours...";
+      $("tokenMeta").textContent = "";
+      $("smsMeta").textContent = "";
+      setStatus("Envoi en cours...");
+      $("sendBtn").disabled = true;
+
+      try {
+        if (!config.clientId || !config.clientSecret || !config.senderAddress || !config.recipient || !config.message) {
+          throw new Error("Client ID, client secret, sender address, destinataire et message sont obligatoires.");
+        }
+
+        const basic = btoa(`${config.clientId}:${config.clientSecret}`);
+        const tokenStarted = performance.now();
+        const tokenResponse = await fetch(config.tokenUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Basic ${basic}`,
+            Accept: "application/json",
+            "Content-Type": "application/x-www-form-urlencoded"
+          },
+          body: "grant_type=client_credentials"
+        });
+        const tokenPayload = await readResponse(tokenResponse);
+        $("tokenMeta").textContent = `${tokenResponse.status} ${Math.round(performance.now() - tokenStarted)}ms`;
+        $("tokenOutput").textContent = format({
+          request: {
+            url: config.tokenUrl,
+            method: "POST",
+            headers: {
+              Authorization: "Basic <redacted>",
+              Accept: "application/json",
+              "Content-Type": "application/x-www-form-urlencoded"
+            },
+            body: "grant_type=client_credentials"
+          },
+          response: tokenPayload
+        });
+
+        if (!tokenResponse.ok || !tokenPayload.access_token) {
+          throw new Error("Token Orange non obtenu. Voir la réponse token.");
+        }
+
+        const senderAddress = `tel:${normalizePhone(config.senderAddress)}`;
+        const smsUrl = `${outboundBaseUrl(config.smsBaseUrl)}/${encodeURIComponent(senderAddress)}/requests`;
+        const smsBody = buildSmsBody(config);
+        $("curlOutput").textContent = buildCurl(config, smsUrl, smsBody);
+
+        const smsStarted = performance.now();
+        const smsResponse = await fetch(smsUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${tokenPayload.access_token}`,
+            Accept: "application/json",
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(smsBody)
+        });
+        const smsPayload = await readResponse(smsResponse);
+        $("smsMeta").textContent = `${smsResponse.status} ${Math.round(performance.now() - smsStarted)}ms`;
+        $("smsOutput").textContent = format({
+          request: {
+            url: smsUrl,
+            method: "POST",
+            headers: {
+              Authorization: "Bearer <redacted>",
+              Accept: "application/json",
+              "Content-Type": "application/json"
+            },
+            body: smsBody
+          },
+          response: smsPayload
+        });
+
+        if (!smsResponse.ok) {
+          throw new Error("Orange a refusé l'envoi SMS. Voir la réponse SMS.");
+        }
+
+        setStatus("SMS accepté par Orange", "ok");
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : "Erreur inconnue", "fail");
+      } finally {
+        $("sendBtn").disabled = false;
+      }
+    }
+
+    async function sendSmsViaProxy() {
+      const config = getConfig();
+      $("tokenOutput").textContent = "Appel du proxy EduTrack...";
+      $("smsOutput").textContent = "En attente.";
+      $("curlOutput").textContent = "Génération en cours...";
+      $("tokenMeta").textContent = "";
+      $("smsMeta").textContent = "";
+      setStatus("Envoi via proxy en cours...");
+      $("sendBtn").disabled = true;
+      $("directBtn").disabled = true;
+
+      try {
+        if (!config.proxyUrl || !config.clientId || !config.clientSecret || !config.senderAddress || !config.recipient || !config.message) {
+          throw new Error("Proxy URL, Client ID, client secret, sender address, destinataire et message sont obligatoires.");
+        }
+
+        const smsBody = buildSmsBody(config);
+        const senderAddress = `tel:${normalizePhone(config.senderAddress)}`;
+        const smsUrl = `${outboundBaseUrl(config.smsBaseUrl)}/${encodeURIComponent(senderAddress)}/requests`;
+        $("curlOutput").textContent = [
+          "curl -X POST \\",
+          "  -H 'Content-Type: application/json' \\",
+          `  --data '${escapeShell(JSON.stringify(config))}' \\`,
+          `  '${escapeShell(config.proxyUrl)}'`,
+          "",
+          buildCurl(config, smsUrl, smsBody)
+        ].join("\n");
+
+        const started = performance.now();
+        const response = await fetch(config.proxyUrl, {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(config)
+        });
+        const payload = await readResponse(response);
+        $("tokenMeta").textContent = `${response.status} ${Math.round(performance.now() - started)}ms`;
+        $("tokenOutput").textContent = format({
+          request: {
+            url: config.proxyUrl,
+            method: "POST",
+            body: {
+              ...config,
+              clientSecret: "<redacted>"
+            }
+          },
+          response: payload
+        });
+        $("smsOutput").textContent = format(payload?.sms ?? "Voir la réponse proxy.");
+        $("smsMeta").textContent = payload?.sms?.status ? `SMS ${payload.sms.status}` : "";
+
+        if (!response.ok || !payload?.success) {
+          throw new Error("Le proxy EduTrack a refusé l'envoi. Voir la réponse.");
+        }
+
+        setStatus("SMS accepté par Orange via proxy", "ok");
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : "Erreur inconnue", "fail");
+      } finally {
+        $("sendBtn").disabled = false;
+        $("directBtn").disabled = false;
+      }
+    }
+
+    $("sendBtn").addEventListener("click", sendSmsViaProxy);
+    $("directBtn").addEventListener("click", sendSmsDirect);
+    $("saveBtn").addEventListener("click", saveConfig);
+    $("clearBtn").addEventListener("click", () => {
+      $("tokenOutput").textContent = "Aucune requête.";
+      $("smsOutput").textContent = "Aucune requête.";
+      $("curlOutput").textContent = "Clique sur Envoyer pour générer les commandes.";
+      $("tokenMeta").textContent = "";
+      $("smsMeta").textContent = "";
+      setStatus("Sorties effacées");
+    });
+
+    loadConfig();
+  </script>
+</body>
+</html>

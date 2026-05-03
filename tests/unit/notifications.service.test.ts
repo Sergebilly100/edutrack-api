@@ -526,4 +526,55 @@ describe('notifications.service', () => {
       })
     );
   });
+
+  it('subscription.expired queue le SMS et un email directeur si directorEmail est présent', async () => {
+    const service = new NotificationsService({
+      withTenantSchema,
+      repository,
+      eventBus,
+      smsQueue: smsQueue as never,
+    });
+
+    await service.handleSubscriptionExpired({
+      tenantId: 'tenant-1',
+      schemaName: 'school_sainte_marie',
+      schoolName: 'Sainte Marie',
+      periodLabel: '01/04/2026 -> 30/04/2026',
+      dueDate: '2026-05-01',
+      remainingAmountFcfa: 25000,
+      directorPhone: '2250700000001',
+      directorEmail: 'directeur@test.ci',
+    });
+
+    expect(smsQueue.add).toHaveBeenNthCalledWith(
+      1,
+      'send-sms',
+      expect.objectContaining({
+        type: 'send-sms',
+        to: '2250700000001',
+        notificationType: 'payment_reminder',
+      }),
+      expect.any(Object)
+    );
+    expect(smsQueue.add).toHaveBeenNthCalledWith(
+      2,
+      'send-email',
+      expect.objectContaining({
+        type: 'send-email',
+        to: 'directeur@test.ci',
+        subject: '[EduTrack] Relance paiement — Sainte Marie',
+        notificationType: 'payment_reminder',
+      }),
+      expect.any(Object)
+    );
+    expect(repository.insertNotificationLog).toHaveBeenCalledWith(
+      tenantDb,
+      expect.objectContaining({
+        type: 'payment_reminder',
+        channel: 'email',
+        recipientEmail: 'directeur@test.ci',
+        status: 'queued',
+      })
+    );
+  });
 });
