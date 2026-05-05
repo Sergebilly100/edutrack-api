@@ -14,6 +14,7 @@ import {
   BILLING_PDF_QUEUE_NAME,
   type BillingPdfJobData,
   type BillingPdfJobResult,
+  createBillingPdfQueue,
 } from './billing.queue.js';
 import { BillingModuleError, buildBillingService } from './billing.service.js';
 import {
@@ -28,7 +29,7 @@ import {
   updateSalaryStatusBodySchema,
 } from './billing.types.js';
 
-const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
+// const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
 const EXPORT_SIGNING_WINDOW_MS = 15 * 60 * 1000;
 const exportDirRoot = path.resolve(BILLING_EXPORT_DIR);
 
@@ -48,14 +49,14 @@ const buildSigningSecret = (): string => {
 
 const SIGNING_SECRET = buildSigningSecret();
 
-export const billingPdfQueue = new Queue<BillingPdfJobData, BillingPdfJobResult>(
-  BILLING_PDF_QUEUE_NAME,
-  {
-    connection: {
-      url: redisUrl,
-    },
-  }
-);
+// export const billingPdfQueue = new Queue<BillingPdfJobData, BillingPdfJobResult>(
+//   BILLING_PDF_QUEUE_NAME,
+//   {
+//     connection: {
+//       url: redisUrl,
+//     },
+//   }
+// );
 
 const resolveBaseUrl = (request: FastifyRequest): string => {
   const configured = process.env.APP_BASE_URL?.trim();
@@ -159,13 +160,29 @@ const handleError = (
   });
 };
 
-export default async function billingController(app: FastifyInstance): Promise<void> {
+export default async function billingController(
+  app: FastifyInstance,
+  // La queue est injectée depuis server.ts — testable, pas de doublon Redis
+  options: { billingPdfQueue: Queue<BillingPdfJobData, BillingPdfJobResult> }
+): Promise<void> {
+  // Toutes les références à billingPdfQueue dans le corps utilisent options.billingPdfQueue
+  const { billingPdfQueue } = options;
+
   app.get(
     '/api/v1/billing/salary/summary',
     { preHandler: requirePermission('salary.view') },
     async (request, reply) => {
       try {
-        const claims = request.claims!;
+        const claims = request.claims
+if (!claims) {
+  // Ne devrait jamais arriver si requirePermission est actif,
+  // mais on garde un guard défensif pour le strict mode
+  return reply.code(401).send({
+    error: 'Unauthorized',
+    code: 'MISSING_CLAIMS',
+    statusCode: 401,
+  })
+}
         const query = monthQuerySchema.parse(request.query ?? {});
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
@@ -184,7 +201,16 @@ export default async function billingController(app: FastifyInstance): Promise<v
     { preHandler: requirePermission('salary.view') },
     async (request, reply) => {
       try {
-        const claims = request.claims!;
+        const claims = request.claims
+if (!claims) {
+  // Ne devrait jamais arriver si requirePermission est actif,
+  // mais on garde un guard défensif pour le strict mode
+  return reply.code(401).send({
+    error: 'Unauthorized',
+    code: 'MISSING_CLAIMS',
+    statusCode: 401,
+  })
+}
         const query = monthQuerySchema.parse(request.query ?? {});
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
@@ -203,7 +229,16 @@ export default async function billingController(app: FastifyInstance): Promise<v
     { preHandler: requirePermission('salary.view') },
     async (request, reply) => {
       try {
-        const claims = request.claims!;
+        const claims = request.claims
+if (!claims) {
+  // Ne devrait jamais arriver si requirePermission est actif,
+  // mais on garde un guard défensif pour le strict mode
+  return reply.code(401).send({
+    error: 'Unauthorized',
+    code: 'MISSING_CLAIMS',
+    statusCode: 401,
+  })
+}
         const params = teacherParamsSchema.parse(request.params ?? {});
         const query = monthQuerySchema.parse(request.query ?? {});
 
@@ -223,7 +258,16 @@ export default async function billingController(app: FastifyInstance): Promise<v
     { preHandler: requirePermission('salary.view') },
     async (request, reply) => {
       try {
-        const claims = request.claims!;
+        const claims = request.claims
+if (!claims) {
+  // Ne devrait jamais arriver si requirePermission est actif,
+  // mais on garde un guard défensif pour le strict mode
+  return reply.code(401).send({
+    error: 'Unauthorized',
+    code: 'MISSING_CLAIMS',
+    statusCode: 401,
+  })
+}
         const params = teacherParamsSchema.parse(request.params ?? {});
         const query = salaryHistoryQuerySchema.parse(request.query ?? {});
 
@@ -243,7 +287,16 @@ export default async function billingController(app: FastifyInstance): Promise<v
     { preHandler: requirePermission('salary.compute') },
     async (request, reply) => {
       try {
-        const claims = request.claims!;
+        const claims = request.claims
+if (!claims) {
+  // Ne devrait jamais arriver si requirePermission est actif,
+  // mais on garde un guard défensif pour le strict mode
+  return reply.code(401).send({
+    error: 'Unauthorized',
+    code: 'MISSING_CLAIMS',
+    statusCode: 401,
+  })
+}
         const query = monthQuerySchema.parse(request.query ?? {});
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
@@ -262,7 +315,16 @@ export default async function billingController(app: FastifyInstance): Promise<v
     { preHandler: requirePermission('salary.mark_paid') },
     async (request, reply) => {
       try {
-        const claims = request.claims!;
+        const claims = request.claims
+if (!claims) {
+  // Ne devrait jamais arriver si requirePermission est actif,
+  // mais on garde un guard défensif pour le strict mode
+  return reply.code(401).send({
+    error: 'Unauthorized',
+    code: 'MISSING_CLAIMS',
+    statusCode: 401,
+  })
+}
         const params = recordParamsSchema.parse(request.params ?? {});
         const body = updateSalaryStatusBodySchema.parse(request.body ?? {});
 
@@ -291,7 +353,16 @@ export default async function billingController(app: FastifyInstance): Promise<v
     { preHandler: requirePermission('salary.export') },
     async (request, reply) => {
       try {
-        const claims = request.claims!;
+        const claims = request.claims
+if (!claims) {
+  // Ne devrait jamais arriver si requirePermission est actif,
+  // mais on garde un guard défensif pour le strict mode
+  return reply.code(401).send({
+    error: 'Unauthorized',
+    code: 'MISSING_CLAIMS',
+    statusCode: 401,
+  })
+}
         const params = teacherParamsSchema.parse(request.params ?? {});
         const query = monthQuerySchema.parse(request.query ?? {});
 
@@ -321,7 +392,16 @@ export default async function billingController(app: FastifyInstance): Promise<v
     { preHandler: requirePermission('salary.export') },
     async (request, reply) => {
       try {
-        const claims = request.claims!;
+        const claims = request.claims
+if (!claims) {
+  // Ne devrait jamais arriver si requirePermission est actif,
+  // mais on garde un guard défensif pour le strict mode
+  return reply.code(401).send({
+    error: 'Unauthorized',
+    code: 'MISSING_CLAIMS',
+    statusCode: 401,
+  })
+}
         const body = salarySingleExportBodySchema.parse(request.body ?? {});
 
         const job = await billingPdfQueue.add(
@@ -350,7 +430,16 @@ export default async function billingController(app: FastifyInstance): Promise<v
     { preHandler: requirePermission('salary.export') },
     async (request, reply) => {
       try {
-        const claims = request.claims!;
+        const claims = request.claims
+if (!claims) {
+  // Ne devrait jamais arriver si requirePermission est actif,
+  // mais on garde un guard défensif pour le strict mode
+  return reply.code(401).send({
+    error: 'Unauthorized',
+    code: 'MISSING_CLAIMS',
+    statusCode: 401,
+  })
+}
         const query = monthQuerySchema.parse(request.query ?? {});
 
         const job = await billingPdfQueue.add(
@@ -378,7 +467,16 @@ export default async function billingController(app: FastifyInstance): Promise<v
     { preHandler: requirePermission('salary.export') },
     async (request, reply) => {
       try {
-        const claims = request.claims!;
+        const claims = request.claims
+if (!claims) {
+  // Ne devrait jamais arriver si requirePermission est actif,
+  // mais on garde un guard défensif pour le strict mode
+  return reply.code(401).send({
+    error: 'Unauthorized',
+    code: 'MISSING_CLAIMS',
+    statusCode: 401,
+  })
+}
         const body = salaryBulkExportBodySchema.parse(request.body ?? {});
 
         const job = await billingPdfQueue.add(

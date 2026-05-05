@@ -10,7 +10,8 @@ import { Redis } from 'ioredis';
 import adminController from './modules/admin/admin.controller.js';
 import attendanceController from './modules/attendance/attendance.controller.js';
 import authController from './modules/auth/auth.controller.js';
-import billingController, { billingPdfQueue } from './modules/billing/billing.controller.js';
+import billingController from './modules/billing/billing.controller.js'
+import { createBillingPdfQueue } from './modules/billing/billing.queue.js'
 import { createBillingPdfWorker } from './modules/billing/billing.queue.js';
 import documentsController from './modules/documents/documents.controller.js';
 import importExportController from './modules/import-export/import.controller.js';
@@ -44,6 +45,7 @@ const port = Number(process.env.PORT || 3000);
 const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
 const notificationsRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
 const billingRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
+const billingPdfQueue = createBillingPdfQueue(billingRedis)
 const subscriptionsRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
 const notificationsQueue = createNotificationsQueue(notificationsRedis);
 const billingWorker = createBillingPdfWorker(billingRedis);
@@ -148,7 +150,7 @@ app.register(authController);
 app.register(adminController);
 app.register(attendanceController);
 app.register(notificationsController);
-app.register(billingController);
+app.register(billingController, { billingPdfQueue })
 app.register(studentsController);
 app.register(teachersController);
 app.register(scheduleController);

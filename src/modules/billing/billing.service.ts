@@ -62,6 +62,9 @@ export class BillingService {
       const hoursPlanned = BillingRepository.toNumber(row.hours_planned);
       const hoursDone = BillingRepository.toNumber(row.hours_done);
       const totalFcfa = BillingRepository.toNumber(row.total_fcfa);
+      // Pour un vacataire : montant effectivement versé = somme des salary_payments
+      // C'est la valeur à afficher dans le total "Total payé" du dashboard
+      const paidAmountForSummary = BillingRepository.toNumber(row.paid_amount);
 
       if (row.hourly_rate === null || row.teacher_type === 'permanent') {
         return {
@@ -72,6 +75,13 @@ export class BillingService {
           hoursDone: roundHours(hoursDone),
           hourlyRate: null,
           totalFcfa: row.monthly_salary,
+          // Pour un permanent : si paid_amount = 0 mais paid_at est défini,
+          // c'est un enregistrement legacy — on restitue monthly_salary comme montant versé
+          amountAlreadyPaid: hasMeaningfulValue(paidAmountForSummary)
+            ? paidAmountForSummary
+            : row.paid_at
+              ? (row.monthly_salary ?? 0)
+              : 0,
           status: row.salary_status ?? 'pending',
           salaryRecordId: row.salary_record_id,
           isPartiallyPaid: false,
@@ -98,6 +108,9 @@ export class BillingService {
         hoursDone: roundHours(hoursDone),
         hourlyRate: row.hourly_rate,
         totalFcfa,
+        // amountAlreadyPaid : montant réellement versé ce mois pour ce prof.
+        // Distinct de totalFcfa (montant dû total) — crucial pour les paiements partiels.
+        amountAlreadyPaid: paidAmountForSummary,
         status: normalizedStatus,
         salaryRecordId: row.salary_record_id,
         isPartiallyPaid: normalizedStatus !== 'paid' ? isPartiallyPaid : false,
@@ -431,7 +444,8 @@ export class BillingService {
     } else {
       const paidSummary = await this.repository.getSalaryPaymentsSummary(input.recordId);
       const paidAmountFromPayments = BillingRepository.toNumber(paidSummary.paid_amount);
-      const isVacataire = existing.hourly_rate > 0;
+      // pour utilise la variable existing.teacher_type pour detecter les vacataires
+      const isVacataire = existing.teacher_type === 'vacataire';
 
       if (!isVacataire) {
         const paidAmount =

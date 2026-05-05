@@ -59,9 +59,13 @@ type TeacherDailyRow = {
 type SalaryRecordRow = {
   id: string;
   teacher_id: string;
+  // 'vacataire' | 'permanent' — champ canonique pour la logique métier
+  teacher_type: 'vacataire' | 'permanent';
   period_month: string;
   hours_planned: string | number;
   hours_done: string | number;
+  // hourly_rate peut être 0 pour un vacataire non encore paramétré,
+  // ne jamais l'utiliser pour détecter le type
   hourly_rate: number;
   total_fcfa: number;
   status: SalaryRecordStatus;
@@ -321,22 +325,29 @@ export class BillingRepository {
   }
 
   async getSalaryRecordById(recordId: string): Promise<SalaryRecordRow | null> {
+    //JOIN teachers pour récupérer teacher_type de façon fiable
     const result = await this.db.execute<SalaryRecordRow>(sql`
       SELECT
-        id,
-        teacher_id,
-        period_month::text,
-        hours_planned,
-        hours_done,
-        hourly_rate,
-        total_fcfa,
-        status::text,
-        paid_at::text,
-        paid_by,
-        notes,
-        created_at::text
-      FROM salary_records
-      WHERE id = ${recordId}
+        sr.id,
+        sr.teacher_id,
+        -- teacher_type provient de la table teachers, pas de salary_records.
+        -- C'est la source de vérité pour la logique de paiement.
+        t.type::text AS teacher_type,
+        sr.period_month::text,
+        sr.hours_planned,
+        sr.hours_done,
+        sr.hourly_rate,
+        sr.total_fcfa,
+        sr.status::text,
+        sr.paid_at::text,
+        sr.paid_by,
+        sr.notes,
+        sr.created_at::text
+      FROM salary_records sr
+      -- On joint teachers pour avoir le type canonique du prof,
+      -- indépendamment de hourly_rate qui peut valoir 0
+      INNER JOIN teachers t ON t.id = sr.teacher_id
+      WHERE sr.id = ${recordId}
       LIMIT 1
     `);
 
