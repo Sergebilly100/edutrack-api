@@ -596,7 +596,6 @@ export class AttendanceRepository {
           SELECT 1
           FROM notifications_log n
           WHERE n.type = 'student_absent_parent'
-            AND n.channel = 'sms'
             AND n.related_id = ast.schedule_id
             AND n.recipient_phone = st.parent_phone
             AND COALESCE(n.sent_at::date, n.created_at::date) = ast.date::date

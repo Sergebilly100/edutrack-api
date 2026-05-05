@@ -366,6 +366,47 @@ export const defaultRepository: NotificationsRepository = {
       filteredTypes.length === 0
         ? sql``
         : sql`WHERE type IN (${sql.join(filteredTypes.map((item) => sql`${item}`), sql`, `)})`;
+    const columnsResult = await asExecutor(tenantDb).execute<{
+      has_channel: boolean;
+      has_recipient_email: boolean;
+    }>(sql`
+      SELECT
+        EXISTS (
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = 'notifications_log'
+            AND column_name = 'channel'
+        ) AS has_channel,
+        EXISTS (
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = 'notifications_log'
+            AND column_name = 'recipient_email'
+        ) AS has_recipient_email
+    `);
+    const columns = getFirstRow(columnsResult);
+
+    if (!columns?.has_channel || !columns.has_recipient_email) {
+      const result = await asExecutor(tenantDb).execute<NotificationLogRow>(sql`
+        SELECT
+          id::text AS id,
+          type::text AS type,
+          'sms'::text AS channel,
+          message,
+          sent_at::text AS sent_at,
+          recipient_phone,
+          NULL::text AS recipient_email,
+          status::text AS status
+        FROM notifications_log
+        ${whereClause}
+        ORDER BY COALESCE(sent_at, created_at) DESC, created_at DESC
+        LIMIT ${safeLimit}
+      `);
+
+      return result.rows;
+    }
 
     const result = await asExecutor(tenantDb).execute<NotificationLogRow>(sql`
       SELECT
