@@ -3,6 +3,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { QueryResult, QueryResultRow } from 'pg';
 
 import type { ActiveAttendanceItem, AttendanceScheduleContext } from './attendance.types.js';
+import { ensureTenantRealHoursInfrastructure } from '../../shared/database/real-hours-infrastructure.js';
 
 export type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
 
@@ -22,6 +23,9 @@ type ScheduleContextRow = {
   planned_room_id: string;
   planned_room_name: string;
   planned_room_token: string;
+  planned_room_latitude: string | number | null;
+  planned_room_longitude: string | number | null;
+  planned_room_geo_radius: number | null;
   time_slot_id: string;
   slot_label: string;
   slot_start_time: string;
@@ -39,11 +43,14 @@ type AttendanceWriteRow = {
   status: 'present' | 'absent' | 'late' | 'excused';
   late_minutes: number | null;
   checked_in_at: string | null;
+  checked_out_at: string | null;
 };
 
 type ExistingTeacherAttendanceRow = {
+  id: string;
   status: 'present' | 'absent' | 'late' | 'excused';
   checked_in_at: string | null;
+  checked_out_at: string | null;
 };
 
 type ActiveAttendanceRow = {
@@ -60,6 +67,9 @@ type ActiveAttendanceRow = {
   room_mismatch: boolean | null;
   room_scanned_name: string | null;
   checked_in_at: string | null;
+  checked_out_at: string | null;
+  actual_minutes: number | null;
+  geo_status: 'verified' | 'suspicious' | 'unavailable' | 'not_checked' | null;
 };
 
 // ── Type élève minimal pour l'appel ──────────────────────────────────────────
@@ -86,6 +96,9 @@ type TeacherAttendanceByDateRow = {
   date: string;
   room_scan_start_at: string | null;
   room_scan_end_at: string | null;
+  checked_out_at: string | null;
+  actual_minutes: number | null;
+  geo_status: 'verified' | 'suspicious' | 'unavailable' | 'not_checked' | null;
 };
 
 type DirectorTodayCourseRow = {
@@ -141,6 +154,29 @@ type DirectorHistoryDetailRow = {
   student_total_count: number;
 };
 
+type FeatureFlagsRow = {
+  use_real_hours: boolean;
+  geo_check_enabled: boolean;
+};
+
+type TeacherComplianceRow = {
+  teacher_id: string;
+  teacher_name: string;
+  total_checkins: number;
+  total_checkouts: number;
+  compliance_rate: string | number;
+};
+
+type SuspiciousAttendanceRow = {
+  attendance_id: string;
+  teacher_name: string;
+  course_name: string;
+  date: string;
+  checked_in_at: string | null;
+  checkin_distance: string | number | null;
+  checkin_accuracy: string | number | null;
+};
+
 type schex = {
   id: string;
   class_id: string;
@@ -165,6 +201,9 @@ const mapScheduleContext = (row: ScheduleContextRow): AttendanceScheduleContext 
   plannedRoomId: row.planned_room_id,
   plannedRoomName: row.planned_room_name,
   plannedRoomToken: row.planned_room_token,
+  plannedRoomLatitude: row.planned_room_latitude === null ? null : Number(row.planned_room_latitude),
+  plannedRoomLongitude: row.planned_room_longitude === null ? null : Number(row.planned_room_longitude),
+  plannedRoomGeoRadius: row.planned_room_geo_radius ?? 100,
   timeSlotId: row.time_slot_id,
   slotLabel: row.slot_label,
   slotStartTime: row.slot_start_time,
@@ -251,6 +290,8 @@ export class AttendanceRepository {
     scheduleId: string,
     teacherId: string
   ): Promise<AttendanceScheduleContext | null> {
+    await ensureTenantRealHoursInfrastructure(this.db);
+
     const result = await this.db.execute<ScheduleContextRow>(sql`
       SELECT
         s.id AS schedule_id,
@@ -262,6 +303,9 @@ export class AttendanceRepository {
         s.room_id AS planned_room_id,
         r.name AS planned_room_name,
         r.qr_token AS planned_room_token,
+        r.latitude AS planned_room_latitude,
+        r.longitude AS planned_room_longitude,
+        COALESCE(r.geo_radius, 100)::int AS planned_room_geo_radius,
         s.time_slot_id,
         ts.label AS slot_label,
         ts.start_time::text AS slot_start_time,
@@ -298,10 +342,14 @@ export class AttendanceRepository {
     scheduleId: string;
     date: string;
   }): Promise<ExistingTeacherAttendanceRow | null> {
+    await ensureTenantRealHoursInfrastructure(this.db);
+
     const result = await this.db.execute<ExistingTeacherAttendanceRow>(sql`
       SELECT
+        id::text AS id,
         status::text AS status,
-        checked_in_at::text AS checked_in_at
+        checked_in_at::text AS checked_in_at,
+        checked_out_at::text AS checked_out_at
       FROM attendances_teacher
       WHERE teacher_id = ${params.teacherId}
         AND schedule_id = ${params.scheduleId}
@@ -332,7 +380,14 @@ export class AttendanceRepository {
     status: 'present' | 'absent' | 'late' | 'excused';
     lateMinutes: number | null;
     checkedInAt: string;
+    checkinLatitude?: number | null;
+    checkinLongitude?: number | null;
+    checkinAccuracy?: number | null;
+    checkinDistance?: number | null;
+    geoStatus?: 'verified' | 'suspicious' | 'unavailable' | 'not_checked';
   }): Promise<AttendanceWriteRow> {
+    await ensureTenantRealHoursInfrastructure(this.db);
+
     const result = await this.db.execute<AttendanceWriteRow>(sql`
       INSERT INTO attendances_teacher (
         teacher_id,
@@ -341,6 +396,11 @@ export class AttendanceRepository {
         status,
         checked_in_at,
         late_minutes,
+        checkin_latitude,
+        checkin_longitude,
+        checkin_accuracy,
+        checkin_distance,
+        geo_status,
         room_mismatch,
         qr_alert_sent
       )
@@ -351,6 +411,11 @@ export class AttendanceRepository {
         ${params.status},
         ${params.checkedInAt}::timestamptz,
         ${params.lateMinutes},
+        ${params.checkinLatitude ?? null}::numeric,
+        ${params.checkinLongitude ?? null}::numeric,
+        ${params.checkinAccuracy ?? null}::numeric,
+        ${params.checkinDistance ?? null}::numeric,
+        ${params.geoStatus ?? 'not_checked'},
         false,
         false
       )
@@ -358,8 +423,13 @@ export class AttendanceRepository {
       DO UPDATE SET
         status = EXCLUDED.status,
         checked_in_at = EXCLUDED.checked_in_at,
-        late_minutes = EXCLUDED.late_minutes
-      RETURNING id, status, late_minutes, checked_in_at::text
+        late_minutes = EXCLUDED.late_minutes,
+        checkin_latitude = EXCLUDED.checkin_latitude,
+        checkin_longitude = EXCLUDED.checkin_longitude,
+        checkin_accuracy = EXCLUDED.checkin_accuracy,
+        checkin_distance = EXCLUDED.checkin_distance,
+        geo_status = EXCLUDED.geo_status
+      RETURNING id, status, late_minutes, checked_in_at::text, checked_out_at::text
     `);
 
     const [row] = getRows(result);
@@ -455,6 +525,8 @@ export class AttendanceRepository {
     teacherId: string;
     date: string;
   }): Promise<TeacherAttendanceByDateRow[]> {
+    await ensureTenantRealHoursInfrastructure(this.db);
+
     const result = await this.db.execute<TeacherAttendanceByDateRow>(sql`
       SELECT
         at.id::text AS id,
@@ -463,13 +535,225 @@ export class AttendanceRepository {
         at.late_minutes,
         at.date::text AS date,
         at.room_scan_start_at::text AS room_scan_start_at,
-        at.room_scan_end_at::text AS room_scan_end_at
+        at.room_scan_end_at::text AS room_scan_end_at,
+        at.checked_out_at::text AS checked_out_at,
+        at.actual_minutes,
+        at.geo_status
       FROM attendances_teacher at
       WHERE at.teacher_id = ${params.teacherId}
         AND at.date = ${params.date}
     `);
 
     return getRows(result);
+  }
+
+  async getSchoolFeatureFlags(schemaName: string): Promise<FeatureFlagsRow> {
+    await ensureTenantRealHoursInfrastructure(this.db);
+
+    const result = await this.db.execute<FeatureFlagsRow>(sql`
+      SELECT
+        COALESCE(f.use_real_hours, false) AS use_real_hours,
+        COALESCE(f.geo_check_enabled, false) AS geo_check_enabled
+      FROM public.tenants t
+      LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
+      WHERE t.schema_name = ${schemaName}
+      LIMIT 1
+    `);
+
+    return getRows(result)[0] ?? { use_real_hours: false, geo_check_enabled: false };
+  }
+
+  async checkOut(params: {
+    teacherId: string;
+    scheduleId: string;
+    date: string;
+    checkedOutAtIso: string;
+    actualMinutes: number;
+    checkoutLatitude?: number | null;
+    checkoutLongitude?: number | null;
+    checkoutAccuracy?: number | null;
+    checkoutGeoStatus: 'verified' | 'suspicious' | 'unavailable' | 'not_checked';
+  }): Promise<{ actual_minutes: number; checkout_geo_status: string }> {
+    await ensureTenantRealHoursInfrastructure(this.db);
+
+    const result = await this.db.execute<{ actual_minutes: number; checkout_geo_status: string }>(sql`
+      UPDATE attendances_teacher
+      SET
+        checked_out_at = ${params.checkedOutAtIso}::timestamptz,
+        actual_minutes = ${params.actualMinutes},
+        checkout_latitude = ${params.checkoutLatitude ?? null}::numeric,
+        checkout_longitude = ${params.checkoutLongitude ?? null}::numeric,
+        checkout_accuracy = ${params.checkoutAccuracy ?? null}::numeric,
+        checkout_geo_status = ${params.checkoutGeoStatus},
+        room_scan_end_at = COALESCE(room_scan_end_at, ${params.checkedOutAtIso}::timestamptz)
+      WHERE teacher_id = ${params.teacherId}
+        AND schedule_id = ${params.scheduleId}
+        AND date = ${params.date}::date
+        AND checked_in_at IS NOT NULL
+        AND checked_out_at IS NULL
+      RETURNING actual_minutes, checkout_geo_status
+    `);
+
+    const row = getRows(result)[0];
+    if (!row) {
+      throw new Error('Failed to persist check-out');
+    }
+
+    return row;
+  }
+
+  async listTeacherCompliance(monthStart: string, monthEnd: string): Promise<TeacherComplianceRow[]> {
+    await ensureTenantRealHoursInfrastructure(this.db);
+
+    const result = await this.db.execute<TeacherComplianceRow>(sql`
+      SELECT
+        teacher_id::text AS teacher_id,
+        teacher_name,
+        total_checkins,
+        total_checkouts,
+        compliance_rate
+      FROM teacher_scan_compliance
+      WHERE month = ${monthStart}::date
+      UNION ALL
+      SELECT
+        t.id::text AS teacher_id,
+        u.name AS teacher_name,
+        0 AS total_checkins,
+        0 AS total_checkouts,
+        0::numeric AS compliance_rate
+      FROM teachers t
+      INNER JOIN users u ON u.id = t.user_id
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM attendances_teacher at
+        WHERE at.teacher_id = t.id
+          AND at.created_at >= ${monthStart}::date
+          AND at.created_at < (${monthEnd}::date + INTERVAL '1 day')
+      )
+      ORDER BY compliance_rate DESC, teacher_name ASC
+    `);
+
+    return getRows(result);
+  }
+
+  async listSuspiciousAttendances(params: {
+    monthStart: string;
+    monthEnd: string;
+  }): Promise<SuspiciousAttendanceRow[]> {
+    await ensureTenantRealHoursInfrastructure(this.db);
+
+    const result = await this.db.execute<SuspiciousAttendanceRow>(sql`
+      SELECT
+        at.id::text AS attendance_id,
+        u.name AS teacher_name,
+        s.subject AS course_name,
+        at.date::text AS date,
+        at.checked_in_at::text AS checked_in_at,
+        at.checkin_distance,
+        at.checkin_accuracy
+      FROM attendances_teacher at
+      INNER JOIN teachers t ON t.id = at.teacher_id
+      INNER JOIN users u ON u.id = t.user_id
+      LEFT JOIN schedules s ON s.id = at.schedule_id
+      WHERE at.geo_status = 'suspicious'
+        AND at.date BETWEEN ${params.monthStart}::date AND ${params.monthEnd}::date
+      ORDER BY at.date DESC, at.checked_in_at DESC
+    `);
+
+    return getRows(result);
+  }
+
+  async reviewGeoAttendance(params: {
+    attendanceId: string;
+    decision: 'validated' | 'rejected';
+  }): Promise<void> {
+    await ensureTenantRealHoursInfrastructure(this.db);
+
+    await this.db.execute(sql`
+      UPDATE attendances_teacher
+      SET
+        geo_status = CASE
+          WHEN ${params.decision} = 'validated' THEN 'verified'
+          ELSE geo_status
+        END,
+        status = CASE
+          WHEN ${params.decision} = 'rejected' THEN 'absent'::attendance_teacher_status
+          ELSE status
+        END,
+        actual_minutes = CASE
+          WHEN ${params.decision} = 'rejected' THEN 0
+          ELSE actual_minutes
+        END
+      WHERE id = ${params.attendanceId}
+    `);
+  }
+
+  async recomputeTeacherSalaryForMonth(params: {
+    teacherId: string;
+    monthStart: string;
+    monthEnd: string;
+  }): Promise<void> {
+    await ensureTenantRealHoursInfrastructure(this.db);
+
+    await this.db.execute(sql`
+      WITH feature_flags AS (
+        SELECT COALESCE(f.use_real_hours, false) AS use_real_hours
+        FROM public.tenants t
+        LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
+        WHERE t.schema_name = current_schema()
+        LIMIT 1
+      ),
+      totals AS (
+        SELECT
+          COALESCE(
+            SUM(
+              CASE
+                WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                  AND at.actual_minutes IS NOT NULL
+                  THEN at.actual_minutes / 60.0
+                ELSE EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0
+              END
+            ),
+            0
+          )::numeric(8,2) AS hours_done
+        FROM attendances_teacher at
+        INNER JOIN schedules s ON s.id = at.schedule_id
+        INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+        WHERE at.teacher_id = ${params.teacherId}
+          AND at.date BETWEEN ${params.monthStart}::date AND ${params.monthEnd}::date
+          AND at.status IN ('present', 'late', 'excused')
+      ),
+      payment_totals AS (
+        SELECT
+          sr.id AS record_id,
+          COALESCE(SUM(sp.hours_paid), 0)::numeric(8,2) AS paid_hours,
+          COALESCE(SUM(sp.amount_fcfa), 0)::int AS paid_amount
+        FROM salary_records sr
+        LEFT JOIN salary_payments sp ON sp.salary_record_id = sr.id
+        WHERE sr.teacher_id = ${params.teacherId}
+          AND sr.period_month = ${params.monthStart}::date
+        GROUP BY sr.id
+      )
+      UPDATE salary_records sr
+      SET
+        hours_done = totals.hours_done,
+        total_fcfa = CASE
+          WHEN t.type = 'permanent' THEN COALESCE(t.monthly_salary, sr.total_fcfa)
+          ELSE ROUND(totals.hours_done * sr.hourly_rate)::int
+        END,
+        status = CASE
+          WHEN sr.status = 'disputed' THEN sr.status
+          WHEN t.type = 'vacataire' AND totals.hours_done <= 0 THEN 'nothing_to_pay'::salary_status
+          WHEN t.type = 'vacataire' AND COALESCE(payment_totals.paid_hours, 0) >= totals.hours_done THEN 'paid'::salary_status
+          WHEN t.type = 'permanent' AND COALESCE(payment_totals.paid_amount, 0) >= COALESCE(t.monthly_salary, sr.total_fcfa) THEN 'paid'::salary_status
+          ELSE 'pending'::salary_status
+        END
+      FROM totals, teachers t
+      LEFT JOIN payment_totals ON true
+      WHERE sr.teacher_id = ${params.teacherId}
+        AND sr.period_month = ${params.monthStart}::date
+        AND t.id = sr.teacher_id
+    `);
   }
 
   // ── NOUVEAU — appel élèves en masse par le prof ───────────────────────────

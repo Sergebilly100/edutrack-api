@@ -169,6 +169,9 @@ export const rooms = tenant.table(
     qrToken: varchar('qr_token', { length: 64 }).notNull().unique(),
     building: varchar('building', { length: 100 }),
     capacity: integer('capacity'),
+    latitude: numeric('latitude', { precision: 10, scale: 7 }),
+    longitude: numeric('longitude', { precision: 10, scale: 7 }),
+    geoRadius: integer('geo_radius').default(100),
     isActive: boolean('is_active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
       .notNull()
@@ -277,12 +280,23 @@ export const attendancesTeacher = tenant.table(
     date: date('date', { mode: 'string' }).notNull(),
     status: attendanceTeacherStatusEnum('status').notNull().default('present'),
     checkedInAt: timestamp('checked_in_at', { withTimezone: true, mode: 'date' }),
+    checkedOutAt: timestamp('checked_out_at', { withTimezone: true, mode: 'date' }),
+    actualMinutes: integer('actual_minutes'),
     lateMinutes: integer('late_minutes'),
+    checkinLatitude: numeric('checkin_latitude', { precision: 10, scale: 7 }),
+    checkinLongitude: numeric('checkin_longitude', { precision: 10, scale: 7 }),
+    checkinAccuracy: numeric('checkin_accuracy', { precision: 6, scale: 2 }),
+    checkinDistance: numeric('checkin_distance', { precision: 8, scale: 2 }),
+    geoStatus: text('geo_status').default('not_checked'),
     roomScannedId: uuid('room_scanned_id').references(() => rooms.id),
     roomScanStartAt: timestamp('room_scan_start_at', {
       withTimezone: true,
       mode: 'date',
     }),
+    checkoutLatitude: numeric('checkout_latitude', { precision: 10, scale: 7 }),
+    checkoutLongitude: numeric('checkout_longitude', { precision: 10, scale: 7 }),
+    checkoutAccuracy: numeric('checkout_accuracy', { precision: 6, scale: 2 }),
+    checkoutGeoStatus: text('checkout_geo_status').default('not_checked'),
     roomScanEndAt: timestamp('room_scan_end_at', {
       withTimezone: true,
       mode: 'date',

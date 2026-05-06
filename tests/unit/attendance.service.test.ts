@@ -28,6 +28,7 @@ const repository = {
   findTeacherByUserId: vi.fn(),
   findScheduleContextForTeacher: vi.fn(),
   upsertCheckIn: vi.fn(),
+  getSchoolFeatureFlags: vi.fn(),
   findRoomByToken: vi.fn(),
   ensureAttendanceRecord: vi.fn(),
   recordQrScan: vi.fn(),
@@ -41,6 +42,10 @@ const repository = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  repository.getSchoolFeatureFlags.mockResolvedValue({
+    use_real_hours: false,
+    geo_check_enabled: false,
+  });
   vi.useFakeTimers();
 });
 

@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { ZodError, z } from 'zod';
 
 import { db, withTenantSchema } from '../../shared/database/db.js';
+import { ensurePublicRealHoursInfrastructure } from '../../shared/database/real-hours-infrastructure.js';
 import { authenticateRequest, requireDirectorOrSecretary } from '../../shared/middleware/auth.middleware.js';
 
 type TenantInfoRow = {
@@ -19,6 +20,8 @@ type TenantInfoRow = {
   can_edit_sms_template: boolean | null;
   can_export_data: boolean | null;
   allow_teacher_qr_skip: boolean | null;
+  use_real_hours: boolean | null;
+  geo_check_enabled: boolean | null;
   onboarding_completed: boolean;
 };
 
@@ -71,6 +74,8 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
       });
     }
   }
+
+  console.error('[school] unhandled error', error);
 
   return reply.code(500).send({
     error: 'Internal server error',
@@ -163,17 +168,22 @@ const resolveSchemaNameFromPublicRequest = async (request: FastifyRequest): Prom
 };
 
 const fetchSchoolInfoBySchema = async (schemaName: string) => {
+  await ensurePublicRealHoursInfrastructure(db);
+
   const tenantResult = await db.execute<TenantInfoRow>(sql`
-    SELECT id, name, subdomain, plan, city, teaching_type, max_users,
-           COALESCE(student_label, 'Élève') AS student_label,
-           COALESCE(director_title, 'Directeur') AS director_title,
-           COALESCE(max_sms_per_month, 2000) AS max_sms_per_month,
-           COALESCE(can_edit_sms_template, false) AS can_edit_sms_template,
-           COALESCE(can_export_data, true) AS can_export_data,
-           COALESCE(allow_teacher_qr_skip, false) AS allow_teacher_qr_skip,
-           onboarding_completed
-    FROM public.tenants
-    WHERE schema_name = ${schemaName}
+    SELECT t.id, t.name, t.subdomain, t.plan, t.city, t.teaching_type, t.max_users,
+           COALESCE(t.student_label, 'Élève') AS student_label,
+           COALESCE(t.director_title, 'Directeur') AS director_title,
+           COALESCE(t.max_sms_per_month, 2000) AS max_sms_per_month,
+           COALESCE(t.can_edit_sms_template, false) AS can_edit_sms_template,
+           COALESCE(t.can_export_data, true) AS can_export_data,
+           COALESCE(t.allow_teacher_qr_skip, false) AS allow_teacher_qr_skip,
+           COALESCE(features.use_real_hours, false) AS use_real_hours,
+           COALESCE(features.geo_check_enabled, false) AS geo_check_enabled,
+           t.onboarding_completed
+    FROM public.tenants t
+    LEFT JOIN public.school_sms_features features ON features.tenant_id = t.id
+    WHERE t.schema_name = ${schemaName}
     LIMIT 1
   `);
   const tenant = getRows<TenantInfoRow>(tenantResult)[0];
@@ -218,6 +228,8 @@ const fetchSchoolInfoBySchema = async (schemaName: string) => {
     can_edit_sms_template: tenant.can_edit_sms_template ?? false,
     can_export_data: tenant.can_export_data ?? true,
     allow_teacher_qr_skip: tenant.allow_teacher_qr_skip ?? false,
+    use_real_hours: tenant.use_real_hours ?? false,
+    geo_check_enabled: tenant.geo_check_enabled ?? false,
     current_users: tenantMetrics.currentUsers,
     address: '',
     phone: tenantMetrics.directorPhone,

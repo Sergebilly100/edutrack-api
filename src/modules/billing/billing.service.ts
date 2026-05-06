@@ -60,6 +60,7 @@ export class BillingService {
 
     const items = rows.map((row) => {
       const hoursPlanned = BillingRepository.toNumber(row.hours_planned);
+      const effectiveHoursDone = BillingRepository.toNumber(row.hours_done);
       const hoursDone = BillingRepository.toNumber(row.hours_done);
       const totalFcfa = BillingRepository.toNumber(row.total_fcfa);
       // Pour un vacataire : montant effectivement versé = somme des salary_payments
@@ -145,6 +146,7 @@ export class BillingService {
 
     const rows = daily.map((row) => {
       const hoursPlanned = BillingRepository.toNumber(row.hours_planned);
+      const effectiveHoursDone = BillingRepository.toNumber(row.hours_done);
       const rowEndTime = row.end_time.slice(0, 5);
       const hasExplicitStatus = row.attendance_status !== null;
       const shouldAutoAbsent =
@@ -172,7 +174,7 @@ export class BillingService {
         rollcallDone: hasRollcall,
         rollcallMissing: !hasRollcall && row.checked_in_at !== null,
         hoursPlanned: roundHours(hoursPlanned),
-        hoursDone: roundHours(countedAsDone ? hoursPlanned : 0),
+        hoursDone: roundHours(countedAsDone ? effectiveHoursDone : 0),
       };
     });
 

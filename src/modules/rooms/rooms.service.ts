@@ -25,6 +25,9 @@ const toPublicRoom = (room: RoomEntity): PublicRoom => ({
   name: room.name,
   building: room.building,
   capacity: room.capacity,
+  latitude: room.latitude,
+  longitude: room.longitude,
+  geoRadius: room.geoRadius,
   isActive: room.isActive,
   createdAt: room.createdAt,
 });
@@ -63,6 +66,9 @@ export class RoomsService {
     name: string;
     building?: string | null;
     capacity?: number | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    geoRadius?: number | null;
   }): Promise<PublicRoom> {
     try {
       const room = await this.repository.createRoom({
@@ -85,6 +91,9 @@ export class RoomsService {
       name?: string;
       building?: string | null;
       capacity?: number | null;
+      latitude?: number | null;
+      longitude?: number | null;
+      geoRadius?: number | null;
     }
   ): Promise<PublicRoom> {
     try {

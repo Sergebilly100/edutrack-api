@@ -8,6 +8,7 @@ import { AttendanceModuleError, buildAttendanceService } from './attendance.serv
 import {
   bulkStudentsBodySchema,
   checkInBodySchema,
+  checkOutBodySchema,
   qrSkipBodySchema,
   qrScanBodySchema,
   teacherAttendanceDateQuerySchema,
@@ -65,6 +66,21 @@ const weekScheduleQuerySchema = z.object({
     .default(() => new Date().toISOString().slice(0, 10)),
 })
 
+const monthQuerySchema = z.object({
+  month: z
+    .string()
+    .regex(/^\d{4}-\d{2}$/)
+    .default(() => new Date().toISOString().slice(0, 7)),
+});
+
+const geoReviewParamsSchema = z.object({
+  attendanceId: z.string().uuid(),
+});
+
+const geoReviewBodySchema = z.object({
+  decision: z.enum(['validated', 'rejected']),
+});
+
 export default async function attendanceController(app: FastifyInstance): Promise<void> {
   app.post('/api/v1/attendance/check-in', { preHandler: requireTeacher }, async (request, reply) => {
     try {
@@ -77,6 +93,37 @@ export default async function attendanceController(app: FastifyInstance): Promis
           {
             scheduleId: body.schedule_id,
             date: body.date,
+            latitude: body.latitude,
+            longitude: body.longitude,
+            accuracy: body.accuracy,
+          },
+          {
+            schemaName: claims.schemaName,
+            userId: claims.sub,
+          }
+        );
+      });
+
+      return reply.send({ data: result });
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.post('/api/v1/attendance/check-out', { preHandler: requireTeacher }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const body = checkOutBodySchema.parse(request.body ?? {});
+
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildAttendanceService(tenantDb);
+        return service.checkOut(
+          {
+            scheduleId: body.schedule_id,
+            date: body.date,
+            latitude: body.latitude,
+            longitude: body.longitude,
+            accuracy: body.accuracy,
           },
           {
             schemaName: claims.schemaName,
@@ -216,6 +263,52 @@ export default async function attendanceController(app: FastifyInstance): Promis
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
         const service = buildAttendanceService(tenantDb);
         return service.getTodayForDirector();
+      });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.get('/api/v1/attendance/teacher-compliance', { preHandler: requireDirector }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const query = monthQuerySchema.parse(request.query ?? {});
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildAttendanceService(tenantDb);
+        return service.getTeacherCompliance({ month: query.month });
+      });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.get('/api/v1/attendance/suspicious', { preHandler: requireDirector }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const query = monthQuerySchema.parse(request.query ?? {});
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildAttendanceService(tenantDb);
+        return service.getSuspiciousAttendances({ month: query.month });
+      });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.patch('/api/v1/attendance/:attendanceId/geo-review', { preHandler: requireDirector }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const params = geoReviewParamsSchema.parse(request.params ?? {});
+      const body = geoReviewBodySchema.parse(request.body ?? {});
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildAttendanceService(tenantDb);
+        return service.reviewGeoAttendance({
+          attendanceId: params.attendanceId,
+          decision: body.decision,
+        });
       });
       return reply.send(result);
     } catch (error) {

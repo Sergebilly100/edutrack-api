@@ -99,6 +99,22 @@ export default async function roomsController(app: FastifyInstance): Promise<voi
     }
   });
 
+  app.patch('/api/v1/rooms/:id', { preHandler: requirePermission('rooms.edit') }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const params = roomIdParamsSchema.parse(request.params ?? {});
+      const body = updateRoomBodySchema.parse(request.body ?? {});
+
+      const room = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        return buildRoomsService(tenantDb).updateRoom(params.id, body);
+      });
+
+      return reply.send({ room });
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
   app.delete('/api/v1/rooms/:id', { preHandler: requirePermission('rooms.delete') }, async (request, reply) => {
     try {
       const claims = request.claims!;

@@ -185,6 +185,8 @@ type SchoolSmsFeatureConfigResult = {
   commission_pct: number;
   sms_cap_per_student: number;
   monetize_parent_alerts: boolean;
+  use_real_hours: boolean;
+  geo_check_enabled: boolean;
 };
 
 type SmsHistoryRow = {
@@ -2492,8 +2494,16 @@ const getTenantSmsFeatureConfig = async (
     commission_pct: string | number;
     sms_cap_per_student: number;
     monetize_parent_alerts: boolean;
+    use_real_hours: boolean;
+    geo_check_enabled: boolean;
   }>(sql`
-    SELECT is_enabled, commission_pct, sms_cap_per_student, COALESCE(monetize_parent_alerts, false) AS monetize_parent_alerts
+    SELECT
+      is_enabled,
+      commission_pct,
+      sms_cap_per_student,
+      COALESCE(monetize_parent_alerts, false) AS monetize_parent_alerts,
+      COALESCE(use_real_hours, false) AS use_real_hours,
+      COALESCE(geo_check_enabled, false) AS geo_check_enabled
     FROM public.school_sms_features
     WHERE tenant_id = ${tenantId}::uuid
     LIMIT 1
@@ -2504,6 +2514,8 @@ const getTenantSmsFeatureConfig = async (
     commission_pct: string | number;
     sms_cap_per_student: number;
     monetize_parent_alerts: boolean;
+    use_real_hours: boolean;
+    geo_check_enabled: boolean;
   }>(result)[0];
   if (!row) {
     return null;
@@ -2514,13 +2526,17 @@ const getTenantSmsFeatureConfig = async (
     commission_pct: parseNumeric(row.commission_pct),
     sms_cap_per_student: row.sms_cap_per_student,
     monetize_parent_alerts: row.monetize_parent_alerts,
+    use_real_hours: row.use_real_hours,
+    geo_check_enabled: row.geo_check_enabled,
   };
 };
 
 const ensureSchoolSmsFeatureMonetizationColumn = async (publicDb: TenantDb): Promise<void> => {
   await publicDb.execute(sql`
     ALTER TABLE public.school_sms_features
-    ADD COLUMN IF NOT EXISTS monetize_parent_alerts boolean NOT NULL DEFAULT false
+    ADD COLUMN IF NOT EXISTS monetize_parent_alerts boolean NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS use_real_hours boolean NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS geo_check_enabled boolean NOT NULL DEFAULT false
   `);
 };
 
@@ -2585,7 +2601,13 @@ export const deactivateSchoolSmsFeature = async (
 export const updateSchoolSmsFeatureConfig = async (
   publicDb: TenantDb,
   tenantId: string,
-  payload: { commission_pct?: number; sms_cap_per_student?: number; monetizeParentAlerts?: boolean },
+  payload: {
+    commission_pct?: number;
+    sms_cap_per_student?: number;
+    monetizeParentAlerts?: boolean;
+    useRealHours?: boolean;
+    geoCheckEnabled?: boolean;
+  },
   audit?: { actorId?: string | null; actorRole?: string | null }
 ): Promise<SchoolSmsFeatureConfigResult> => {
   await ensureAdminPublicInfrastructure(publicDb);
@@ -2594,7 +2616,8 @@ export const updateSchoolSmsFeatureConfig = async (
 
   await publicDb.execute(sql`
     INSERT INTO public.school_sms_features (
-      tenant_id, is_enabled, commission_pct, sms_cap_per_student, monetize_parent_alerts, updated_at
+      tenant_id, is_enabled, commission_pct, sms_cap_per_student, monetize_parent_alerts,
+      use_real_hours, geo_check_enabled, updated_at
     )
     VALUES (
       ${tenantId}::uuid,
@@ -2602,6 +2625,8 @@ export const updateSchoolSmsFeatureConfig = async (
       ${payload.commission_pct ?? 0},
       ${payload.sms_cap_per_student ?? 60},
       ${payload.monetizeParentAlerts ?? false},
+      ${payload.useRealHours ?? false},
+      ${payload.geoCheckEnabled ?? false},
       NOW()
     )
     ON CONFLICT (tenant_id)
@@ -2621,6 +2646,16 @@ export const updateSchoolSmsFeatureConfig = async (
           THEN ${payload.monetizeParentAlerts ?? false}
         ELSE public.school_sms_features.monetize_parent_alerts
       END,
+      use_real_hours = CASE
+        WHEN ${payload.useRealHours !== undefined}
+          THEN ${payload.useRealHours ?? false}
+        ELSE public.school_sms_features.use_real_hours
+      END,
+      geo_check_enabled = CASE
+        WHEN ${payload.geoCheckEnabled !== undefined}
+          THEN ${payload.geoCheckEnabled ?? false}
+        ELSE public.school_sms_features.geo_check_enabled
+      END,
       updated_at = NOW()
   `);
 
@@ -2631,6 +2666,8 @@ export const updateSchoolSmsFeatureConfig = async (
       commission_pct: payload.commission_pct ?? 0,
       sms_cap_per_student: payload.sms_cap_per_student ?? 60,
       monetize_parent_alerts: payload.monetizeParentAlerts ?? false,
+      use_real_hours: payload.useRealHours ?? false,
+      geo_check_enabled: payload.geoCheckEnabled ?? false,
     }
   );
 
@@ -2651,6 +2688,33 @@ export const updateSchoolSmsFeatureConfig = async (
         'update_monetize_parent_alerts',
         ${before ? JSON.stringify({ value: before.monetize_parent_alerts }) : null}::jsonb,
         ${JSON.stringify({ value: payload.monetizeParentAlerts })}::jsonb
+      )
+    `);
+  }
+
+  if (payload.useRealHours !== undefined || payload.geoCheckEnabled !== undefined) {
+    await publicDb.execute(sql`
+      INSERT INTO public.audit_financial_events (
+        tenant_id,
+        actor_id,
+        actor_role,
+        action,
+        payload_before,
+        payload_after
+      )
+      VALUES (
+        ${tenantId}::uuid,
+        ${audit?.actorId ?? null}::uuid,
+        ${audit?.actorRole ?? 'super_admin'},
+        'update_school_features',
+        ${before ? JSON.stringify({
+          use_real_hours: before.use_real_hours,
+          geo_check_enabled: before.geo_check_enabled,
+        }) : null}::jsonb,
+        ${JSON.stringify({
+          use_real_hours: resolved.use_real_hours,
+          geo_check_enabled: resolved.geo_check_enabled,
+        })}::jsonb
       )
     `);
   }
@@ -3042,6 +3106,8 @@ export const getSchoolSmsFeatureStats = async (
       commission_pct: 0,
       sms_cap_per_student: 60,
       monetize_parent_alerts: false,
+      use_real_hours: false,
+      geo_check_enabled: false,
     };
   const currentMonth = monthFromDate(new Date());
 

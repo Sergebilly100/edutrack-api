@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { QueryResult, QueryResultRow } from 'pg';
+import { ensureTenantRealHoursInfrastructure } from '../../shared/database/real-hours-infrastructure.js';
 
 export type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
 
@@ -48,6 +49,7 @@ type TeacherDailyRow = {
   end_time: string;
   slot_label: string;
   hours_planned: string | number;
+  hours_done: string | number;
   attendance_status: 'present' | 'absent' | 'late' | 'excused' | null;
   checked_in_at: string | null;
   room_scan_end_at: string | null;
@@ -131,8 +133,17 @@ export class BillingRepository {
   constructor(private readonly db: QueryExecutor) {}
 
   async listTeacherMonthlyMetrics(monthStart: string, monthEnd: string): Promise<SalaryMetricRow[]> {
+    await ensureTenantRealHoursInfrastructure(this.db);
+
     const result = await this.db.execute<SalaryMetricRow>(sql`
-      WITH month_days AS (
+      WITH feature_flags AS (
+        SELECT COALESCE(f.use_real_hours, false) AS use_real_hours
+        FROM public.tenants t
+        LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
+        WHERE t.schema_name = current_schema()
+        LIMIT 1
+      ),
+      month_days AS (
         SELECT generate_series(${monthStart}::date, ${monthEnd}::date, interval '1 day')::date AS d
       ),
       planned AS (
@@ -157,7 +168,14 @@ export class BillingRepository {
         SELECT
           s.teacher_id,
           COALESCE(
-            SUM(EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0),
+            SUM(
+              CASE
+                WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                  AND at.actual_minutes IS NOT NULL
+                  THEN at.actual_minutes / 60.0
+                ELSE EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0
+              END
+            ),
             0
           )::numeric(8,2) AS hours_done
         FROM attendances_teacher at
@@ -203,7 +221,14 @@ export class BillingRepository {
       LEFT JOIN LATERAL (
         SELECT
           COALESCE(
-            SUM(EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0),
+            SUM(
+              CASE
+                WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                  AND at.actual_minutes IS NOT NULL
+                  THEN at.actual_minutes / 60.0
+                ELSE EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0
+              END
+            ),
             0
           )::numeric(8,2) AS hours_done_since_paid
         FROM attendances_teacher at
@@ -276,8 +301,17 @@ export class BillingRepository {
     monthStart: string,
     monthEnd: string
   ): Promise<TeacherDailyRow[]> {
+    await ensureTenantRealHoursInfrastructure(this.db);
+
     const result = await this.db.execute<TeacherDailyRow>(sql`
-      WITH month_days AS (
+      WITH feature_flags AS (
+        SELECT COALESCE(f.use_real_hours, false) AS use_real_hours
+        FROM public.tenants t
+        LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
+        WHERE t.schema_name = current_schema()
+        LIMIT 1
+      ),
+      month_days AS (
         SELECT generate_series(${monthStart}::date, ${monthEnd}::date, interval '1 day')::date AS d
       )
       SELECT
@@ -292,7 +326,13 @@ export class BillingRepository {
         (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0)::numeric(8,2) AS hours_planned,
         at.status::text AS attendance_status,
         at.checked_in_at::text,
-        at.room_scan_end_at::text AS room_scan_end_at,
+        COALESCE(at.checked_out_at, at.room_scan_end_at)::text AS room_scan_end_at,
+        CASE
+          WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+            AND at.actual_minutes IS NOT NULL
+            THEN (at.actual_minutes / 60.0)::numeric(8,2)
+          ELSE (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0)::numeric(8,2)
+        END AS hours_done,
         at.late_minutes,
         at.room_mismatch,
         rollcall.has_rollcall

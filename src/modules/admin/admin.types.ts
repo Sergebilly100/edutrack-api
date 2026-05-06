@@ -87,12 +87,16 @@ export const smsFeatureConfigBodySchema = z
     commission_pct: z.coerce.number().min(0).max(100).optional(),
     sms_cap_per_student: z.coerce.number().int().min(0).max(10000).optional(),
     monetizeParentAlerts: z.boolean().optional(),
+    useRealHours: z.boolean().optional(),
+    geoCheckEnabled: z.boolean().optional(),
   })
   .refine(
     (value) =>
       value.commission_pct !== undefined ||
       value.sms_cap_per_student !== undefined ||
-      value.monetizeParentAlerts !== undefined,
+      value.monetizeParentAlerts !== undefined ||
+      value.useRealHours !== undefined ||
+      value.geoCheckEnabled !== undefined,
     {
       message: 'At least one field must be provided',
     }

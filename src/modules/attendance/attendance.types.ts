@@ -5,6 +5,17 @@ export const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 export const checkInBodySchema = z.object({
   schedule_id: z.string().uuid(),
   date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format').optional(),
+  latitude: z.number().min(-90).max(90).optional(),
+  longitude: z.number().min(-180).max(180).optional(),
+  accuracy: z.number().min(0).max(10000).optional(),
+});
+
+export const checkOutBodySchema = z.object({
+  schedule_id: z.string().uuid(),
+  latitude: z.number().min(-90).max(90).optional(),
+  longitude: z.number().min(-180).max(180).optional(),
+  accuracy: z.number().min(0).max(10000).optional(),
+  date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format').optional(),
 });
 
 export const qrScanBodySchema = z.object({
@@ -42,6 +53,9 @@ export type AttendanceScheduleContext = {
   plannedRoomId: string;
   plannedRoomName: string;
   plannedRoomToken: string;
+  plannedRoomLatitude: number | null;
+  plannedRoomLongitude: number | null;
+  plannedRoomGeoRadius: number;
   timeSlotId: string;
   slotLabel: string;
   slotStartTime: string;
@@ -72,4 +86,5 @@ export type CheckInResult = {
   status: 'present' | 'absent' | 'late' | 'excused';
   lateMinutes: number | null;
   checkedInAt: string;
+  geoStatus?: 'verified' | 'suspicious' | 'unavailable' | 'not_checked';
 };

@@ -7,6 +7,7 @@ import {
 import { AttendanceRepository } from './attendance.repository.js';
 import type { ActiveAttendanceItem, CheckInResult } from './attendance.types.js';
 import { calculateAttendanceStatus, validateRoomScan } from '../../shared/utils/attendance.js';
+import { haversineDistance, type GeoStatus } from '../../shared/utils/geo.js';
 import { scheduleQrMissingScanCheck } from './attendance.scheduler.js';
 
 export class AttendanceModuleError extends Error {
@@ -37,6 +38,46 @@ const toSlotDateTime = (date: string, time: string): Date => new Date(`${date}T$
 const toIso = (date: Date): string => date.toISOString();
 const DEFAULT_SCHOOL_PHONE = process.env.DEFAULT_SCHOOL_PHONE ?? '2250000000000';
 
+const resolveGeo = (input: {
+  enabled: boolean;
+  latitude?: number;
+  longitude?: number;
+  roomLatitude: number | null;
+  roomLongitude: number | null;
+  roomRadius: number;
+}): { status: GeoStatus; distance: number | null } => {
+  if (!input.enabled) {
+    return { status: 'not_checked', distance: null };
+  }
+
+  if (input.latitude === undefined || input.longitude === undefined) {
+    return { status: 'unavailable', distance: null };
+  }
+
+  if (input.roomLatitude === null || input.roomLongitude === null) {
+    return { status: 'not_checked', distance: null };
+  }
+
+  const distance = haversineDistance(
+    input.latitude,
+    input.longitude,
+    input.roomLatitude,
+    input.roomLongitude
+  );
+
+  return {
+    status: distance <= input.roomRadius ? 'verified' : 'suspicious',
+    distance,
+  };
+};
+
+const monthBoundsFromDate = (date: string): { monthStart: string; monthEnd: string } => {
+  const monthStart = `${date.slice(0, 7)}-01`;
+  const [yearRaw, monthRaw] = date.slice(0, 7).split('-');
+  const end = new Date(Date.UTC(Number(yearRaw), Number(monthRaw), 0));
+  return { monthStart, monthEnd: end.toISOString().slice(0, 10) };
+};
+
 export class AttendanceService {
   constructor(private readonly repository: AttendanceRepository) {}
 
@@ -44,6 +85,9 @@ export class AttendanceService {
     input: {
       scheduleId: string;
       date?: string;
+      latitude?: number;
+      longitude?: number;
+      accuracy?: number;
     },
     context: ServiceContext
   ): Promise<CheckInResult> {
@@ -65,6 +109,15 @@ export class AttendanceService {
     const slotStart = toSlotDateTime(date, schedule.slotStartTime);
     const slotEnd = toSlotDateTime(date, schedule.slotEndTime);
     const status = calculateAttendanceStatus(checkedInAt, slotStart, slotEnd);
+    const flags = await this.repository.getSchoolFeatureFlags(context.schemaName);
+    const geo = resolveGeo({
+      enabled: flags.geo_check_enabled,
+      latitude: input.latitude,
+      longitude: input.longitude,
+      roomLatitude: schedule.plannedRoomLatitude,
+      roomLongitude: schedule.plannedRoomLongitude,
+      roomRadius: schedule.plannedRoomGeoRadius,
+    });
 
     await this.repository.upsertCheckIn({
       teacherId: teacher.id,
@@ -73,6 +126,11 @@ export class AttendanceService {
       status: status.status,
       lateMinutes: status.lateMinutes,
       checkedInAt: toIso(checkedInAt),
+      checkinLatitude: flags.geo_check_enabled ? input.latitude ?? null : null,
+      checkinLongitude: flags.geo_check_enabled ? input.longitude ?? null : null,
+      checkinAccuracy: flags.geo_check_enabled ? input.accuracy ?? null : null,
+      checkinDistance: geo.distance,
+      geoStatus: geo.status,
     });
 
     if (status.status !== 'absent') {
@@ -112,7 +170,84 @@ export class AttendanceService {
       status: status.status,
       lateMinutes: status.lateMinutes,
       checkedInAt: toIso(checkedInAt),
+      geoStatus: geo.status,
     };
+  }
+
+  async checkOut(
+    input: {
+      scheduleId: string;
+      date?: string;
+      latitude?: number;
+      longitude?: number;
+      accuracy?: number;
+    },
+    context: ServiceContext
+  ): Promise<{ success: true; actualMinutes: number; geoStatus: GeoStatus }> {
+    const teacher = await this.repository.findTeacherByUserId(context.userId);
+    if (!teacher) {
+      throw new AttendanceModuleError('Teacher profile not found', 404, 'TEACHER_NOT_FOUND');
+    }
+
+    const schedule = await this.repository.findScheduleContextForTeacher(
+      input.scheduleId,
+      teacher.id
+    );
+    if (!schedule) {
+      throw new AttendanceModuleError('Schedule not found', 404, 'SCHEDULE_NOT_FOUND');
+    }
+
+    const date = input.date ?? currentDateIso();
+    const existing = await this.repository.getTeacherAttendance({
+      teacherId: teacher.id,
+      scheduleId: schedule.scheduleId,
+      date,
+    });
+
+    if (!existing?.checked_in_at) {
+      throw new AttendanceModuleError('Check-in not found', 404, 'CHECKIN_NOT_FOUND');
+    }
+
+    if (existing.checked_out_at) {
+      throw new AttendanceModuleError('Check-out already recorded', 409, 'CHECKOUT_ALREADY_RECORDED');
+    }
+
+    const checkedOutAt = new Date();
+    const checkedInAt = new Date(existing.checked_in_at);
+    const actualMinutes = Math.max(
+      0,
+      Math.floor((checkedOutAt.getTime() - checkedInAt.getTime()) / 60000)
+    );
+    const flags = await this.repository.getSchoolFeatureFlags(context.schemaName);
+    const geo = resolveGeo({
+      enabled: flags.geo_check_enabled,
+      latitude: input.latitude,
+      longitude: input.longitude,
+      roomLatitude: schedule.plannedRoomLatitude,
+      roomLongitude: schedule.plannedRoomLongitude,
+      roomRadius: schedule.plannedRoomGeoRadius,
+    });
+
+    await this.repository.checkOut({
+      teacherId: teacher.id,
+      scheduleId: schedule.scheduleId,
+      date,
+      checkedOutAtIso: toIso(checkedOutAt),
+      actualMinutes,
+      checkoutLatitude: flags.geo_check_enabled ? input.latitude ?? null : null,
+      checkoutLongitude: flags.geo_check_enabled ? input.longitude ?? null : null,
+      checkoutAccuracy: flags.geo_check_enabled ? input.accuracy ?? null : null,
+      checkoutGeoStatus: geo.status,
+    });
+
+    const { monthStart, monthEnd } = monthBoundsFromDate(date);
+    await this.repository.recomputeTeacherSalaryForMonth({
+      teacherId: teacher.id,
+      monthStart,
+      monthEnd,
+    });
+
+    return { success: true, actualMinutes, geoStatus: geo.status };
   }
 
   async qrScan(
@@ -299,6 +434,9 @@ export class AttendanceService {
     date: string;
     room_scan_start_at: string | null;
     room_scan_end_at: string | null;
+    checked_out_at: string | null;
+    actual_minutes: number | null;
+    geo_status: 'verified' | 'suspicious' | 'unavailable' | 'not_checked' | null;
   }>> {
     const teacher = await this.repository.findTeacherByUserId(context.userId);
     if (!teacher) {
@@ -535,6 +673,48 @@ export class AttendanceService {
       from: input.from,
       to: input.to,
     });
+  }
+
+  async getTeacherCompliance(input: { month: string }): Promise<
+    Array<{
+      teacherId: string;
+      teacherName: string;
+      totalCheckins: number;
+      totalCheckouts: number;
+      complianceRate: number;
+      rank: number;
+    }>
+  > {
+    const { monthStart, monthEnd } = monthBoundsFromDate(`${input.month}-01`);
+    const rows = await this.repository.listTeacherCompliance(monthStart, monthEnd);
+    return rows.map((row, index) => ({
+      teacherId: row.teacher_id,
+      teacherName: row.teacher_name,
+      totalCheckins: Number(row.total_checkins),
+      totalCheckouts: Number(row.total_checkouts),
+      complianceRate: Number(row.compliance_rate),
+      rank: index + 1,
+    }));
+  }
+
+  async getSuspiciousAttendances(input: { month: string }) {
+    const { monthStart, monthEnd } = monthBoundsFromDate(`${input.month}-01`);
+    return this.repository.listSuspiciousAttendances({ monthStart, monthEnd }).then((rows) =>
+      rows.map((row) => ({
+        attendanceId: row.attendance_id,
+        teacherName: row.teacher_name,
+        courseName: row.course_name,
+        date: row.date,
+        checkedInAt: row.checked_in_at,
+        checkinDistance: row.checkin_distance === null ? null : Number(row.checkin_distance),
+        checkinAccuracy: row.checkin_accuracy === null ? null : Number(row.checkin_accuracy),
+      }))
+    );
+  }
+
+  async reviewGeoAttendance(input: { attendanceId: string; decision: 'validated' | 'rejected' }) {
+    await this.repository.reviewGeoAttendance(input);
+    return { success: true };
   }
 }
 
