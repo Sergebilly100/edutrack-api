@@ -152,10 +152,7 @@ export const updateLimitsBodySchema = z.object({
   max_admin_positions: z.number().int().min(1).max(50),
 });
 
-export const STAFF_BASE_PERMISSIONS: readonly PermissionKey[] = [
-  'subscriptions.view',
-  'subscriptions.create',
-];
+export const STAFF_BASE_PERMISSIONS: readonly PermissionKey[] = [];
 
 // Backward-compatible alias during role transition.
 export const SECRETARY_BASE_PERMISSIONS = STAFF_BASE_PERMISSIONS;
