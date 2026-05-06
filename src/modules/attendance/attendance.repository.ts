@@ -102,6 +102,7 @@ type DirectorTodayCourseRow = {
   room_mismatch: boolean;
   room_scanned_name: string | null;
   room_scanned_at: string | null;
+  room_scan_end_at: string | null;
   checked_in_at: string | null;
   student_rollcall_done: boolean;
   student_present_count: number;
@@ -133,6 +134,7 @@ type DirectorHistoryDetailRow = {
   room_mismatch: boolean;
   room_scanned_name: string | null;
   room_scanned_at: string | null;
+  room_scan_end_at: string | null;
   student_rollcall_done: boolean;
   student_present_count: number;
   student_absent_count: number;
@@ -830,6 +832,7 @@ export class AttendanceRepository {
         COALESCE(at.room_mismatch, false) AS room_mismatch,
         scanned_room.name AS room_scanned_name,
         at.room_scan_start_at::text AS room_scanned_at,
+        at.room_scan_end_at::text AS room_scan_end_at,
         at.checked_in_at::text AS checked_in_at,
         CASE
           WHEN COUNT(ast.id) > 0 THEN true
@@ -871,6 +874,7 @@ export class AttendanceRepository {
         at.room_mismatch,
         scanned_room.name,
         at.room_scan_start_at,
+        at.room_scan_end_at,
         at.checked_in_at
       ORDER BY ts.sort_order ASC, ts.start_time ASC, c.name ASC
     `);
@@ -1013,6 +1017,7 @@ export class AttendanceRepository {
         COALESCE(at.room_mismatch, false) AS room_mismatch,
         scanned_room.name AS room_scanned_name,
         at.room_scan_start_at::text AS room_scanned_at,
+        at.room_scan_end_at::text AS room_scan_end_at,
         CASE WHEN COUNT(ast.id) > 0 THEN true ELSE false END AS student_rollcall_done,
         COUNT(CASE WHEN ast.status = 'present' THEN 1 END)::int AS student_present_count,
         COUNT(CASE WHEN ast.status = 'absent'  THEN 1 END)::int AS student_absent_count,
@@ -1039,7 +1044,7 @@ export class AttendanceRepository {
         d.date, s.id, u.name, s.subject, c.name, r.name,
         ts.start_time, ts.end_time,
         at.status, at.late_minutes, at.checked_in_at,
-        at.room_mismatch, scanned_room.name, at.room_scan_start_at
+        at.room_mismatch, scanned_room.name, at.room_scan_start_at, at.room_scan_end_at
       ORDER BY d.date DESC, ts.start_time ASC
     `);
 

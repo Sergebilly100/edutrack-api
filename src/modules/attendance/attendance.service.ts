@@ -450,6 +450,7 @@ export class AttendanceService {
       room_mismatch: boolean;
       room_scanned_name: string | null;
       room_scanned_at: string | null;
+      room_scan_end_at: string | null;
       checked_in_at: string | null;
       student_rollcall_done: boolean;
       student_present_count: number;
