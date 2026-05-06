@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { sql } from 'drizzle-orm';
 import { ZodError, z } from 'zod';
 
@@ -31,6 +31,11 @@ const schoolInfoPatchSchema = z.object({
   address: z.string().trim().max(255).optional(),
   phone: z.string().trim().min(6).max(20).optional(),
 });
+
+const SCHEMA_NAME_REGEX = /^[a-z][a-z0-9_]{2,63}$/;
+const SUBDOMAIN_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const DEFAULT_LOCAL_SCHEMA =
+  (process.env.AUTH_DEFAULT_TENANT_SCHEMA ?? 'school_sainte_marie').trim();
 
 const getRows = <TRow,>(result: unknown): TRow[] => {
   if (typeof result !== 'object' || result === null || !('rows' in result)) {
@@ -72,6 +77,89 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
     code: 'INTERNAL_ERROR',
     statusCode: 500,
   });
+};
+
+const extractHostname = (request: FastifyRequest): string | null => {
+  const host = typeof request.headers.host === 'string' ? request.headers.host : '';
+  if (!host) {
+    return null;
+  }
+
+  const noPort = host.split(':')[0]?.trim().toLowerCase() ?? '';
+  return noPort.length > 0 ? noPort : null;
+};
+
+const parseSubdomain = (hostname: string): string | null => {
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+    return null;
+  }
+
+  const labels = hostname.split('.').filter(Boolean);
+  if (labels.length < 3) {
+    return null;
+  }
+
+  const firstLabel = labels[0] ?? '';
+  if (!SUBDOMAIN_REGEX.test(firstLabel) || firstLabel === 'www' || firstLabel === 'admin') {
+    return null;
+  }
+
+  return firstLabel;
+};
+
+const resolveSchemaBySubdomain = async (subdomain: string): Promise<string | null> => {
+  const result = await db.execute<{ schema_name: string }>(sql`
+    SELECT schema_name
+    FROM public.tenants
+    WHERE subdomain = ${subdomain}
+    LIMIT 1
+  `);
+
+  return getRows<{ schema_name: string }>(result)[0]?.schema_name ?? null;
+};
+
+const resolveSchemaNameFromPublicRequest = async (request: FastifyRequest): Promise<string> => {
+  const headerValue = request.headers['x-tenant-schema'];
+  if (typeof headerValue === 'string' && headerValue.trim().length > 0) {
+    const schema = headerValue.trim();
+    if (!SCHEMA_NAME_REGEX.test(schema)) {
+      throw new Error('Invalid tenant schema');
+    }
+    return schema;
+  }
+
+  const subdomainHeader = request.headers['x-tenant-subdomain'];
+  if (typeof subdomainHeader === 'string' && subdomainHeader.trim().length > 0) {
+    const subdomain = subdomainHeader.trim().toLowerCase();
+    if (!SUBDOMAIN_REGEX.test(subdomain)) {
+      throw new Error('Invalid tenant subdomain');
+    }
+    const schema = await resolveSchemaBySubdomain(subdomain);
+    if (!schema) {
+      throw new Error('Tenant not found');
+    }
+    return schema;
+  }
+
+  const hostname = extractHostname(request);
+  if (hostname) {
+    const subdomain = parseSubdomain(hostname);
+    if (subdomain) {
+      const schema = await resolveSchemaBySubdomain(subdomain);
+      if (!schema) {
+        throw new Error('Tenant not found');
+      }
+      return schema;
+    }
+
+    const isLocalHost =
+      hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+    if (isLocalHost && SCHEMA_NAME_REGEX.test(DEFAULT_LOCAL_SCHEMA)) {
+      return DEFAULT_LOCAL_SCHEMA;
+    }
+  }
+
+  throw new Error('Tenant not found');
 };
 
 const fetchSchoolInfoBySchema = async (schemaName: string) => {
@@ -138,6 +226,31 @@ const fetchSchoolInfoBySchema = async (schemaName: string) => {
 };
 
 export default async function schoolController(app: FastifyInstance): Promise<void> {
+  app.get('/api/v1/school/public-info', async (request, reply) => {
+    try {
+      const schemaName = await resolveSchemaNameFromPublicRequest(request);
+      const tenantResult = await db.execute<{ name: string }>(sql`
+        SELECT name
+        FROM public.tenants
+        WHERE schema_name = ${schemaName}
+        LIMIT 1
+      `);
+      const school = getRows<{ name: string }>(tenantResult)[0];
+
+      if (!school) {
+        return reply.code(404).send({
+          error: 'Tenant not found',
+          code: 'NOT_FOUND',
+          statusCode: 404,
+        });
+      }
+
+      return reply.send({ name: school.name });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
   app.get('/api/v1/school/info', { preHandler: authenticateRequest }, async (request, reply) => {
     try {
       const claims = request.claims;
