@@ -24,17 +24,38 @@ CREATE OR REPLACE VIEW "tenant"."teacher_scan_compliance" AS
 SELECT
   t.id AS teacher_id,
   u.name AS teacher_name,
-  COUNT(at.id)::int AS total_checkins,
-  COUNT(at.checked_out_at)::int AS total_checkouts,
+  COUNT(at.id) FILTER (
+    WHERE at.checked_in_at IS NOT NULL
+      OR at.room_scan_start_at IS NOT NULL
+      OR at.status IN ('present', 'late')
+  )::int AS total_checkins,
+  COUNT(at.id) FILTER (
+    WHERE at.checked_out_at IS NOT NULL
+      OR at.room_scan_end_at IS NOT NULL
+  )::int AS total_checkouts,
   COALESCE(
-    ROUND(COUNT(at.checked_out_at)::numeric / NULLIF(COUNT(at.id), 0) * 100, 1),
+    ROUND(
+      COUNT(at.id) FILTER (
+        WHERE at.checked_out_at IS NOT NULL
+          OR at.room_scan_end_at IS NOT NULL
+      )::numeric
+      / NULLIF(
+        COUNT(at.id) FILTER (
+          WHERE at.checked_in_at IS NOT NULL
+            OR at.room_scan_start_at IS NOT NULL
+            OR at.status IN ('present', 'late')
+        ),
+        0
+      ) * 100,
+      1
+    ),
     0
   ) AS compliance_rate,
-  DATE_TRUNC('month', at.created_at)::date AS month
+  DATE_TRUNC('month', at.date)::date AS month
 FROM "tenant"."teachers" t
 INNER JOIN "tenant"."users" u ON u.id = t.user_id
 LEFT JOIN "tenant"."attendances_teacher" at ON at.teacher_id = t.id
-GROUP BY t.id, u.name, DATE_TRUNC('month', at.created_at);
+GROUP BY t.id, u.name, DATE_TRUNC('month', at.date);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_att_teacher_compliance_teacher_created
   ON "tenant"."attendances_teacher" ("teacher_id", "created_at");
