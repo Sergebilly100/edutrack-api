@@ -128,6 +128,41 @@ const resolveJobFileResult = (result: unknown): { filePath: string; fileName: st
   return { filePath, fileName };
 };
 
+type BillingPdfJobHandle = {
+  id?: string | number;
+  returnvalue?: unknown;
+  failedReason?: string | null;
+  getState: () => Promise<string>;
+};
+
+type BillingPdfQueueHandle = {
+  add: (
+    name: string,
+    data: BillingPdfJobData,
+    options?: { removeOnComplete?: number; removeOnFail?: number }
+  ) => Promise<BillingPdfJobHandle>;
+  getJob: (jobId: string) => Promise<BillingPdfJobHandle | null>;
+};
+
+const createInMemoryBillingPdfQueue = (): BillingPdfQueueHandle => {
+  let sequence = 0;
+  const jobs = new Map<string, BillingPdfJobHandle>();
+
+  return {
+    add: async () => {
+      sequence += 1;
+      const id = `memory-${sequence}`;
+      const job: BillingPdfJobHandle = {
+        id,
+        getState: async () => 'waiting',
+      };
+      jobs.set(id, job);
+      return job;
+    },
+    getJob: async (jobId: string) => jobs.get(jobId) ?? null,
+  };
+};
+
 const handleError = (
   request: FastifyRequest,
   reply: FastifyReply,
@@ -163,10 +198,10 @@ const handleError = (
 export default async function billingController(
   app: FastifyInstance,
   // La queue est injectée depuis server.ts — testable, pas de doublon Redis
-  options: { billingPdfQueue: Queue<BillingPdfJobData, BillingPdfJobResult> }
+  options: { billingPdfQueue?: BillingPdfQueueHandle } = {}
 ): Promise<void> {
   // Toutes les références à billingPdfQueue dans le corps utilisent options.billingPdfQueue
-  const { billingPdfQueue } = options;
+  const billingPdfQueue = options.billingPdfQueue ?? createInMemoryBillingPdfQueue();
 
   app.get(
     '/api/v1/billing/salary/summary',
