@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError, z } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
-import { requireDirector, requireTeacher } from '../../shared/middleware/auth.middleware.js';
+import { authenticateRequest, requireDirector, requireTeacher } from '../../shared/middleware/auth.middleware.js';
 
 import { AttendanceModuleError, buildAttendanceService } from './attendance.service.js';
 import {
@@ -80,6 +80,25 @@ const geoReviewParamsSchema = z.object({
 const geoReviewBodySchema = z.object({
   decision: z.enum(['validated', 'rejected']),
 });
+
+const requireTeacherOrDirector = async (
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> => {
+  await authenticateRequest(request, reply);
+  if (reply.sent) {
+    return;
+  }
+
+  const role = request.claims?.role;
+  if (role !== 'teacher' && role !== 'director') {
+    reply.code(403).send({
+      error: 'Forbidden',
+      code: 'FORBIDDEN',
+      statusCode: 403,
+    });
+  }
+};
 
 export default async function attendanceController(app: FastifyInstance): Promise<void> {
   app.post('/api/v1/attendance/check-in', { preHandler: requireTeacher }, async (request, reply) => {
@@ -270,13 +289,17 @@ export default async function attendanceController(app: FastifyInstance): Promis
     }
   });
 
-  app.get('/api/v1/attendance/teacher-compliance', { preHandler: requireDirector }, async (request, reply) => {
+  app.get('/api/v1/attendance/teacher-compliance', { preHandler: requireTeacherOrDirector }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const query = monthQuerySchema.parse(request.query ?? {});
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
         const service = buildAttendanceService(tenantDb);
-        return service.getTeacherCompliance({ month: query.month });
+        return service.getTeacherCompliance({
+          month: query.month,
+          role: claims.role,
+          userId: claims.sub,
+        });
       });
       return reply.send(result);
     } catch (error) {

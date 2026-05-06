@@ -602,7 +602,11 @@ export class AttendanceRepository {
     return row;
   }
 
-  async listTeacherCompliance(monthStart: string, monthEnd: string): Promise<TeacherComplianceRow[]> {
+  async listTeacherCompliance(params: {
+    monthStart: string;
+    monthEnd: string;
+    teacherId?: string;
+  }): Promise<TeacherComplianceRow[]> {
     await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<TeacherComplianceRow>(sql`
@@ -613,7 +617,8 @@ export class AttendanceRepository {
         total_checkouts,
         compliance_rate
       FROM teacher_scan_compliance
-      WHERE month = ${monthStart}::date
+      WHERE month = ${params.monthStart}::date
+        AND (${params.teacherId ?? null}::uuid IS NULL OR teacher_id = ${params.teacherId ?? null}::uuid)
       UNION ALL
       SELECT
         t.id::text AS teacher_id,
@@ -623,12 +628,13 @@ export class AttendanceRepository {
         0::numeric AS compliance_rate
       FROM teachers t
       INNER JOIN users u ON u.id = t.user_id
-      WHERE NOT EXISTS (
+      WHERE (${params.teacherId ?? null}::uuid IS NULL OR t.id = ${params.teacherId ?? null}::uuid)
+        AND NOT EXISTS (
         SELECT 1
         FROM attendances_teacher at
         WHERE at.teacher_id = t.id
-          AND at.created_at >= ${monthStart}::date
-          AND at.created_at < (${monthEnd}::date + INTERVAL '1 day')
+          AND at.date >= ${params.monthStart}::date
+          AND at.date < (${params.monthEnd}::date + INTERVAL '1 day')
       )
       ORDER BY compliance_rate DESC, teacher_name ASC
     `);

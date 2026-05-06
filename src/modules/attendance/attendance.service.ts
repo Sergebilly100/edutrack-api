@@ -675,7 +675,7 @@ export class AttendanceService {
     });
   }
 
-  async getTeacherCompliance(input: { month: string }): Promise<
+  async getTeacherCompliance(input: { month: string; role?: string; userId?: string }): Promise<
     Array<{
       teacherId: string;
       teacherName: string;
@@ -686,7 +686,23 @@ export class AttendanceService {
     }>
   > {
     const { monthStart, monthEnd } = monthBoundsFromDate(`${input.month}-01`);
-    const rows = await this.repository.listTeacherCompliance(monthStart, monthEnd);
+    let teacherId: string | undefined;
+    if (input.role === 'teacher') {
+      if (!input.userId) {
+        throw new AttendanceModuleError('Unauthorized', 401, 'UNAUTHORIZED');
+      }
+      const teacher = await this.repository.findTeacherByUserId(input.userId);
+      if (!teacher) {
+        throw new AttendanceModuleError('Teacher profile not found', 404, 'TEACHER_NOT_FOUND');
+      }
+      teacherId = teacher.id;
+    }
+
+    const rows = await this.repository.listTeacherCompliance({
+      monthStart,
+      monthEnd,
+      teacherId,
+    });
     return rows.map((row, index) => ({
       teacherId: row.teacher_id,
       teacherName: row.teacher_name,
