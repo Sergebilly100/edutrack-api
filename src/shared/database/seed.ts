@@ -994,6 +994,42 @@ const main = async (): Promise<void> => {
           AND schedule_id = ${unmarkedA.id}
           AND date = ${todayDate}
       `);
+
+      await tx.execute(sql`
+        UPDATE attendances_teacher
+        SET
+          geo_status = 'suspicious',
+          checkin_distance = 147,
+          actual_minutes = 60,
+          checked_out_at = ${`${todayDate}T${addMinutesToTime(presentA.slot_start.slice(0, 5), 60)}:00.000Z`},
+          validation_status = 'pending',
+          validation_reason = 'Seed validation GPS suspect',
+          validated_hours = NULL,
+          validated_by = NULL,
+          validated_at = NULL,
+          note = 'Présence seed à valider: GPS suspect'
+        WHERE teacher_id = ${presentA.teacher_id}
+          AND schedule_id = ${presentA.id}
+          AND date = ${todayDate}
+      `);
+
+      await tx.execute(sql`
+        UPDATE attendances_teacher
+        SET
+          geo_status = 'verified',
+          checkin_distance = 12,
+          actual_minutes = 38,
+          checked_out_at = ${`${todayDate}T${addMinutesToTime(presentB.slot_start.slice(0, 5), 38)}:00.000Z`},
+          validation_status = 'pending',
+          validation_reason = 'Seed validation heures courtes',
+          validated_hours = NULL,
+          validated_by = NULL,
+          validated_at = NULL,
+          note = 'Présence seed à valider: heures courtes'
+        WHERE teacher_id = ${presentB.teacher_id}
+          AND schedule_id = ${presentB.id}
+          AND date = ${todayDate}
+      `);
     }
 
     console.info('[seed] Inserting student attendances (past 2 weeks)...');
@@ -1056,6 +1092,9 @@ const main = async (): Promise<void> => {
       commission_pct,
       sms_cap_per_student,
       sms_unit_price_fcfa,
+      use_real_hours,
+      geo_check_enabled,
+      checkout_tolerance_minutes,
       activated_at,
       activated_by
     )
@@ -1065,6 +1104,9 @@ const main = async (): Promise<void> => {
       15.00,
       60,
       1000,
+      true,
+      true,
+      5,
       NOW(),
       ${superAdminIdForSmsFeature}
     )
@@ -1074,6 +1116,9 @@ const main = async (): Promise<void> => {
       commission_pct = EXCLUDED.commission_pct,
       sms_cap_per_student = EXCLUDED.sms_cap_per_student,
       sms_unit_price_fcfa = EXCLUDED.sms_unit_price_fcfa,
+      use_real_hours = EXCLUDED.use_real_hours,
+      geo_check_enabled = EXCLUDED.geo_check_enabled,
+      checkout_tolerance_minutes = EXCLUDED.checkout_tolerance_minutes,
       activated_at = EXCLUDED.activated_at,
       activated_by = EXCLUDED.activated_by,
       updated_at = NOW()

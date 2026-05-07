@@ -19,6 +19,9 @@ type PublicFeatureRow = {
   sms_cap_per_student: number;
   commission_pct: string | number;
   sms_unit_price_fcfa: number | null;
+  use_real_hours: boolean;
+  geo_check_enabled: boolean;
+  checkout_tolerance_minutes: number;
 };
 
 type ParentListRow = {
@@ -176,7 +179,10 @@ export class SubscriptionsRepository {
           COALESCE(monetize_parent_alerts, false) AS monetize_parent_alerts,
           sms_cap_per_student,
           commission_pct,
-          sms_unit_price_fcfa
+          sms_unit_price_fcfa,
+          COALESCE(use_real_hours, false) AS use_real_hours,
+          COALESCE(geo_check_enabled, false) AS geo_check_enabled,
+          COALESCE(checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
         FROM public.school_sms_features
         WHERE tenant_id = ${tenantId}::uuid
         LIMIT 1
@@ -186,7 +192,7 @@ export class SubscriptionsRepository {
       if ((error as { cause?: { code?: string }; code?: string }).cause?.code !== '42703') {
         throw error;
       }
-      const fallback = await publicDb.execute<Omit<PublicFeatureRow, 'monetize_parent_alerts'>>(sql`
+      const fallback = await publicDb.execute<Omit<PublicFeatureRow, 'monetize_parent_alerts' | 'use_real_hours' | 'geo_check_enabled' | 'checkout_tolerance_minutes'>>(sql`
         SELECT
           tenant_id::text,
           is_enabled,
@@ -198,7 +204,15 @@ export class SubscriptionsRepository {
         LIMIT 1
       `);
       const row = fallback.rows[0];
-      return row ? { ...row, monetize_parent_alerts: false } : null;
+      return row
+        ? {
+            ...row,
+            monetize_parent_alerts: false,
+            use_real_hours: false,
+            geo_check_enabled: false,
+            checkout_tolerance_minutes: 5,
+          }
+        : null;
     }
   }
 
@@ -232,7 +246,10 @@ export class SubscriptionsRepository {
         is_enabled,
         sms_cap_per_student,
         commission_pct,
-        sms_unit_price_fcfa
+        sms_unit_price_fcfa,
+        COALESCE(use_real_hours, false) AS use_real_hours,
+        COALESCE(geo_check_enabled, false) AS geo_check_enabled,
+        COALESCE(checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
     `);
 
     const row = result.rows[0];

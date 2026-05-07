@@ -5,7 +5,7 @@ import { ZodError } from 'zod';
 import { db as publicDb, withTenantSchema } from '../../shared/database/db.js';
 import {
   requireDirector,
-  requireDirectorOrSecretary,
+  requirePermission,
 } from '../../shared/middleware/auth.middleware.js';
 import { ValidationModuleError, buildValidationsService } from './validations.service.js';
 import {
@@ -49,7 +49,7 @@ const handleError = (
 };
 
 export default async function validationsController(app: FastifyInstance): Promise<void> {
-  app.get('/api/v1/validations/pending', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.get('/api/v1/validations/pending', { preHandler: requirePermission('validations.view') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
@@ -62,7 +62,7 @@ export default async function validationsController(app: FastifyInstance): Promi
     }
   });
 
-  app.get('/api/v1/validations/pending/count', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.get('/api/v1/validations/pending/count', { preHandler: requirePermission('validations.view') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
@@ -75,7 +75,7 @@ export default async function validationsController(app: FastifyInstance): Promi
     }
   });
 
-  app.patch('/api/v1/validations/:attendanceId/approve', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.patch('/api/v1/validations/:attendanceId/approve', { preHandler: requirePermission('validations.approve') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const params = attendanceIdParamsSchema.parse(request.params ?? {});
@@ -101,7 +101,7 @@ export default async function validationsController(app: FastifyInstance): Promi
     }
   });
 
-  app.patch('/api/v1/validations/:attendanceId/reject', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.patch('/api/v1/validations/:attendanceId/reject', { preHandler: requirePermission('validations.reject') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const params = attendanceIdParamsSchema.parse(request.params ?? {});

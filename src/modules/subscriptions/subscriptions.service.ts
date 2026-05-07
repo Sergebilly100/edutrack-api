@@ -372,6 +372,9 @@ export class SubscriptionsService {
       monetize_parent_alerts: feature?.monetize_parent_alerts ?? false,
       commission_pct: EDUTRACK_COMMISSION_PCT,
       sms_unit_price_fcfa: feature?.sms_unit_price_fcfa ?? null,
+      use_real_hours: feature?.use_real_hours ?? false,
+      geo_check_enabled: feature?.geo_check_enabled ?? false,
+      checkout_tolerance_minutes: feature?.checkout_tolerance_minutes ?? 5,
     };
   }
 
@@ -390,6 +393,9 @@ export class SubscriptionsService {
       monetize_parent_alerts: feature.monetize_parent_alerts,
       commission_pct: EDUTRACK_COMMISSION_PCT,
       sms_unit_price_fcfa: feature.sms_unit_price_fcfa,
+      use_real_hours: feature.use_real_hours,
+      geo_check_enabled: feature.geo_check_enabled,
+      checkout_tolerance_minutes: feature.checkout_tolerance_minutes,
     };
   }
 
