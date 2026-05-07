@@ -157,6 +157,7 @@ type DirectorHistoryDetailRow = {
 type FeatureFlagsRow = {
   use_real_hours: boolean;
   geo_check_enabled: boolean;
+  checkout_tolerance_minutes: number;
 };
 
 type TeacherComplianceRow = {
@@ -385,6 +386,7 @@ export class AttendanceRepository {
     checkinAccuracy?: number | null;
     checkinDistance?: number | null;
     geoStatus?: 'verified' | 'suspicious' | 'unavailable' | 'not_checked';
+    validationStatus?: 'not_required' | 'pending' | 'approved' | 'rejected';
   }): Promise<AttendanceWriteRow> {
     await ensureTenantRealHoursInfrastructure(this.db);
 
@@ -401,6 +403,7 @@ export class AttendanceRepository {
         checkin_accuracy,
         checkin_distance,
         geo_status,
+        validation_status,
         room_mismatch,
         qr_alert_sent
       )
@@ -416,6 +419,7 @@ export class AttendanceRepository {
         ${params.checkinAccuracy ?? null}::numeric,
         ${params.checkinDistance ?? null}::numeric,
         ${params.geoStatus ?? 'not_checked'},
+        ${params.validationStatus ?? 'not_required'}::attendance_validation_status,
         false,
         false
       )
@@ -428,7 +432,8 @@ export class AttendanceRepository {
         checkin_longitude = EXCLUDED.checkin_longitude,
         checkin_accuracy = EXCLUDED.checkin_accuracy,
         checkin_distance = EXCLUDED.checkin_distance,
-        geo_status = EXCLUDED.geo_status
+        geo_status = EXCLUDED.geo_status,
+        validation_status = EXCLUDED.validation_status
       RETURNING id, status, late_minutes, checked_in_at::text, checked_out_at::text
     `);
 
@@ -553,14 +558,19 @@ export class AttendanceRepository {
     const result = await this.db.execute<FeatureFlagsRow>(sql`
       SELECT
         COALESCE(f.use_real_hours, false) AS use_real_hours,
-        COALESCE(f.geo_check_enabled, false) AS geo_check_enabled
+        COALESCE(f.geo_check_enabled, false) AS geo_check_enabled,
+        COALESCE(f.checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
       FROM public.tenants t
       LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
       WHERE t.schema_name = ${schemaName}
       LIMIT 1
     `);
 
-    return getRows(result)[0] ?? { use_real_hours: false, geo_check_enabled: false };
+    return getRows(result)[0] ?? {
+      use_real_hours: false,
+      geo_check_enabled: false,
+      checkout_tolerance_minutes: 5,
+    };
   }
 
   async checkOut(params: {
@@ -573,6 +583,8 @@ export class AttendanceRepository {
     checkoutLongitude?: number | null;
     checkoutAccuracy?: number | null;
     checkoutGeoStatus: 'verified' | 'suspicious' | 'unavailable' | 'not_checked';
+    validationStatus: 'not_required' | 'pending' | 'approved' | 'rejected';
+    validatedHours?: number | null;
   }): Promise<{ actual_minutes: number; checkout_geo_status: string }> {
     await ensureTenantRealHoursInfrastructure(this.db);
 
@@ -585,6 +597,8 @@ export class AttendanceRepository {
         checkout_longitude = ${params.checkoutLongitude ?? null}::numeric,
         checkout_accuracy = ${params.checkoutAccuracy ?? null}::numeric,
         checkout_geo_status = ${params.checkoutGeoStatus},
+        validation_status = ${params.validationStatus}::attendance_validation_status,
+        validated_hours = ${params.validatedHours ?? null}::numeric,
         room_scan_end_at = COALESCE(room_scan_end_at, ${params.checkedOutAtIso}::timestamptz)
       WHERE teacher_id = ${params.teacherId}
         AND schedule_id = ${params.scheduleId}
@@ -694,6 +708,55 @@ export class AttendanceRepository {
     `);
   }
 
+  async logQrInvalidAlert(params: {
+    teacherId: string;
+    teacherName: string;
+    qrToken: string;
+    timestamp: string;
+  }): Promise<void> {
+    const result = await this.db.execute<{
+      director_phone: string | null;
+      director_email: string | null;
+    }>(sql`
+      SELECT u.phone AS director_phone, u.email AS director_email
+      FROM users u
+      WHERE u.role = 'director'
+        AND u.is_active = true
+        AND (u.phone IS NOT NULL OR u.email IS NOT NULL)
+      ORDER BY u.created_at ASC
+      LIMIT 1
+    `);
+    const director = getRows(result)[0];
+    const message = `[EduTrack] ${params.teacherName} a tenté de scanner un QR inconnu à ${params.timestamp}. Accès refusé.`;
+
+    await this.db.execute(sql`
+      INSERT INTO notifications_log (
+        type,
+        channel,
+        recipient_phone,
+        recipient_email,
+        message,
+        status,
+        related_id,
+        metadata
+      )
+      VALUES (
+        'qr_invalid_alert',
+        'sms',
+        ${director?.director_phone ?? ''},
+        ${director?.director_email ?? null},
+        ${message},
+        'queued',
+        ${params.teacherId}::uuid,
+        ${JSON.stringify({
+          teacherId: params.teacherId,
+          qrToken: params.qrToken,
+          timestamp: params.timestamp,
+        })}::jsonb
+      )
+    `);
+  }
+
   async recomputeTeacherSalaryForMonth(params: {
     teacherId: string;
     monthStart: string;
@@ -714,6 +777,8 @@ export class AttendanceRepository {
           COALESCE(
             SUM(
               CASE
+                WHEN at.validation_status = 'approved' THEN COALESCE(at.validated_hours, 0)
+                WHEN at.validation_status IN ('pending', 'rejected') THEN 0
                 WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
                   AND at.actual_minutes IS NOT NULL
                   THEN at.actual_minutes / 60.0

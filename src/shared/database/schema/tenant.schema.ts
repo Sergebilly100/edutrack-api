@@ -42,13 +42,22 @@ export const attendanceStudentStatusEnum = tenant.enum('attendance_student_statu
   'excused',
 ]);
 
+export const attendanceValidationStatusEnum = tenant.enum('attendance_validation_status', [
+  'not_required',
+  'pending',
+  'approved',
+  'rejected',
+]);
+
 export const notificationTypeEnum = tenant.enum('notification_type', [
   'teacher_absent_director',
   'teacher_late_director',
   'teacher_qr_mismatch',
   'teacher_qr_missing_scan',
   'teacher_qr_scan_out_of_time',
+  'qr_invalid_alert',
   'student_absent_parent',
+  'attendance_rejected',
   'subscription_expiry_alert',
   'payment_reminder',
   'custom',
@@ -303,6 +312,13 @@ export const attendancesTeacher = tenant.table(
     }),
     roomMismatch: boolean('room_mismatch').notNull().default(false),
     qrAlertSent: boolean('qr_alert_sent').notNull().default(false),
+    validationStatus: attendanceValidationStatusEnum('validation_status')
+      .notNull()
+      .default('not_required'),
+    validationReason: text('validation_reason'),
+    validatedBy: uuid('validated_by').references(() => users.id),
+    validatedAt: timestamp('validated_at', { withTimezone: true, mode: 'date' }),
+    validatedHours: numeric('validated_hours', { precision: 5, scale: 2 }),
     markedBy: uuid('marked_by').references(() => users.id),
     syncedAt: timestamp('synced_at', { withTimezone: true, mode: 'date' }),
     note: text('note'),
@@ -369,9 +385,11 @@ export const notificationsLog = tenant.table(
     id: uuid('id').defaultRandom().primaryKey(),
     type: notificationTypeEnum('type').notNull(),
     channel: varchar('channel', { length: 10 }).notNull().default('sms'),
+    recipientId: uuid('recipient_id'),
     recipientPhone: varchar('recipient_phone', { length: 20 }).notNull(),
     recipientEmail: varchar('recipient_email', { length: 255 }),
     message: text('message').notNull(),
+    metadata: jsonb('metadata'),
     status: notificationStatusEnum('status').notNull().default('queued'),
     providerRef: varchar('provider_ref', { length: 255 }),
     relatedId: uuid('related_id'),

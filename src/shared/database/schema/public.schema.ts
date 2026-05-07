@@ -177,6 +177,7 @@ export const schoolSmsFeatures = pgTable(
     smsUnitPriceFcfa: integer('sms_unit_price_fcfa'),
     useRealHours: boolean('use_real_hours').notNull().default(false),
     geoCheckEnabled: boolean('geo_check_enabled').notNull().default(false),
+    checkoutToleranceMinutes: integer('checkout_tolerance_minutes').notNull().default(5),
     activatedAt: timestamp('activated_at', { withTimezone: true, mode: 'date' }),
     activatedBy: uuid('activated_by'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
@@ -191,6 +192,10 @@ export const schoolSmsFeatures = pgTable(
     schoolSmsFeaturesSmsCapNonNegativeCheck: check(
       'school_sms_features_sms_cap_non_negative_check',
       sql`${table.smsCapPerStudent} >= 0`
+    ),
+    schoolSmsFeaturesCheckoutToleranceRangeCheck: check(
+      'school_sms_features_checkout_tolerance_range_check',
+      sql`${table.checkoutToleranceMinutes} >= 0 AND ${table.checkoutToleranceMinutes} <= 30`
     ),
   })
 );

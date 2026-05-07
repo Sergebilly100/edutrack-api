@@ -4,7 +4,7 @@ import { ZodError, z } from 'zod';
 import { randomUUID } from 'node:crypto';
 
 import { db as publicDb, withTenantSchema } from '../../shared/database/db.js';
-import { requireDirector, requirePermission } from '../../shared/middleware/auth.middleware.js';
+import { requireDirector, requirePermission, requireTeacher } from '../../shared/middleware/auth.middleware.js';
 import type { NotificationType } from '../../shared/types/index.js';
 
 import { defaultRepository } from './notifications.repository.js';
@@ -15,7 +15,9 @@ const notificationTypes: NotificationType[] = [
   'teacher_qr_mismatch',
   'teacher_qr_missing_scan',
   'teacher_qr_scan_out_of_time',
+  'qr_invalid_alert',
   'student_absent_parent',
+  'attendance_rejected',
   'subscription_expiry_alert',
   'payment_reminder',
   'custom',
@@ -309,6 +311,33 @@ export default async function notificationsController(app: FastifyInstance): Pro
           limit: query.limit,
           types: query.types,
         });
+      });
+
+      return reply.send(data);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.get('/api/v1/notifications/me', { preHandler: requireTeacher }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const data = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const result = await tenantDb.execute<{
+          id: string;
+          type: string;
+          message: string;
+          created_at: string;
+          metadata: unknown;
+        }>(sql`
+          SELECT id::text, type::text, message, created_at::text, metadata
+          FROM notifications_log
+          WHERE recipient_id = ${claims.sub}::uuid
+            AND type = 'attendance_rejected'
+          ORDER BY created_at DESC
+          LIMIT 10
+        `);
+        return result.rows;
       });
 
       return reply.send(data);

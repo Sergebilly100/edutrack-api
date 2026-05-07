@@ -38,6 +38,7 @@ import {
 import studentsController from './modules/students/students.controller.js';
 import scheduleController from './modules/schedule/schedule.controller.js';
 import teachersController from './modules/teachers/teachers.controller.js';
+import validationsController from './modules/validations/validations.controller.js';
 import { db } from './shared/database/db.js';
 
 const app = Fastify({ logger: true });
@@ -153,6 +154,7 @@ app.register(notificationsController);
 app.register(billingController, { billingPdfQueue })
 app.register(studentsController);
 app.register(teachersController);
+app.register(validationsController);
 app.register(scheduleController);
 app.register(roomsController);
 app.register(documentsController);
@@ -201,6 +203,17 @@ const start = async (): Promise<void> => {
       {
         name: 'teacher-daily-summary-all',
         data: { type: 'teacher-daily-summary-all' },
+      }
+    );
+    await notificationsQueue.upsertJobScheduler(
+      'validation-daily-summary-9h',
+      {
+        pattern: '0 9 * * 1-6',
+        tz: 'Africa/Abidjan',
+      },
+      {
+        name: 'validation-daily-summary-all',
+        data: { type: 'validation-daily-summary-all' },
       }
     );
     await app.listen({ port, host: '0.0.0.0' });

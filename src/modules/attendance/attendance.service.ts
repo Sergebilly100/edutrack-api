@@ -118,6 +118,7 @@ export class AttendanceService {
       roomLongitude: schedule.plannedRoomLongitude,
       roomRadius: schedule.plannedRoomGeoRadius,
     });
+    const validationStatus = geo.status === 'suspicious' ? 'pending' : 'not_required';
 
     await this.repository.upsertCheckIn({
       teacherId: teacher.id,
@@ -131,6 +132,7 @@ export class AttendanceService {
       checkinAccuracy: flags.geo_check_enabled ? input.accuracy ?? null : null,
       checkinDistance: geo.distance,
       geoStatus: geo.status,
+      validationStatus,
     });
 
     if (status.status !== 'absent') {
@@ -227,6 +229,19 @@ export class AttendanceService {
       roomLongitude: schedule.plannedRoomLongitude,
       roomRadius: schedule.plannedRoomGeoRadius,
     });
+    const slotStart = toSlotDateTime(date, schedule.slotStartTime);
+    const slotEnd = toSlotDateTime(date, schedule.slotEndTime);
+    const scheduleDurationMinutes = Math.max(
+      0,
+      Math.floor((slotEnd.getTime() - slotStart.getTime()) / 60000)
+    );
+    const fullHours = Math.round((scheduleDurationMinutes / 60) * 100) / 100;
+    const validationStatus =
+      flags.use_real_hours && actualMinutes < scheduleDurationMinutes - flags.checkout_tolerance_minutes
+        ? 'pending'
+        : 'not_required';
+    const validatedHours =
+      flags.use_real_hours && validationStatus === 'not_required' ? fullHours : null;
 
     await this.repository.checkOut({
       teacherId: teacher.id,
@@ -238,6 +253,8 @@ export class AttendanceService {
       checkoutLongitude: flags.geo_check_enabled ? input.longitude ?? null : null,
       checkoutAccuracy: flags.geo_check_enabled ? input.accuracy ?? null : null,
       checkoutGeoStatus: geo.status,
+      validationStatus,
+      validatedHours,
     });
 
     const { monthStart, monthEnd } = monthBoundsFromDate(date);
@@ -280,6 +297,19 @@ export class AttendanceService {
     const scannedAt = new Date();
 
     const scannedRoom = await this.repository.findRoomByToken(input.qrToken);
+    if (!scannedRoom) {
+      await this.repository.logQrInvalidAlert({
+        teacherId: teacher.id,
+        teacherName: teacher.name,
+        qrToken: input.qrToken,
+        timestamp: toIso(scannedAt),
+      });
+      throw new AttendanceModuleError(
+        'QR code non reconnu pour cet établissement',
+        400,
+        'QR_NOT_IN_SCHOOL'
+      );
+    }
 
     const validation = validateRoomScan({
       scannedRoomToken: input.qrToken,

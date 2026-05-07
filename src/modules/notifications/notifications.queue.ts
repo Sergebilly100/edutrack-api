@@ -74,10 +74,16 @@ export type TeacherDailySummaryJobData = {
   date?: string;
 };
 
+export type ValidationDailySummaryJobData = {
+  type: 'validation-daily-summary-all';
+  date?: string;
+};
+
 export type NotificationJobData =
   | NotificationSmsJobData
   | NotificationEmailJobData
-  | TeacherDailySummaryJobData;
+  | TeacherDailySummaryJobData
+  | ValidationDailySummaryJobData;
 
 type NotificationsWorkerDeps = {
   repository: NotificationsRepository;
@@ -230,12 +236,80 @@ const processTeacherDailySummaryJob = async (
   }
 };
 
+const processValidationDailySummaryJob = async (
+  deps: NotificationsWorkerDeps
+): Promise<void> => {
+  const tenants = await listActiveTenantSchemas();
+
+  for (const tenant of tenants) {
+    await withTenantSchema(tenant.schemaName, async (tenantDb) => {
+      const result = await tenantDb.execute<{
+        director_phone: string | null;
+        director_email: string | null;
+        pending_count: number;
+      }>(sql`
+        SELECT
+          d.phone AS director_phone,
+          d.email AS director_email,
+          COUNT(at.id)::int AS pending_count
+        FROM attendances_teacher at
+        LEFT JOIN LATERAL (
+          SELECT u.phone, u.email
+          FROM users u
+          WHERE u.role = 'director'
+            AND u.is_active = true
+            AND (u.phone IS NOT NULL OR u.email IS NOT NULL)
+          ORDER BY u.created_at ASC
+          LIMIT 1
+        ) d ON true
+        WHERE at.validation_status = 'pending'
+        GROUP BY d.phone, d.email
+      `);
+      const row = result.rows[0];
+      const pendingCount = Number(row?.pending_count ?? 0);
+      if (pendingCount <= 0 || (!row?.director_phone && !row?.director_email)) {
+        return;
+      }
+
+      const message = `[EduTrack] ${pendingCount} présence(s) en attente de validation. Consultez l'app.`;
+      const tasks: Array<Promise<void>> = [];
+      if (row.director_phone) {
+        tasks.push(
+          deps.smsSender({
+            to: row.director_phone,
+            message,
+            type: 'custom',
+            schemaName: tenant.schemaName,
+          }).then(() => undefined)
+        );
+      }
+      if (row.director_email) {
+        tasks.push(
+          deps.emailSender({
+            to: row.director_email,
+            subject: '[EduTrack] Validations horaires en attente',
+            text: message,
+            type: 'custom',
+            schemaName: tenant.schemaName,
+          }).then(() => undefined)
+        );
+      }
+      await Promise.all(tasks);
+    });
+  }
+};
+
 export const processNotificationJob = async (
   data: NotificationJobData,
   deps: NotificationsWorkerDeps
 ): Promise<void> => {
   if (data.type === 'teacher-daily-summary-all') {
     await processTeacherDailySummaryJob(data, deps);
+    return;
+  }
+
+  if (data.type === 'validation-daily-summary-all') {
+    await processValidationDailySummaryJob(deps);
     return;
   }
 

@@ -46,11 +46,11 @@ type NotificationsServiceDeps = {
     callback: (tenantDb: TenantDbLike) => Promise<T>
   ) => Promise<T>;
   eventBus: {
-    on: <K extends keyof Pick<EventMap, 'student.absent' | 'subscription.expired'>>(
+    on: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'student.absent' | 'subscription.expired'>>(
       event: K,
       handler: (payload: EventMap[K]) => void
     ) => void;
-    off: <K extends keyof Pick<EventMap, 'student.absent' | 'subscription.expired'>>(
+    off: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'student.absent' | 'subscription.expired'>>(
       event: K,
       handler: (payload: EventMap[K]) => void
     ) => void;
@@ -702,11 +702,19 @@ export class NotificationsService {
   };
 
   start(): void {
+    if (this.deps.eventBus.on === defaultOn) {
+      this.deps.eventBus.on('teacher.late', this.teacherLateListener);
+      this.deps.eventBus.on('teacher.qr_alert', this.teacherQrAlertListener);
+    }
     this.deps.eventBus.on('student.absent', this.studentAbsentListener);
     this.deps.eventBus.on('subscription.expired', this.subscriptionExpiredListener);
   }
 
   stop(): void {
+    if (this.deps.eventBus.off === defaultOff) {
+      this.deps.eventBus.off('teacher.late', this.teacherLateListener);
+      this.deps.eventBus.off('teacher.qr_alert', this.teacherQrAlertListener);
+    }
     this.deps.eventBus.off('student.absent', this.studentAbsentListener);
     this.deps.eventBus.off('subscription.expired', this.subscriptionExpiredListener);
   }

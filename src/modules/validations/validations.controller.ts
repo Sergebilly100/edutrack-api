@@ -1,0 +1,161 @@
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { sql } from 'drizzle-orm';
+import { ZodError } from 'zod';
+
+import { db as publicDb, withTenantSchema } from '../../shared/database/db.js';
+import {
+  requireDirector,
+  requireDirectorOrSecretary,
+} from '../../shared/middleware/auth.middleware.js';
+import { ValidationModuleError, buildValidationsService } from './validations.service.js';
+import {
+  approveValidationBodySchema,
+  attendanceIdParamsSchema,
+  realHoursConfigBodySchema,
+  rejectValidationBodySchema,
+} from './validations.types.js';
+
+const handleError = (
+  request: FastifyRequest,
+  reply: FastifyReply,
+  error: unknown
+): FastifyReply => {
+  if (error instanceof ZodError) {
+    return reply.code(400).send({
+      error: 'Validation error',
+      code: 'BAD_REQUEST',
+      statusCode: 400,
+    });
+  }
+
+  if (error instanceof ValidationModuleError) {
+    return reply.code(error.statusCode).send({
+      error: error.message,
+      code: error.code,
+      statusCode: error.statusCode,
+    });
+  }
+
+  request.log.error(
+    { err: error instanceof Error ? error.message : 'unknown error' },
+    '[validations] unhandled error'
+  );
+
+  return reply.code(500).send({
+    error: 'Internal server error',
+    code: 'INTERNAL_ERROR',
+    statusCode: 500,
+  });
+};
+
+export default async function validationsController(app: FastifyInstance): Promise<void> {
+  app.get('/api/v1/validations/pending', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildValidationsService(tenantDb);
+        return service.listPending();
+      });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.get('/api/v1/validations/pending/count', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildValidationsService(tenantDb);
+        return service.countPending();
+      });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.patch('/api/v1/validations/:attendanceId/approve', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const params = attendanceIdParamsSchema.parse(request.params ?? {});
+      const body = approveValidationBodySchema.parse(request.body ?? {});
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildValidationsService(tenantDb);
+        return service.approve(
+          {
+            attendanceId: params.attendanceId,
+            validatedHours: body.validated_hours,
+          },
+          {
+            schemaName: claims.schemaName,
+            userId: claims.sub,
+            role: claims.role,
+          }
+        );
+      });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.patch('/api/v1/validations/:attendanceId/reject', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const params = attendanceIdParamsSchema.parse(request.params ?? {});
+      const body = rejectValidationBodySchema.parse(request.body ?? {});
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildValidationsService(tenantDb);
+        return service.reject(
+          {
+            attendanceId: params.attendanceId,
+            reason: body.reason,
+          },
+          {
+            schemaName: claims.schemaName,
+            userId: claims.sub,
+            role: claims.role,
+          }
+        );
+      });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.patch('/api/v1/school/settings/real-hours-config', { preHandler: requireDirector }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const body = realHoursConfigBodySchema.parse(request.body ?? {});
+      const result = await publicDb.execute<{ use_real_hours: boolean }>(sql`
+        SELECT COALESCE(f.use_real_hours, false) AS use_real_hours
+        FROM public.tenants t
+        LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
+        WHERE t.schema_name = ${claims.schemaName}
+        LIMIT 1
+      `);
+      const useRealHours = result.rows[0]?.use_real_hours ?? false;
+      if (!useRealHours) {
+        return reply.code(400).send({
+          error: 'Real hours are disabled for this school',
+          code: 'REAL_HOURS_DISABLED',
+          statusCode: 400,
+        });
+      }
+
+      await publicDb.execute(sql`
+        UPDATE public.school_sms_features f
+        SET checkout_tolerance_minutes = ${body.checkoutToleranceMinutes}, updated_at = NOW()
+        FROM public.tenants t
+        WHERE f.tenant_id = t.id
+          AND t.schema_name = ${claims.schemaName}
+      `);
+
+      return reply.send({ success: true, checkoutToleranceMinutes: body.checkoutToleranceMinutes });
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+}

@@ -170,6 +170,8 @@ export class BillingRepository {
           COALESCE(
             SUM(
               CASE
+                WHEN at.validation_status = 'approved' THEN COALESCE(at.validated_hours, 0)
+                WHEN at.validation_status IN ('pending', 'rejected') THEN 0
                 WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
                   AND at.actual_minutes IS NOT NULL
                   THEN at.actual_minutes / 60.0
@@ -223,6 +225,8 @@ export class BillingRepository {
           COALESCE(
             SUM(
               CASE
+                WHEN at.validation_status = 'approved' THEN COALESCE(at.validated_hours, 0)
+                WHEN at.validation_status IN ('pending', 'rejected') THEN 0
                 WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
                   AND at.actual_minutes IS NOT NULL
                   THEN at.actual_minutes / 60.0
@@ -328,6 +332,8 @@ export class BillingRepository {
         at.checked_in_at::text,
         COALESCE(at.checked_out_at, at.room_scan_end_at)::text AS room_scan_end_at,
         CASE
+          WHEN at.validation_status = 'approved' THEN COALESCE(at.validated_hours, 0)::numeric(8,2)
+          WHEN at.validation_status IN ('pending', 'rejected') THEN 0::numeric(8,2)
           WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
             AND at.actual_minutes IS NOT NULL
             THEN (at.actual_minutes / 60.0)::numeric(8,2)

@@ -25,7 +25,19 @@ export const ensurePublicRealHoursInfrastructure = async (
   await db.execute(sql`
     ALTER TABLE public.school_sms_features
       ADD COLUMN IF NOT EXISTS use_real_hours boolean NOT NULL DEFAULT false,
-      ADD COLUMN IF NOT EXISTS geo_check_enabled boolean NOT NULL DEFAULT false
+      ADD COLUMN IF NOT EXISTS geo_check_enabled boolean NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS checkout_tolerance_minutes integer NOT NULL DEFAULT 5
+  `);
+
+  await db.execute(sql`
+    ALTER TABLE public.school_sms_features
+      DROP CONSTRAINT IF EXISTS school_sms_features_checkout_tolerance_range_check
+  `);
+
+  await db.execute(sql`
+    ALTER TABLE public.school_sms_features
+      ADD CONSTRAINT school_sms_features_checkout_tolerance_range_check
+      CHECK (checkout_tolerance_minutes >= 0 AND checkout_tolerance_minutes <= 30)
   `);
 
   publicReady = true;
@@ -43,6 +55,22 @@ export const ensureTenantRealHoursInfrastructure = async (
 
   if (!tenantSchemasReady.has(schemaName)) {
     await db.execute(sql`
+      DO $$ BEGIN
+        CREATE TYPE attendance_validation_status AS ENUM (
+          'not_required',
+          'pending',
+          'approved',
+          'rejected'
+        );
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$
+    `);
+
+    await db.execute(sql.raw(`
+      ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'qr_invalid_alert';
+      ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'attendance_rejected';
+    `));
+
+    await db.execute(sql`
       ALTER TABLE attendances_teacher
         ADD COLUMN IF NOT EXISTS checked_out_at timestamptz,
         ADD COLUMN IF NOT EXISTS actual_minutes integer,
@@ -54,7 +82,21 @@ export const ensureTenantRealHoursInfrastructure = async (
         ADD COLUMN IF NOT EXISTS checkout_latitude numeric(10,7),
         ADD COLUMN IF NOT EXISTS checkout_longitude numeric(10,7),
         ADD COLUMN IF NOT EXISTS checkout_accuracy numeric(6,2),
-        ADD COLUMN IF NOT EXISTS checkout_geo_status text DEFAULT 'not_checked'
+        ADD COLUMN IF NOT EXISTS checkout_geo_status text DEFAULT 'not_checked',
+        ADD COLUMN IF NOT EXISTS validation_status attendance_validation_status NOT NULL DEFAULT 'not_required',
+        ADD COLUMN IF NOT EXISTS validation_reason text,
+        ADD COLUMN IF NOT EXISTS validated_by uuid,
+        ADD COLUMN IF NOT EXISTS validated_at timestamptz,
+        ADD COLUMN IF NOT EXISTS validated_hours numeric(5,2)
+    `);
+
+    await db.execute(sql`
+      DO $$ BEGIN
+        ALTER TABLE attendances_teacher
+          ADD CONSTRAINT attendances_teacher_validated_by_users_id_fk
+          FOREIGN KEY (validated_by) REFERENCES users(id)
+          ON DELETE no action ON UPDATE no action;
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$
     `);
 
     await db.execute(sql`
@@ -62,6 +104,12 @@ export const ensureTenantRealHoursInfrastructure = async (
         ADD COLUMN IF NOT EXISTS latitude numeric(10,7),
         ADD COLUMN IF NOT EXISTS longitude numeric(10,7),
         ADD COLUMN IF NOT EXISTS geo_radius integer DEFAULT 100
+    `);
+
+    await db.execute(sql`
+      ALTER TABLE notifications_log
+        ADD COLUMN IF NOT EXISTS recipient_id uuid,
+        ADD COLUMN IF NOT EXISTS metadata jsonb
     `);
 
     tenantSchemasReady.add(schemaName);
@@ -109,6 +157,18 @@ export const ensureTenantRealHoursInfrastructure = async (
   await db.execute(sql`
     CREATE INDEX IF NOT EXISTS idx_att_teacher_compliance_teacher_created
       ON attendances_teacher (teacher_id, created_at)
+  `);
+
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_attendances_validation_status
+      ON attendances_teacher (validation_status)
+      WHERE validation_status = 'pending'
+  `);
+
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_attendances_geo_status
+      ON attendances_teacher (geo_status)
+      WHERE geo_status = 'suspicious'
   `);
 
 };

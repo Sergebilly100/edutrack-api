@@ -56,7 +56,9 @@ export type NotificationType =
   | 'teacher_qr_mismatch'
   | 'teacher_qr_missing_scan'
   | 'teacher_qr_scan_out_of_time'
+  | 'qr_invalid_alert'
   | 'student_absent_parent'
+  | 'attendance_rejected'
   | 'subscription_expiry_alert'
   | 'payment_reminder'
   | 'custom';
