@@ -4,6 +4,7 @@ import type {
   TeacherCheckedInPayload,
   TeacherLatePayload,
   TeacherQrAlertPayload,
+  TeacherQrInvalidPayload,
 } from '../../shared/events/events.types.js';
 
 export const emitTeacherCheckedIn = (payload: TeacherCheckedInPayload): void => {
@@ -16,6 +17,10 @@ export const emitTeacherLate = (payload: TeacherLatePayload): void => {
 
 export const emitTeacherQrAlert = (payload: TeacherQrAlertPayload): void => {
   emit('teacher.qr_alert', payload);
+};
+
+export const emitTeacherQrInvalid = (payload: TeacherQrInvalidPayload): void => {
+  emit('teacher.qr_invalid', payload);
 };
 
 export const emitStudentAbsent = (payload: StudentAbsentPayload): void => {

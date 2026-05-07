@@ -247,12 +247,34 @@ const processValidationDailySummaryJob = async (
         director_phone: string | null;
         director_email: string | null;
         pending_count: number;
+        pending_details: string | null;
       }>(sql`
         SELECT
           d.phone AS director_phone,
           d.email AS director_email,
-          COUNT(at.id)::int AS pending_count
+          COUNT(at.id)::int AS pending_count,
+          STRING_AGG(
+            CONCAT(
+              '- ',
+              u.name,
+              ' / ',
+              s.subject,
+              ' / ',
+              at.date::text,
+              ' / ',
+              CASE
+                WHEN at.geo_status = 'suspicious' THEN 'GPS suspect'
+                WHEN at.actual_minutes IS NOT NULL THEN CONCAT('Heures courtes: ', at.actual_minutes::int, ' min')
+                ELSE 'Validation requise'
+              END
+            ),
+            E'\n'
+            ORDER BY at.date DESC, u.name ASC
+          ) AS pending_details
         FROM attendances_teacher at
+        INNER JOIN teachers t ON t.id = at.teacher_id
+        INNER JOIN users u ON u.id = t.user_id
+        INNER JOIN schedules s ON s.id = at.schedule_id
         LEFT JOIN LATERAL (
           SELECT u.phone, u.email
           FROM users u
@@ -284,11 +306,12 @@ const processValidationDailySummaryJob = async (
         );
       }
       if (row.director_email) {
+        const emailText = `${message}\n\nValidations pendantes :\n${row.pending_details ?? '- Aucun détail disponible'}`;
         tasks.push(
           deps.emailSender({
             to: row.director_email,
             subject: '[EduTrack] Validations horaires en attente',
-            text: message,
+            text: emailText,
             type: 'custom',
             schemaName: tenant.schemaName,
           }).then(() => undefined)

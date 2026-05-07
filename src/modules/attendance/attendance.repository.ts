@@ -51,6 +51,8 @@ type ExistingTeacherAttendanceRow = {
   status: 'present' | 'absent' | 'late' | 'excused';
   checked_in_at: string | null;
   checked_out_at: string | null;
+  geo_status: 'verified' | 'suspicious' | 'unavailable' | 'not_checked' | null;
+  validation_status: 'not_required' | 'pending' | 'approved' | 'rejected';
 };
 
 type ActiveAttendanceRow = {
@@ -350,7 +352,9 @@ export class AttendanceRepository {
         id::text AS id,
         status::text AS status,
         checked_in_at::text AS checked_in_at,
-        checked_out_at::text AS checked_out_at
+        checked_out_at::text AS checked_out_at,
+        geo_status,
+        validation_status::text AS validation_status
       FROM attendances_teacher
       WHERE teacher_id = ${params.teacherId}
         AND schedule_id = ${params.scheduleId}
@@ -597,8 +601,16 @@ export class AttendanceRepository {
         checkout_longitude = ${params.checkoutLongitude ?? null}::numeric,
         checkout_accuracy = ${params.checkoutAccuracy ?? null}::numeric,
         checkout_geo_status = ${params.checkoutGeoStatus},
-        validation_status = ${params.validationStatus}::attendance_validation_status,
-        validated_hours = ${params.validatedHours ?? null}::numeric,
+        validation_status = CASE
+          WHEN validation_status = 'pending' AND geo_status = 'suspicious'
+            THEN validation_status
+          ELSE ${params.validationStatus}::attendance_validation_status
+        END,
+        validated_hours = CASE
+          WHEN validation_status = 'pending' AND geo_status = 'suspicious'
+            THEN validated_hours
+          ELSE ${params.validatedHours ?? null}::numeric
+        END,
         room_scan_end_at = COALESCE(room_scan_end_at, ${params.checkedOutAtIso}::timestamptz)
       WHERE teacher_id = ${params.teacherId}
         AND schedule_id = ${params.scheduleId}

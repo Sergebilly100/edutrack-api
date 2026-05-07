@@ -1,4 +1,5 @@
 import { ValidationsRepository } from './validations.repository.js';
+import { emit } from '../../shared/events/event-bus.js';
 import type { PendingValidationCount, PendingValidationGroups } from './validations.types.js';
 
 export class ValidationModuleError extends Error {
@@ -14,6 +15,7 @@ export class ValidationModuleError extends Error {
 
 type ServiceContext = {
   schemaName: string;
+  tenantId?: string;
   userId: string;
   role: string;
 };
@@ -78,6 +80,20 @@ export class ValidationsService {
     });
     await this.repository.insertRejectedTeacherNotification({
       context: before,
+      reason: input.reason,
+      validatedBy: context.userId,
+    });
+    emit('teacher.attendance_rejected', {
+      tenantId: context.tenantId ?? '',
+      schemaName: context.schemaName,
+      teacherId: before.teacher_id,
+      teacherUserId: before.teacher_user_id,
+      teacherName: before.teacher_name,
+      teacherPhone: before.teacher_phone,
+      teacherEmail: before.teacher_email,
+      attendanceId: before.attendance_id,
+      courseName: before.course_name,
+      date: before.date,
       reason: input.reason,
       validatedBy: context.userId,
     });

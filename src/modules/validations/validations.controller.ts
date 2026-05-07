@@ -89,6 +89,7 @@ export default async function validationsController(app: FastifyInstance): Promi
           },
           {
             schemaName: claims.schemaName,
+            tenantId: claims.tenantId,
             userId: claims.sub,
             role: claims.role,
           }
@@ -114,6 +115,7 @@ export default async function validationsController(app: FastifyInstance): Promi
           },
           {
             schemaName: claims.schemaName,
+            tenantId: claims.tenantId,
             userId: claims.sub,
             role: claims.role,
           }

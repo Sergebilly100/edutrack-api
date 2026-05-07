@@ -3,6 +3,7 @@ import {
   emitTeacherCheckedIn,
   emitTeacherLate,
   emitTeacherQrAlert,
+  emitTeacherQrInvalid,
 } from './attendance.events.js';
 import { AttendanceRepository } from './attendance.repository.js';
 import type { ActiveAttendanceItem, CheckInResult } from './attendance.types.js';
@@ -299,6 +300,14 @@ export class AttendanceService {
     const scannedRoom = await this.repository.findRoomByToken(input.qrToken);
     if (!scannedRoom) {
       await this.repository.logQrInvalidAlert({
+        teacherId: teacher.id,
+        teacherName: teacher.name,
+        qrToken: input.qrToken,
+        timestamp: toIso(scannedAt),
+      });
+      emitTeacherQrInvalid({
+        tenantId: context.schemaName,
+        schemaName: context.schemaName,
         teacherId: teacher.id,
         teacherName: teacher.name,
         qrToken: input.qrToken,

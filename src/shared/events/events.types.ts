@@ -27,6 +27,30 @@ export type TeacherQrAlertPayload = {
   roomMismatch: boolean;
 };
 
+export type TeacherQrInvalidPayload = {
+  tenantId: string;
+  schemaName: string;
+  teacherId: string;
+  teacherName: string;
+  qrToken: string;
+  timestamp: string;
+};
+
+export type TeacherAttendanceRejectedPayload = {
+  tenantId: string;
+  schemaName: string;
+  teacherId: string;
+  teacherUserId: string;
+  teacherName: string;
+  teacherPhone?: string | null;
+  teacherEmail?: string | null;
+  attendanceId: string;
+  courseName: string;
+  date: string;
+  reason: string;
+  validatedBy: string;
+};
+
 export type TeacherAbsentPayload = {
   tenantId: string;
   schemaName: string;
@@ -66,11 +90,15 @@ export type EventMap = {
   'teacher.checked_in': TeacherCheckedInPayload;
   'teacher.late': TeacherLatePayload;
   'teacher.qr_alert': TeacherQrAlertPayload;
+  'teacher.qr_invalid': TeacherQrInvalidPayload;
+  'teacher.attendance_rejected': TeacherAttendanceRejectedPayload;
   'teacher.absent': TeacherAbsentPayload;
   'teacher.*':
     | TeacherCheckedInPayload
     | TeacherLatePayload
     | TeacherQrAlertPayload
+    | TeacherQrInvalidPayload
+    | TeacherAttendanceRejectedPayload
     | TeacherAbsentPayload;
   'student.absent': StudentAbsentPayload;
   'subscription.expired': SubscriptionExpiredPayload;
