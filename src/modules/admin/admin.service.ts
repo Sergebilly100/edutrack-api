@@ -14,7 +14,6 @@ import {
   type RevenueMetricsResult,
   type RevenueSummaryResult,
   type SchoolDetailsResult,
-  type SchoolListItem,
   type SchoolListResult,
   type SchoolPaymentReminderResult,
   type SchoolUsersResult,
