@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError, z } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
-import { authenticateRequest, requireDirector, requireTeacher } from '../../shared/middleware/auth.middleware.js';
+import { requireDirector, requireTeacher, requireTeacherOrDirector } from '../../shared/middleware/auth.middleware.js';
 
 import { AttendanceModuleError, buildAttendanceService } from './attendance.service.js';
 import {
@@ -81,24 +81,6 @@ const geoReviewBodySchema = z.object({
   decision: z.enum(['validated', 'rejected']),
 });
 
-const requireTeacherOrDirector = async (
-  request: FastifyRequest,
-  reply: FastifyReply
-): Promise<void> => {
-  await authenticateRequest(request, reply);
-  if (reply.sent) {
-    return;
-  }
-
-  const role = request.claims?.role;
-  if (role !== 'teacher' && role !== 'director') {
-    reply.code(403).send({
-      error: 'Forbidden',
-      code: 'FORBIDDEN',
-      statusCode: 403,
-    });
-  }
-};
 
 export default async function attendanceController(app: FastifyInstance): Promise<void> {
   app.post('/api/v1/attendance/check-in', { preHandler: requireTeacher }, async (request, reply) => {

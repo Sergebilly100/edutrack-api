@@ -661,6 +661,7 @@ export class NotificationsService {
     smsQueue: Queue<NotificationJobData>;
     emailSender: EmailSender;
   };
+  private _started = false;
 
   constructor(deps: Partial<Omit<NotificationsServiceDeps, 'smsQueue'>> & {
     smsQueue: Queue<NotificationJobData>;
@@ -718,6 +719,8 @@ export class NotificationsService {
   };
 
   start(): void {
+    if (this._started) return;
+    this._started = true;
     if (this.deps.eventBus.on === defaultOn) {
       this.deps.eventBus.on('teacher.late', this.teacherLateListener);
       this.deps.eventBus.on('teacher.qr_alert', this.teacherQrAlertListener);
@@ -732,6 +735,7 @@ export class NotificationsService {
   }
 
   stop(): void {
+    this._started = false;
     if (this.deps.eventBus.off === defaultOff) {
       this.deps.eventBus.off('teacher.late', this.teacherLateListener);
       this.deps.eventBus.off('teacher.qr_alert', this.teacherQrAlertListener);

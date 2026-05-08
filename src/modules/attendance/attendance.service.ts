@@ -72,10 +72,16 @@ const resolveGeo = (input: {
   };
 };
 
-const monthBoundsFromDate = (date: string): { monthStart: string; monthEnd: string } => {
+export const monthBoundsFromDate = (date: string): { monthStart: string; monthEnd: string } => {
   const monthStart = `${date.slice(0, 7)}-01`;
   const [yearRaw, monthRaw] = date.slice(0, 7).split('-');
-  const end = new Date(Date.UTC(Number(yearRaw), Number(monthRaw), 0));
+  const m = Number(monthRaw);
+  const y = Number(yearRaw);
+  const end = new Date(Date.UTC(
+    m === 12 ? y + 1 : y,
+    m === 12 ? 0 : m,
+    0
+  ));
   return { monthStart, monthEnd: end.toISOString().slice(0, 10) };
 };
 
@@ -504,7 +510,7 @@ export class AttendanceService {
   }>> {
     const scheduleForWeek = await this.repository.getWeekScheduleForTeacher(userId, date);
     if (!scheduleForWeek) {
-      throw new AttendanceModuleError('Teacher Week schedule not found', 404, 'TEACHER_NOT_FOUND');
+      throw new AttendanceModuleError('No schedule found for this week', 404, 'SCHEDULE_NOT_FOUND');
     }
 
     return scheduleForWeek;
@@ -542,11 +548,12 @@ export class AttendanceService {
     }
 
     const allStudentIds = allStudents.map((s) => s.id);
+    const validatedAbsentIds = input.absentStudentIds.filter((id) => allStudentIds.includes(id));
 
     const result = await this.repository.bulkUpsertStudentAttendance({
       scheduleId: input.scheduleId,
       date: input.date,
-      absentStudentIds: input.absentStudentIds,
+      absentStudentIds: validatedAbsentIds,
       markedByUserId: context.userId,
       allStudentIds,
     });
@@ -556,7 +563,7 @@ export class AttendanceService {
         schemaName: context.schemaName,
         scheduleId: input.scheduleId,
         date: input.date,
-        absentStudentIds: input.absentStudentIds,
+        absentStudentIds: validatedAbsentIds,
       });
 
     for (const student of notificationCandidates) {

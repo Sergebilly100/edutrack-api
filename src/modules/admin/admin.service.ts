@@ -1131,18 +1131,6 @@ const getTenantDauLast7d = async (
   }
 };
 
-const getSchoolMrr = async (publicDb: TenantDb, tenantId: string): Promise<number> => {
-  const result = await publicDb.execute<{ mrr_fcfa: number }>(sql`
-    SELECT COALESCE(SUM(s.mrr_fcfa), 0)::int AS mrr_fcfa
-    FROM public.subscriptions s
-    WHERE s.tenant_id = ${tenantId}
-      AND s.status IN ('active', 'past_due')
-  `);
-
-  const [row] = getRows<{ mrr_fcfa: number }>(result);
-  return parseNumeric(row?.mrr_fcfa);
-};
-
 const getSchoolSubscriptionSnapshot = async (
   publicDb: TenantDb,
   tenantId: string

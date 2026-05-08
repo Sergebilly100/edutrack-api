@@ -3,7 +3,6 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { access } from 'node:fs/promises';
 import path from 'node:path';
-import { Queue } from 'bullmq';
 import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
@@ -11,10 +10,7 @@ import { requirePermission } from '../../shared/middleware/auth.middleware.js';
 
 import {
   BILLING_EXPORT_DIR,
-  BILLING_PDF_QUEUE_NAME,
   type BillingPdfJobData,
-  type BillingPdfJobResult,
-  createBillingPdfQueue,
 } from './billing.queue.js';
 import { BillingModuleError, buildBillingService } from './billing.service.js';
 import {

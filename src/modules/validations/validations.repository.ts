@@ -50,7 +50,13 @@ const toNumber = (value: string | number | null): number | null => {
 const monthBoundsFromDate = (date: string): { monthStart: string; monthEnd: string } => {
   const monthStart = `${date.slice(0, 7)}-01`;
   const [yearRaw, monthRaw] = date.slice(0, 7).split('-');
-  const end = new Date(Date.UTC(Number(yearRaw), Number(monthRaw), 0));
+  const m = Number(monthRaw);
+  const y = Number(yearRaw);
+  const end = new Date(Date.UTC(
+    m === 12 ? y + 1 : y,
+    m === 12 ? 0 : m,
+    0
+  ));
   return { monthStart, monthEnd: end.toISOString().slice(0, 10) };
 };
 

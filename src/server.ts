@@ -7,8 +7,11 @@ import { sql } from 'drizzle-orm';
 import Fastify from 'fastify';
 import { Redis } from 'ioredis';
 
+import { Worker } from 'bullmq';
+
 import adminController from './modules/admin/admin.controller.js';
 import attendanceController from './modules/attendance/attendance.controller.js';
+import { runAttendanceMissingQrScanHandler } from './modules/attendance/attendance.worker-handler.js';
 import authController from './modules/auth/auth.controller.js';
 import billingController from './modules/billing/billing.controller.js'
 import { createBillingPdfQueue } from './modules/billing/billing.queue.js'
@@ -40,6 +43,7 @@ import scheduleController from './modules/schedule/schedule.controller.js';
 import teachersController from './modules/teachers/teachers.controller.js';
 import validationsController from './modules/validations/validations.controller.js';
 import { db } from './shared/database/db.js';
+import { qrAlertQueue } from './shared/queue/queue.js';
 
 const app = Fastify({ logger: true });
 const port = Number(process.env.PORT || 3000);
@@ -57,6 +61,17 @@ const notificationsWorker = createNotificationsWorker(notificationsRedis, {
   smsSender: defaultSmsSender,
   emailSender: defaultEmailSender,
 });
+const qrAlertRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
+const qrAlertWorker = new Worker(
+  'qr-alert',
+  async (job) => {
+    await runAttendanceMissingQrScanHandler({
+      schemaName: job.data.schemaName,
+      date: job.data.date,
+    });
+  },
+  { connection: qrAlertRedis }
+);
 const notificationsService = new NotificationsService({
   smsQueue: notificationsQueue,
 });
@@ -111,7 +126,7 @@ const loadMaintenanceState = async (): Promise<{ mode: boolean; message: string 
 notificationsService.start();
 
 app.register(cors, {
-  origin: true,
+  origin: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 });
@@ -177,6 +192,9 @@ app.addHook('onClose', async () => {
   await subscriptionsMaintenanceQueue.close();
   await notificationsRedis.quit();
   await subscriptionsRedis.quit();
+  await qrAlertWorker.close();
+  await qrAlertQueue.close();
+  await qrAlertRedis.quit();
 });
 
 const start = async (): Promise<void> => {

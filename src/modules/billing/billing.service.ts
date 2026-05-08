@@ -60,7 +60,6 @@ export class BillingService {
 
     const items = rows.map((row) => {
       const hoursPlanned = BillingRepository.toNumber(row.hours_planned);
-      const effectiveHoursDone = BillingRepository.toNumber(row.hours_done);
       const hoursDone = BillingRepository.toNumber(row.hours_done);
       const totalFcfa = BillingRepository.toNumber(row.total_fcfa);
       // Pour un vacataire : montant effectivement versé = somme des salary_payments
