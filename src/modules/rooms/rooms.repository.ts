@@ -60,7 +60,7 @@ export class RoomsRepository {
 
     const result = await this.db.execute<RoomStatsRow>(sql`
       WITH active_period AS (
-        SELECT id
+        SELECT id, valid_from, valid_to
         FROM schedule_periods
         WHERE is_active = true
           AND valid_from <= ${date}
@@ -81,9 +81,12 @@ export class RoomsRepository {
         COUNT(DISTINCT s.id) AS weekly_schedules_count,
         COUNT(DISTINCT at.id) FILTER (
           WHERE at.room_scan_start_at IS NOT NULL
-            -- Filtrer les scans de la période active uniquement
-            AND at.date >= (SELECT valid_from FROM active_period)
-            AND at.date <= (SELECT valid_to FROM active_period)
+            AND (
+              ap.id IS NULL OR (
+                at.date >= ap.valid_from
+                AND at.date <= ap.valid_to
+              )
+            )
         ) AS scans_count
       FROM rooms r
       LEFT JOIN active_period ap ON true
@@ -95,7 +98,7 @@ export class RoomsRepository {
       LEFT JOIN attendances_teacher at
         ON at.room_scanned_id = r.id
       WHERE r.is_active = true
-      GROUP BY r.id, r.name, r.building, r.capacity, r.latitude, r.longitude, r.geo_radius, r.is_active, r.created_at
+      GROUP BY r.id, r.name, r.building, r.capacity, r.latitude, r.longitude, r.geo_radius, r.is_active, r.created_at, ap.id, ap.valid_from, ap.valid_to
       ORDER BY r.name ASC
     `);
 
