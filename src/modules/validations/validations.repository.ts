@@ -4,6 +4,7 @@ import type { QueryResult, QueryResultRow } from 'pg';
 
 import { ensureTenantRealHoursInfrastructure } from '../../shared/database/real-hours-infrastructure.js';
 import type {
+  MissingEndScanTeacher,
   PendingValidationCount,
   PendingValidationGroups,
   PendingValidationItem,
@@ -345,6 +346,166 @@ export class ValidationsRepository {
   async recomputeForAttendanceDate(teacherId: string, date: string): Promise<void> {
     const { monthStart, monthEnd } = monthBoundsFromDate(date);
     await this.recomputeTeacherSalaryForMonth({ teacherId, monthStart, monthEnd });
+  }
+
+  // ── Missing end-scan queries ────────────────────────────────────────────────
+
+  async listMissingEndScans(month: string): Promise<MissingEndScanTeacher[]> {
+    await ensureTenantRealHoursInfrastructure(this.db);
+
+    const monthStart = `${month}-01`;
+    const { monthEnd } = monthBoundsFromDate(monthStart);
+
+    type MissingRow = {
+      teacher_id: string;
+      teacher_name: string;
+      attendance_id: string;
+      schedule_id: string;
+      date: string;
+      subject: string;
+      slot_label: string;
+      warning_sent: boolean;
+    };
+
+    const result = await this.db.execute<MissingRow>(sql`
+      SELECT
+        t.id::text AS teacher_id,
+        u.name AS teacher_name,
+        at.id::text AS attendance_id,
+        at.schedule_id::text AS schedule_id,
+        at.date::text AS date,
+        s.subject,
+        ts.label AS slot_label,
+        EXISTS (
+          SELECT 1 FROM notifications_log nl
+          WHERE nl.type = 'scan_end_warning'
+            AND nl.recipient_id = u.id
+            AND nl.metadata->>'month' = ${month}
+        ) AS warning_sent
+      FROM attendances_teacher at
+      INNER JOIN teachers t ON t.id = at.teacher_id
+      INNER JOIN users u ON u.id = t.user_id
+      INNER JOIN schedules s ON s.id = at.schedule_id
+      INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+      WHERE at.date BETWEEN ${monthStart}::date AND ${monthEnd}::date
+        AND at.checked_in_at IS NOT NULL
+        AND at.checked_out_at IS NULL
+        AND at.room_scan_end_at IS NULL
+        AND at.validation_status != 'rejected'
+      ORDER BY u.name ASC, at.date DESC
+    `);
+
+    const rows = getRows(result);
+    const grouped = new Map<string, MissingEndScanTeacher>();
+
+    for (const row of rows) {
+      let entry = grouped.get(row.teacher_id);
+      if (!entry) {
+        entry = {
+          teacherId: row.teacher_id,
+          teacherName: row.teacher_name,
+          missingEndScanCount: 0,
+          sessions: [],
+          warningSent: row.warning_sent,
+        };
+        grouped.set(row.teacher_id, entry);
+      }
+      entry.missingEndScanCount++;
+      entry.sessions.push({
+        date: row.date,
+        scheduleId: row.schedule_id,
+        attendanceId: row.attendance_id,
+        subject: row.subject,
+        timeSlot: row.slot_label,
+      });
+    }
+
+    return Array.from(grouped.values());
+  }
+
+  async insertEndScanWarningNotification(params: {
+    teacherUserId: string;
+    teacherPhone: string | null;
+    teacherEmail: string | null;
+    teacherName: string;
+    month: string;
+    missingCount: number;
+    validatedBy: string;
+  }): Promise<void> {
+    const message = `Attention : ${params.missingCount} cours sans scan de fin détecté(s) pour le mois ${params.month}. Veuillez régulariser la situation.`;
+    await this.db.execute(sql`
+      INSERT INTO notifications_log (
+        type,
+        channel,
+        recipient_id,
+        recipient_phone,
+        recipient_email,
+        message,
+        status,
+        metadata
+      )
+      VALUES (
+        'scan_end_warning',
+        'email',
+        ${params.teacherUserId}::uuid,
+        ${params.teacherPhone ?? ''},
+        ${params.teacherEmail ?? null},
+        ${message},
+        'queued',
+        ${JSON.stringify({
+          month: params.month,
+          missingCount: params.missingCount,
+          teacherName: params.teacherName,
+          validatedBy: params.validatedBy,
+        })}::jsonb
+      )
+    `);
+  }
+
+  async getTeacherUserInfo(teacherIds: string[]): Promise<Array<{
+    teacher_id: string;
+    user_id: string;
+    teacher_name: string;
+    phone: string | null;
+    email: string | null;
+  }>> {
+    if (teacherIds.length === 0) return [];
+    const idList = sql.join(teacherIds.map((id) => sql`${id}::uuid`), sql`, `);
+    const result = await this.db.execute<{
+      teacher_id: string;
+      user_id: string;
+      teacher_name: string;
+      phone: string | null;
+      email: string | null;
+    }>(sql`
+      SELECT
+        t.id::text AS teacher_id,
+        u.id::text AS user_id,
+        u.name AS teacher_name,
+        u.phone,
+        u.email
+      FROM teachers t
+      INNER JOIN users u ON u.id = t.user_id
+      WHERE t.id IN (${idList})
+    `);
+    return getRows(result);
+  }
+
+  async invalidateSession(params: {
+    attendanceId: string;
+    reason: string;
+    validatedBy: string;
+  }): Promise<void> {
+    await this.db.execute(sql`
+      UPDATE attendances_teacher
+      SET
+        validation_status = 'rejected',
+        validation_reason = ${params.reason},
+        validated_by = ${params.validatedBy}::uuid,
+        validated_at = NOW(),
+        status = 'absent'::attendance_teacher_status
+      WHERE id = ${params.attendanceId}
+    `);
   }
 }
 

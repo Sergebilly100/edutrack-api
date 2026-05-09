@@ -8,8 +8,7 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { Queue, Worker, type Job } from 'bullmq';
 import type { Redis } from 'ioredis';
 
-import { db } from '../../shared/database/db.js';
-import { withTenantSchema } from '../../shared/database/db.js';
+import { db, withTenantSchema } from '../../shared/database/db.js';
 
 import { buildBillingService } from './billing.service.js';
 

@@ -35,9 +35,11 @@ export const ensurePublicRealHoursInfrastructure = async (
   `);
 
   await db.execute(sql`
-    ALTER TABLE public.school_sms_features
-      ADD CONSTRAINT school_sms_features_checkout_tolerance_range_check
-      CHECK (checkout_tolerance_minutes >= 0 AND checkout_tolerance_minutes <= 30)
+    DO $$ BEGIN
+      ALTER TABLE public.school_sms_features
+        ADD CONSTRAINT school_sms_features_checkout_tolerance_range_check
+        CHECK (checkout_tolerance_minutes >= 0 AND checkout_tolerance_minutes <= 30);
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$
   `);
 
   publicReady = true;
@@ -68,6 +70,7 @@ export const ensureTenantRealHoursInfrastructure = async (
     await db.execute(sql.raw(`
       ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'qr_invalid_alert';
       ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'attendance_rejected';
+      ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'scan_end_warning';
     `));
 
     await db.execute(sql`
@@ -112,9 +115,15 @@ export const ensureTenantRealHoursInfrastructure = async (
         ADD COLUMN IF NOT EXISTS metadata jsonb
     `);
 
-    await db.execute(sql`DROP VIEW IF EXISTS teacher_scan_compliance`);
     await db.execute(sql`
-      CREATE OR REPLACE VIEW teacher_scan_compliance AS
+      ALTER TABLE salary_records
+        ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT NOW()
+    `);
+
+    try {
+      await db.execute(sql`DROP VIEW IF EXISTS teacher_scan_compliance`);
+      await db.execute(sql`
+        CREATE OR REPLACE VIEW teacher_scan_compliance AS
     SELECT
       t.id AS teacher_id,
       u.name AS teacher_name,
@@ -268,7 +277,11 @@ export const ensureTenantRealHoursInfrastructure = async (
       AND at.schedule_id = s.id
       AND at.date >= DATE_TRUNC('month', CURRENT_DATE)
     GROUP BY t.id, u.name, DATE_TRUNC('month', at.date)
-  `);
+      `);
+    } catch (viewError) {
+      console.error('[real-hours-infrastructure] Failed to create teacher_scan_compliance view:', viewError);
+      // Continue without the view - it will be retried next time
+    }
 
     await db.execute(sql`
       CREATE INDEX IF NOT EXISTS idx_att_teacher_compliance_teacher_created

@@ -11,8 +11,11 @@ import { ValidationModuleError, buildValidationsService } from './validations.se
 import {
   approveValidationBodySchema,
   attendanceIdParamsSchema,
+  invalidateSessionBodySchema,
+  missingEndScansQuerySchema,
   realHoursConfigBodySchema,
   rejectValidationBodySchema,
+  sendEndScanWarningBodySchema,
 } from './validations.types.js';
 
 const handleError = (
@@ -113,6 +116,63 @@ export default async function validationsController(app: FastifyInstance): Promi
             attendanceId: params.attendanceId,
             reason: body.reason,
           },
+          {
+            schemaName: claims.schemaName,
+            tenantId: claims.tenantId,
+            userId: claims.sub,
+            role: claims.role,
+          }
+        );
+      });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  // ── Missing end-scan routes ──────────────────────────────────────────────
+
+  app.get('/api/v1/validations/missing-end-scans', { preHandler: requirePermission('validations.view') }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const query = missingEndScansQuerySchema.parse(request.query ?? {});
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildValidationsService(tenantDb);
+        return service.listMissingEndScans(query.month);
+      });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.post('/api/v1/validations/send-end-scan-warning', { preHandler: requirePermission('validations.approve') }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const body = sendEndScanWarningBodySchema.parse(request.body ?? {});
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildValidationsService(tenantDb);
+        return service.sendEndScanWarnings(body.teacher_ids, body.month, {
+          schemaName: claims.schemaName,
+          tenantId: claims.tenantId,
+          userId: claims.sub,
+          role: claims.role,
+        });
+      });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.patch('/api/v1/validations/invalidate-session', { preHandler: requirePermission('validations.reject') }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const body = invalidateSessionBodySchema.parse(request.body ?? {});
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildValidationsService(tenantDb);
+        return service.invalidateSession(
+          { attendanceId: body.attendance_id, reason: body.reason },
           {
             schemaName: claims.schemaName,
             tenantId: claims.tenantId,

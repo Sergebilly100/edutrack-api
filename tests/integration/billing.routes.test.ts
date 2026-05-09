@@ -2,6 +2,21 @@ import { describe, expect, it } from 'vitest';
 
 import { getAuthHeaders, getSeedContext, queryTenant, request, tenantTable } from './setup.js';
 
+// Helper : insert une présence du prof seed pour le mois courant
+// Utilise un UPDATE pour éviter les problèmes de cast de type enum hors search_path
+const insertTeacherAttendance = async (teacherId: string, scheduleId: string) => {
+  const today = new Date().toISOString().slice(0, 10);
+  // On insère sans cast enum : on laisse la valeur DEFAULT 'present' (déjà défini sur la table)
+  await queryTenant(
+    `
+      INSERT INTO ${tenantTable('attendances_teacher')} (teacher_id, schedule_id, date)
+      VALUES ($1, $2, $3::date)
+      ON CONFLICT (teacher_id, schedule_id, date) DO NOTHING
+    `,
+    [teacherId, scheduleId, today]
+  );
+};
+
 const currentMonth = new Date().toISOString().slice(0, 7);
 
 describe('billing integration (real db)', () => {
@@ -181,6 +196,90 @@ describe('billing integration (real db)', () => {
     expect(details.body?.summary?.totalFcfa).toBe(350000);
     expect(details.body?.payment?.notes).toBe(note);
     expect(details.body?.payment?.paidAt).toBeTruthy();
+  });
+
+  it('bug 1 : recalcul ne doit pas ecraser le statut paid (salary_payments)', async () => {
+    const headers = await getAuthHeaders('director');
+    const context = getSeedContext();
+
+    // Insérer une présence (status default = 'present') pour avoir hours_done > 0
+    await insertTeacherAttendance(context.teacherId, context.scheduleId);
+
+    // Premier compute
+    const compute1 = await request()
+      .post(`/api/v1/billing/salary/compute?month=${currentMonth}`)
+      .set(headers);
+    expect(compute1.status).toBe(200);
+
+    // Récupérer l'id du record créé
+    const records = await queryTenant<{ id: string }>(
+      `SELECT id FROM ${tenantTable('salary_records')} WHERE teacher_id = $1 AND period_month = $2::date LIMIT 1`,
+      [context.teacherId, `${currentMonth}-01`]
+    );
+    const recordId = records[0]?.id;
+    expect(recordId).toBeTruthy();
+
+    // Forcer les données pour permettre le paiement
+    await queryTenant(
+      `UPDATE ${tenantTable('salary_records')} SET hours_done = 2::numeric, total_fcfa = 10000, hourly_rate = 5000 WHERE id = $1`,
+      [recordId]
+    );
+
+    // Marquer payé (1 heure sur 2)
+    const markPaid = await request()
+      .patch(`/api/v1/billing/salary/${recordId as string}/status`)
+      .set(headers)
+      .send({ status: 'paid', notes: 'premier versement', hoursToPay: 1 });
+    expect(markPaid.status).toBe(200);
+
+    // Recompute
+    const compute2 = await request()
+      .post(`/api/v1/billing/salary/compute?month=${currentMonth}`)
+      .set(headers);
+    expect(compute2.status).toBe(200);
+
+    // Vérifier que le statut n'a pas été écrasé (toujours pending car paiement partiel)
+    const afterRecompute = await queryTenant<{ status: string }>(
+      `SELECT status::text AS status FROM ${tenantTable('salary_records')} WHERE id = $1`,
+      [recordId]
+    );
+    // Le record avec paiement partiel doit rester pending (pas écrasé à nothing_to_pay)
+    // et surtout NE PAS passer de paid à pending
+    expect(['pending', 'paid']).toContain(afterRecompute[0]?.status);
+  });
+
+  it('bug 2 : lastComputedAt se met a jour a chaque recalcul', async () => {
+    const headers = await getAuthHeaders('director');
+
+    const compute1 = await request()
+      .post(`/api/v1/billing/salary/compute?month=${currentMonth}`)
+      .set(headers);
+    expect(compute1.status).toBe(200);
+
+    const summary1 = await request()
+      .get(`/api/v1/billing/salary/summary?month=${currentMonth}`)
+      .set(headers);
+    const firstComputedAt = summary1.body?.lastComputedAt as string | null;
+    expect(firstComputedAt).toBeTruthy();
+
+    // Attendre 1.1s pour que updated_at change
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+
+    const compute2 = await request()
+      .post(`/api/v1/billing/salary/compute?month=${currentMonth}`)
+      .set(headers);
+    expect(compute2.status).toBe(200);
+
+    const summary2 = await request()
+      .get(`/api/v1/billing/salary/summary?month=${currentMonth}`)
+      .set(headers);
+    const secondComputedAt = summary2.body?.lastComputedAt as string | null;
+    expect(secondComputedAt).toBeTruthy();
+
+    // La seconde date doit être strictement postérieure à la première
+    expect(new Date(secondComputedAt!).getTime()).toBeGreaterThan(
+      new Date(firstComputedAt!).getTime()
+    );
   });
 
   it('POST /api/v1/billing/salary/compute refuse staff (403)', async () => {

@@ -59,6 +59,7 @@ export type NotificationType =
   | 'qr_invalid_alert'
   | 'student_absent_parent'
   | 'attendance_rejected'
+  | 'scan_end_warning'
   | 'subscription_expiry_alert'
   | 'payment_reminder'
   | 'custom';

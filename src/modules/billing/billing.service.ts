@@ -20,6 +20,10 @@ const monthToBounds = (month: string): { monthStart: string; monthEnd: string } 
     throw new BillingModuleError('Invalid month format', 400, 'INVALID_MONTH');
   }
 
+  if (year < 2000 || year > 2100) {
+    throw new BillingModuleError('Year out of valid range (2000-2100)', 400, 'INVALID_MONTH');
+  }
+
   const monthStart = `${yearRaw}-${monthRaw}-01`;
   const endDate = new Date(Date.UTC(year, monthNumber, 0));
   const monthEnd = endDate.toISOString().slice(0, 10);
@@ -27,6 +31,156 @@ const monthToBounds = (month: string): { monthStart: string; monthEnd: string } 
 };
 
 const roundHours = (value: number): number => Math.round(value * 100) / 100;
+
+type DailyBreakdownRow = {
+  date: string;
+  schedule_id: string;
+  class_name: string;
+  subject: string;
+  day_of_week: number;
+  slot_label: string;
+  start_time: string;
+  end_time: string;
+  attendance_status: string | null;
+  checked_in_at: string | null;
+  room_scan_end_at: string | null;
+  late_minutes: number | null;
+  room_mismatch: boolean | null;
+  has_rollcall: boolean | null;
+  hours_planned: string | number;
+  hours_done: string | number;
+};
+
+const buildDailyRows = (daily: DailyBreakdownRow[]) => {
+  const now = new Date();
+  const todayIso = now.toISOString().slice(0, 10);
+  const currentTime = now.toISOString().slice(11, 16);
+
+  return daily.map((row) => {
+    const hoursPlanned = BillingRepository.toNumber(row.hours_planned);
+    const effectiveHoursDone = BillingRepository.toNumber(row.hours_done);
+    const rowEndTime = row.end_time.slice(0, 5);
+    const hasExplicitStatus = row.attendance_status !== null;
+    const shouldAutoAbsent =
+      !hasExplicitStatus &&
+      (row.date < todayIso || (row.date === todayIso && rowEndTime < currentTime));
+    const attendanceStatus = row.attendance_status ?? (shouldAutoAbsent ? 'absent' : 'not_marked');
+    const countedAsDone =
+      attendanceStatus === 'present' || attendanceStatus === 'late' || attendanceStatus === 'excused';
+    const hasRollcall = row.has_rollcall === true;
+
+    return {
+      date: row.date,
+      scheduleId: row.schedule_id,
+      className: row.class_name,
+      subject: row.subject,
+      dayOfWeek: row.day_of_week,
+      slotLabel: row.slot_label,
+      startTime: row.start_time,
+      endTime: row.end_time,
+      attendanceStatus,
+      checkedInAt: row.checked_in_at,
+      checkedOutAt: row.room_scan_end_at,
+      lateMinutes: row.late_minutes,
+      roomMismatch: row.room_mismatch === true,
+      rollcallDone: hasRollcall,
+      rollcallMissing: !hasRollcall && row.checked_in_at !== null,
+      hoursPlanned: roundHours(hoursPlanned),
+      hoursDone: roundHours(countedAsDone ? effectiveHoursDone : 0),
+    };
+  });
+};
+
+const computeTeacherFinancials = (
+  rows: ReturnType<typeof buildDailyRows>,
+  teacher: { teacher_type: string; hourly_rate: number | null; monthly_salary: number | null },
+  teacherMetrics: Record<string, unknown> | null | undefined,
+  effectivePaidHours: number,
+  effectivePaidAmount: number,
+) => {
+  const totals = rows.reduce(
+    (acc, row) => {
+      acc.hoursPlanned += row.hoursPlanned;
+      acc.hoursDone += row.hoursDone;
+      if (row.attendanceStatus === 'absent') {
+        acc.absenceHours += row.hoursPlanned;
+      }
+      return acc;
+    },
+    { hoursPlanned: 0, hoursDone: 0, absenceHours: 0 }
+  );
+
+  const hourlyRate = teacher.hourly_rate;
+  const totalFcfa =
+    teacher.teacher_type === 'permanent'
+      ? teacher.monthly_salary
+      : hourlyRate === null
+        ? null
+        : Math.round(totals.hoursDone * hourlyRate);
+
+  const remainingHoursToPay = Math.max(
+    0,
+    totals.hoursDone - (teacher.teacher_type === 'vacataire' ? effectivePaidHours : 0)
+  );
+  const hoursDoneSincePaid = teacherMetrics ? BillingRepository.toNumber(teacherMetrics.hours_done_since_paid as string | number) : 0;
+  const hoursDoneSinceLastPayment =
+    teacher.teacher_type === 'vacataire' && teacherMetrics?.paid_at
+      ? roundHours(Math.max(0, hoursDoneSincePaid))
+      : 0;
+  const absenceHours = roundHours(totals.absenceHours);
+  const remainingPlannedHours = roundHours(
+    Math.max(0, totals.hoursPlanned - totals.hoursDone - totals.absenceHours)
+  );
+  const currentEarnedAmount =
+    teacher.teacher_type === 'permanent'
+      ? teacher.monthly_salary
+      : hourlyRate === null
+        ? null
+        : Math.round(totals.hoursDone * hourlyRate);
+  const amountAlreadyPaid =
+    teacher.teacher_type === 'permanent'
+      ? effectivePaidAmount
+      : hourlyRate === null
+        ? null
+        : effectivePaidAmount;
+  const amountRemainingToPayNow =
+    teacher.teacher_type === 'permanent'
+      ? Math.max(0, (teacher.monthly_salary ?? 0) - effectivePaidAmount)
+      : hourlyRate === null
+        ? null
+        : Math.max(0, Math.round(remainingHoursToPay * hourlyRate));
+  const remainingPotentialAmount =
+    teacher.teacher_type === 'permanent'
+      ? 0
+      : hourlyRate === null
+        ? null
+        : Math.round(remainingPlannedHours * hourlyRate);
+  const absenceAmount =
+    teacher.teacher_type === 'permanent'
+      ? 0
+      : hourlyRate === null
+        ? null
+        : Math.round(absenceHours * hourlyRate);
+  const isPartiallyPaid =
+    teacher.teacher_type !== 'permanent' &&
+    hourlyRate !== null &&
+    hasMeaningfulValue(effectivePaidHours) &&
+    effectivePaidHours + EPSILON < totals.hoursDone;
+
+  return {
+    totals,
+    totalFcfa,
+    hoursDoneSinceLastPayment,
+    absenceHours,
+    remainingPlannedHours,
+    currentEarnedAmount,
+    amountAlreadyPaid,
+    amountRemainingToPayNow,
+    remainingPotentialAmount,
+    absenceAmount,
+    isPartiallyPaid,
+  };
+};
 const EPSILON = 0.0001;
 const hasMeaningfulValue = (value: number): boolean => value > EPSILON;
 const isZeroDueVacataire = (hoursDone: number, totalFcfa: number): boolean =>
@@ -139,67 +293,12 @@ export class BillingService {
     }
 
     const teacherMetrics = (
-      await this.repository.listTeacherMonthlyMetrics(monthStart, monthEnd)
-    ).find((row) => row.teacher_id === teacherId);
+      await this.repository.listTeacherMonthlyMetrics(monthStart, monthEnd, teacherId)
+    )[0];
 
     const daily = await this.repository.listTeacherDailyBreakdown(teacherId, monthStart, monthEnd);
-    const now = new Date();
-    const todayIso = now.toISOString().slice(0, 10);
-    const currentTime = now.toISOString().slice(11, 16);
+    const rows = buildDailyRows(daily as DailyBreakdownRow[]);
 
-    const rows = daily.map((row) => {
-      const hoursPlanned = BillingRepository.toNumber(row.hours_planned);
-      const effectiveHoursDone = BillingRepository.toNumber(row.hours_done);
-      const rowEndTime = row.end_time.slice(0, 5);
-      const hasExplicitStatus = row.attendance_status !== null;
-      const shouldAutoAbsent =
-        !hasExplicitStatus &&
-        (row.date < todayIso || (row.date === todayIso && rowEndTime < currentTime));
-      const attendanceStatus = row.attendance_status ?? (shouldAutoAbsent ? 'absent' : 'not_marked');
-      const countedAsDone =
-        attendanceStatus === 'present' || attendanceStatus === 'late' || attendanceStatus === 'excused';
-      const hasRollcall = row.has_rollcall === true;
-
-      return {
-        date: row.date,
-        scheduleId: row.schedule_id,
-        className: row.class_name,
-        subject: row.subject,
-        dayOfWeek: row.day_of_week,
-        slotLabel: row.slot_label,
-        startTime: row.start_time,
-        endTime: row.end_time,
-        attendanceStatus,
-        checkedInAt: row.checked_in_at,
-        checkedOutAt: row.room_scan_end_at,
-        lateMinutes: row.late_minutes,
-        roomMismatch: row.room_mismatch === true,
-        rollcallDone: hasRollcall,
-        rollcallMissing: !hasRollcall && row.checked_in_at !== null,
-        hoursPlanned: roundHours(hoursPlanned),
-        hoursDone: roundHours(countedAsDone ? effectiveHoursDone : 0),
-      };
-    });
-
-    const totals = rows.reduce(
-      (acc, row) => {
-        acc.hoursPlanned += row.hoursPlanned;
-        acc.hoursDone += row.hoursDone;
-        if (row.attendanceStatus === 'absent') {
-          acc.absenceHours += row.hoursPlanned;
-        }
-        return acc;
-      },
-      { hoursPlanned: 0, hoursDone: 0, absenceHours: 0 }
-    );
-
-    const hourlyRate = teacher.hourly_rate;
-    const totalFcfa =
-      teacher.teacher_type === 'permanent'
-        ? teacher.monthly_salary
-        : hourlyRate === null
-          ? null
-          : Math.round(totals.hoursDone * hourlyRate);
     const salaryRecordId = teacherMetrics?.salary_record_id ?? null;
     const teacherMonthlyRecord = salaryRecordId
       ? await this.repository.getSalaryRecordById(salaryRecordId)
@@ -210,7 +309,6 @@ export class BillingService {
       : { paid_hours: 0, paid_amount: 0, payments_count: 0, last_paid_at: null };
     const paidHoursFromPayments = BillingRepository.toNumber(paidSummary.paid_hours);
     const paidAmountFromPayments = BillingRepository.toNumber(paidSummary.paid_amount);
-    const hoursDoneSincePaid = teacherMetrics ? BillingRepository.toNumber(teacherMetrics.hours_done_since_paid) : 0;
     const effectivePaidHours = teacher.teacher_type === 'vacataire' ? paidHoursFromPayments : 0;
     const effectivePaidAmount =
       teacher.teacher_type === 'permanent'
@@ -220,60 +318,16 @@ export class BillingService {
             ? teacher.monthly_salary ?? 0
             : 0
         : paidAmountFromPayments;
-    const remainingHoursToPay = Math.max(
-      0,
-      totals.hoursDone - (teacher.teacher_type === 'vacataire' ? effectivePaidHours : 0)
-    );
-    const hoursDoneSinceLastPayment =
-      teacher.teacher_type === 'vacataire' && teacherMetrics?.paid_at
-        ? roundHours(Math.max(0, hoursDoneSincePaid))
-        : 0;
-    const absenceHours = roundHours(totals.absenceHours);
-    const remainingPlannedHours = roundHours(
-      Math.max(0, totals.hoursPlanned - totals.hoursDone - totals.absenceHours)
-    );
-    const currentEarnedAmount =
-      teacher.teacher_type === 'permanent'
-        ? teacher.monthly_salary
-        : hourlyRate === null
-          ? null
-          : Math.round(totals.hoursDone * hourlyRate);
-    const amountAlreadyPaid =
-      teacher.teacher_type === 'permanent'
-        ? effectivePaidAmount
-        : hourlyRate === null
-          ? null
-          : effectivePaidAmount;
-    const amountRemainingToPayNow =
-      teacher.teacher_type === 'permanent'
-        ? Math.max(0, (teacher.monthly_salary ?? 0) - effectivePaidAmount)
-        : hourlyRate === null
-          ? null
-          : Math.max(0, Math.round(remainingHoursToPay * hourlyRate));
-    const remainingPotentialAmount =
-      teacher.teacher_type === 'permanent'
-        ? 0
-        : hourlyRate === null
-          ? null
-          : Math.round(remainingPlannedHours * hourlyRate);
-    const absenceAmount =
-      teacher.teacher_type === 'permanent'
-        ? 0
-        : hourlyRate === null
-          ? null
-          : Math.round(absenceHours * hourlyRate);
-    const isPartiallyPaid =
-      teacher.teacher_type !== 'permanent' &&
-      hourlyRate !== null &&
-      hasMeaningfulValue(effectivePaidHours) &&
-      effectivePaidHours + EPSILON < totals.hoursDone;
+
+    const financials = computeTeacherFinancials(rows, teacher, teacherMetrics, effectivePaidHours, effectivePaidAmount);
+
     const baseStatus = teacherMetrics?.salary_status ?? 'pending';
     const normalizedStatus: SalaryRecordStatus =
-      teacher.teacher_type === 'vacataire' && totalFcfa !== null
+      teacher.teacher_type === 'vacataire' && financials.totalFcfa !== null
         ? resolveVacataireStatus({
             currentStatus: baseStatus,
-            hoursDone: totals.hoursDone,
-            totalFcfa,
+            hoursDone: financials.totals.hoursDone,
+            totalFcfa: financials.totalFcfa,
             paidHours: effectivePaidHours,
           })
         : baseStatus;
@@ -303,23 +357,23 @@ export class BillingService {
         id: teacher.teacher_id,
         name: teacher.teacher_name,
         type: teacher.teacher_type,
-        hourlyRate,
+        hourlyRate: teacher.hourly_rate,
         monthlySalary: teacher.monthly_salary,
       },
       summary: {
-        hoursPlanned: roundHours(totals.hoursPlanned),
-        hoursDone: roundHours(totals.hoursDone),
-        totalFcfa,
+        hoursPlanned: roundHours(financials.totals.hoursPlanned),
+        hoursDone: roundHours(financials.totals.hoursDone),
+        totalFcfa: financials.totalFcfa,
         status: normalizedStatus,
-        absenceHours,
-        remainingPlannedHours,
-        currentEarnedAmount,
-        amountAlreadyPaid,
-        amountRemainingToPayNow,
-        remainingPotentialAmount,
-        absenceAmount,
-        hoursDoneSinceLastPayment,
-        isPartiallyPaid: normalizedStatus !== 'paid' ? isPartiallyPaid : false,
+        absenceHours: financials.absenceHours,
+        remainingPlannedHours: financials.remainingPlannedHours,
+        currentEarnedAmount: financials.currentEarnedAmount,
+        amountAlreadyPaid: financials.amountAlreadyPaid,
+        amountRemainingToPayNow: financials.amountRemainingToPayNow,
+        remainingPotentialAmount: financials.remainingPotentialAmount,
+        absenceAmount: financials.absenceAmount,
+        hoursDoneSinceLastPayment: financials.hoursDoneSinceLastPayment,
+        isPartiallyPaid: normalizedStatus !== 'paid' ? financials.isPartiallyPaid : false,
       },
       payment: {
         paidAt: lastPayment?.paid_at ?? teacherMetrics?.paid_at ?? null,
@@ -345,9 +399,18 @@ export class BillingService {
     const rows = await this.repository.listTeacherMonthlyMetrics(monthStart, monthEnd);
     const canStoreNothingToPay = await this.repository.hasSalaryStatusValue('nothing_to_pay');
 
-    let updatedCount = 0;
-    for (const row of rows) {
+    const recordsToUpsert: Array<{
+      teacherId: string;
+      periodMonth: string;
+      hoursPlanned: number;
+      hoursDone: number;
+      hourlyRate: number;
+      totalFcfa: number;
+      status: SalaryRecordStatus;
+      notes: string | null;
+    }> = [];
 
+    for (const row of rows) {
       const hoursPlanned = roundHours(BillingRepository.toNumber(row.hours_planned));
       const hoursDone = roundHours(BillingRepository.toNumber(row.hours_done));
 
@@ -383,7 +446,7 @@ export class BillingService {
       const storedStatus =
         nextStatus === 'nothing_to_pay' && !canStoreNothingToPay ? 'pending' : nextStatus;
 
-      await this.repository.upsertSalaryRecord({
+      recordsToUpsert.push({
         teacherId: row.teacher_id,
         periodMonth: monthStart,
         hoursPlanned,
@@ -393,9 +456,9 @@ export class BillingService {
         status: storedStatus,
         notes: row.notes,
       });
-
-      updatedCount += 1;
     }
+
+    const updatedCount = await this.repository.batchUpsertSalaryRecords(recordsToUpsert);
 
     return {
       month,

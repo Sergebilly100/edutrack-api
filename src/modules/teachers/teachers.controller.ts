@@ -15,7 +15,7 @@ import {
   type CreateTeacherInput,
 } from './teachers.types.js';
 
-const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
+const handleError = (request: { log: { error: (obj: Record<string, unknown>, msg?: string) => void } }, reply: FastifyReply, error: unknown): FastifyReply => {
   if (error instanceof ZodError) {
     return reply.code(400).send({
       error: 'Validation error',
@@ -25,6 +25,9 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
   }
 
   if (error instanceof TeachersModuleError) {
+    if (error.statusCode >= 500) {
+      request.log.error({ err: error, code: error.code }, error.message);
+    }
     return reply.code(error.statusCode).send({
       error: error.message,
       code: error.code,
@@ -32,6 +35,7 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
     });
   }
 
+  request.log.error({ err: error }, 'Unexpected error in teachers module');
   return reply.code(500).send({
     error: 'Unexpected error',
     code: 'INTERNAL_SERVER_ERROR',
@@ -85,7 +89,7 @@ export default async function teachersController(app: FastifyInstance): Promise<
 
       return reply.send(result);
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(request, reply, error);
     }
   });
 
@@ -102,7 +106,7 @@ export default async function teachersController(app: FastifyInstance): Promise<
 
       return reply.send(stats);
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(request, reply, error);
     }
   });
 
@@ -122,7 +126,7 @@ export default async function teachersController(app: FastifyInstance): Promise<
 
       return reply.send(teacher);
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(request, reply, error);
     }
   });
 
@@ -139,7 +143,7 @@ export default async function teachersController(app: FastifyInstance): Promise<
 
       return reply.code(201).send(created);
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(request, reply, error);
     }
   });
 
@@ -157,7 +161,7 @@ export default async function teachersController(app: FastifyInstance): Promise<
 
       return reply.send(updated);
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(request, reply, error);
     }
   });
 
@@ -174,7 +178,7 @@ export default async function teachersController(app: FastifyInstance): Promise<
 
       return reply.send(deleted);
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(request, reply, error);
     }
   });
 
@@ -195,7 +199,7 @@ export default async function teachersController(app: FastifyInstance): Promise<
 
         return reply.send(stats);
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(request, reply, error);
       }
     }
   );

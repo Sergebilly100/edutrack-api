@@ -1,10 +1,10 @@
 import { z } from 'zod';
 
-export const monthQuerySchema = z.object({
-  month: z.string().regex(/^\d{4}-\d{2}$/),
-});
-
 const monthRegex = /^\d{4}-\d{2}$/;
+
+export const monthQuerySchema = z.object({
+  month: z.string().regex(monthRegex),
+});
 
 export const teacherParamsSchema = z.object({
   teacherId: z.string().uuid(),

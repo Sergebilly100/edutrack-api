@@ -46,3 +46,35 @@ export type PendingValidationCount = {
   short_hours: number;
   total: number;
 };
+
+// ── Missing end-scan types ──────────────────────────────────────────────────
+
+export const missingEndScansQuerySchema = z.object({
+  month: z.string().regex(/^\d{4}-\d{2}$/),
+});
+
+export const sendEndScanWarningBodySchema = z.object({
+  teacher_ids: z.array(z.string().uuid()).min(1).max(200),
+  month: z.string().regex(/^\d{4}-\d{2}$/),
+});
+
+export const invalidateSessionBodySchema = z.object({
+  attendance_id: z.string().uuid(),
+  reason: z.string().trim().min(3).max(500),
+});
+
+export type MissingEndScanSession = {
+  date: string;
+  scheduleId: string;
+  attendanceId: string;
+  subject: string;
+  timeSlot: string;
+};
+
+export type MissingEndScanTeacher = {
+  teacherId: string;
+  teacherName: string;
+  missingEndScanCount: number;
+  sessions: MissingEndScanSession[];
+  warningSent: boolean;
+};

@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { QueryResult, QueryResultRow } from 'pg';
 import { ensureTenantRealHoursInfrastructure } from '../../shared/database/real-hours-infrastructure.js';
+import { toNumber } from '../../shared/utils/numbers.js';
 
 export type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
 
@@ -120,19 +121,12 @@ type CountRow = { count: string | number };
 
 const getRows = <TRow extends QueryResultRow>(result: QueryResult<TRow>): TRow[] => result.rows;
 
-const toNumber = (value: string | number): number => {
-  if (typeof value === 'number') {
-    return value;
-  }
 
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-};
 
 export class BillingRepository {
   constructor(private readonly db: QueryExecutor) {}
 
-  async listTeacherMonthlyMetrics(monthStart: string, monthEnd: string): Promise<SalaryMetricRow[]> {
+  async listTeacherMonthlyMetrics(monthStart: string, monthEnd: string, teacherId?: string): Promise<SalaryMetricRow[]> {
     await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<SalaryMetricRow>(sql`
@@ -243,7 +237,7 @@ export class BillingRepository {
           AND at.teacher_id = t.id
           AND at.date BETWEEN ${monthStart}::date AND ${monthEnd}::date
           AND at.status IN ('present', 'late', 'excused')
-          AND ((at.date::timestamp + ts.end_time)::timestamptz > sr.paid_at)
+          AND ((at.date::timestamp + ts.end_time)::timestamp > sr.paid_at) 
       ) done_after_payment ON true
       LEFT JOIN LATERAL (
         SELECT
@@ -277,6 +271,7 @@ export class BillingRepository {
           AND sp.paid_at > sr.paid_at
       ) payments_after_cutoff ON true
       WHERE u.is_active = true
+        ${teacherId ? sql`AND t.id = ${teacherId}` : sql``}
       ORDER BY u.name ASC
     `);
 
@@ -446,7 +441,7 @@ export class BillingRepository {
       DO UPDATE SET
         hours_planned = EXCLUDED.hours_planned,
         hours_done = EXCLUDED.hours_done,
-        -- Préserver hourly_rate et total_fcfa pour les salaires déjà payés (historique)
+        -- Préserver hourly_rate, total_fcfa et status pour les salaires déjà payés (historique)
         hourly_rate = CASE
           WHEN salary_records.status = 'paid' THEN salary_records.hourly_rate
           ELSE EXCLUDED.hourly_rate
@@ -457,9 +452,11 @@ export class BillingRepository {
         END,
         status = CASE
           WHEN salary_records.status = 'disputed' THEN 'disputed'::salary_status
+          WHEN salary_records.status = 'paid' THEN 'paid'::salary_status
           ELSE EXCLUDED.status
         END,
-        notes = COALESCE(EXCLUDED.notes, salary_records.notes)
+        notes = COALESCE(EXCLUDED.notes, salary_records.notes),
+        updated_at = NOW()
       RETURNING
         id,
         teacher_id,
@@ -481,6 +478,55 @@ export class BillingRepository {
     }
 
     return row;
+  }
+
+  async batchUpsertSalaryRecords(records: Array<{
+    teacherId: string;
+    periodMonth: string;
+    hoursPlanned: number;
+    hoursDone: number;
+    hourlyRate: number;
+    totalFcfa: number;
+    status: SalaryRecordStatus;
+    notes: string | null;
+  }>): Promise<number> {
+    if (records.length === 0) return 0;
+
+    const values = sql.join(
+      records.map(
+        (r) =>
+          sql`(${r.teacherId}, ${r.periodMonth}::date, ${r.hoursPlanned}::numeric, ${r.hoursDone}::numeric, ${r.hourlyRate}, ${r.totalFcfa}, ${r.status}::salary_status, ${r.notes})`
+      ),
+      sql`, `
+    );
+
+    const result = await this.db.execute(sql`
+      INSERT INTO salary_records (
+        teacher_id, period_month, hours_planned, hours_done, hourly_rate, total_fcfa, status, notes
+      )
+      VALUES ${values}
+      ON CONFLICT (teacher_id, period_month)
+      DO UPDATE SET
+        hours_planned = EXCLUDED.hours_planned,
+        hours_done = EXCLUDED.hours_done,
+        hourly_rate = CASE
+          WHEN salary_records.status = 'paid' THEN salary_records.hourly_rate
+          ELSE EXCLUDED.hourly_rate
+        END,
+        total_fcfa = CASE
+          WHEN salary_records.status = 'paid' THEN salary_records.total_fcfa
+          ELSE EXCLUDED.total_fcfa
+        END,
+        status = CASE
+          WHEN salary_records.status = 'disputed' THEN 'disputed'::salary_status
+          WHEN salary_records.status = 'paid' THEN 'paid'::salary_status
+          ELSE EXCLUDED.status
+        END,
+        notes = COALESCE(EXCLUDED.notes, salary_records.notes),
+        updated_at = NOW()
+    `);
+
+    return (result as QueryResult).rowCount ?? records.length;
   }
 
   async hasSalaryStatusValue(status: SalaryRecordStatus): Promise<boolean> {
@@ -510,7 +556,8 @@ export class BillingRepository {
         status = ${input.status}::salary_status,
         notes = CASE WHEN ${input.notes !== undefined} THEN ${input.notes ?? null} ELSE notes END,
         paid_at = CASE WHEN ${input.status === 'paid'} THEN NOW() ELSE paid_at END,
-        paid_by = CASE WHEN ${input.status === 'paid'} THEN ${input.paidBy ?? null}::uuid ELSE NULL END
+        paid_by = CASE WHEN ${input.status === 'paid'} THEN ${input.paidBy ?? null}::uuid ELSE NULL END,
+        updated_at = NOW()
       WHERE id = ${input.recordId}
       RETURNING
         id,
@@ -605,7 +652,7 @@ export class BillingRepository {
               THEN GREATEST(0, sr.total_fcfa - COALESCE(explicit_agg.paid_amount_before_cutoff, 0))
             ELSE 0
           END AS amount_fcfa,
-          sr.status::text AS status,
+          'paid'::text AS status,
           sr.paid_at::text AS paid_at,
           sr.paid_by,
           up.name AS paid_by_name,
@@ -626,7 +673,7 @@ export class BillingRepository {
             AND at.teacher_id = sr.teacher_id
             AND at.date BETWEEN sr.period_month AND (date_trunc('month', sr.period_month) + interval '1 month - 1 day')::date
             AND at.status IN ('present', 'late', 'excused')
-            AND ((at.date::timestamp + ts.end_time)::timestamptz > sr.paid_at)
+            AND ((at.date::timestamp + ts.end_time)::timestamp > sr.paid_at)
         ) done_after_payment ON true
         WHERE sr.teacher_id = ${teacherId}
           AND sr.paid_at IS NOT NULL
@@ -787,7 +834,8 @@ export class BillingRepository {
         status = ${input.status}::salary_status,
         notes = CASE WHEN ${input.notes !== undefined} THEN ${input.notes ?? null} ELSE notes END,
         paid_at = CASE WHEN ${input.touchPaidAt ?? true} THEN NOW() ELSE paid_at END,
-        paid_by = CASE WHEN ${input.touchPaidAt ?? true} THEN ${input.paidBy ?? null}::uuid ELSE paid_by END
+        paid_by = CASE WHEN ${input.touchPaidAt ?? true} THEN ${input.paidBy ?? null}::uuid ELSE paid_by END,
+        updated_at = NOW()
       WHERE id = ${input.recordId}
       RETURNING
         id,
@@ -856,7 +904,7 @@ export class BillingRepository {
 
   async getLastComputedDate(monthStart: string): Promise<string | null> {
     const result = await this.db.execute<{ last_computed: string | null }>(sql`
-      SELECT MAX(created_at)::text AS last_computed
+      SELECT GREATEST(MAX(updated_at), MAX(created_at))::text AS last_computed
       FROM salary_records
       WHERE period_month = ${monthStart}::date
     `);

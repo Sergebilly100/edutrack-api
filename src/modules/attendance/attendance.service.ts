@@ -755,6 +755,10 @@ export class AttendanceService {
       totalCheckins: Number(row.total_checkins),
       totalCheckouts: Number(row.total_checkouts),
       complianceRate: Number(row.compliance_rate),
+      scanEndRate: Number(row.scan_end_rate),
+      roomCorrectRate: Number(row.room_correct_rate),
+      rollcallRate: Number(row.rollcall_rate),
+      attendanceRate: Number(row.attendance_rate),
       rank: index + 1,
     }));
   }

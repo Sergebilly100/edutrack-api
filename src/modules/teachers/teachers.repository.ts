@@ -1,6 +1,7 @@
 import argon2 from 'argon2';
 import { sql } from 'drizzle-orm';
 
+import { toNumber } from '../../shared/utils/numbers.js';
 import { generateUsername } from '../../shared/utils/username.js';
 
 import type {
@@ -70,14 +71,6 @@ const toTotal = (row: TotalRow | undefined): number => {
   return Number.isFinite(value) ? value : 0;
 };
 
-const toNumber = (value: string | number | null | undefined): number => {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string') {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return 0;
-};
 
 const buildWhere = (query: TeachersListQuery): ReturnType<typeof sql>[] => {
   const where: ReturnType<typeof sql>[] = [];
@@ -193,8 +186,14 @@ export class TeachersRepository {
   }
 
   async createTeacher(input: CreateTeacherInput): Promise<TeacherRow> {
+    // Only load usernames with the same prefix to avoid loading entire table
+    const normalizedLast = (input.last_name || 'user')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '') || 'user';
+    const normalizedFirst = ((input.first_name || 'user')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '') || 'user').slice(0, 4);
+    const baseUsername = `${normalizedLast}.${normalizedFirst}`;
     const existingUsernamesResult = await this.db.execute(sql`
-      SELECT username FROM teachers
+      SELECT username FROM teachers WHERE username LIKE ${baseUsername + '%'}
     `);
     const existingUsernames = getRows<{ username: string }>(existingUsernamesResult).map(
       (row) => row.username
@@ -288,18 +287,22 @@ export class TeachersRepository {
         input.blocked_reason !== undefined
           ? sql`${input.blocked_reason}`
           : sql`${current.blocked_reason}`;
-      blockedAtSql = sql`${current.blocked_at}`;
+      blockedAtSql = current.blocked_at === null ? sql`NULL` : sql`${current.blocked_at}`;
     }
-    // concertis la matière en un tableau pour ne pas bloquer la requête
-    const pgArrayFormat = `{${(input.subjects ?? current.subjects ?? []).join(',')}}`;
+    const subjectsArray = input.subjects ?? current.subjects ?? [];
+    const subjectsLiteral = sql.raw(`ARRAY[${subjectsArray.map((s) => `'${s.replace(/'/g, "''")}'`).join(',')}]::text[]`);
+    const monthlySalaryVal = input.monthly_salary === undefined ? current.monthly_salary : input.monthly_salary;
+    const hourlyRateVal = input.hourly_rate === undefined ? current.hourly_rate : input.hourly_rate;
+    const monthlySalarySql = monthlySalaryVal === null ? sql`NULL` : sql`${monthlySalaryVal}`;
+    const hourlyRateSql = hourlyRateVal === null ? sql`NULL` : sql`${hourlyRateVal}`;
 
     await this.db.execute(sql`
       UPDATE teachers
       SET
         type           = ${input.type ?? current.type},
-        subjects       = ${pgArrayFormat},
-        hourly_rate    = ${input.hourly_rate === undefined ? current.hourly_rate : input.hourly_rate},
-        monthly_salary = ${input.monthly_salary === undefined ? current.monthly_salary : input.monthly_salary},
+        subjects       = ${subjectsLiteral},
+        hourly_rate    = ${hourlyRateSql},
+        monthly_salary = ${monthlySalarySql},
         is_blocked     = ${nextIsBlocked},
         blocked_reason = ${blockedReasonSql},
         blocked_at     = ${blockedAtSql}

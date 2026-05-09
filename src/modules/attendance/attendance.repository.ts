@@ -168,6 +168,10 @@ type TeacherComplianceRow = {
   total_checkins: number;
   total_checkouts: number;
   compliance_rate: string | number;
+  scan_end_rate: string | number;
+  room_correct_rate: string | number;
+  rollcall_rate: string | number;
+  attendance_rate: string | number;
 };
 
 type SuspiciousAttendanceRow = {
@@ -641,7 +645,11 @@ export class AttendanceRepository {
         teacher_name,
         total_checkins,
         total_checkouts,
-        compliance_rate
+        compliance_rate,
+        scan_end_rate,
+        room_correct_rate,
+        rollcall_rate,
+        attendance_rate
       FROM teacher_scan_compliance
       WHERE month = ${params.monthStart}::date
         AND (${params.teacherId ?? null}::uuid IS NULL OR teacher_id = ${params.teacherId ?? null}::uuid)
@@ -651,7 +659,11 @@ export class AttendanceRepository {
         u.name AS teacher_name,
         0 AS total_checkins,
         0 AS total_checkouts,
-        0::numeric AS compliance_rate
+        0::numeric AS compliance_rate,
+        0::numeric AS scan_end_rate,
+        0::numeric AS room_correct_rate,
+        0::numeric AS rollcall_rate,
+        0::numeric AS attendance_rate
       FROM teachers t
       INNER JOIN users u ON u.id = t.user_id
       WHERE (${params.teacherId ?? null}::uuid IS NULL OR t.id = ${params.teacherId ?? null}::uuid)

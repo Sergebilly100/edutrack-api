@@ -58,6 +58,7 @@ export const notificationTypeEnum = tenant.enum('notification_type', [
   'qr_invalid_alert',
   'student_absent_parent',
   'attendance_rejected',
+  'scan_end_warning',
   'subscription_expiry_alert',
   'payment_reminder',
   'custom',
@@ -507,6 +508,9 @@ export const salaryRecords = tenant.table(
     paidBy: uuid('paid_by').references(() => users.id),
     notes: text('notes'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' })
       .notNull()
       .defaultNow(),
   },
