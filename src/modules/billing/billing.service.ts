@@ -224,6 +224,20 @@ export class BillingService {
       const paidAmountForSummary = BillingRepository.toNumber(row.paid_amount);
 
       if (row.hourly_rate === null || row.teacher_type === 'permanent') {
+        const effectivePaidAmount = hasMeaningfulValue(paidAmountForSummary)
+          ? paidAmountForSummary
+          : row.paid_at
+            ? (row.monthly_salary ?? 0)
+            : 0;
+        // Pour un permanent legacy (paid_at défini mais salary_payments vide),
+        // réconcilier le statut depuis paid_at plutôt que de lire salary_records.status
+        // qui peut rester 'pending' sur les anciens enregistrements.
+        const permanentStatus: SalaryRecordStatus =
+          row.salary_status === 'disputed'
+            ? 'disputed'
+            : hasMeaningfulValue(effectivePaidAmount) && effectivePaidAmount + EPSILON >= (row.monthly_salary ?? 0)
+              ? 'paid'
+              : row.salary_status ?? 'pending';
         return {
           teacherId: row.teacher_id,
           teacherName: row.teacher_name,
@@ -232,14 +246,8 @@ export class BillingService {
           hoursDone: roundHours(hoursDone),
           hourlyRate: null,
           totalFcfa: row.monthly_salary,
-          // Pour un permanent : si paid_amount = 0 mais paid_at est défini,
-          // c'est un enregistrement legacy — on restitue monthly_salary comme montant versé
-          amountAlreadyPaid: hasMeaningfulValue(paidAmountForSummary)
-            ? paidAmountForSummary
-            : row.paid_at
-              ? (row.monthly_salary ?? 0)
-              : 0,
-          status: row.salary_status ?? 'pending',
+          amountAlreadyPaid: effectivePaidAmount,
+          status: permanentStatus,
           salaryRecordId: row.salary_record_id,
           isPartiallyPaid: false,
           paidAt: row.paid_at,
@@ -247,7 +255,21 @@ export class BillingService {
       }
 
       const paidHoursFromPayments = BillingRepository.toNumber(row.paid_hours);
-      const paidHoursForStatus = paidHoursFromPayments;
+      // Legacy vacataire : paid_at défini mais salary_payments vide → le paiement
+      // a eu lieu avant l'introduction de la table salary_payments. On considère
+      // que toutes les heures faites (total_fcfa de l'époque) ont été réglées.
+      const isLegacyVacataire = !hasMeaningfulValue(paidHoursFromPayments) && row.paid_at !== null;
+      const effectiveVacatairePaidAmount = hasMeaningfulValue(paidAmountForSummary)
+        ? paidAmountForSummary
+        : isLegacyVacataire
+          ? totalFcfa
+          : 0;
+      const effectiveVacatairePaidHours = hasMeaningfulValue(paidHoursFromPayments)
+        ? paidHoursFromPayments
+        : isLegacyVacataire
+          ? hoursDone
+          : 0;
+      const paidHoursForStatus = effectiveVacatairePaidHours;
       const isPartiallyPaid = hasMeaningfulValue(paidHoursForStatus) && paidHoursForStatus + EPSILON < hoursDone;
       const baseStatus = row.salary_status ?? 'pending';
       const normalizedStatus = resolveVacataireStatus({
@@ -265,9 +287,7 @@ export class BillingService {
         hoursDone: roundHours(hoursDone),
         hourlyRate: row.hourly_rate,
         totalFcfa,
-        // amountAlreadyPaid : montant réellement versé ce mois pour ce prof.
-        // Distinct de totalFcfa (montant dû total) — crucial pour les paiements partiels.
-        amountAlreadyPaid: paidAmountForSummary,
+        amountAlreadyPaid: effectiveVacatairePaidAmount,
         status: normalizedStatus,
         salaryRecordId: row.salary_record_id,
         isPartiallyPaid: normalizedStatus !== 'paid' ? isPartiallyPaid : false,
@@ -309,7 +329,18 @@ export class BillingService {
       : { paid_hours: 0, paid_amount: 0, payments_count: 0, last_paid_at: null };
     const paidHoursFromPayments = BillingRepository.toNumber(paidSummary.paid_hours);
     const paidAmountFromPayments = BillingRepository.toNumber(paidSummary.paid_amount);
-    const effectivePaidHours = teacher.teacher_type === 'vacataire' ? paidHoursFromPayments : 0;
+    const isLegacyVacataire =
+      teacher.teacher_type === 'vacataire' &&
+      !hasMeaningfulValue(paidHoursFromPayments) &&
+      (teacherMetrics?.paid_at ?? null) !== null;
+    const effectivePaidHours =
+      teacher.teacher_type === 'vacataire'
+        ? hasMeaningfulValue(paidHoursFromPayments)
+          ? paidHoursFromPayments
+          : isLegacyVacataire
+            ? BillingRepository.toNumber(teacherMetrics?.hours_done ?? 0)
+            : 0
+        : 0;
     const effectivePaidAmount =
       teacher.teacher_type === 'permanent'
         ? hasMeaningfulValue(paidAmountFromPayments)
@@ -317,7 +348,11 @@ export class BillingService {
           : teacherMetrics?.paid_at
             ? teacher.monthly_salary ?? 0
             : 0
-        : paidAmountFromPayments;
+        : hasMeaningfulValue(paidAmountFromPayments)
+          ? paidAmountFromPayments
+          : isLegacyVacataire
+            ? BillingRepository.toNumber(teacherMetrics?.total_fcfa ?? 0)
+            : 0;
 
     const financials = computeTeacherFinancials(rows, teacher, teacherMetrics, effectivePaidHours, effectivePaidAmount);
 
@@ -330,7 +365,11 @@ export class BillingService {
             totalFcfa: financials.totalFcfa,
             paidHours: effectivePaidHours,
           })
-        : baseStatus;
+        : baseStatus === 'disputed'
+          ? 'disputed'
+          : hasMeaningfulValue(effectivePaidAmount) && effectivePaidAmount + EPSILON >= (teacher.monthly_salary ?? 0)
+            ? 'paid'
+            : baseStatus;
 
     const normalizedPaymentRows =
       paymentRows.length > 0

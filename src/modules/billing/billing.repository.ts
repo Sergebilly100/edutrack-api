@@ -876,27 +876,41 @@ export class BillingRepository {
       WITH payments AS (
         SELECT
           salary_record_id,
-          COALESCE(SUM(amount_fcfa), 0)::int AS paid_amount
+          COALESCE(SUM(amount_fcfa), 0)::int AS paid_amount,
+          COALESCE(SUM(hours_paid), 0)::numeric AS paid_hours,
+          COUNT(*) AS payments_count
         FROM salary_payments
         GROUP BY salary_record_id
+      ),
+      -- Un enregistrement legacy est un salary_record avec paid_at défini
+      -- mais sans aucune entrée dans salary_payments (créé avant la table salary_payments).
+      -- Il est considéré entièrement soldé : montant restant = 0.
+      record_remaining AS (
+        SELECT
+          sr.id,
+          sr.period_month,
+          sr.status,
+          CASE
+            WHEN sr.paid_at IS NOT NULL AND COALESCE(payments.payments_count, 0) = 0
+              THEN 0
+            ELSE GREATEST(sr.total_fcfa - COALESCE(payments.paid_amount, 0), 0)
+          END AS remaining_fcfa
+        FROM salary_records sr
+        LEFT JOIN payments ON payments.salary_record_id = sr.id
+        WHERE sr.period_month < ${beforeMonthStart}::date
+          AND sr.status::text <> 'nothing_to_pay'
       )
       SELECT
-        sr.period_month::text AS period_month,
+        period_month::text AS period_month,
         COUNT(*)::int AS records_count,
-        SUM(GREATEST(sr.total_fcfa - COALESCE(payments.paid_amount, 0), 0))::int AS total_remaining_fcfa
-      FROM salary_records sr
-      LEFT JOIN payments ON payments.salary_record_id = sr.id
-      WHERE sr.period_month < ${beforeMonthStart}::date
-        AND sr.status::text <> 'nothing_to_pay'
-        -- Ne garder que les salaires réellement impayés (status pending ou disputed)
-        -- OU les salaires marqués payés mais avec un montant restant (cas des paiements partiels)
-        AND (
-          sr.status IN ('pending'::salary_status, 'disputed'::salary_status)
-          OR (sr.status = 'paid'::salary_status AND GREATEST(sr.total_fcfa - COALESCE(payments.paid_amount, 0), 0) > 0)
-        )
-      GROUP BY sr.period_month
-      HAVING SUM(GREATEST(sr.total_fcfa - COALESCE(payments.paid_amount, 0), 0)) > 0
-      ORDER BY sr.period_month ASC
+        SUM(remaining_fcfa)::int AS total_remaining_fcfa
+      FROM record_remaining
+      WHERE
+        (status IN ('pending'::salary_status, 'disputed'::salary_status) AND remaining_fcfa > 0)
+        OR (status = 'paid'::salary_status AND remaining_fcfa > 0)
+      GROUP BY period_month
+      HAVING SUM(remaining_fcfa) > 0
+      ORDER BY period_month ASC
     `);
 
     return getRows(result);
