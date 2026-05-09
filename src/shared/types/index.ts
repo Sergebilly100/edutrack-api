@@ -60,6 +60,8 @@ export type NotificationType =
   | 'student_absent_parent'
   | 'attendance_rejected'
   | 'scan_end_warning'
+  | 'scan_end_sanction'
+  | 'scan_end_sanction_cancelled'
   | 'subscription_expiry_alert'
   | 'payment_reminder'
   | 'custom';

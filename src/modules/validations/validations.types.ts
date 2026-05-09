@@ -34,6 +34,8 @@ export type PendingValidationItem = {
   validationReason: string | null;
   hourlyRate: number | null;
   kind: ValidationKind;
+  slotLabel: string | null;
+  roomName: string | null;
 };
 
 export type PendingValidationGroups = {
@@ -63,18 +65,51 @@ export const invalidateSessionBodySchema = z.object({
   reason: z.string().trim().min(3).max(500),
 });
 
+export const endScanActionBodySchema = z.object({
+  attendance_id: z.string().uuid(),
+  action: z.enum(['warned', 'sanctioned']),
+  reason: z.string().trim().min(3).max(500),
+});
+
+export const cancelEndScanSanctionBodySchema = z.object({
+  attendance_id: z.string().uuid(),
+  reason: z.string().trim().min(3).max(500),
+});
+
+export const notificationIdParamsSchema = z.object({
+  notificationId: z.string().uuid(),
+});
+
+export type TeacherNotificationItem = {
+  id: string;
+  type: string;
+  message: string;
+  createdAt: string;
+  readAt: string | null;
+  metadata: Record<string, unknown> | null;
+};
+
+export type EndScanAction = 'warned' | 'sanctioned';
+
 export type MissingEndScanSession = {
   date: string;
   scheduleId: string;
   attendanceId: string;
   subject: string;
   timeSlot: string;
+  roomName: string | null;
+  endScanAction: EndScanAction | null;
+  endScanActionReason: string | null;
+  endScanActionAt: string | null;
+  endScanActionCancelledAt: string | null;
 };
 
 export type MissingEndScanTeacher = {
   teacherId: string;
   teacherName: string;
   missingEndScanCount: number;
+  warningCount: number;
+  sanctionCount: number;
   sessions: MissingEndScanSession[];
   warningSent: boolean;
 };

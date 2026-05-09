@@ -6,13 +6,17 @@ import { db as publicDb, withTenantSchema } from '../../shared/database/db.js';
 import {
   requireDirector,
   requirePermission,
+  requireTeacher,
 } from '../../shared/middleware/auth.middleware.js';
 import { ValidationModuleError, buildValidationsService } from './validations.service.js';
 import {
   approveValidationBodySchema,
   attendanceIdParamsSchema,
+  cancelEndScanSanctionBodySchema,
+  endScanActionBodySchema,
   invalidateSessionBodySchema,
   missingEndScansQuerySchema,
+  notificationIdParamsSchema,
   realHoursConfigBodySchema,
   rejectValidationBodySchema,
   sendEndScanWarningBodySchema,
@@ -180,6 +184,84 @@ export default async function validationsController(app: FastifyInstance): Promi
             role: claims.role,
           }
         );
+      });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  // ── End-scan actions (warn / sanction / cancel) ──────────────────────────────
+
+  app.post('/api/v1/validations/end-scan-action', { preHandler: requirePermission('validations.approve') }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const body = endScanActionBodySchema.parse(request.body ?? {});
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildValidationsService(tenantDb);
+        return service.applyEndScanAction(
+          { attendanceId: body.attendance_id, action: body.action, reason: body.reason },
+          { schemaName: claims.schemaName, tenantId: claims.tenantId, userId: claims.sub, role: claims.role }
+        );
+      });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.post('/api/v1/validations/cancel-end-scan-sanction', { preHandler: requirePermission('validations.reject') }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const body = cancelEndScanSanctionBodySchema.parse(request.body ?? {});
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildValidationsService(tenantDb);
+        return service.cancelEndScanSanction(
+          { attendanceId: body.attendance_id, reason: body.reason },
+          { schemaName: claims.schemaName, tenantId: claims.tenantId, userId: claims.sub, role: claims.role }
+        );
+      });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  // ── Teacher in-app notifications ────────────────────────────────────────────
+
+  app.get('/api/v1/teacher/notifications', { preHandler: requireTeacher }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildValidationsService(tenantDb);
+        return service.listTeacherNotifications(claims.sub);
+      });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.patch('/api/v1/teacher/notifications/:notificationId/read', { preHandler: requireTeacher }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const params = notificationIdParamsSchema.parse(request.params ?? {});
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildValidationsService(tenantDb);
+        return service.markTeacherNotificationRead(params.notificationId, claims.sub);
+      });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.patch('/api/v1/teacher/notifications/read-all', { preHandler: requireTeacher }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildValidationsService(tenantDb);
+        return service.markAllTeacherNotificationsRead(claims.sub);
       });
       return reply.send(result);
     } catch (error) {

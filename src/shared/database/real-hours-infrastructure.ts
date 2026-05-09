@@ -71,6 +71,8 @@ export const ensureTenantRealHoursInfrastructure = async (
       ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'qr_invalid_alert';
       ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'attendance_rejected';
       ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'scan_end_warning';
+      ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'scan_end_sanction';
+      ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'scan_end_sanction_cancelled';
     `));
 
     await db.execute(sql`
@@ -107,6 +109,22 @@ export const ensureTenantRealHoursInfrastructure = async (
         ADD COLUMN IF NOT EXISTS latitude numeric(10,7),
         ADD COLUMN IF NOT EXISTS longitude numeric(10,7),
         ADD COLUMN IF NOT EXISTS geo_radius integer DEFAULT 100
+    `);
+
+    await db.execute(sql`
+      DO $$ BEGIN
+        CREATE TYPE end_scan_action_type AS ENUM ('warned', 'sanctioned');
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$
+    `);
+
+    await db.execute(sql`
+      ALTER TABLE attendances_teacher
+        ADD COLUMN IF NOT EXISTS end_scan_action end_scan_action_type,
+        ADD COLUMN IF NOT EXISTS end_scan_action_reason text,
+        ADD COLUMN IF NOT EXISTS end_scan_action_at timestamptz,
+        ADD COLUMN IF NOT EXISTS end_scan_action_by uuid,
+        ADD COLUMN IF NOT EXISTS end_scan_action_cancelled_at timestamptz,
+        ADD COLUMN IF NOT EXISTS end_scan_action_cancel_reason text
     `);
 
     await db.execute(sql`

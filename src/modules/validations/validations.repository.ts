@@ -4,14 +4,18 @@ import type { QueryResult, QueryResultRow } from 'pg';
 
 import { ensureTenantRealHoursInfrastructure } from '../../shared/database/real-hours-infrastructure.js';
 import type {
+  EndScanAction,
   MissingEndScanTeacher,
   PendingValidationCount,
   PendingValidationGroups,
   PendingValidationItem,
+  TeacherNotificationItem,
   ValidationKind,
 } from './validations.types.js';
 
 export type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
+
+type TransactionCallback<T> = (tx: QueryExecutor) => Promise<T>;
 
 type PendingValidationRow = {
   attendance_id: string;
@@ -32,6 +36,8 @@ type PendingValidationRow = {
   validation_reason: string | null;
   hourly_rate: number | null;
   kind: ValidationKind;
+  slot_label: string | null;
+  room_name: string | null;
 };
 
 type AttendanceValidationContextRow = PendingValidationRow & {
@@ -77,10 +83,16 @@ const mapPendingRow = (row: PendingValidationRow): PendingValidationItem => ({
   validationReason: row.validation_reason,
   hourlyRate: row.hourly_rate,
   kind: row.kind,
+  slotLabel: row.slot_label ?? null,
+  roomName: row.room_name ?? null,
 });
 
 export class ValidationsRepository {
   constructor(private readonly db: QueryExecutor) {}
+
+  transaction<T>(callback: TransactionCallback<T>): Promise<T> {
+    return this.db.transaction(callback);
+  }
 
   async listPending(): Promise<PendingValidationGroups> {
     await ensureTenantRealHoursInfrastructure(this.db);
@@ -114,13 +126,16 @@ export class ValidationsRepository {
         CASE
           WHEN at.geo_status = 'suspicious' THEN 'gps_suspicious'
           ELSE 'short_hours'
-        END AS kind
+        END AS kind,
+        ts.label AS slot_label,
+        r.name AS room_name
       FROM attendances_teacher at
       INNER JOIN teachers t ON t.id = at.teacher_id
       INNER JOIN users u ON u.id = t.user_id
       INNER JOIN schedules s ON s.id = at.schedule_id
       INNER JOIN classes c ON c.id = s.class_id
       INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+      LEFT JOIN rooms r ON r.id = s.room_id
       WHERE at.validation_status = 'pending'
         AND (
           at.geo_status = 'suspicious'
@@ -142,16 +157,48 @@ export class ValidationsRepository {
   }
 
   async countPending(): Promise<PendingValidationCount> {
-    const groups = await this.listPending();
-    const gps = groups.gps_suspicious.length;
-    const short = groups.short_hours.length;
+    await ensureTenantRealHoursInfrastructure(this.db);
+
+    type CountRow = { kind: ValidationKind; cnt: string };
+    const result = await this.db.execute<CountRow>(sql`
+      WITH feature_flags AS (
+        SELECT COALESCE(f.checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
+        FROM public.tenants t
+        LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
+        WHERE t.schema_name = current_schema()
+        LIMIT 1
+      )
+      SELECT
+        CASE WHEN at.geo_status = 'suspicious' THEN 'gps_suspicious' ELSE 'short_hours' END AS kind,
+        COUNT(*)::text AS cnt
+      FROM attendances_teacher at
+      INNER JOIN schedules s ON s.id = at.schedule_id
+      INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+      WHERE at.validation_status = 'pending'
+        AND (
+          at.geo_status = 'suspicious'
+          OR (
+            at.actual_minutes IS NOT NULL
+            AND at.actual_minutes < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
+          )
+        )
+      GROUP BY 1
+    `);
+
+    let gps = 0;
+    let short = 0;
+    for (const row of getRows(result)) {
+      if (row.kind === 'gps_suspicious') gps = Number(row.cnt);
+      else short = Number(row.cnt);
+    }
     return { gps_suspicious: gps, short_hours: short, total: gps + short };
   }
 
-  async findValidationContext(attendanceId: string): Promise<AttendanceValidationContextRow | null> {
-    await ensureTenantRealHoursInfrastructure(this.db);
+  async findValidationContext(attendanceId: string, tx?: QueryExecutor): Promise<AttendanceValidationContextRow | null> {
+    const db = tx ?? this.db;
+    await ensureTenantRealHoursInfrastructure(db);
 
-    const result = await this.db.execute<AttendanceValidationContextRow>(sql`
+    const result = await db.execute<AttendanceValidationContextRow>(sql`
       SELECT
         at.id::text AS attendance_id,
         t.id::text AS teacher_id,
@@ -171,13 +218,16 @@ export class ValidationsRepository {
         at.validation_reason,
         t.hourly_rate,
         CASE WHEN at.geo_status = 'suspicious' THEN 'gps_suspicious' ELSE 'short_hours' END AS kind,
-        DATE_TRUNC('month', at.date)::date::text AS period_month
+        DATE_TRUNC('month', at.date)::date::text AS period_month,
+        ts.label AS slot_label,
+        r.name AS room_name
       FROM attendances_teacher at
       INNER JOIN teachers t ON t.id = at.teacher_id
       INNER JOIN users u ON u.id = t.user_id
       INNER JOIN schedules s ON s.id = at.schedule_id
       INNER JOIN classes c ON c.id = s.class_id
       INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+      LEFT JOIN rooms r ON r.id = s.room_id
       WHERE at.id = ${attendanceId}
       LIMIT 1
     `);
@@ -189,8 +239,9 @@ export class ValidationsRepository {
     attendanceId: string;
     validatedHours: number;
     validatedBy: string;
-  }): Promise<void> {
-    await this.db.execute(sql`
+  }, tx?: QueryExecutor): Promise<void> {
+    const db = tx ?? this.db;
+    await db.execute(sql`
       UPDATE attendances_teacher
       SET
         validation_status = 'approved',
@@ -206,8 +257,9 @@ export class ValidationsRepository {
     attendanceId: string;
     reason: string;
     validatedBy: string;
-  }): Promise<void> {
-    await this.db.execute(sql`
+  }, tx?: QueryExecutor): Promise<void> {
+    const db = tx ?? this.db;
+    await db.execute(sql`
       UPDATE attendances_teacher
       SET
         validation_status = 'rejected',
@@ -364,7 +416,12 @@ export class ValidationsRepository {
       date: string;
       subject: string;
       slot_label: string;
+      room_name: string | null;
       warning_sent: boolean;
+      end_scan_action: EndScanAction | null;
+      end_scan_action_reason: string | null;
+      end_scan_action_at: string | null;
+      end_scan_action_cancelled_at: string | null;
     };
 
     const result = await this.db.execute<MissingRow>(sql`
@@ -376,22 +433,28 @@ export class ValidationsRepository {
         at.date::text AS date,
         s.subject,
         ts.label AS slot_label,
+        r.name AS room_name,
         EXISTS (
           SELECT 1 FROM notifications_log nl
           WHERE nl.type = 'scan_end_warning'
             AND nl.recipient_id = u.id
             AND nl.metadata->>'month' = ${month}
-        ) AS warning_sent
+        ) AS warning_sent,
+        at.end_scan_action,
+        at.end_scan_action_reason,
+        at.end_scan_action_at::text AS end_scan_action_at,
+        at.end_scan_action_cancelled_at::text AS end_scan_action_cancelled_at
       FROM attendances_teacher at
       INNER JOIN teachers t ON t.id = at.teacher_id
       INNER JOIN users u ON u.id = t.user_id
       INNER JOIN schedules s ON s.id = at.schedule_id
       INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+      LEFT JOIN rooms r ON r.id = s.room_id
       WHERE at.date BETWEEN ${monthStart}::date AND ${monthEnd}::date
         AND at.checked_in_at IS NOT NULL
         AND at.checked_out_at IS NULL
         AND at.room_scan_end_at IS NULL
-        AND at.validation_status != 'rejected'
+        AND at.date < CURRENT_DATE
       ORDER BY u.name ASC, at.date DESC
     `);
 
@@ -405,18 +468,27 @@ export class ValidationsRepository {
           teacherId: row.teacher_id,
           teacherName: row.teacher_name,
           missingEndScanCount: 0,
+          warningCount: 0,
+          sanctionCount: 0,
           sessions: [],
           warningSent: row.warning_sent,
         };
         grouped.set(row.teacher_id, entry);
       }
       entry.missingEndScanCount++;
+      if (row.end_scan_action === 'warned' && !row.end_scan_action_cancelled_at) entry.warningCount++;
+      if (row.end_scan_action === 'sanctioned' && !row.end_scan_action_cancelled_at) entry.sanctionCount++;
       entry.sessions.push({
         date: row.date,
         scheduleId: row.schedule_id,
         attendanceId: row.attendance_id,
         subject: row.subject,
         timeSlot: row.slot_label,
+        roomName: row.room_name ?? null,
+        endScanAction: row.end_scan_action ?? null,
+        endScanActionReason: row.end_scan_action_reason ?? null,
+        endScanActionAt: row.end_scan_action_at ?? null,
+        endScanActionCancelledAt: row.end_scan_action_cancelled_at ?? null,
       });
     }
 
@@ -507,7 +579,242 @@ export class ValidationsRepository {
       WHERE id = ${params.attendanceId}
     `);
   }
-}
+
+  // ── End-scan actions (warn / sanction) ───────────────────────────────────
+
+  async findAttendanceForEndScanAction(attendanceId: string): Promise<{
+    attendance_id: string;
+    teacher_id: string;
+    teacher_user_id: string;
+    teacher_name: string;
+    teacher_phone: string | null;
+    teacher_email: string | null;
+    course_name: string;
+    date: string;
+    end_scan_action: EndScanAction | null;
+    end_scan_action_cancelled_at: string | null;
+    validation_status: string;
+  } | null> {
+    const result = await this.db.execute<{
+      attendance_id: string;
+      teacher_id: string;
+      teacher_user_id: string;
+      teacher_name: string;
+      teacher_phone: string | null;
+      teacher_email: string | null;
+      course_name: string;
+      date: string;
+      end_scan_action: EndScanAction | null;
+      end_scan_action_cancelled_at: string | null;
+      validation_status: string;
+    }>(sql`
+      SELECT
+        at.id::text AS attendance_id,
+        t.id::text AS teacher_id,
+        u.id::text AS teacher_user_id,
+        u.name AS teacher_name,
+        u.phone AS teacher_phone,
+        u.email AS teacher_email,
+        s.subject AS course_name,
+        at.date::text AS date,
+        at.end_scan_action,
+        at.end_scan_action_cancelled_at::text AS end_scan_action_cancelled_at,
+        at.validation_status::text AS validation_status
+      FROM attendances_teacher at
+      INNER JOIN teachers t ON t.id = at.teacher_id
+      INNER JOIN users u ON u.id = t.user_id
+      INNER JOIN schedules s ON s.id = at.schedule_id
+      WHERE at.id = ${attendanceId}
+      LIMIT 1
+    `);
+    return getRows(result)[0] ?? null;
+  }
+
+  async applyEndScanAction(params: {
+    attendanceId: string;
+    action: EndScanAction;
+    reason: string;
+    actorId: string;
+  }): Promise<void> {
+    await this.db.execute(sql`
+      UPDATE attendances_teacher
+      SET
+        end_scan_action = ${params.action}::end_scan_action_type,
+        end_scan_action_reason = ${params.reason},
+        end_scan_action_at = NOW(),
+        end_scan_action_by = ${params.actorId}::uuid,
+        end_scan_action_cancelled_at = NULL,
+        end_scan_action_cancel_reason = NULL
+      WHERE id = ${params.attendanceId}
+    `);
+  }
+
+  async setSanctionedAttendanceRejected(params: {
+    attendanceId: string;
+    reason: string;
+    actorId: string;
+  }): Promise<void> {
+    await this.db.execute(sql`
+      UPDATE attendances_teacher
+      SET
+        validation_status = 'rejected',
+        validation_reason = ${params.reason},
+        validated_by = ${params.actorId}::uuid,
+        validated_at = NOW(),
+        validated_hours = 0,
+        status = 'absent'::attendance_teacher_status
+      WHERE id = ${params.attendanceId}
+    `);
+  }
+
+  async revertSanctionedAttendance(attendanceId: string): Promise<void> {
+    await this.db.execute(sql`
+      UPDATE attendances_teacher
+      SET
+        validation_status = 'pending',
+        validation_reason = NULL,
+        validated_by = NULL,
+        validated_at = NULL,
+        validated_hours = NULL,
+        status = 'present'::attendance_teacher_status
+      WHERE id = ${attendanceId}
+    `);
+  }
+
+  async cancelEndScanSanction(params: {
+    attendanceId: string;
+    reason: string;
+  }): Promise<void> {
+    await this.db.execute(sql`
+      UPDATE attendances_teacher
+      SET
+        end_scan_action_cancelled_at = NOW(),
+        end_scan_action_cancel_reason = ${params.reason}
+      WHERE id = ${params.attendanceId}
+    `);
+  }
+
+  async insertEndScanActionNotification(params: {
+    action: EndScanAction;
+    teacherUserId: string;
+    teacherPhone: string | null;
+    teacherEmail: string | null;
+    teacherName: string;
+    courseName: string;
+    date: string;
+    reason: string;
+  }): Promise<void> {
+    const isSanction = params.action === 'sanctioned';
+    const message = isSanction
+      ? `Sanction pour absence de scan de fin — ${params.courseName} du ${params.date}. Motif : ${params.reason}. Présentez-vous à l'administration pour justification.`
+      : `Avertissement pour absence de scan de fin — ${params.courseName} du ${params.date}. Motif : ${params.reason}. Aucun impact sur votre salaire ce mois.`;
+    await this.db.execute(sql`
+      INSERT INTO notifications_log (
+        type, channel, recipient_id, recipient_phone, recipient_email, message, status, metadata
+      ) VALUES (
+        ${isSanction ? 'scan_end_sanction' : 'scan_end_warning'},
+        'email',
+        ${params.teacherUserId}::uuid,
+        ${params.teacherPhone ?? ''},
+        ${params.teacherEmail ?? null},
+        ${message},
+        'queued',
+        ${JSON.stringify({ courseName: params.courseName, date: params.date, reason: params.reason, action: params.action })}::jsonb
+      )
+    `);
+  }
+
+  async insertSanctionCancelledNotification(params: {
+    teacherUserId: string;
+    teacherPhone: string | null;
+    teacherEmail: string | null;
+    teacherName: string;
+    courseName: string;
+    date: string;
+    cancelReason: string;
+  }): Promise<void> {
+    const message = `La sanction pour ${params.courseName} du ${params.date} a été annulée. Motif : ${params.cancelReason}. Votre cours est de nouveau pris en compte.`;
+    await this.db.execute(sql`
+      INSERT INTO notifications_log (
+        type, channel, recipient_id, recipient_phone, recipient_email, message, status, metadata
+      ) VALUES (
+        'scan_end_sanction_cancelled',
+        'email',
+        ${params.teacherUserId}::uuid,
+        ${params.teacherPhone ?? ''},
+        ${params.teacherEmail ?? null},
+        ${message},
+        'queued',
+        ${JSON.stringify({ courseName: params.courseName, date: params.date, cancelReason: params.cancelReason })}::jsonb
+      )
+    `);
+  }
+
+  // ── Teacher in-app notifications ─────────────────────────────────────────
+
+  async listTeacherNotifications(userId: string): Promise<TeacherNotificationItem[]> {
+    type NotifRow = {
+      id: string;
+      type: string;
+      message: string;
+      created_at: string;
+      metadata: Record<string, unknown> | null;
+    };
+
+    const result = await this.db.execute<NotifRow>(sql`
+      SELECT
+        id::text,
+        type,
+        message,
+        created_at::text,
+        metadata
+      FROM notifications_log
+      WHERE recipient_id = ${userId}::uuid
+        AND type IN ('attendance_rejected', 'scan_end_warning')
+      ORDER BY created_at DESC
+      LIMIT 50
+    `);
+
+    return getRows(result).map((row) => ({
+      id: row.id,
+      type: row.type,
+      message: row.message,
+      createdAt: row.created_at,
+      readAt: (row.metadata as { read_at?: string } | null)?.read_at ?? null,
+      metadata: row.metadata,
+    }));
+  }
+
+  async findTeacherNotification(notificationId: string, userId: string): Promise<{ id: string } | null> {
+    const result = await this.db.execute<{ id: string }>(sql`
+      SELECT id::text
+      FROM notifications_log
+      WHERE id = ${notificationId}::uuid
+        AND recipient_id = ${userId}::uuid
+        AND type IN ('attendance_rejected', 'scan_end_warning')
+      LIMIT 1
+    `);
+    return getRows(result)[0] ?? null;
+  }
+
+  async markNotificationRead(notificationId: string): Promise<void> {
+    await this.db.execute(sql`
+      UPDATE notifications_log
+      SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('read_at', NOW()::text)
+      WHERE id = ${notificationId}::uuid
+    `);
+  }
+
+  async markAllNotificationsRead(userId: string): Promise<void> {
+    await this.db.execute(sql`
+      UPDATE notifications_log
+      SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('read_at', NOW()::text)
+      WHERE recipient_id = ${userId}::uuid
+        AND type IN ('attendance_rejected', 'scan_end_warning')
+        AND (metadata->>'read_at' IS NULL)
+    `);
+  }
+} // end class ValidationsRepository
 
 export const buildValidationsRepository = (
   db: ConstructorParameters<typeof ValidationsRepository>[0]

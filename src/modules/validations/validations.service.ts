@@ -1,6 +1,6 @@
 import { ValidationsRepository } from './validations.repository.js';
 import { emit } from '../../shared/events/event-bus.js';
-import type { MissingEndScanTeacher, PendingValidationCount, PendingValidationGroups } from './validations.types.js';
+import type { EndScanAction, MissingEndScanTeacher, PendingValidationCount, PendingValidationGroups, TeacherNotificationItem } from './validations.types.js';
 
 export class ValidationModuleError extends Error {
   constructor(
@@ -35,29 +35,31 @@ export class ValidationsService {
     input: { attendanceId: string; validatedHours?: number },
     context: ServiceContext
   ): Promise<{ success: true }> {
-    const before = await this.repository.findValidationContext(input.attendanceId);
-    if (!before) {
-      throw new ValidationModuleError('Validation not found', 404, 'VALIDATION_NOT_FOUND');
-    }
-
-    const fullHours = Number(before.schedule_duration_minutes) / 60;
-    const validatedHours = input.validatedHours ?? fullHours;
-    await this.repository.approve({
-      attendanceId: input.attendanceId,
-      validatedHours,
-      validatedBy: context.userId,
+    const before = await this.repository.transaction(async (tx) => {
+      const ctx = await this.repository.findValidationContext(input.attendanceId, tx);
+      if (!ctx) {
+        throw new ValidationModuleError('Validation not found', 404, 'VALIDATION_NOT_FOUND');
+      }
+      const fullHours = Number(ctx.schedule_duration_minutes) / 60;
+      const validatedHours = input.validatedHours ?? fullHours;
+      await this.repository.approve(
+        { attendanceId: input.attendanceId, validatedHours, validatedBy: context.userId },
+        tx
+      );
+      return { ctx, validatedHours };
     });
-    await this.repository.recomputeForAttendanceDate(before.teacher_id, before.date);
+
+    await this.repository.recomputeForAttendanceDate(before.ctx.teacher_id, before.ctx.date);
     await this.repository.auditValidation({
       schemaName: context.schemaName,
       actorId: context.userId,
       actorRole: context.role,
       action: 'attendance_validation_approved',
-      before,
+      before: before.ctx,
       after: {
         attendanceId: input.attendanceId,
         validationStatus: 'approved',
-        validatedHours,
+        validatedHours: before.validatedHours,
       },
     });
 
@@ -68,16 +70,18 @@ export class ValidationsService {
     input: { attendanceId: string; reason: string },
     context: ServiceContext
   ): Promise<{ success: true }> {
-    const before = await this.repository.findValidationContext(input.attendanceId);
-    if (!before) {
-      throw new ValidationModuleError('Validation not found', 404, 'VALIDATION_NOT_FOUND');
-    }
-
-    await this.repository.reject({
-      attendanceId: input.attendanceId,
-      reason: input.reason,
-      validatedBy: context.userId,
+    const before = await this.repository.transaction(async (tx) => {
+      const ctx = await this.repository.findValidationContext(input.attendanceId, tx);
+      if (!ctx) {
+        throw new ValidationModuleError('Validation not found', 404, 'VALIDATION_NOT_FOUND');
+      }
+      await this.repository.reject(
+        { attendanceId: input.attendanceId, reason: input.reason, validatedBy: context.userId },
+        tx
+      );
+      return ctx;
     });
+
     await this.repository.insertRejectedTeacherNotification({
       context: before,
       reason: input.reason,
@@ -192,6 +196,123 @@ export class ValidationsService {
       },
     });
 
+    return { success: true };
+  }
+
+  // ── End-scan actions ─────────────────────────────────────────────────────
+
+  async applyEndScanAction(
+    input: { attendanceId: string; action: EndScanAction; reason: string },
+    context: ServiceContext
+  ): Promise<{ success: true }> {
+    const record = await this.repository.findAttendanceForEndScanAction(input.attendanceId);
+    if (!record) {
+      throw new ValidationModuleError('Attendance not found', 404, 'ATTENDANCE_NOT_FOUND');
+    }
+    if (record.validation_status === 'approved') {
+      throw new ValidationModuleError(
+        'This session is already approved',
+        409,
+        'SESSION_ALREADY_APPROVED'
+      );
+    }
+    if (
+      record.end_scan_action !== null &&
+      record.end_scan_action_cancelled_at === null
+    ) {
+      throw new ValidationModuleError(
+        'An action has already been applied to this session',
+        409,
+        'END_SCAN_ACTION_ALREADY_SET'
+      );
+    }
+
+    await this.repository.applyEndScanAction({
+      attendanceId: input.attendanceId,
+      action: input.action,
+      reason: input.reason,
+      actorId: context.userId,
+    });
+
+    if (input.action === 'sanctioned') {
+      await this.repository.setSanctionedAttendanceRejected({
+        attendanceId: input.attendanceId,
+        reason: input.reason,
+        actorId: context.userId,
+      });
+      await this.repository.recomputeForAttendanceDate(record.teacher_id, record.date);
+    }
+
+    await this.repository.insertEndScanActionNotification({
+      action: input.action,
+      teacherUserId: record.teacher_user_id,
+      teacherPhone: record.teacher_phone,
+      teacherEmail: record.teacher_email,
+      teacherName: record.teacher_name,
+      courseName: record.course_name,
+      date: record.date,
+      reason: input.reason,
+    });
+
+    return { success: true };
+  }
+
+  async cancelEndScanSanction(
+    input: { attendanceId: string; reason: string },
+    context: ServiceContext
+  ): Promise<{ success: true }> {
+    const record = await this.repository.findAttendanceForEndScanAction(input.attendanceId);
+    if (!record) {
+      throw new ValidationModuleError('Attendance not found', 404, 'ATTENDANCE_NOT_FOUND');
+    }
+    if (record.end_scan_action !== 'sanctioned' || record.end_scan_action_cancelled_at !== null) {
+      throw new ValidationModuleError(
+        'No active sanction to cancel for this session',
+        409,
+        'NO_ACTIVE_SANCTION'
+      );
+    }
+
+    await this.repository.cancelEndScanSanction({
+      attendanceId: input.attendanceId,
+      reason: input.reason,
+    });
+    await this.repository.revertSanctionedAttendance(input.attendanceId);
+    await this.repository.recomputeForAttendanceDate(record.teacher_id, record.date);
+
+    await this.repository.insertSanctionCancelledNotification({
+      teacherUserId: record.teacher_user_id,
+      teacherPhone: record.teacher_phone,
+      teacherEmail: record.teacher_email,
+      teacherName: record.teacher_name,
+      courseName: record.course_name,
+      date: record.date,
+      cancelReason: input.reason,
+    });
+
+    return { success: true };
+  }
+
+  // ── Teacher in-app notifications ─────────────────────────────────────────
+
+  listTeacherNotifications(userId: string): Promise<TeacherNotificationItem[]> {
+    return this.repository.listTeacherNotifications(userId);
+  }
+
+  async markTeacherNotificationRead(
+    notificationId: string,
+    userId: string
+  ): Promise<{ success: true }> {
+    const found = await this.repository.findTeacherNotification(notificationId, userId);
+    if (!found) {
+      throw new ValidationModuleError('Notification not found', 404, 'NOTIFICATION_NOT_FOUND');
+    }
+    await this.repository.markNotificationRead(notificationId);
+    return { success: true };
+  }
+
+  async markAllTeacherNotificationsRead(userId: string): Promise<{ success: true }> {
+    await this.repository.markAllNotificationsRead(userId);
     return { success: true };
   }
 }
