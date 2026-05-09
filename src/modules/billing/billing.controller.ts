@@ -204,16 +204,7 @@ export default async function billingController(
     { preHandler: requirePermission('salary.view') },
     async (request, reply) => {
       try {
-        const claims = request.claims
-if (!claims) {
-  // Ne devrait jamais arriver si requirePermission est actif,
-  // mais on garde un guard défensif pour le strict mode
-  return reply.code(401).send({
-    error: 'Unauthorized',
-    code: 'MISSING_CLAIMS',
-    statusCode: 401,
-  })
-}
+        const claims = request.claims!;
         const query = monthQuerySchema.parse(request.query ?? {});
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
@@ -232,16 +223,7 @@ if (!claims) {
     { preHandler: requirePermission('salary.view') },
     async (request, reply) => {
       try {
-        const claims = request.claims
-if (!claims) {
-  // Ne devrait jamais arriver si requirePermission est actif,
-  // mais on garde un guard défensif pour le strict mode
-  return reply.code(401).send({
-    error: 'Unauthorized',
-    code: 'MISSING_CLAIMS',
-    statusCode: 401,
-  })
-}
+        const claims = request.claims!;
         const query = monthQuerySchema.parse(request.query ?? {});
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
@@ -260,16 +242,7 @@ if (!claims) {
     { preHandler: requirePermission('salary.view') },
     async (request, reply) => {
       try {
-        const claims = request.claims
-if (!claims) {
-  // Ne devrait jamais arriver si requirePermission est actif,
-  // mais on garde un guard défensif pour le strict mode
-  return reply.code(401).send({
-    error: 'Unauthorized',
-    code: 'MISSING_CLAIMS',
-    statusCode: 401,
-  })
-}
+        const claims = request.claims!;
         const params = teacherParamsSchema.parse(request.params ?? {});
         const query = monthQuerySchema.parse(request.query ?? {});
 
@@ -289,16 +262,7 @@ if (!claims) {
     { preHandler: requirePermission('salary.view') },
     async (request, reply) => {
       try {
-        const claims = request.claims
-if (!claims) {
-  // Ne devrait jamais arriver si requirePermission est actif,
-  // mais on garde un guard défensif pour le strict mode
-  return reply.code(401).send({
-    error: 'Unauthorized',
-    code: 'MISSING_CLAIMS',
-    statusCode: 401,
-  })
-}
+        const claims = request.claims!;
         const params = teacherParamsSchema.parse(request.params ?? {});
         const query = salaryHistoryQuerySchema.parse(request.query ?? {});
 
@@ -318,16 +282,7 @@ if (!claims) {
     { preHandler: requirePermission('salary.compute') },
     async (request, reply) => {
       try {
-        const claims = request.claims
-if (!claims) {
-  // Ne devrait jamais arriver si requirePermission est actif,
-  // mais on garde un guard défensif pour le strict mode
-  return reply.code(401).send({
-    error: 'Unauthorized',
-    code: 'MISSING_CLAIMS',
-    statusCode: 401,
-  })
-}
+        const claims = request.claims!;
         const query = monthQuerySchema.parse(request.query ?? {});
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
@@ -346,16 +301,7 @@ if (!claims) {
     { preHandler: requirePermission('salary.mark_paid') },
     async (request, reply) => {
       try {
-        const claims = request.claims
-if (!claims) {
-  // Ne devrait jamais arriver si requirePermission est actif,
-  // mais on garde un guard défensif pour le strict mode
-  return reply.code(401).send({
-    error: 'Unauthorized',
-    code: 'MISSING_CLAIMS',
-    statusCode: 401,
-  })
-}
+        const claims = request.claims!;
         const params = recordParamsSchema.parse(request.params ?? {});
         const body = updateSalaryStatusBodySchema.parse(request.body ?? {});
 
@@ -384,16 +330,7 @@ if (!claims) {
     { preHandler: requirePermission('salary.export') },
     async (request, reply) => {
       try {
-        const claims = request.claims
-if (!claims) {
-  // Ne devrait jamais arriver si requirePermission est actif,
-  // mais on garde un guard défensif pour le strict mode
-  return reply.code(401).send({
-    error: 'Unauthorized',
-    code: 'MISSING_CLAIMS',
-    statusCode: 401,
-  })
-}
+        const claims = request.claims!;
         const params = teacherParamsSchema.parse(request.params ?? {});
         const query = monthQuerySchema.parse(request.query ?? {});
 
@@ -423,16 +360,7 @@ if (!claims) {
     { preHandler: requirePermission('salary.export') },
     async (request, reply) => {
       try {
-        const claims = request.claims
-if (!claims) {
-  // Ne devrait jamais arriver si requirePermission est actif,
-  // mais on garde un guard défensif pour le strict mode
-  return reply.code(401).send({
-    error: 'Unauthorized',
-    code: 'MISSING_CLAIMS',
-    statusCode: 401,
-  })
-}
+        const claims = request.claims!;
         const body = salarySingleExportBodySchema.parse(request.body ?? {});
 
         const job = await billingPdfQueue.add(
@@ -461,16 +389,7 @@ if (!claims) {
     { preHandler: requirePermission('salary.export') },
     async (request, reply) => {
       try {
-        const claims = request.claims
-if (!claims) {
-  // Ne devrait jamais arriver si requirePermission est actif,
-  // mais on garde un guard défensif pour le strict mode
-  return reply.code(401).send({
-    error: 'Unauthorized',
-    code: 'MISSING_CLAIMS',
-    statusCode: 401,
-  })
-}
+        const claims = request.claims!;
         const query = monthQuerySchema.parse(request.query ?? {});
 
         const job = await billingPdfQueue.add(
@@ -498,16 +417,7 @@ if (!claims) {
     { preHandler: requirePermission('salary.export') },
     async (request, reply) => {
       try {
-        const claims = request.claims
-if (!claims) {
-  // Ne devrait jamais arriver si requirePermission est actif,
-  // mais on garde un guard défensif pour le strict mode
-  return reply.code(401).send({
-    error: 'Unauthorized',
-    code: 'MISSING_CLAIMS',
-    statusCode: 401,
-  })
-}
+        const claims = request.claims!;
         const body = salaryBulkExportBodySchema.parse(request.body ?? {});
 
         const job = await billingPdfQueue.add(

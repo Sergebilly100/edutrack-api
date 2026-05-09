@@ -446,8 +446,15 @@ export class BillingRepository {
       DO UPDATE SET
         hours_planned = EXCLUDED.hours_planned,
         hours_done = EXCLUDED.hours_done,
-        hourly_rate = EXCLUDED.hourly_rate,
-        total_fcfa = EXCLUDED.total_fcfa,
+        -- Préserver hourly_rate et total_fcfa pour les salaires déjà payés (historique)
+        hourly_rate = CASE
+          WHEN salary_records.status = 'paid' THEN salary_records.hourly_rate
+          ELSE EXCLUDED.hourly_rate
+        END,
+        total_fcfa = CASE
+          WHEN salary_records.status = 'paid' THEN salary_records.total_fcfa
+          ELSE EXCLUDED.total_fcfa
+        END,
         status = CASE
           WHEN salary_records.status = 'disputed' THEN 'disputed'::salary_status
           ELSE EXCLUDED.status
@@ -833,9 +840,11 @@ export class BillingRepository {
       LEFT JOIN payments ON payments.salary_record_id = sr.id
       WHERE sr.period_month < ${beforeMonthStart}::date
         AND sr.status::text <> 'nothing_to_pay'
+        -- Ne garder que les salaires réellement impayés (status pending ou disputed)
+        -- OU les salaires marqués payés mais avec un montant restant (cas des paiements partiels)
         AND (
-          sr.status <> 'paid'::salary_status
-          OR GREATEST(sr.total_fcfa - COALESCE(payments.paid_amount, 0), 0) > 0
+          sr.status IN ('pending'::salary_status, 'disputed'::salary_status)
+          OR (sr.status = 'paid'::salary_status AND GREATEST(sr.total_fcfa - COALESCE(payments.paid_amount, 0), 0) > 0)
         )
       GROUP BY sr.period_month
       HAVING SUM(GREATEST(sr.total_fcfa - COALESCE(payments.paid_amount, 0), 0)) > 0
@@ -843,6 +852,16 @@ export class BillingRepository {
     `);
 
     return getRows(result);
+  }
+
+  async getLastComputedDate(monthStart: string): Promise<string | null> {
+    const result = await this.db.execute<{ last_computed: string | null }>(sql`
+      SELECT MAX(created_at)::text AS last_computed
+      FROM salary_records
+      WHERE period_month = ${monthStart}::date
+    `);
+
+    return getRows(result)[0]?.last_computed ?? null;
   }
 
   static toNumber(value: string | number): number {

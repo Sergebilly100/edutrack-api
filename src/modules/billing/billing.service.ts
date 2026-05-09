@@ -56,7 +56,10 @@ export class BillingService {
 
   async getSalarySummary(month: string) {
     const { monthStart, monthEnd } = monthToBounds(month);
-    const rows = await this.repository.listTeacherMonthlyMetrics(monthStart, monthEnd);
+    const [rows, lastComputedAt] = await Promise.all([
+      this.repository.listTeacherMonthlyMetrics(monthStart, monthEnd),
+      this.repository.getLastComputedDate(monthStart),
+    ]);
 
     const items = rows.map((row) => {
       const hoursPlanned = BillingRepository.toNumber(row.hours_planned);
@@ -123,6 +126,7 @@ export class BillingService {
     return {
       month,
       items,
+      lastComputedAt,
     };
   }
 

@@ -514,7 +514,11 @@ const main = async (): Promise<void> => {
       LIMIT 1
     `);
 
-    const monthDate = '2025-01-01';
+    // Utiliser le mois actuel et le mois précédent pour les salary_records
+    const now = new Date();
+    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const previousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const previousMonthStr = `${previousMonth.getFullYear()}-${String(previousMonth.getMonth() + 1).padStart(2, '0')}-01`;
 
     await tx.execute(sql`
       INSERT INTO salary_records (
@@ -530,28 +534,54 @@ const main = async (): Promise<void> => {
         paid_by
       )
       VALUES
+      -- Mois actuel
       (
         ${firstTeacherId},
-        ${monthDate},
+        ${currentMonth},
         48.00,
         45.50,
         5000,
         227500,
         'pending',
-        'Bilan mois courant',
+        'Bilan mois en cours',
         NULL,
         NULL
       ),
       (
         ${secondTeacherId},
-        ${monthDate},
+        ${currentMonth},
         42.00,
-        41.00,
+        38.00,
         4500,
-        184500,
+        171000,
+        'pending',
+        'Bilan mois en cours',
+        NULL,
+        NULL
+      ),
+      -- Mois précédent (payé)
+      (
+        ${firstTeacherId},
+        ${previousMonthStr},
+        44.00,
+        42.00,
+        5000,
+        210000,
         'paid',
         'Règlement validé',
-        NOW(),
+        NOW() - INTERVAL '7 days',
+        ${directorId}
+      ),
+      (
+        ${secondTeacherId},
+        ${previousMonthStr},
+        40.00,
+        40.00,
+        4500,
+        180000,
+        'paid',
+        'Règlement validé',
+        NOW() - INTERVAL '7 days',
         ${directorId}
       )
     `);
@@ -800,13 +830,13 @@ const main = async (): Promise<void> => {
       (${subTwoId}, ${subTwoTotal}, 'momo_mtn', NOW() - INTERVAL '7 day', ${directorId}, 'Paiement MTN MoMo souscription parent')
     `);
 
-    const currentMonth = formatDate(new Date()).slice(0, 7);
+    const currentMonthSms = formatDate(new Date()).slice(0, 7);
     await tx.execute(sql`
       INSERT INTO sms_usage_log (subscription_id, student_id, month, sms_sent_count, email_sent_count)
       VALUES
-      (${subOneId}, ${subOneStudentIds[0]}, ${currentMonth}, 4, 1),
-      (${subTwoId}, ${subTwoStudentIds[0]}, ${currentMonth}, 7, 3),
-      (${subTwoId}, ${subTwoStudentIds[1]}, ${currentMonth}, 2, 1)
+      (${subOneId}, ${subOneStudentIds[0]}, ${currentMonthSms}, 4, 1),
+      (${subTwoId}, ${subTwoStudentIds[0]}, ${currentMonthSms}, 7, 3),
+      (${subTwoId}, ${subTwoStudentIds[1]}, ${currentMonthSms}, 2, 1)
     `);
 
     const studentsByClass = new Map<string, string[]>();
