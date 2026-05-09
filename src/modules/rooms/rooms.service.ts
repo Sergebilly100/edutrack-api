@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 
+import { emit } from '../../shared/events/event-bus.js';
 import type { RoomEntity, RoomItem } from './rooms.types.js';
 import { RoomsRepository, mapRoomStats } from './rooms.repository.js';
 
@@ -55,7 +56,11 @@ const isDbConstraintError = (error: unknown, code: string): boolean => {
 };
 
 export class RoomsService {
-  constructor(private readonly repository: RoomsRepository) {}
+  constructor(
+    private readonly repository: RoomsRepository,
+    private readonly tenantId: string,
+    private readonly schemaName: string
+  ) {}
 
   async listActiveRooms(): Promise<{ rooms: RoomItem[] }> {
     const rows = await this.repository.listActiveRoomsWithStats(todayIso());
@@ -75,6 +80,16 @@ export class RoomsService {
         ...input,
         qrToken: generateQrToken(),
       });
+
+      // Émettre événement pour audit logs
+      emit('room.created', {
+        tenantId: this.tenantId,
+        schemaName: this.schemaName,
+        roomId: room.id,
+        roomName: room.name,
+        createdAt: room.createdAt,
+      });
+
       return toPublicRoom(room);
     } catch (error) {
       if (isDbConstraintError(error, '23505')) {
@@ -102,6 +117,16 @@ export class RoomsService {
         throw new RoomsModuleError('Room not found', 404, 'ROOM_NOT_FOUND');
       }
 
+      // Émettre événement pour audit logs
+      const updatedFields = Object.keys(input).filter((key) => input[key as keyof typeof input] !== undefined);
+      emit('room.updated', {
+        tenantId: this.tenantId,
+        schemaName: this.schemaName,
+        roomId: room.id,
+        roomName: room.name,
+        updatedFields,
+      });
+
       return toPublicRoom(room);
     } catch (error) {
       if (error instanceof RoomsModuleError) {
@@ -117,13 +142,18 @@ export class RoomsService {
   }
 
   async deleteRoom(roomId: string): Promise<PublicRoom> {
-    const room = await this.repository.findRoomById(roomId);
-    if (!room) {
-      throw new RoomsModuleError('Room not found', 404, 'ROOM_NOT_FOUND');
-    }
+    // La vérification + soft delete doit être atomique pour éviter race condition
+    // On délègue tout au repository qui fera la transaction
+    const deleted = await this.repository.softDeleteRoomIfUnused(roomId);
 
-    const blocked = await this.repository.hasAnyActiveSchedules(roomId);
-    if (blocked) {
+    if (!deleted) {
+      // Vérifier si la room existe
+      const room = await this.repository.findRoomById(roomId);
+      if (!room) {
+        throw new RoomsModuleError('Room not found', 404, 'ROOM_NOT_FOUND');
+      }
+
+      // Si elle existe mais deleted = null, c'est qu'elle est utilisée
       throw new RoomsModuleError(
         'Room is used in schedule slots and cannot be deleted',
         409,
@@ -131,10 +161,14 @@ export class RoomsService {
       );
     }
 
-    const deleted = await this.repository.softDeleteRoom(roomId);
-    if (!deleted) {
-      throw new RoomsModuleError('Room not found', 404, 'ROOM_NOT_FOUND');
-    }
+    // Émettre événement pour audit logs (alerte sécurité)
+    emit('room.deleted', {
+      tenantId: this.tenantId,
+      schemaName: this.schemaName,
+      roomId: deleted.id,
+      roomName: deleted.name,
+      deletedAt: new Date().toISOString(),
+    });
 
     return toPublicRoom(deleted);
   }
@@ -145,10 +179,23 @@ export class RoomsService {
       throw new RoomsModuleError('Room not found', 404, 'ROOM_NOT_FOUND');
     }
 
-    const updated = await this.repository.regenerateRoomToken(roomId, generateQrToken());
+    const oldToken = room.qrToken;
+    const newToken = generateQrToken();
+    const updated = await this.repository.regenerateRoomToken(roomId, newToken);
     if (!updated) {
       throw new RoomsModuleError('Room not found', 404, 'ROOM_NOT_FOUND');
     }
+
+    // Émettre événement pour audit logs (alerte sécurité - ancien QR compromis)
+    emit('room.qr_regenerated', {
+      tenantId: this.tenantId,
+      schemaName: this.schemaName,
+      roomId: updated.id,
+      roomName: updated.name,
+      oldToken,
+      newToken,
+      regeneratedAt: new Date().toISOString(),
+    });
 
     return {
       room: updated,
@@ -170,5 +217,8 @@ export class RoomsService {
   }
 }
 
-export const buildRoomsService = (db: ConstructorParameters<typeof RoomsRepository>[0]) =>
-  new RoomsService(new RoomsRepository(db));
+export const buildRoomsService = (
+  db: ConstructorParameters<typeof RoomsRepository>[0],
+  tenantId: string,
+  schemaName: string
+) => new RoomsService(new RoomsRepository(db), tenantId, schemaName);

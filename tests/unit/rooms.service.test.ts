@@ -17,6 +17,7 @@ const mockRepo = {
   findRoomById: vi.fn(),
   hasAnyActiveSchedules: vi.fn(),
   softDeleteRoom: vi.fn(),
+  softDeleteRoomIfUnused: vi.fn(),
   createRoom: vi.fn(),
   updateRoom: vi.fn(),
   regenerateRoomToken: vi.fn(),
@@ -24,7 +25,7 @@ const mockRepo = {
   findRoomByToken: vi.fn(),
 } as unknown as Record<keyof RoomsRepository, ReturnType<typeof vi.fn>>;
 
-const service = new RoomsService(mockRepo as unknown as RoomsRepository);
+const service = new RoomsService(mockRepo as unknown as RoomsRepository, 'tenant-1', 'school_test');
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -43,8 +44,8 @@ describe('rooms.service', () => {
   });
 
   it('deleteRoom -> 409 ROOM_HAS_SCHEDULES si la salle est liée à des créneaux', async () => {
+    mockRepo.softDeleteRoomIfUnused.mockResolvedValue(null);
     mockRepo.findRoomById.mockResolvedValue(baseRoom);
-    mockRepo.hasAnyActiveSchedules.mockResolvedValue(true);
 
     await expect(service.deleteRoom('room-1')).rejects.toMatchObject<Partial<RoomsModuleError>>({
       message: 'Room is used in schedule slots and cannot be deleted',
@@ -54,13 +55,11 @@ describe('rooms.service', () => {
   });
 
   it('deleteRoom -> soft delete et retourne room sans qrToken', async () => {
-    mockRepo.findRoomById.mockResolvedValue(baseRoom);
-    mockRepo.hasAnyActiveSchedules.mockResolvedValue(false);
-    mockRepo.softDeleteRoom.mockResolvedValue({ ...baseRoom, isActive: false });
+    mockRepo.softDeleteRoomIfUnused.mockResolvedValue({ ...baseRoom, isActive: false });
 
     const result = await service.deleteRoom('room-1');
 
-    expect(mockRepo.softDeleteRoom).toHaveBeenCalledWith('room-1');
+    expect(mockRepo.softDeleteRoomIfUnused).toHaveBeenCalledWith('room-1');
     expect(result).toMatchObject({
       id: 'room-1',
       name: 'Salle A1',
@@ -123,5 +122,81 @@ describe('rooms.service', () => {
     const result = await service.regenerateToken('room-1');
 
     expect(result.qr_url).toBe(`https://app.edutrack.ci/scan?token=${result.room.qrToken}`);
+  });
+
+  it('createRoom -> 409 ROOM_CONFLICT si contrainte unique violée (23505)', async () => {
+    const dbError = new Error('duplicate key');
+    (dbError as Error & { code: string }).code = '23505';
+    mockRepo.createRoom.mockRejectedValue(dbError);
+
+    await expect(service.createRoom({ name: 'Salle A1' })).rejects.toMatchObject<Partial<RoomsModuleError>>({
+      message: 'Room already exists',
+      statusCode: 409,
+      code: 'ROOM_CONFLICT',
+    });
+  });
+
+  it('updateRoom -> 409 ROOM_CONFLICT si contrainte unique violée', async () => {
+    const dbError = new Error('duplicate key');
+    (dbError as Error & { code: string }).code = '23505';
+    mockRepo.updateRoom.mockRejectedValue(dbError);
+
+    await expect(service.updateRoom('room-1', { name: 'Salle B1' })).rejects.toMatchObject<
+      Partial<RoomsModuleError>
+    >({
+      message: 'Room already exists',
+      statusCode: 409,
+      code: 'ROOM_CONFLICT',
+    });
+  });
+
+  it('getRoomQr -> 404 si room inexistante', async () => {
+    mockRepo.findRoomById.mockResolvedValue(null);
+
+    await expect(service.getRoomQr('missing')).rejects.toMatchObject<Partial<RoomsModuleError>>({
+      message: 'Room not found',
+      statusCode: 404,
+      code: 'ROOM_NOT_FOUND',
+    });
+  });
+
+  it('getRoomQr -> retourne room_name, qr_token et qr_url', async () => {
+    mockRepo.findRoomById.mockResolvedValue(baseRoom);
+
+    const result = await service.getRoomQr('room-1');
+
+    expect(result).toMatchObject({
+      room_name: 'Salle A1',
+      qr_token: baseRoom.qrToken,
+    });
+    expect(result.qr_url).toContain('/scan?token=');
+  });
+
+  it('listActiveRooms -> retourne liste vide si aucune salle', async () => {
+    mockRepo.listActiveRoomsWithStats.mockResolvedValue([]);
+
+    const result = await service.listActiveRooms();
+
+    expect(result.rooms).toEqual([]);
+  });
+
+  it('deleteRoom -> soft delete atomique via softDeleteRoomIfUnused', async () => {
+    mockRepo.softDeleteRoomIfUnused.mockResolvedValue({ ...baseRoom, isActive: false });
+
+    const result = await service.deleteRoom('room-1');
+
+    expect(mockRepo.softDeleteRoomIfUnused).toHaveBeenCalledWith('room-1');
+    expect(result.isActive).toBe(false);
+  });
+
+  it('deleteRoom -> 409 ROOM_HAS_SCHEDULES si room utilisée (atomique)', async () => {
+    mockRepo.softDeleteRoomIfUnused.mockResolvedValue(null);
+    mockRepo.findRoomById.mockResolvedValue(baseRoom);
+
+    await expect(service.deleteRoom('room-1')).rejects.toMatchObject<Partial<RoomsModuleError>>({
+      message: 'Room is used in schedule slots and cannot be deleted',
+      statusCode: 409,
+      code: 'ROOM_HAS_SCHEDULES',
+    });
   });
 });

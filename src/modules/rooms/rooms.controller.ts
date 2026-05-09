@@ -58,12 +58,17 @@ export default async function roomsController(app: FastifyInstance): Promise<voi
   app.get('/api/v1/rooms', { preHandler: requirePermission('rooms.view') }, async (request, reply) => {
     try {
       const claims = request.claims!;
+      const tenantId = claims.tenantId ?? claims.schemaName;
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-        return buildRoomsService(tenantDb).listActiveRooms();
+        return buildRoomsService(tenantDb, tenantId, claims.schemaName).listActiveRooms();
       });
 
       return reply.send(result);
     } catch (error) {
+      // Capture erreurs infrastructure (ensureTenantRealHoursInfrastructure)
+      if (error instanceof Error && error.message.includes('permission denied')) {
+        request.log.error({ err: error, schemaName: request.claims?.schemaName }, '[rooms] DB permission error');
+      }
       return handleError(request, reply, error);
     }
   });
@@ -71,10 +76,11 @@ export default async function roomsController(app: FastifyInstance): Promise<voi
   app.post('/api/v1/rooms', { preHandler: requirePermission('rooms.create') }, async (request, reply) => {
     try {
       const claims = request.claims!;
+      const tenantId = claims.tenantId ?? claims.schemaName;
       const body = createRoomBodySchema.parse(request.body ?? {});
 
       const room = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-        return buildRoomsService(tenantDb).createRoom(body);
+        return buildRoomsService(tenantDb, tenantId, claims.schemaName).createRoom(body);
       });
 
       return reply.code(201).send({ room });
@@ -86,11 +92,12 @@ export default async function roomsController(app: FastifyInstance): Promise<voi
   app.put('/api/v1/rooms/:id', { preHandler: requirePermission('rooms.edit') }, async (request, reply) => {
     try {
       const claims = request.claims!;
+      const tenantId = claims.tenantId ?? claims.schemaName;
       const params = roomIdParamsSchema.parse(request.params ?? {});
       const body = updateRoomBodySchema.parse(request.body ?? {});
 
       const room = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-        return buildRoomsService(tenantDb).updateRoom(params.id, body);
+        return buildRoomsService(tenantDb, tenantId, claims.schemaName).updateRoom(params.id, body);
       });
 
       return reply.send({ room });
@@ -102,11 +109,12 @@ export default async function roomsController(app: FastifyInstance): Promise<voi
   app.patch('/api/v1/rooms/:id', { preHandler: requirePermission('rooms.edit') }, async (request, reply) => {
     try {
       const claims = request.claims!;
+      const tenantId = claims.tenantId ?? claims.schemaName;
       const params = roomIdParamsSchema.parse(request.params ?? {});
       const body = updateRoomBodySchema.parse(request.body ?? {});
 
       const room = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-        return buildRoomsService(tenantDb).updateRoom(params.id, body);
+        return buildRoomsService(tenantDb, tenantId, claims.schemaName).updateRoom(params.id, body);
       });
 
       return reply.send({ room });
@@ -118,10 +126,11 @@ export default async function roomsController(app: FastifyInstance): Promise<voi
   app.delete('/api/v1/rooms/:id', { preHandler: requirePermission('rooms.delete') }, async (request, reply) => {
     try {
       const claims = request.claims!;
+      const tenantId = claims.tenantId ?? claims.schemaName;
       const params = roomIdParamsSchema.parse(request.params ?? {});
 
       const room = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-        return buildRoomsService(tenantDb).deleteRoom(params.id);
+        return buildRoomsService(tenantDb, tenantId, claims.schemaName).deleteRoom(params.id);
       });
 
       return reply.send({ room });
@@ -136,10 +145,11 @@ export default async function roomsController(app: FastifyInstance): Promise<voi
     async (request, reply) => {
       try {
         const claims = request.claims!;
+        const tenantId = claims.tenantId ?? claims.schemaName;
         const params = roomIdParamsSchema.parse(request.params ?? {});
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-          return buildRoomsService(tenantDb).regenerateToken(params.id);
+          return buildRoomsService(tenantDb, tenantId, claims.schemaName).regenerateToken(params.id);
         });
 
         return reply.send(result);
@@ -152,10 +162,11 @@ export default async function roomsController(app: FastifyInstance): Promise<voi
   app.get('/api/v1/rooms/:id/qr', { preHandler: requirePermission('rooms.view') }, async (request, reply) => {
     try {
       const claims = request.claims!;
+      const tenantId = claims.tenantId ?? claims.schemaName;
       const params = roomIdParamsSchema.parse(request.params ?? {});
 
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-        return buildRoomsService(tenantDb).getRoomQr(params.id);
+        return buildRoomsService(tenantDb, tenantId, claims.schemaName).getRoomQr(params.id);
       });
 
       return reply.send(result);

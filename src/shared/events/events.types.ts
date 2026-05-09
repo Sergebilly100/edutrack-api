@@ -86,6 +86,40 @@ export type SubscriptionExpiredPayload = {
   directorEmail?: string | null;
 };
 
+export type RoomCreatedPayload = {
+  tenantId: string;
+  schemaName: string;
+  roomId: string;
+  roomName: string;
+  createdAt: string;
+};
+
+export type RoomUpdatedPayload = {
+  tenantId: string;
+  schemaName: string;
+  roomId: string;
+  roomName: string;
+  updatedFields: string[];
+};
+
+export type RoomDeletedPayload = {
+  tenantId: string;
+  schemaName: string;
+  roomId: string;
+  roomName: string;
+  deletedAt: string;
+};
+
+export type RoomQrRegeneratedPayload = {
+  tenantId: string;
+  schemaName: string;
+  roomId: string;
+  roomName: string;
+  oldToken: string;
+  newToken: string;
+  regeneratedAt: string;
+};
+
 export type EventMap = {
   'teacher.checked_in': TeacherCheckedInPayload;
   'teacher.late': TeacherLatePayload;
@@ -102,10 +136,19 @@ export type EventMap = {
     | TeacherAbsentPayload;
   'student.absent': StudentAbsentPayload;
   'subscription.expired': SubscriptionExpiredPayload;
+  'room.created': RoomCreatedPayload;
+  'room.updated': RoomUpdatedPayload;
+  'room.deleted': RoomDeletedPayload;
+  'room.qr_regenerated': RoomQrRegeneratedPayload;
+  'room.*':
+    | RoomCreatedPayload
+    | RoomUpdatedPayload
+    | RoomDeletedPayload
+    | RoomQrRegeneratedPayload;
 };
 
 /**
  * Sous-ensemble de EventMap excluant les patterns wildcard.
  * Seuls ces events peuvent être passés à emit().
  */
-export type EmittableEventMap = Omit<EventMap, 'teacher.*'>;
+export type EmittableEventMap = Omit<EventMap, 'teacher.*' | 'room.*'>;

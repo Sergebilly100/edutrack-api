@@ -22,7 +22,9 @@ vi.mock('../../src/shared/middleware/auth.middleware.js', () => ({
 }));
 
 vi.mock('../../src/modules/rooms/rooms.service.js', async () => {
-  const actual = await vi.importActual('../../src/modules/rooms/rooms.service.js');
+  const actual = await vi.importActual<typeof import('../../src/modules/rooms/rooms.service.js')>(
+    '../../src/modules/rooms/rooms.service.js'
+  );
   return {
     ...actual,
     buildRoomsService: mocks.buildRoomsService,
@@ -30,6 +32,7 @@ vi.mock('../../src/modules/rooms/rooms.service.js', async () => {
 });
 
 import roomsController from '../../src/modules/rooms/rooms.controller.js';
+import { RoomsModuleError } from '../../src/modules/rooms/rooms.service.js';
 
 const ROOM_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -53,15 +56,17 @@ beforeEach(() => {
     };
   });
 
-  mocks.withTenantSchema.mockImplementation(async (_schemaName, callback) => callback({ execute: vi.fn() }));
-  mocks.buildRoomsService.mockReturnValue({
+  mocks.withTenantSchema.mockImplementation(async (_schemaName, callback) => {
+    return await callback({ execute: vi.fn() });
+  });
+  mocks.buildRoomsService.mockImplementation(() => ({
     listActiveRooms: mocks.listActiveRooms,
     createRoom: mocks.createRoom,
     updateRoom: mocks.updateRoom,
     deleteRoom: mocks.deleteRoom,
     regenerateToken: mocks.regenerateToken,
     getRoomQr: mocks.getRoomQr,
-  });
+  }));
 
   mocks.listActiveRooms.mockResolvedValue({ rooms: [] });
   mocks.createRoom.mockResolvedValue({
@@ -222,6 +227,73 @@ describe('rooms routes', () => {
 
     expect(response.statusCode).toBe(403);
     expect(mocks.listActiveRooms).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('PATCH /api/v1/rooms/:id met à jour une salle', async () => {
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/rooms/${ROOM_ID}`,
+      payload: {
+        capacity: 40,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.updateRoom).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('POST /api/v1/rooms retourne 409 si conflit (nom déjà existant)', async () => {
+    mocks.createRoom.mockImplementationOnce(() => {
+      throw new RoomsModuleError('Room already exists', 409, 'ROOM_CONFLICT');
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/rooms',
+      payload: {
+        name: 'Salle Test',
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().code).toBe('ROOM_CONFLICT');
+    await app.close();
+  });
+
+  it('DELETE /api/v1/rooms/:id retourne 409 si room utilisée dans schedules', async () => {
+    mocks.deleteRoom.mockImplementationOnce(() => {
+      throw new RoomsModuleError('Room is used in schedule slots', 409, 'ROOM_HAS_SCHEDULES');
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/rooms/${ROOM_ID}`,
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().code).toBe('ROOM_HAS_SCHEDULES');
+    await app.close();
+  });
+
+  it('PUT /api/v1/rooms/:id valide GPS: latitude et longitude ensemble', async () => {
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/api/v1/rooms/${ROOM_ID}`,
+      payload: {
+        name: 'Salle Test',
+        latitude: 5.345,
+        // longitude manquant -> devrait échouer
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(mocks.updateRoom).not.toHaveBeenCalled();
     await app.close();
   });
 });

@@ -17,7 +17,11 @@ const toNumber = (value: string | number): number => {
   }
 
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Invalid number value: ${value}`);
+  }
+
+  return parsed;
 };
 
 const toIsoDateTime = (value: Date | string): string => {
@@ -39,9 +43,11 @@ const mapRoomEntity = (row: RoomEntityRow): RoomEntity => ({
   qrToken: row.qr_token,
   building: row.building,
   capacity: row.capacity,
+  // CRITIQUE: Conserver null au lieu de convertir en 0 (coordonnées 0,0 = Golfe de Guinée!)
   latitude: row.latitude === null ? null : toNumber(row.latitude),
   longitude: row.longitude === null ? null : toNumber(row.longitude),
-  geoRadius: row.geo_radius ?? 100,
+  // geoRadius peut être null pour désactiver le géofencing
+  geoRadius: row.geo_radius,
   isActive: row.is_active,
   createdAt: toIsoDateTime(row.created_at),
 });
@@ -73,7 +79,12 @@ export class RoomsRepository {
         r.is_active,
         r.created_at,
         COUNT(DISTINCT s.id) AS weekly_schedules_count,
-        COUNT(DISTINCT at.id) FILTER (WHERE at.room_scan_start_at IS NOT NULL) AS scans_count
+        COUNT(DISTINCT at.id) FILTER (
+          WHERE at.room_scan_start_at IS NOT NULL
+            -- Filtrer les scans de la période active uniquement
+            AND at.date >= (SELECT valid_from FROM active_period)
+            AND at.date <= (SELECT valid_to FROM active_period)
+        ) AS scans_count
       FROM rooms r
       LEFT JOIN active_period ap ON true
       LEFT JOIN schedules s
@@ -111,7 +122,7 @@ export class RoomsRepository {
         ${input.capacity ?? null},
         ${input.latitude ?? null}::numeric,
         ${input.longitude ?? null}::numeric,
-        ${input.geoRadius ?? 100},
+        ${input.geoRadius ?? null},
         true
       )
       RETURNING id, name, qr_token, building, capacity, latitude, longitude, geo_radius, is_active, created_at
@@ -146,7 +157,7 @@ export class RoomsRepository {
         capacity = CASE WHEN ${input.capacity !== undefined} THEN ${input.capacity ?? null}::integer ELSE capacity END,
         latitude = CASE WHEN ${input.latitude !== undefined} THEN ${input.latitude ?? null}::numeric ELSE latitude END,
         longitude = CASE WHEN ${input.longitude !== undefined} THEN ${input.longitude ?? null}::numeric ELSE longitude END,
-        geo_radius = CASE WHEN ${input.geoRadius !== undefined} THEN ${input.geoRadius ?? 100}::integer ELSE geo_radius END
+        geo_radius = CASE WHEN ${input.geoRadius !== undefined} THEN ${input.geoRadius ?? null}::integer ELSE geo_radius END
       WHERE id = ${roomId}
       RETURNING id, name, qr_token, building, capacity, latitude, longitude, geo_radius, is_active, created_at
     `);
@@ -198,6 +209,33 @@ export class RoomsRepository {
     return row ? mapRoomEntity(row) : null;
   }
 
+  /**
+   * Supprime (soft delete) une salle uniquement si elle n'est pas utilisée dans des créneaux actifs.
+   * Cette opération est atomique via une sous-requête, évitant la race condition.
+   *
+   * @returns RoomEntity si suppression OK, null si room utilisée ou inexistante
+   */
+  async softDeleteRoomIfUnused(roomId: string): Promise<RoomEntity | null> {
+    await ensureTenantRealHoursInfrastructure(this.db);
+
+    const result = await this.db.execute<RoomEntityRow>(sql`
+      UPDATE rooms
+      SET is_active = false
+      WHERE id = ${roomId}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM schedules s
+          WHERE s.room_id = ${roomId}
+            AND s.is_active = true
+            AND (s.end_date IS NULL OR s.end_date > CURRENT_DATE)
+        )
+      RETURNING id, name, qr_token, building, capacity, latitude, longitude, geo_radius, is_active, created_at
+    `);
+
+    const [row] = getRows(result);
+    return row ? mapRoomEntity(row) : null;
+  }
+
   async regenerateRoomToken(roomId: string, qrToken: string): Promise<RoomEntity | null> {
     await ensureTenantRealHoursInfrastructure(this.db);
 
@@ -234,7 +272,7 @@ export const mapRoomStats = (row: RoomStatsRow) => ({
   capacity: row.capacity,
   latitude: row.latitude === null ? null : toNumber(row.latitude),
   longitude: row.longitude === null ? null : toNumber(row.longitude),
-  geoRadius: row.geo_radius ?? 100,
+  geoRadius: row.geo_radius, // null = géofencing désactivé
   isActive: row.is_active,
   createdAt: toIsoDateTime(row.created_at),
   stats: {
