@@ -1,6 +1,7 @@
 import argon2 from 'argon2';
 
 import { PermissionsRepository } from './permissions.repository.js';
+import { recordPasswordReset } from '../../shared/auth/token-version.js';
 
 type ClaimsCoreFields = {
   sub: string;
@@ -402,7 +403,10 @@ export class PermissionsService {
     return { deleted: true };
   }
 
-  async resetAdministrativeUserPassword(userId: string, input: { newPassword: string }) {
+  async resetAdministrativeUserPassword(
+    userId: string,
+    input: { newPassword: string; schemaName: string }
+  ) {
     const existingUser = await this.repository.findAdministrativeUserById(userId);
     if (!existingUser) {
       throw new PermissionsModuleError(
@@ -414,7 +418,8 @@ export class PermissionsService {
 
     const passwordHash = await argon2.hash(input.newPassword);
     await this.repository.updateAdministrativeUserPasswordHash(userId, passwordHash);
-    // TODO: émettre un event pour invalider les sessions actives de ${userId}
+    await this.repository.revokeAllUserRefreshTokens(userId);
+    await recordPasswordReset(input.schemaName, userId);
     return { updated: true };
   }
 

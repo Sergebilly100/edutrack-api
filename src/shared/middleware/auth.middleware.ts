@@ -8,6 +8,7 @@ import {
 } from '../../modules/permissions/permissions.repository.js';
 import { resolveEffectivePermissions } from '../../modules/permissions/permissions.service.js';
 import { verifyAccessToken, type AccessTokenClaims } from '../../modules/auth/auth.service.js';
+import { getRevokeAt } from '../auth/token-version.js';
 
 const DIRECTOR_STAFF_ROLES = new Set(['director', 'staff']);
 const TEACHER_DIRECTOR_STAFF_ROLES = new Set(['teacher', 'director', 'staff']);
@@ -85,6 +86,16 @@ export const authenticateRequest = async (
 
   if (claims.readOnly && !READ_ONLY_METHODS.has(request.method.toUpperCase())) {
     forbidden(reply, 'Session en lecture seule');
+    return;
+  }
+
+  // Reject tokens issued before the last password reset for this user.
+  const iat = typeof (claims as Record<string, unknown>).iat === 'number'
+    ? (claims as Record<string, unknown>).iat as number
+    : 0;
+  const revokeAt = await getRevokeAt(claims.schemaName, claims.sub);
+  if (revokeAt > 0 && iat < revokeAt) {
+    unauthorized(reply, 'Session invalidée, veuillez vous reconnecter');
     return;
   }
 

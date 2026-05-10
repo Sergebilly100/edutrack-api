@@ -552,6 +552,21 @@ export class PermissionsRepository {
     return getRows(result).length > 0;
   }
 
+  async revokeAllUserRefreshTokens(userId: string): Promise<void> {
+    try {
+      await this.db.execute(sql`
+        UPDATE refresh_tokens
+        SET is_active = false,
+            updated_at = NOW(),
+            revoked_at = NOW()
+        WHERE user_id = ${userId}::uuid
+          AND is_active = true
+      `);
+    } catch {
+      // refresh_tokens table may not exist on all tenants — fail silently.
+    }
+  }
+
   async updateSchoolConfig(
     schemaName: string,
     input: {

@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { randomUUID } from 'node:crypto';
 import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
@@ -6,6 +7,7 @@ import {
   authenticateRequest,
   requirePermission,
 } from '../../shared/middleware/auth.middleware.js';
+import { uploadToR2 } from '../../shared/storage/r2.js';
 
 import { PermissionsModuleError, buildPermissionsService } from './permissions.service.js';
 import {
@@ -98,6 +100,60 @@ export default async function permissionsController(app: FastifyInstance): Promi
         });
 
         return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/permissions/config/school/logo',
+    { preHandler: requirePermission('settings.school') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+
+        const data = await request.file();
+        if (!data) {
+          throw new PermissionsModuleError('No file provided', 400, 'BAD_REQUEST');
+        }
+
+        const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml']);
+        if (!ALLOWED_MIME.has(data.mimetype)) {
+          throw new PermissionsModuleError(
+            'Type de fichier non supporté. Utilisez PNG, JPEG, WEBP ou SVG.',
+            400,
+            'INVALID_FILE_TYPE'
+          );
+        }
+
+        const MAX_SIZE = 500 * 1024; // 500 KB
+        const chunks: Buffer[] = [];
+        let totalSize = 0;
+        for await (const chunk of data.file) {
+          totalSize += chunk.length;
+          if (totalSize > MAX_SIZE) {
+            throw new PermissionsModuleError(
+              'Fichier trop volumineux. Maximum 500 KB.',
+              400,
+              'FILE_TOO_LARGE'
+            );
+          }
+          chunks.push(chunk);
+        }
+        const buffer = Buffer.concat(chunks);
+
+        const ext = data.mimetype.split('/')[1]?.replace('jpeg', 'jpg') ?? 'png';
+        const key = `logos/${claims.schemaName}/${randomUUID()}.${ext}`;
+        const { url } = await uploadToR2(key, buffer, data.mimetype);
+
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          return buildPermissionsService(tenantDb).updateSchoolConfig(claims.schemaName, {
+            logoUrl: url,
+          });
+        });
+
+        return reply.send({ ...result, logoUrl: url });
       } catch (error) {
         return handleError(request, reply, error);
       }
@@ -214,6 +270,7 @@ if (claims.role !== 'super_admin') {
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
           return buildPermissionsService(tenantDb).resetAdministrativeUserPassword(params.id, {
             newPassword: body.newPassword,
+            schemaName: claims.schemaName,
           });
         });
 
