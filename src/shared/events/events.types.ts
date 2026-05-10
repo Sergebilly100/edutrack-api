@@ -120,6 +120,15 @@ export type RoomQrRegeneratedPayload = {
   regeneratedAt: string;
 };
 
+export type ImportCompletedPayload = {
+  tenantId: string;
+  schemaName: string;
+  importType: 'students' | 'teachers' | 'schedule';
+  importedCount: number;
+  updatedCount: number;
+  deactivatedCount: number;
+};
+
 export type EventMap = {
   'teacher.checked_in': TeacherCheckedInPayload;
   'teacher.late': TeacherLatePayload;
@@ -145,6 +154,7 @@ export type EventMap = {
     | RoomUpdatedPayload
     | RoomDeletedPayload
     | RoomQrRegeneratedPayload;
+  'import.completed': ImportCompletedPayload;
 };
 
 /**

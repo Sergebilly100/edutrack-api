@@ -130,10 +130,7 @@ export type ParentAlertContactRow = {
   subscription_status: SubscriptionStatus | null;
 };
 
-const monthToDate = (month: string): string => `${month}-01`;
-
 const firstDayOfMonth = (month: string): string => `${month}-01`;
-const EDUTRACK_COMMISSION_PCT = 15;
 
 export class SubscriptionsRepository {
   constructor(private readonly tenantDb: TenantDb) {}
@@ -892,6 +889,16 @@ export class SubscriptionsRepository {
     return result.rows[0] ?? null;
   }
 
+  async getSubscriptionById(subscriptionId: string): Promise<{ id: string; parent_id: string; status: SubscriptionStatus } | null> {
+    const result = await this.tenantDb.execute<{ id: string; parent_id: string; status: SubscriptionStatus }>(sql`
+      SELECT id::text, parent_id::text, status::text AS status
+      FROM parent_subscriptions
+      WHERE id = ${subscriptionId}::uuid
+      LIMIT 1
+    `);
+    return result.rows[0] ?? null;
+  }
+
   async updateSubscriptionStatus(
     subscriptionId: string,
     status: SubscriptionStatus,
@@ -938,7 +945,7 @@ export class SubscriptionsRepository {
   }
 
   async computeMonthlyRevenue(month: string): Promise<{ total_subscriptions_fcfa: number; subscription_count: number }> {
-    const monthDate = monthToDate(month);
+    const monthDate = firstDayOfMonth(month);
     const result = await this.tenantDb.execute<{ total: string | number; count: number }>(sql`
       SELECT
         COALESCE(SUM((sp.amount_fcfa::numeric / NULLIF(ps.duration_months, 0))), 0) AS total,
@@ -1325,26 +1332,22 @@ export class SubscriptionsRepository {
       payment_status: 'paid' | 'partial' | 'pending';
     }>
   > {
-    const items: Array<{
-      month: string;
-      subscriptions_active_count: number;
-      subscriptions_new_this_month: number;
-      total_collected_fcfa: number;
-      monthly_revenue_prorated_fcfa: number;
-      commission_due_fcfa: number;
-      commission_paid_fcfa: number;
-      commission_remaining_fcfa: number;
-      payment_status: 'paid' | 'partial' | 'pending';
-    }> = [];
-
     const now = new Date();
-    for (let i = 0; i < params.months; i += 1) {
+    const months = Array.from({ length: params.months }, (_, i) => {
       const date = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
-      const month = monthKeyInBusinessTimezone(date);
-      const summary = await this.getRevenueSummary({ tenantId: params.tenantId, month });
-      const due = Math.round((summary.total_collected_fcfa * EDUTRACK_COMMISSION_PCT) / 100);
+      return monthKeyInBusinessTimezone(date);
+    });
+
+    const results = await Promise.all(
+      months.map((month) => this.getRevenueSummary({ tenantId: params.tenantId, month }))
+    );
+
+    const COMMISSION_PCT = 15;
+    return results.map((summary, i) => {
+      const month = months[i]!;
+      const due = Math.round((summary.total_collected_fcfa * COMMISSION_PCT) / 100);
       const remaining = Math.max(0, due - summary.commission_paid_fcfa);
-      items.push({
+      return {
         month,
         subscriptions_active_count: summary.subscriptions_active_count,
         subscriptions_new_this_month: summary.subscriptions_new_this_month,
@@ -1354,9 +1357,8 @@ export class SubscriptionsRepository {
         commission_paid_fcfa: summary.commission_paid_fcfa,
         commission_remaining_fcfa: remaining,
         payment_status: remaining === 0 ? 'paid' : summary.commission_paid_fcfa > 0 ? 'partial' : 'pending',
-      });
-    }
-    return items;
+      } as const;
+    });
   }
 
   async expireOutdatedSubscriptions(): Promise<number> {
@@ -1402,6 +1404,107 @@ export class SubscriptionsRepository {
     `);
   }
 
+  async createParentWithSubscriptionTx(params: {
+    fullName: string;
+    phone: string;
+    email?: string;
+    passwordHash: string;
+    unitPriceFcfa: number;
+    studentCount: number;
+    totalAmountFcfa: number;
+    durationMonths: number;
+    startsAt: string;
+    endsAt: string;
+    createdBy: string;
+    studentIds: string[];
+    paidNow: boolean;
+    paymentMethod: string;
+  }): Promise<{ parentId: string; subscriptionId: string }> {
+    return this.tenantDb.transaction(async (tx) => {
+      const parentResult = await tx.execute<{ id: string }>(sql`
+        INSERT INTO parents (full_name, phone, email, password_hash, must_change_password, is_active)
+        VALUES (${params.fullName}, ${params.phone}, ${params.email ?? null}, ${params.passwordHash}, true, true)
+        RETURNING id::text
+      `);
+      const parentId = parentResult.rows[0]!.id;
+
+      const subResult = await tx.execute<{ id: string }>(sql`
+        INSERT INTO parent_subscriptions (
+          parent_id, unit_price_fcfa, student_count, total_amount_fcfa, duration_months,
+          starts_at, ends_at, status, auto_renew_alert, renewed_count, created_by
+        ) VALUES (
+          ${parentId}::uuid, ${params.unitPriceFcfa}, ${params.studentCount}, ${params.totalAmountFcfa},
+          ${params.durationMonths}, ${params.startsAt}, ${params.endsAt}, 'active', false, 0, ${params.createdBy}::uuid
+        )
+        RETURNING id::text
+      `);
+      const subscriptionId = subResult.rows[0]!.id;
+
+      for (const studentId of params.studentIds) {
+        await tx.execute(sql`
+          INSERT INTO parent_student_links (subscription_id, parent_id, student_id)
+          VALUES (${subscriptionId}::uuid, ${parentId}::uuid, ${studentId}::uuid)
+          ON CONFLICT (parent_id, student_id) DO UPDATE SET subscription_id = EXCLUDED.subscription_id
+        `);
+      }
+
+      if (params.paidNow) {
+        await tx.execute(sql`
+          INSERT INTO subscription_payments (subscription_id, amount_fcfa, payment_method, paid_at, recorded_by)
+          VALUES (${subscriptionId}::uuid, ${params.totalAmountFcfa}, ${params.paymentMethod}, NOW(), ${params.createdBy}::uuid)
+        `);
+      }
+
+      return { parentId, subscriptionId };
+    });
+  }
+
+  async renewSubscriptionTx(params: {
+    parentId: string;
+    unitPriceFcfa: number;
+    studentCount: number;
+    totalAmountFcfa: number;
+    durationMonths: number;
+    startsAt: string;
+    endsAt: string;
+    createdBy: string;
+    autoRenewAlert: boolean;
+    studentIds: string[];
+    paidNow: boolean;
+    paymentMethod: string;
+  }): Promise<{ subscriptionId: string }> {
+    return this.tenantDb.transaction(async (tx) => {
+      const subResult = await tx.execute<{ id: string }>(sql`
+        INSERT INTO parent_subscriptions (
+          parent_id, unit_price_fcfa, student_count, total_amount_fcfa, duration_months,
+          starts_at, ends_at, status, auto_renew_alert, renewed_count, created_by
+        ) VALUES (
+          ${params.parentId}::uuid, ${params.unitPriceFcfa}, ${params.studentCount}, ${params.totalAmountFcfa},
+          ${params.durationMonths}, ${params.startsAt}, ${params.endsAt}, 'active', ${params.autoRenewAlert}, 0, ${params.createdBy}::uuid
+        )
+        RETURNING id::text
+      `);
+      const subscriptionId = subResult.rows[0]!.id;
+
+      for (const studentId of params.studentIds) {
+        await tx.execute(sql`
+          INSERT INTO parent_student_links (subscription_id, parent_id, student_id)
+          VALUES (${subscriptionId}::uuid, ${params.parentId}::uuid, ${studentId}::uuid)
+          ON CONFLICT (parent_id, student_id) DO UPDATE SET subscription_id = EXCLUDED.subscription_id
+        `);
+      }
+
+      if (params.paidNow) {
+        await tx.execute(sql`
+          INSERT INTO subscription_payments (subscription_id, amount_fcfa, payment_method, paid_at, recorded_by)
+          VALUES (${subscriptionId}::uuid, ${params.totalAmountFcfa}, ${params.paymentMethod}, NOW(), ${params.createdBy}::uuid)
+        `);
+      }
+
+      return { subscriptionId };
+    });
+  }
+
   computeStartsAndEnds(durationMonths: number): { startsAt: string; endsAt: string } {
     const startsAt = todayInBusinessTimezone();
     const endsAt = addMonthsIso(startsAt, durationMonths);
@@ -1409,7 +1512,9 @@ export class SubscriptionsRepository {
   }
 
   computeRenewalStartsAndEnds(lastEndsAt: string, durationMonths: number): { startsAt: string; endsAt: string } {
-    const startsAt = addDaysIso(lastEndsAt, 1);
+    const today = todayInBusinessTimezone();
+    const dayAfterLastEnds = addDaysIso(lastEndsAt, 1);
+    const startsAt = dayAfterLastEnds > today ? dayAfterLastEnds : today;
     const endsAt = addMonthsIso(startsAt, durationMonths);
     return { startsAt, endsAt };
   }

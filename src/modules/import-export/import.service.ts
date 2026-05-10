@@ -2,6 +2,7 @@ import argon2 from 'argon2';
 import { randomBytes } from 'node:crypto';
 import * as XLSX from 'xlsx';
 
+import { emit } from '../../shared/events/event-bus.js';
 import { generateUsername } from '../../shared/utils/username.js';
 import {
   canonicalizeSubject,
@@ -34,6 +35,7 @@ const SCHEDULE_HEADERS = ['Nom professeur*', 'Classe*', 'Matière*', 'Jour*', 'C
 
 const PREVIEW_LIMIT = 5;
 const STUDENT_IGNORE_SHEETS = ['README', 'readme', 'Info', 'INSTRUCTIONS', 'Salles (référence)'];
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
 
 const DAY_MAP: Record<string, number> = {
   lundi: 1,
@@ -72,7 +74,7 @@ const hasFutureOccurrenceInPeriod = (input: {
   const nowDateIso = formatUtcDate(now);
   const baseDateIso = input.validFrom > nowDateIso ? input.validFrom : nowDateIso;
   const periodEnd = parseUtcDate(input.validTo);
-  const candidate = nextIsoDayOnOrAfter(parseUtcDate(baseDateIso), input.dayOfWeek);
+  let candidate = nextIsoDayOnOrAfter(parseUtcDate(baseDateIso), input.dayOfWeek);
 
   while (candidate <= periodEnd) {
     const candidateIso = formatUtcDate(candidate);
@@ -80,7 +82,10 @@ const hasFutureOccurrenceInPeriod = (input: {
     if (candidateDateTime > now) {
       return true;
     }
-    candidate.setUTCDate(candidate.getUTCDate() + 7);
+    // Advance to the next occurrence without mutating the loop variable's shared state.
+    const next = new Date(candidate);
+    next.setUTCDate(next.getUTCDate() + 7);
+    candidate = next;
   }
 
   return false;
@@ -141,6 +146,16 @@ const makeError = (params: {
   value: params.value ?? '',
 });
 
+const assertFileSizeWithinLimit = (fileBuffer: Buffer): void => {
+  if (fileBuffer.length > MAX_FILE_SIZE_BYTES) {
+    throw new ImportModuleError(
+      `Le fichier dépasse la taille maximale autorisée (${MAX_FILE_SIZE_BYTES / 1024 / 1024} Mo)`,
+      400,
+      'IMPORT_FILE_TOO_LARGE'
+    );
+  }
+};
+
 const parseWorkbook = (
   fileBuffer: Buffer,
   params?: {
@@ -148,6 +163,7 @@ const parseWorkbook = (
     ignoreSheets?: string[];
   }
 ): ParsedWorkbook => {
+  assertFileSizeWithinLimit(fileBuffer);
   const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
 
   if (workbook.SheetNames.length === 0) {
@@ -284,7 +300,8 @@ const validateSchedulePeriodInput = (period?: SchedulePeriodInput): SchedulePeri
     );
   }
 
-  if (!isMonday(period.weekStart) || !isMonday(period.weekEnd) || period.weekStart > period.weekEnd) {
+  // weekEnd must be strictly after weekStart (at least one week difference)
+  if (!isMonday(period.weekStart) || !isMonday(period.weekEnd) || period.weekStart >= period.weekEnd) {
     throw new ImportModuleError(
       `Impossible de laisser une semaine sans EDT entre ${period.weekStart} et ${period.weekEnd}`,
       400,
@@ -312,7 +329,34 @@ const normalizeSubjectsForCompare = (subjects: string[]): string =>
     .sort()
     .join(',');
 
-const toDiffItem = (input: DiffPreviewItem): DiffPreviewItem => input;
+// ---------------------------------------------------------------------------
+// Identity key helpers — single source of truth for deduplication
+// ---------------------------------------------------------------------------
+
+const buildStudentIdentityKey = (params: {
+  matricule: string | null;
+  firstName: string;
+  lastName: string;
+  className: string;
+}): string => {
+  if (params.matricule) {
+    return `matricule::${normalizeKey(params.matricule)}`;
+  }
+  return `name::${normalizeKey(`${params.className}::${params.firstName}::${params.lastName}`)}`;
+};
+
+const buildTeacherIdentityKey = (params: {
+  matricule: string | null;
+  firstName: string;
+  lastName: string;
+}): string => {
+  if (params.matricule) {
+    return `matricule::${normalizeKey(params.matricule)}`;
+  }
+  return `name::${normalizeKey(`${params.firstName} ${params.lastName}`)}`;
+};
+
+// ---------------------------------------------------------------------------
 
 const resolveTeacherUsername = (
   params: {
@@ -338,7 +382,7 @@ const resolveTeacherUsername = (
 };
 
 const hasTransaction = (db: QueryExecutor): db is TransactionalQueryExecutor => {
-  return 'transaction' in db && typeof db.transaction === 'function';
+  return 'transaction' in db && typeof (db as TransactionalQueryExecutor).transaction === 'function';
 };
 
 const runInTransaction = async <T>(
@@ -351,6 +395,144 @@ const runInTransaction = async <T>(
 
   return run(db);
 };
+
+// ---------------------------------------------------------------------------
+// Row-level validation helpers
+// ---------------------------------------------------------------------------
+
+const validateStudentRow = (
+  sheetRow: ParsedWorkbookRow,
+  classesByName: Map<string, string>,
+  existingByMatricule: Map<string, { id: string; key: string; matricule: string | null; firstName: string; lastName: string; className: string; birthDate: string | null; parentName: string | null; parentPhone: string | null; parentName2: string | null; parentPhone2: string | null; isActive: boolean }>,
+  batchStudentMatricules: Map<string, number>,
+  errors: ImportError[]
+): {
+  matricule: string | null;
+  firstName: string;
+  lastName: string;
+  className: string;
+  birthDate: string | null;
+  parentName: string | null;
+  parentPhone: string | null;
+  parentName2: string | null;
+  parentPhone2: string | null;
+} | null => {
+  const line = sheetRow.line;
+  const matricule = normalizeCell(sheetRow.values['Matricule']);
+  const firstName = normalizeCell(sheetRow.values['Prénom*']);
+  const lastName = normalizeCell(sheetRow.values['Nom*']);
+  const className = normalizeCell(sheetRow.values['Classe*']) || normalizeCell(sheetRow.sheetName);
+  const birthDateRaw = normalizeCell(sheetRow.values['Date de naissance']);
+  const birthDate = parseDateToIso(birthDateRaw);
+  const parentName = normalizeCell(sheetRow.values['Nom parent']) || null;
+  const parentPhoneRaw = normalizeCell(sheetRow.values['Téléphone parent']);
+  const parentName2 = normalizeCell(sheetRow.values['Nom parent 2']) || null;
+  const parentPhone2Raw = normalizeCell(sheetRow.values['Téléphone parent 2']);
+  const normalizedMatricule = matricule ? normalizeKey(matricule) : null;
+
+  if (normalizedMatricule) {
+    const existingInBatch = batchStudentMatricules.get(normalizedMatricule);
+    if (existingInBatch) {
+      errors.push({
+        ...makeError({
+          row: line,
+          column: 'Matricule',
+          message: `Matricule dupliqué dans le fichier (déjà utilisé à la ligne ${existingInBatch})`,
+          value: matricule,
+        }),
+        sheet: sheetRow.sheetName,
+      });
+    } else {
+      batchStudentMatricules.set(normalizedMatricule, line);
+    }
+  }
+
+  if (!firstName) {
+    errors.push({
+      ...makeError({ row: line, column: 'Prénom*', message: 'Prénom requis' }),
+      sheet: sheetRow.sheetName,
+    });
+  }
+
+  if (!lastName) {
+    errors.push({
+      ...makeError({ row: line, column: 'Nom*', message: 'Nom requis' }),
+      sheet: sheetRow.sheetName,
+    });
+  }
+
+  if (!className) {
+    errors.push({
+      ...makeError({ row: line, column: 'Classe*', message: 'Classe requise (ou nom de feuille)' }),
+      sheet: sheetRow.sheetName,
+    });
+  } else if (!classesByName.has(normalizeKey(className))) {
+    errors.push({
+      ...makeError({
+        row: line,
+        column: 'Classe*',
+        message: `Feuille '${sheetRow.sheetName}' ligne ${line} : classe introuvable`,
+        value: className,
+      }),
+      sheet: sheetRow.sheetName,
+    });
+  }
+
+  if (birthDateRaw && !birthDate) {
+    errors.push({
+      ...makeError({
+        row: line,
+        column: 'Date de naissance',
+        message: 'Date invalide (formats acceptés: YYYY-MM-DD ou JJ/MM/AAAA)',
+        value: birthDateRaw,
+      }),
+      sheet: sheetRow.sheetName,
+    });
+  }
+
+  if (parentPhoneRaw && !IMPORT_PHONE_REGEX.test(parentPhoneRaw)) {
+    errors.push({
+      ...makeError({
+        row: line,
+        column: 'Téléphone parent',
+        message: 'Format invalide, attendu 225 suivi de 10 chiffres',
+        value: parentPhoneRaw,
+      }),
+      sheet: sheetRow.sheetName,
+    });
+  }
+
+  if (parentPhone2Raw && !IMPORT_PHONE_REGEX.test(parentPhone2Raw)) {
+    errors.push({
+      ...makeError({
+        row: line,
+        column: 'Téléphone parent 2',
+        message: 'Format invalide, attendu 225 suivi de 10 chiffres',
+        value: parentPhone2Raw,
+      }),
+      sheet: sheetRow.sheetName,
+    });
+  }
+
+  const hasRowError = errors.some((e) => e.row === line && e.sheet === sheetRow.sheetName);
+  if (hasRowError) {
+    return null;
+  }
+
+  return {
+    matricule: matricule || null,
+    firstName,
+    lastName,
+    className,
+    birthDate,
+    parentName,
+    parentPhone: parentPhoneRaw || null,
+    parentName2,
+    parentPhone2: parentPhone2Raw || null,
+  };
+};
+
+// ---------------------------------------------------------------------------
 
 export class ImportService {
   constructor(private readonly repository: ImportRepository = defaultImportRepository) {}
@@ -383,43 +565,64 @@ export class ImportService {
     options?: {
       mode?: ImportMode;
       schedulePeriod?: SchedulePeriodInput;
+      conflictAcknowledged?: boolean;
+      tenantContext?: { tenantId: string; schemaName: string };
     }
   ): Promise<ConfirmReport> {
     const mode = options?.mode ?? 'merge';
     if (type === 'students') {
       const validation = await this.validateStudents(fileBuffer, db, mode);
-      return this.confirmStudents(validation, db, mode);
+      return this.confirmStudents(validation, db, mode, options?.tenantContext);
     }
 
     if (type === 'teachers') {
       const validation = await this.validateTeachers(fileBuffer, db, mode);
-      return this.confirmTeachers(validation, db, mode);
+      return this.confirmTeachers(validation, db, mode, options?.tenantContext);
     }
 
     const validation = await this.validateSchedule(fileBuffer, db, options?.schedulePeriod);
-    return this.confirmSchedule(validation, db, options?.schedulePeriod);
+
+    // Conflict gate belongs in the service, not the controller
+    const hasConflicts = Array.isArray(validation.report.conflicts) && validation.report.conflicts.length > 0;
+    if (hasConflicts && !options?.conflictAcknowledged) {
+      throw new ImportModuleError(
+        'Conflits EDT détectés. Merci de confirmer le remplacement.',
+        400,
+        'IMPORT_CONFLICT_ACK_REQUIRED'
+      );
+    }
+
+    return this.confirmSchedule(validation, db, options?.schedulePeriod, mode, options?.tenantContext);
   }
 
   async listHistory(
     db: QueryExecutor,
-    limit: number
-  ): Promise<
-    Array<{
+    filter: { limit: number; page: number; month?: string; type?: ImportType }
+  ): Promise<{
+    items: Array<{
       id: string;
       imported_at: string;
       type: ImportType;
       imported_count: number;
       updated_count: number;
-    }>
-  > {
-    const rows = await this.repository.listImportHistory(db, limit);
-    return rows.map((row) => ({
-      id: row.id,
-      imported_at: row.imported_at,
-      type: row.import_type,
-      imported_count: row.imported_count,
-      updated_count: row.updated_count,
-    }));
+    }>;
+    total: number;
+    page: number;
+    totalPages: number;
+  }> {
+    const { items, total } = await this.repository.listImportHistory(db, filter);
+    return {
+      items: items.map((row) => ({
+        id: row.id,
+        imported_at: row.imported_at,
+        type: row.import_type,
+        imported_count: row.imported_count,
+        updated_count: row.updated_count,
+      })),
+      total,
+      page: filter.page,
+      totalPages: Math.max(1, Math.ceil(total / filter.limit)),
+    };
   }
 
   private async validateStudents(
@@ -451,197 +654,55 @@ export class ImportService {
     const toUpdate: DiffPreviewItem[] = [];
 
     parsed.rows.forEach((sheetRow) => {
-      const line = sheetRow.line;
-      const matricule = normalizeCell(sheetRow.values['Matricule']);
-      const firstName = normalizeCell(sheetRow.values['Prénom*']);
-      const lastName = normalizeCell(sheetRow.values['Nom*']);
-      const className = normalizeCell(sheetRow.values['Classe*']) || normalizeCell(sheetRow.sheetName);
-      const birthDateRaw = normalizeCell(sheetRow.values['Date de naissance']);
-      const birthDate = parseDateToIso(birthDateRaw);
-      const parentName = normalizeCell(sheetRow.values['Nom parent']) || null;
-      const parentPhoneRaw = normalizeCell(sheetRow.values['Téléphone parent']);
-      const parentName2 = normalizeCell(sheetRow.values['Nom parent 2']) || null;
-      const parentPhone2Raw = normalizeCell(sheetRow.values['Téléphone parent 2']);
-      const normalizedMatricule = matricule ? normalizeKey(matricule) : null;
-      const rowKey = normalizeKey(`${className}::${firstName}::${lastName}`);
-      const rowIdentity = normalizedMatricule ? `matricule::${normalizedMatricule}` : `name::${rowKey}`;
+      const fields = validateStudentRow(
+        sheetRow,
+        classesByName,
+        existingByMatricule,
+        batchStudentMatricules,
+        errors
+      );
+      if (!fields) return;
 
-      if (normalizedMatricule) {
-        const existingInBatch = batchStudentMatricules.get(normalizedMatricule);
-        if (existingInBatch) {
-          errors.push({
-            ...makeError({
-              row: line,
-              column: 'Matricule',
-              message: `Matricule dupliqué dans le fichier (déjà utilisé à la ligne ${existingInBatch})`,
-              value: matricule,
-            }),
-            sheet: sheetRow.sheetName,
-          });
-        } else {
-          batchStudentMatricules.set(normalizedMatricule, line);
-        }
-      }
+      const identityKey = buildStudentIdentityKey(fields);
+      parsedIdentitySet.add(identityKey);
+      validRows.push(fields);
 
-      if (!firstName) {
-        errors.push({
-          ...makeError({ row: line, column: 'Prénom*', message: 'Prénom requis' }),
-          sheet: sheetRow.sheetName,
-        });
-      }
-
-      if (!lastName) {
-        errors.push({
-          ...makeError({ row: line, column: 'Nom*', message: 'Nom requis' }),
-          sheet: sheetRow.sheetName,
-        });
-      }
-
-      if (!className) {
-        errors.push({
-          ...makeError({ row: line, column: 'Classe*', message: 'Classe requise (ou nom de feuille)' }),
-          sheet: sheetRow.sheetName,
-        });
-      } else if (!classesByName.has(normalizeKey(className))) {
-        errors.push(
-          {
-            ...makeError({
-              row: line,
-              column: 'Classe*',
-              message: `Feuille '${sheetRow.sheetName}' ligne ${line} : classe introuvable`,
-              value: className,
-            }),
-            sheet: sheetRow.sheetName,
-          }
-        );
-      }
-
-      if (birthDateRaw && !birthDate) {
-        errors.push({
-          ...makeError({
-            row: line,
-            column: 'Date de naissance',
-            message: 'Date invalide (formats acceptés: YYYY-MM-DD ou JJ/MM/AAAA)',
-            value: birthDateRaw,
-          }),
-          sheet: sheetRow.sheetName,
-        });
-      }
-
-      if (parentPhoneRaw && !IMPORT_PHONE_REGEX.test(parentPhoneRaw)) {
-        errors.push(
-          {
-            ...makeError({
-              row: line,
-              column: 'Téléphone parent',
-              message: 'Format invalide, attendu 225 suivi de 10 chiffres',
-              value: parentPhoneRaw,
-            }),
-            sheet: sheetRow.sheetName,
-          }
-        );
-      }
-
-      if (parentPhone2Raw && !IMPORT_PHONE_REGEX.test(parentPhone2Raw)) {
-        errors.push(
-          {
-            ...makeError({
-              row: line,
-              column: 'Téléphone parent 2',
-              message: 'Format invalide, attendu 225 suivi de 10 chiffres',
-              value: parentPhone2Raw,
-            }),
-            sheet: sheetRow.sheetName,
-          }
-        );
-      }
-
-      const hasRowError = errors.some((error) => error.row === line && error.sheet === sheetRow.sheetName);
-      if (hasRowError) {
-        return;
-      }
-
-      parsedIdentitySet.add(rowIdentity);
-      validRows.push({
-        matricule: matricule || null,
-        firstName,
-        lastName,
-        className,
-        birthDate,
-        parentName,
-        parentPhone: parentPhoneRaw || null,
-        parentName2,
-        parentPhone2: parentPhone2Raw || null,
-      });
-
+      const normalizedMatricule = fields.matricule ? normalizeKey(fields.matricule) : null;
+      const rowKey = normalizeKey(`${fields.className}::${fields.firstName}::${fields.lastName}`);
       const existing = normalizedMatricule
         ? existingByMatricule.get(normalizedMatricule) ?? existingByKey.get(rowKey)
         : existingByKey.get(rowKey);
+
       if (!existing) {
-        toAdd.push(
-          toDiffItem({
-            key: rowIdentity,
-            displayName: `${lastName} ${firstName} (${className})`,
-          })
-        );
+        toAdd.push({ key: identityKey, displayName: `${fields.lastName} ${fields.firstName} (${fields.className})` });
         return;
       }
 
       const changes: DiffPreviewItem['changes'] = {};
-      if ((existing.matricule ?? null) !== (matricule || null)) {
-        changes.matricule = {
-          before: existing.matricule,
-          after: matricule || null,
-        };
+      if ((existing.matricule ?? null) !== (fields.matricule ?? null)) {
+        changes.matricule = { before: existing.matricule, after: fields.matricule };
       }
-
-      if ((existing.birthDate ?? null) !== (birthDate ?? null)) {
-        changes.birthDate = {
-          before: existing.birthDate ?? null,
-          after: birthDate ?? null,
-        };
+      if ((existing.birthDate ?? null) !== (fields.birthDate ?? null)) {
+        changes.birthDate = { before: existing.birthDate ?? null, after: fields.birthDate ?? null };
       }
-
-      if ((existing.parentName ?? null) !== (parentName ?? null)) {
-        changes.parentName = {
-          before: existing.parentName ?? null,
-          after: parentName ?? null,
-        };
+      if ((existing.parentName ?? null) !== (fields.parentName ?? null)) {
+        changes.parentName = { before: existing.parentName ?? null, after: fields.parentName ?? null };
       }
-
-      if ((existing.parentPhone ?? null) !== (parentPhoneRaw || null)) {
-        changes.parentPhone = {
-          before: existing.parentPhone ?? null,
-          after: parentPhoneRaw || null,
-        };
+      if ((existing.parentPhone ?? null) !== (fields.parentPhone ?? null)) {
+        changes.parentPhone = { before: existing.parentPhone ?? null, after: fields.parentPhone ?? null };
       }
-
-      if ((existing.parentName2 ?? null) !== (parentName2 ?? null)) {
-        changes.parentName2 = {
-          before: existing.parentName2 ?? null,
-          after: parentName2 ?? null,
-        };
+      if ((existing.parentName2 ?? null) !== (fields.parentName2 ?? null)) {
+        changes.parentName2 = { before: existing.parentName2 ?? null, after: fields.parentName2 ?? null };
       }
-
-      if ((existing.parentPhone2 ?? null) !== (parentPhone2Raw || null)) {
-        changes.parentPhone2 = {
-          before: existing.parentPhone2 ?? null,
-          after: parentPhone2Raw || null,
-        };
+      if ((existing.parentPhone2 ?? null) !== (fields.parentPhone2 ?? null)) {
+        changes.parentPhone2 = { before: existing.parentPhone2 ?? null, after: fields.parentPhone2 ?? null };
       }
-
       if (!existing.isActive) {
         changes.isActive = { before: 'false', after: 'true' };
       }
 
-      if (changes && Object.keys(changes).length > 0) {
-        toUpdate.push(
-          toDiffItem({
-            key: rowIdentity,
-            displayName: `${lastName} ${firstName} (${className})`,
-            changes,
-          })
-        );
+      if (Object.keys(changes).length > 0) {
+        toUpdate.push({ key: identityKey, displayName: `${fields.lastName} ${fields.firstName} (${fields.className})`, changes });
       }
     });
 
@@ -649,17 +710,18 @@ export class ImportService {
       importMode === 'replace'
         ? existingStudents
             .filter((item) => {
-              const identity = item.matricule
-                ? `matricule::${normalizeKey(item.matricule)}`
-                : `name::${item.key}`;
+              const identity = buildStudentIdentityKey({
+                matricule: item.matricule,
+                firstName: item.firstName,
+                lastName: item.lastName,
+                className: item.className,
+              });
               return !parsedIdentitySet.has(identity) && item.isActive;
             })
-            .map((item) =>
-              toDiffItem({
-                key: item.key,
-                displayName: `${item.lastName} ${item.firstName} (${item.className})`,
-              })
-            )
+            .map((item) => ({
+              key: item.key,
+              displayName: `${item.lastName} ${item.firstName} (${item.className})`,
+            }))
         : [];
 
     const unchanged = Math.max(0, validRows.length - toAdd.length - toUpdate.length);
@@ -869,69 +931,43 @@ export class ImportService {
         username: resolvedUsername,
       });
 
-      const teacherKey = normalizeKey(fullName);
-      const teacherIdentity = normalizedMatricule
-        ? `matricule::${normalizedMatricule}`
-        : `name::${teacherKey}`;
+      const teacherIdentity = buildTeacherIdentityKey({ matricule: matricule || null, firstName, lastName });
       parsedTeacherIdentitySet.add(teacherIdentity);
 
-      const existing = existingByMatriculeMatch ?? existingByName.get(teacherKey);
+      const existing = existingByMatriculeMatch ?? existingByName.get(normalizeKey(fullName));
       if (!existing) {
-        toAdd.push(
-          toDiffItem({
-            key: teacherIdentity,
-            displayName: fullName,
-          })
-        );
+        toAdd.push({ key: teacherIdentity, displayName: fullName });
         return;
       }
 
       const changes: DiffPreviewItem['changes'] = {};
       if ((existing.matricule ?? null) !== (matricule || null)) {
-        changes.matricule = {
-          before: existing.matricule ?? null,
-          after: matricule || null,
-        };
+        changes.matricule = { before: existing.matricule ?? null, after: matricule || null };
       }
-
       if (existing.type !== (type as 'vacataire' | 'permanent')) {
         changes.type = { before: existing.type, after: type };
       }
-
       if (normalizeSubjectsForCompare(existing.subjects) !== normalizeSubjectsForCompare(subjects)) {
-        changes.subjects = {
-          before: existing.subjects.join(', '),
-          after: subjects.join(', '),
-        };
+        changes.subjects = { before: existing.subjects.join(', '), after: subjects.join(', ') };
       }
-
       if ((existing.hourlyRate ?? null) !== (hourlyRate ?? null)) {
         changes.hourlyRate = {
           before: existing.hourlyRate === null ? null : String(existing.hourlyRate),
           after: hourlyRate === null ? null : String(hourlyRate),
         };
       }
-
       if ((existing.monthlySalary ?? null) !== ((type === 'permanent' ? monthlySalary : null) ?? null)) {
         changes.monthlySalary = {
           before: existing.monthlySalary === null ? null : String(existing.monthlySalary),
-          after:
-            type === 'permanent' && monthlySalary !== null ? String(monthlySalary) : null,
+          after: type === 'permanent' && monthlySalary !== null ? String(monthlySalary) : null,
         };
       }
-
       if (!existing.isActive) {
         changes.isActive = { before: 'false', after: 'true' };
       }
 
-      if (changes && Object.keys(changes).length > 0) {
-        toUpdate.push(
-          toDiffItem({
-            key: teacherIdentity,
-            displayName: fullName,
-            changes,
-          })
-        );
+      if (Object.keys(changes).length > 0) {
+        toUpdate.push({ key: teacherIdentity, displayName: fullName, changes });
       }
     });
 
@@ -939,17 +975,14 @@ export class ImportService {
       importMode === 'replace'
         ? existingTeachers
             .filter((teacher) => {
-              const identity = teacher.matricule
-                ? `matricule::${normalizeKey(teacher.matricule)}`
-                : `name::${teacher.key}`;
+              const identity = buildTeacherIdentityKey({
+                matricule: teacher.matricule,
+                firstName: teacher.name.split(' ')[0] ?? '',
+                lastName: teacher.name.split(' ').slice(1).join(' '),
+              });
               return !parsedTeacherIdentitySet.has(identity) && teacher.isActive;
             })
-            .map((teacher) =>
-              toDiffItem({
-                key: teacher.key,
-                displayName: teacher.name,
-              })
-            )
+            .map((teacher) => ({ key: teacher.key, displayName: teacher.name }))
         : [];
 
     const unchanged = Math.max(0, validRows.length - toAdd.length - toUpdate.length);
@@ -1217,7 +1250,8 @@ export class ImportService {
   private async confirmStudents(
     validation: StudentValidation,
     db: QueryExecutor,
-    mode: ImportMode
+    mode: ImportMode,
+    tenantContext?: { tenantId: string; schemaName: string }
   ): Promise<ConfirmReport> {
     this.ensureNoValidationErrors(validation.report);
 
@@ -1237,19 +1271,18 @@ export class ImportService {
 
       if (mode === 'replace') {
         const existing = await this.repository.listExistingStudents(executor);
-        const importedIdentity = new Set(
-          validation.rows.map((row) =>
-            row.matricule
-              ? `matricule::${normalizeKey(row.matricule)}`
-              : `name::${normalizeKey(`${row.className}::${row.firstName}::${row.lastName}`)}`
-          )
+        const importedIdentitySet = new Set(
+          validation.rows.map((row) => buildStudentIdentityKey(row))
         );
         const toDeactivateIds = existing
           .filter((item) => {
-            const identity = item.matricule
-              ? `matricule::${normalizeKey(item.matricule)}`
-              : `name::${item.key}`;
-            return !importedIdentity.has(identity) && item.isActive;
+            const identity = buildStudentIdentityKey({
+              matricule: item.matricule,
+              firstName: item.firstName,
+              lastName: item.lastName,
+              className: item.className,
+            });
+            return !importedIdentitySet.has(identity) && item.isActive;
           })
           .map((item) => item.id);
         deactivated = await this.repository.deactivateStudentsByIds(executor, toDeactivateIds);
@@ -1271,13 +1304,27 @@ export class ImportService {
       };
     };
 
-    return runInTransaction(db, run);
+    const report = await runInTransaction(db, run);
+
+    if (tenantContext) {
+      emit('import.completed', {
+        tenantId: tenantContext.tenantId,
+        schemaName: tenantContext.schemaName,
+        importType: 'students',
+        importedCount: report.imported,
+        updatedCount: report.updated,
+        deactivatedCount: report.deactivated ?? 0,
+      });
+    }
+
+    return report;
   }
 
   private async confirmTeachers(
     validation: TeacherValidation,
     db: QueryExecutor,
-    mode: ImportMode
+    mode: ImportMode,
+    tenantContext?: { tenantId: string; schemaName: string }
   ): Promise<ConfirmReport> {
     this.ensureNoValidationErrors(validation.report);
 
@@ -1312,19 +1359,17 @@ export class ImportService {
 
       if (mode === 'replace') {
         const existing = await this.repository.listExistingTeachers(executor);
-        const importedIdentity = new Set(
-          validation.rows.map((row) =>
-            row.matricule
-              ? `matricule::${normalizeKey(row.matricule)}`
-              : `name::${normalizeKey(`${row.firstName} ${row.lastName}`)}`
-          )
+        const importedIdentitySet = new Set(
+          validation.rows.map((row) => buildTeacherIdentityKey(row))
         );
         const toDeactivateUserIds = existing
           .filter((item) => {
-            const identity = item.matricule
-              ? `matricule::${normalizeKey(item.matricule)}`
-              : `name::${item.key}`;
-            return !importedIdentity.has(identity) && item.isActive;
+            const identity = buildTeacherIdentityKey({
+              matricule: item.matricule,
+              firstName: item.name.split(' ')[0] ?? '',
+              lastName: item.name.split(' ').slice(1).join(' '),
+            });
+            return !importedIdentitySet.has(identity) && item.isActive;
           })
           .map((item) => item.userId);
         deactivated = await this.repository.deactivateTeachersByIds(executor, toDeactivateUserIds);
@@ -1346,13 +1391,28 @@ export class ImportService {
       };
     };
 
-    return runInTransaction(db, run);
+    const report = await runInTransaction(db, run);
+
+    if (tenantContext) {
+      emit('import.completed', {
+        tenantId: tenantContext.tenantId,
+        schemaName: tenantContext.schemaName,
+        importType: 'teachers',
+        importedCount: report.imported,
+        updatedCount: report.updated,
+        deactivatedCount: report.deactivated ?? 0,
+      });
+    }
+
+    return report;
   }
 
   private async confirmSchedule(
     validation: ScheduleValidation,
     db: QueryExecutor,
-    schedulePeriod?: SchedulePeriodInput
+    schedulePeriod?: SchedulePeriodInput,
+    importMode: ImportMode = 'merge',
+    tenantContext?: { tenantId: string; schemaName: string }
   ): Promise<ConfirmReport> {
     this.ensureNoValidationErrors(validation.report);
     const period = validateSchedulePeriodInput(schedulePeriod);
@@ -1366,6 +1426,7 @@ export class ImportService {
       this.repository.listTimeSlots(db),
       this.repository.listRooms(db),
     ]);
+
     let schedulePeriodId: string;
     if (period) {
       schedulePeriodId = await this.repository.findOrCreateSchedulePeriod(db, {
@@ -1430,6 +1491,7 @@ export class ImportService {
     const run = async (executor: QueryExecutor): Promise<ConfirmReport> => {
       let imported = 0;
       let updated = 0;
+      const upsertedScheduleIds: string[] = [];
 
       for (const row of validation.rows) {
         const classId = classIdByName.get(normalizeKey(row.className));
@@ -1460,6 +1522,15 @@ export class ImportService {
         }
       }
 
+      // Mode replace: deactivate schedules of this period that were not in the import file
+      if (importMode === 'replace') {
+        await this.repository.deactivateSchedulesByPeriodExcluding(
+          executor,
+          schedulePeriodId,
+          upsertedScheduleIds
+        );
+      }
+
       await this.repository.createImportHistory(executor, {
         importType: 'schedule',
         importedCount: imported,
@@ -1471,11 +1542,24 @@ export class ImportService {
         updated,
         errors: [],
         preview: validation.report.preview,
-        importMode: 'merge',
+        importMode,
       };
     };
 
-    return runInTransaction(db, run);
+    const report = await runInTransaction(db, run);
+
+    if (tenantContext) {
+      emit('import.completed', {
+        tenantId: tenantContext.tenantId,
+        schemaName: tenantContext.schemaName,
+        importType: 'schedule',
+        importedCount: report.imported,
+        updatedCount: report.updated,
+        deactivatedCount: 0,
+      });
+    }
+
+    return report;
   }
 }
 

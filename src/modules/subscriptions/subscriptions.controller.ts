@@ -218,12 +218,12 @@ export default async function subscriptionsController(app: FastifyInstance): Pro
     { preHandler: requirePermission('subscriptions.cancel') },
     async (request, reply) => {
       try {
-        const { subscriptionId } = cancelSubscriptionParamsSchema.parse(request.params ?? {});
+        const { parentId, subscriptionId } = cancelSubscriptionParamsSchema.parse(request.params ?? {});
         cancelSubscriptionBodySchema.parse(request.body ?? {});
         const claims = request.claims!;
         await withTenantSchema(claims.schemaName, async (tenantDb) => {
           const service = new SubscriptionsService(new SubscriptionsRepository(tenantDb));
-          await service.cancelSubscription(subscriptionId, claims.sub);
+          await service.cancelSubscription(subscriptionId, parentId, claims.sub);
         });
         return reply.send({ success: true });
       } catch (error) {

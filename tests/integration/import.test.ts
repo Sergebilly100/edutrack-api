@@ -1,4 +1,6 @@
 import * as XLSX from 'xlsx';
+import path from 'node:path';
+import { existsSync } from 'node:fs';
 import type { Test } from 'supertest';
 import { describe, expect, it } from 'vitest';
 
@@ -10,75 +12,75 @@ import {
   tenantTable,
 } from './setup.js';
 
-const toWorkbookBuffer = (rows: Record<string, string>[]): Buffer => {
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const toWorkbookBuffer = (rows: Record<string, string>[], sheetName = 'Sheet1'): Buffer => {
   const workbook = XLSX.utils.book_new();
   const sheet = XLSX.utils.json_to_sheet(rows);
-  XLSX.utils.book_append_sheet(workbook, sheet, 'Sheet1');
+  XLSX.utils.book_append_sheet(workbook, sheet, sheetName);
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
 };
 
-const attachStudentsFile = (req: Test, rows: Record<string, string>[]) => {
-  return req.attach('file', toWorkbookBuffer(rows), {
-    filename: 'students.xlsx',
+const attachFile = (req: Test, buf: Buffer, filename = 'import.xlsx') =>
+  req.attach('file', buf, {
+    filename,
     contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });
-};
 
-describe('import integration (real db)', () => {
-  it('POST /api/v1/import/students/dry-run avec 10 lignes valides retourne valid=10, errors=[]', async () => {
+const attachStudents = (req: Test, rows: Record<string, string>[]) =>
+  attachFile(req, toWorkbookBuffer(rows), 'students.xlsx');
+
+const attachTeachers = (req: Test, rows: Record<string, string>[]) =>
+  attachFile(req, toWorkbookBuffer(rows), 'teachers.xlsx');
+
+const attachSchedule = (req: Test, rows: Record<string, string>[]) =>
+  attachFile(req, toWorkbookBuffer(rows), 'schedule.xlsx');
+
+const uniquePrefix = () => `int_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+// ---------------------------------------------------------------------------
+// Students
+// ---------------------------------------------------------------------------
+
+describe('import integration — students', () => {
+  it('POST /api/v1/import/students/dry-run — 10 lignes valides → valid=10, errors=[]', async () => {
     const headers = await getAuthHeaders('director');
-    const context = getSeedContext();
-    const rows = Array.from({ length: 10 }, (_, index) => ({
-      'Prénom*': `DryFirst${index + 1}`,
-      'Nom*': `DryLast${index + 1}`,
-      'Classe*': context.className,
-      'Téléphone parent': `225070000${String(index + 1).padStart(4, '0')}`,
+    const { className } = getSeedContext();
+    const rows = Array.from({ length: 10 }, (_, i) => ({
+      'Prénom*': `DryFirst${i + 1}`,
+      'Nom*': `DryLast${i + 1}`,
+      'Classe*': className,
+      'Téléphone parent': `225070000${String(i + 1).padStart(4, '0')}`,
     }));
 
-    const response = await attachStudentsFile(
+    const res = await attachStudents(
       request().post('/api/v1/import/students/dry-run').set(headers),
       rows
     );
 
-    expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({
-      valid: 10,
-      errors: [],
-    });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ valid: 10, errors: [] });
   });
 
-  it('POST /api/v1/import/students/dry-run avec 3 lignes invalides retourne les bons numéros de ligne', async () => {
+  it('POST /api/v1/import/students/dry-run — 3 lignes invalides → bons numéros de ligne', async () => {
     const headers = await getAuthHeaders('director');
-    const context = getSeedContext();
+    const { className } = getSeedContext();
     const rows = [
-      {
-        'Prénom*': '',
-        'Nom*': 'BadRowOne',
-        'Classe*': context.className,
-        'Téléphone parent': '2250700000001',
-      },
-      {
-        'Prénom*': 'Bad',
-        'Nom*': 'RowTwo',
-        'Classe*': 'Classe inconnue',
-        'Téléphone parent': '2250700000002',
-      },
-      {
-        'Prénom*': 'Bad',
-        'Nom*': 'RowThree',
-        'Classe*': context.className,
-        'Téléphone parent': '0700000000',
-      },
+      { 'Prénom*': '', 'Nom*': 'BadOne', 'Classe*': className, 'Téléphone parent': '2250700000001' },
+      { 'Prénom*': 'Bad', 'Nom*': 'Two', 'Classe*': 'Classe inconnue', 'Téléphone parent': '2250700000002' },
+      { 'Prénom*': 'Bad', 'Nom*': 'Three', 'Classe*': className, 'Téléphone parent': '0700000000' },
     ];
 
-    const response = await attachStudentsFile(
+    const res = await attachStudents(
       request().post('/api/v1/import/students/dry-run').set(headers),
       rows
     );
 
-    expect(response.status).toBe(200);
-    expect(response.body.valid).toBe(0);
-    expect(response.body.errors).toEqual(
+    expect(res.status).toBe(200);
+    expect(res.body.valid).toBe(0);
+    expect(res.body.errors).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ row: 2, column: 'Prénom*' }),
         expect.objectContaining({ row: 3, column: 'Classe*' }),
@@ -87,70 +89,340 @@ describe('import integration (real db)', () => {
     );
   });
 
-  it('POST /api/v1/import/students/confirm persiste 10 élèves en DB', async () => {
+  it('POST /api/v1/import/students/confirm — persiste 10 élèves en DB', async () => {
     const headers = await getAuthHeaders('director');
-    const context = getSeedContext();
-    const prefix = `confirm_${Date.now()}`;
+    const { className } = getSeedContext();
+    const prefix = uniquePrefix();
 
-    const rows = Array.from({ length: 10 }, (_, index) => ({
-      'Prénom*': `${prefix}_first_${index + 1}`,
-      'Nom*': `${prefix}_last_${index + 1}`,
-      'Classe*': context.className,
-      'Téléphone parent': `225070001${String(index + 1).padStart(4, '0')}`,
+    const rows = Array.from({ length: 10 }, (_, i) => ({
+      'Prénom*': `${prefix}_f_${i + 1}`,
+      'Nom*': `${prefix}_l_${i + 1}`,
+      'Classe*': className,
     }));
 
-    const response = await attachStudentsFile(
+    const res = await attachStudents(
       request().post('/api/v1/import/students/confirm').set(headers),
       rows
     );
 
-    expect(response.status).toBe(200);
+    expect(res.status).toBe(200);
 
-    const rowsInDb = await queryTenant<{ count: number }>(
-      `
-        SELECT COUNT(*)::int AS count
-        FROM ${tenantTable('students')}
-        WHERE first_name LIKE $1
-      `,
-      [`${prefix}_first_%`]
+    const [{ count }] = await queryTenant<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM ${tenantTable('students')} WHERE first_name LIKE $1`,
+      [`${prefix}_f_%`]
     );
-
-    expect(Number(rowsInDb[0]?.count ?? 0)).toBe(10);
+    expect(Number(count)).toBe(10);
   });
 
-  it("POST /api/v1/import/students/confirm est idempotent (rejeu => pas de doublons)", async () => {
+  it('POST /api/v1/import/students/confirm — idempotent (rejeu → pas de doublons)', async () => {
     const headers = await getAuthHeaders('director');
-    const context = getSeedContext();
-    const prefix = `idem_${Date.now()}`;
+    const { className } = getSeedContext();
+    const prefix = uniquePrefix();
 
-    const rows = Array.from({ length: 10 }, (_, index) => ({
-      'Prénom*': `${prefix}_first_${index + 1}`,
-      'Nom*': `${prefix}_last_${index + 1}`,
-      'Classe*': context.className,
-      'Téléphone parent': `225070002${String(index + 1).padStart(4, '0')}`,
+    const rows = Array.from({ length: 5 }, (_, i) => ({
+      'Prénom*': `${prefix}_f_${i + 1}`,
+      'Nom*': `${prefix}_l_${i + 1}`,
+      'Classe*': className,
     }));
 
-    const first = await attachStudentsFile(
-      request().post('/api/v1/import/students/confirm').set(headers),
-      rows
-    );
-    const second = await attachStudentsFile(
+    await attachStudents(request().post('/api/v1/import/students/confirm').set(headers), rows);
+    const second = await attachStudents(
       request().post('/api/v1/import/students/confirm').set(headers),
       rows
     );
 
-    expect(first.status).toBe(200);
     expect(second.status).toBe(200);
+    const [{ count }] = await queryTenant<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM ${tenantTable('students')} WHERE first_name LIKE $1`,
+      [`${prefix}_f_%`]
+    );
+    expect(Number(count)).toBe(5);
+  });
 
-    const rowsInDb = await queryTenant<{ count: number }>(
-      `
-        SELECT COUNT(*)::int AS count
-        FROM ${tenantTable('students')}
-        WHERE first_name LIKE $1
-      `,
-      [`${prefix}_first_%`]
+  it('POST /api/v1/import/students/confirm — mode replace désactive les absents', async () => {
+    const headers = await getAuthHeaders('director');
+    const { className } = getSeedContext();
+    const prefix = uniquePrefix();
+
+    // Initial import: 3 students
+    const initial = Array.from({ length: 3 }, (_, i) => ({
+      'Prénom*': `${prefix}_f_${i + 1}`,
+      'Nom*': `${prefix}_l_${i + 1}`,
+      'Classe*': className,
+    }));
+    await attachStudents(
+      request().post('/api/v1/import/students/confirm').set(headers).field('mode', 'merge'),
+      initial
     );
 
-    expect(Number(rowsInDb[0]?.count ?? 0)).toBe(10);
+    // Replace with only 1 student
+    const replacement = [{ 'Prénom*': `${prefix}_f_1`, 'Nom*': `${prefix}_l_1`, 'Classe*': className }];
+    const res = await attachStudents(
+      request().post('/api/v1/import/students/confirm').set(headers).field('mode', 'replace'),
+      replacement
+    );
+
+    expect(res.status).toBe(200);
+
+    const [{ active_count }] = await queryTenant<{ active_count: number }>(
+      `SELECT COUNT(*)::int AS active_count FROM ${tenantTable('students')} WHERE first_name LIKE $1 AND is_active = true`,
+      [`${prefix}_f_%`]
+    );
+    expect(Number(active_count)).toBe(1);
+  });
+
+  it('POST /api/v1/import/students/dry-run — teacher sans permission → 403', async () => {
+    const headers = await getAuthHeaders('teacher');
+    const { className } = getSeedContext();
+
+    const res = await attachStudents(
+      request().post('/api/v1/import/students/dry-run').set(headers),
+      [{ 'Prénom*': 'Awa', 'Nom*': 'Bah', 'Classe*': className }]
+    );
+
+    expect(res.status).toBe(403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Teachers
+// ---------------------------------------------------------------------------
+
+describe('import integration — teachers', () => {
+  it('POST /api/v1/import/teachers/dry-run — valide → valid=1, errors=[]', async () => {
+    const headers = await getAuthHeaders('director');
+
+    const rows = [
+      { 'Nom*': 'Ouattara', 'Prénom*': 'Abou', 'Type*': 'vacataire', 'Matières*': 'Mathématiques', 'Taux horaire FCFA': '5000' },
+    ];
+
+    const res = await attachTeachers(
+      request().post('/api/v1/import/teachers/dry-run').set(headers),
+      rows
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.valid).toBe(1);
+    expect(res.body.errors).toHaveLength(0);
+  });
+
+  it('POST /api/v1/import/teachers/confirm — persiste un prof en DB', async () => {
+    const headers = await getAuthHeaders('director');
+    const prefix = uniquePrefix();
+
+    const rows = [
+      {
+        'Nom*': prefix,
+        'Prénom*': 'Integration',
+        'Type*': 'vacataire',
+        'Matières*': 'Physique',
+        'Taux horaire FCFA': '4000',
+      },
+    ];
+
+    const res = await attachTeachers(
+      request().post('/api/v1/import/teachers/confirm').set(headers),
+      rows
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.imported).toBe(1);
+
+    const [{ count }] = await queryTenant<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM ${tenantTable('teachers')} WHERE username LIKE $1`,
+      [`${prefix.toLowerCase().slice(0, 10)}%`]
+    );
+    expect(Number(count)).toBeGreaterThanOrEqual(1);
+  });
+
+  it('POST /api/v1/import/teachers/dry-run — type invalide → erreur', async () => {
+    const headers = await getAuthHeaders('director');
+
+    const rows = [
+      { 'Nom*': 'Bah', 'Prénom*': 'Mamadou', 'Type*': 'contractuel', 'Matières*': 'Histoire', 'Taux horaire FCFA': '3000' },
+    ];
+
+    const res = await attachTeachers(
+      request().post('/api/v1/import/teachers/dry-run').set(headers),
+      rows
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ column: 'Type*' })])
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Schedule
+// ---------------------------------------------------------------------------
+
+describe('import integration — schedule', () => {
+  it('POST /api/v1/import/schedule/dry-run — valide avec période → valid=1, errors=[]', async () => {
+    const headers = await getAuthHeaders('director');
+    const { className } = getSeedContext();
+    const context = getSeedContext();
+
+    // We need a teacher name matching the seeded teacher
+    const [{ name: teacherName }] = await queryTenant<{ name: string }>(
+      `SELECT u.name FROM ${tenantTable('teachers')} t INNER JOIN ${tenantTable('users')} u ON u.id = t.user_id WHERE t.id = $1`,
+      [context.teacherId]
+    );
+    const [{ label: slotLabel }] = await queryTenant<{ label: string }>(
+      `SELECT label FROM ${tenantTable('time_slots')} LIMIT 1`,
+      []
+    );
+
+    const rows = [
+      {
+        'Nom professeur*': teacherName,
+        'Classe*': className,
+        'Matière*': 'Mathématiques',
+        'Jour*': 'Lundi',
+        'Créneau*': slotLabel,
+        Salle: 'Salle A1',
+      },
+    ];
+
+    const res = await attachSchedule(
+      request()
+        .post('/api/v1/import/schedule/dry-run')
+        .set(headers)
+        .field('week_start', '2026-06-01')
+        .field('week_end', '2026-06-08'),
+      rows
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.valid).toBe(1);
+    expect(res.body.errors).toHaveLength(0);
+  });
+
+  it('POST /api/v1/import/schedule/confirm — sans conflictAcknowledged + conflit → 400 IMPORT_CONFLICT_ACK_REQUIRED', async () => {
+    const headers = await getAuthHeaders('director');
+    const { className } = getSeedContext();
+    const context = getSeedContext();
+
+    const [{ name: teacherName }] = await queryTenant<{ name: string }>(
+      `SELECT u.name FROM ${tenantTable('teachers')} t INNER JOIN ${tenantTable('users')} u ON u.id = t.user_id WHERE t.id = $1`,
+      [context.teacherId]
+    );
+    const [{ label: slotLabel }] = await queryTenant<{ label: string }>(
+      `SELECT label FROM ${tenantTable('time_slots')} LIMIT 1`,
+      []
+    );
+
+    // First import to create the period
+    const rows = [
+      {
+        'Nom professeur*': teacherName,
+        'Classe*': className,
+        'Matière*': 'Mathématiques',
+        'Jour*': 'Lundi',
+        'Créneau*': slotLabel,
+        Salle: 'Salle A1',
+      },
+    ];
+
+    const firstRes = await attachSchedule(
+      request()
+        .post('/api/v1/import/schedule/confirm')
+        .set(headers)
+        .field('week_start', '2026-07-07')
+        .field('week_end', '2026-07-14'),
+      rows
+    );
+    expect(firstRes.status).toBe(200);
+
+    // Second import on same period — conflict, no ack
+    const conflictRes = await attachSchedule(
+      request()
+        .post('/api/v1/import/schedule/confirm')
+        .set(headers)
+        .field('week_start', '2026-07-07')
+        .field('week_end', '2026-07-14')
+        .field('conflict_acknowledged', 'false'),
+      rows
+    );
+
+    expect(conflictRes.status).toBe(400);
+    expect(conflictRes.body.code).toBe('IMPORT_CONFLICT_ACK_REQUIRED');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// History
+// ---------------------------------------------------------------------------
+
+describe('import integration — history', () => {
+  it('GET /api/v1/import/history — retourne les imports confirmés', async () => {
+    const headers = await getAuthHeaders('director');
+    const { className } = getSeedContext();
+    const prefix = uniquePrefix();
+
+    // Perform a confirm to ensure at least one history entry
+    await attachStudents(
+      request().post('/api/v1/import/students/confirm').set(headers),
+      [{ 'Prénom*': `${prefix}_h`, 'Nom*': 'History', 'Classe*': className }]
+    );
+
+    const res = await request().get('/api/v1/import/history').set(headers);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('items');
+    expect(Array.isArray(res.body.items)).toBe(true);
+    expect(res.body.items.length).toBeGreaterThanOrEqual(1);
+    expect(res.body.items[0]).toMatchObject({
+      import_type: expect.stringMatching(/students|teachers|schedule/),
+      imported_count: expect.any(Number),
+      updated_count: expect.any(Number),
+    });
+  });
+
+  it('GET /api/v1/import/history — teacher sans permission → 403', async () => {
+    const headers = await getAuthHeaders('teacher');
+
+    const res = await request().get('/api/v1/import/history').set(headers);
+
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /api/v1/import/history — limit=5 respecté', async () => {
+    const headers = await getAuthHeaders('director');
+
+    const res = await request().get('/api/v1/import/history?limit=5').set(headers);
+
+    expect(res.status).toBe(200);
+    expect(res.body.items.length).toBeLessThanOrEqual(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Template download
+// ---------------------------------------------------------------------------
+
+describe('import integration — template', () => {
+  it('GET /api/v1/import/students/template — retourne 200 ou 404 selon présence du fichier', async () => {
+    const headers = await getAuthHeaders('director');
+
+    const res = await request().get('/api/v1/import/students/template').set(headers);
+
+    const templateExists = existsSync(path.resolve(process.cwd(), 'templates', 'students.xlsx'));
+    if (templateExists) {
+      expect(res.status).toBe(200);
+      expect(res.headers['content-disposition']).toContain('students-template.xlsx');
+    } else {
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('TEMPLATE_NOT_FOUND');
+    }
+  });
+
+  it('GET /api/v1/import/invalid/template — type invalide → 400', async () => {
+    const headers = await getAuthHeaders('director');
+
+    const res = await request().get('/api/v1/import/invalid/template').set(headers);
+
+    expect(res.status).toBe(400);
   });
 });

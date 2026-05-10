@@ -336,7 +336,7 @@ describe('subscriptions integration (real db)', () => {
     expect(Array.isArray(response.body.data)).toBe(true);
   });
 
-  it('Compte staff sans poste assigné conserve la base subscriptions.* → GET /parents → 200', async () => {
+  it('Compte staff sans poste assigné → GET /parents → 403 (pas de permission de base)', async () => {
     if (assignmentId) {
       await queryTenant(
         `DELETE FROM ${tenantTable('position_assignments')} WHERE id = $1::uuid`,
@@ -349,7 +349,97 @@ describe('subscriptions integration (real db)', () => {
       .get('/api/v1/subscriptions/parents')
       .set(headers);
 
-    expect(response.status).toBe(200);
-    expect(Array.isArray(response.body.data)).toBe(true);
+    expect(response.status).toBe(403);
+  });
+
+  it('PATCH cancel avec subscriptionId appartenant à un autre parent → 403', async () => {
+    const headers = await getAuthHeaders('director');
+
+    const otherResponse = await request()
+      .post('/api/v1/subscriptions/parents')
+      .set(headers)
+      .send({
+        full_name: 'Other Parent Isolation',
+        phone: '2250709990099',
+        student_ids: [studentIds[0]],
+        duration_months: 1,
+        payment_method: 'cash',
+        paid_now: true,
+      });
+    expect(otherResponse.status).toBe(201);
+    const otherParentId = otherResponse.body.parent.id as string;
+
+    const otherSubRows = await queryTenant<{ id: string }>(
+      `SELECT id::text FROM ${tenantTable('parent_subscriptions')} WHERE parent_id = $1::uuid ORDER BY created_at DESC LIMIT 1`,
+      [otherParentId]
+    );
+    const otherSubId = otherSubRows[0]!.id;
+
+    const response = await request()
+      .patch(`/api/v1/subscriptions/parents/${createdParentId}/subscription/${otherSubId}/cancel`)
+      .set(headers)
+      .send({});
+
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe('SUBSCRIPTION_OWNERSHIP_MISMATCH');
+  });
+
+  it('PATCH cancel sur abonnement déjà annulé → 409', async () => {
+    const headers = await getAuthHeaders('director');
+
+    const cancelledSubRows = await queryTenant<{ id: string }>(
+      `SELECT id::text FROM ${tenantTable('parent_subscriptions')} WHERE parent_id = $1::uuid AND status = 'cancelled' ORDER BY created_at DESC LIMIT 1`,
+      [createdParentId]
+    );
+
+    if (!cancelledSubRows[0]) {
+      const activeSubRows = await queryTenant<{ id: string }>(
+        `SELECT id::text FROM ${tenantTable('parent_subscriptions')} WHERE parent_id = $1::uuid AND status = 'active' ORDER BY created_at DESC LIMIT 1`,
+        [createdParentId]
+      );
+      if (!activeSubRows[0]) return;
+
+      await request()
+        .patch(`/api/v1/subscriptions/parents/${createdParentId}/subscription/${activeSubRows[0].id}/cancel`)
+        .set(headers)
+        .send({});
+    }
+
+    const cancelledSubRowsAfter = await queryTenant<{ id: string }>(
+      `SELECT id::text FROM ${tenantTable('parent_subscriptions')} WHERE parent_id = $1::uuid AND status = 'cancelled' ORDER BY created_at DESC LIMIT 1`,
+      [createdParentId]
+    );
+    if (!cancelledSubRowsAfter[0]) return;
+
+    const response = await request()
+      .patch(`/api/v1/subscriptions/parents/${createdParentId}/subscription/${cancelledSubRowsAfter[0].id}/cancel`)
+      .set(headers)
+      .send({});
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('SUBSCRIPTION_ALREADY_CANCELLED');
+  });
+
+  it('POST parents crée parent+subscription+links en atomique (rollback si constraint violation)', async () => {
+    const headers = await getAuthHeaders('director');
+
+    const response = await request()
+      .post('/api/v1/subscriptions/parents')
+      .set(headers)
+      .send({
+        full_name: 'Atomic Test Parent',
+        phone: '2250709990088',
+        student_ids: ['00000000-0000-0000-0000-000000000000'],
+        duration_months: 1,
+        payment_method: 'cash',
+        paid_now: true,
+      });
+
+    expect([400, 422, 500].includes(response.status)).toBe(true);
+
+    const orphans = await queryTenant<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM ${tenantTable('parents')} WHERE phone = '2250709990088'`
+    );
+    expect(orphans[0]?.count ?? 0).toBe(0);
   });
 });

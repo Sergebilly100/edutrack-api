@@ -40,35 +40,29 @@ type ImportHistoryRow = {
   updated_count: number;
 };
 
+export type ImportHistoryFilter = {
+  limit: number;
+  page: number;
+  month?: string;   // "YYYY-MM"
+  type?: ImportType;
+};
+
+export type ImportHistoryPage = {
+  items: ImportHistoryRow[];
+  total: number;
+};
+
 const getRows = <T>(result: unknown): T[] => {
   if (typeof result !== 'object' || result === null || !('rows' in result)) {
     return [];
   }
 
-  const rows = (result as { rows?: T[] }).rows;
-  return Array.isArray(rows) ? rows : [];
-};
+  const rows = (result as { rows?: unknown[] }).rows;
+  if (!Array.isArray(rows)) {
+    return [];
+  }
 
-const ensureImportHistoryInfrastructure = async (db: QueryExecutor): Promise<void> => {
-  await db.execute(sql.raw(`
-    DO $$
-    BEGIN
-      CREATE TYPE import_type AS ENUM ('students', 'teachers', 'schedule');
-    EXCEPTION
-      WHEN duplicate_object THEN null;
-    END
-    $$;
-  `));
-
-  await db.execute(sql.raw(`
-    CREATE TABLE IF NOT EXISTS import_history (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-      import_type import_type NOT NULL,
-      imported_count integer DEFAULT 0 NOT NULL,
-      updated_count integer DEFAULT 0 NOT NULL,
-      imported_at timestamp with time zone DEFAULT now() NOT NULL
-    );
-  `));
+  return rows as T[];
 };
 
 export type ImportRepository = {
@@ -148,6 +142,11 @@ export type ImportRepository = {
       roomId: string;
     }
   ) => Promise<'inserted' | 'updated'>;
+  deactivateSchedulesByPeriodExcluding: (
+    db: QueryExecutor,
+    schedulePeriodId: string,
+    keepIds: string[]
+  ) => Promise<number>;
   createImportHistory: (
     db: QueryExecutor,
     entry: {
@@ -158,8 +157,8 @@ export type ImportRepository = {
   ) => Promise<void>;
   listImportHistory: (
     db: QueryExecutor,
-    limit: number
-  ) => Promise<ImportHistoryRow[]>;
+    filter: ImportHistoryFilter
+  ) => Promise<ImportHistoryPage>;
 };
 
 export const defaultImportRepository: ImportRepository = {
@@ -534,6 +533,8 @@ export const defaultImportRepository: ImportRepository = {
       return 'updated';
     }
 
+    // Both inserts happen within the same transaction (caller wraps in runInTransaction).
+    // If INSERT teachers fails after INSERT users succeeds, the transaction rolls back both.
     const userResult = await db.execute(sql`
       INSERT INTO users (
         role,
@@ -578,19 +579,12 @@ export const defaultImportRepository: ImportRepository = {
         ${row.hourlyRate},
         ${row.monthlySalary}
       )
-      ON CONFLICT (username)
-      DO UPDATE SET
-        matricule = EXCLUDED.matricule,
-        type = EXCLUDED.type,
-        subjects = EXCLUDED.subjects,
-        hourly_rate = EXCLUDED.hourly_rate,
-        monthly_salary = EXCLUDED.monthly_salary
       RETURNING id, user_id
     `);
 
     const teacher = getRows<TeacherInsertRow>(teacherResult)[0];
     if (!teacher) {
-      throw new Error('Unable to upsert teacher');
+      throw new Error('Unable to insert teacher');
     }
 
     return 'inserted';
@@ -651,49 +645,81 @@ export const defaultImportRepository: ImportRepository = {
     return 'inserted';
   },
 
-  async createImportHistory(db, entry) {
-    try {
-      await db.execute(sql`
-        INSERT INTO import_history (import_type, imported_count, updated_count)
-        VALUES (${entry.importType}, ${entry.importedCount}, ${entry.updatedCount})
+  async deactivateSchedulesByPeriodExcluding(db, schedulePeriodId, keepIds) {
+    if (keepIds.length === 0) {
+      const result = await db.execute(sql`
+        WITH updated AS (
+          UPDATE schedules
+          SET is_active = false, end_date = CURRENT_DATE
+          WHERE schedule_period_id = ${schedulePeriodId}
+            AND is_active = true
+          RETURNING id
+        )
+        SELECT COUNT(*)::int AS count FROM updated
       `);
-    } catch (error) {
-      const pgError = error as { code?: string };
-      if (pgError.code === '42P01' || pgError.code === '42704') {
-        await ensureImportHistoryInfrastructure(db);
-        await db.execute(sql`
-          INSERT INTO import_history (import_type, imported_count, updated_count)
-          VALUES (${entry.importType}, ${entry.importedCount}, ${entry.updatedCount})
-        `);
-        return;
-      }
-      throw error;
+      const row = getRows<{ count: string | number }>(result)[0];
+      return Number.isFinite(Number(row?.count)) ? Number(row?.count) : 0;
     }
+
+    const result = await db.execute(sql`
+      WITH updated AS (
+        UPDATE schedules
+        SET is_active = false, end_date = CURRENT_DATE
+        WHERE schedule_period_id = ${schedulePeriodId}
+          AND is_active = true
+          AND id NOT IN (${sql.join(keepIds.map((id) => sql`${id}`), sql`, `)})
+        RETURNING id
+      )
+      SELECT COUNT(*)::int AS count FROM updated
+    `);
+
+    const row = getRows<{ count: string | number }>(result)[0];
+    const value = row ? Number(row.count) : 0;
+    return Number.isFinite(value) ? value : 0;
   },
 
-  async listImportHistory(db, limit) {
-    try {
-      const result = await db.execute(sql`
+  async createImportHistory(db, entry) {
+    await db.execute(sql`
+      INSERT INTO import_history (import_type, imported_count, updated_count)
+      VALUES (${entry.importType}, ${entry.importedCount}, ${entry.updatedCount})
+    `);
+  },
+
+  async listImportHistory(db, filter) {
+    const { limit, page, month, type } = filter;
+    const offset = (page - 1) * limit;
+
+    const conditions: ReturnType<typeof sql>[] = [];
+    if (month) {
+      conditions.push(sql`to_char(imported_at, 'YYYY-MM') = ${month}`);
+    }
+    if (type) {
+      conditions.push(sql`import_type = ${type}`);
+    }
+
+    const where = conditions.length > 0
+      ? sql`WHERE ${sql.join(conditions, sql` AND `)}`
+      : sql``;
+
+    const [itemsResult, countResult] = await Promise.all([
+      db.execute(sql`
         SELECT id, imported_at::text AS imported_at, import_type, imported_count, updated_count
         FROM import_history
+        ${where}
         ORDER BY imported_at DESC
-        LIMIT ${limit}
-      `);
+        LIMIT ${limit} OFFSET ${offset}
+      `),
+      db.execute(sql`
+        SELECT COUNT(*)::int AS total
+        FROM import_history
+        ${where}
+      `),
+    ]);
 
-      return getRows<ImportHistoryRow>(result);
-    } catch (error) {
-      const pgError = error as { code?: string };
-      if (pgError.code === '42P01' || pgError.code === '42704') {
-        await ensureImportHistoryInfrastructure(db);
-        const retryResult = await db.execute(sql`
-          SELECT id, imported_at::text AS imported_at, import_type, imported_count, updated_count
-          FROM import_history
-          ORDER BY imported_at DESC
-          LIMIT ${limit}
-        `);
-        return getRows<ImportHistoryRow>(retryResult);
-      }
-      throw error;
-    }
+    const items = getRows<ImportHistoryRow>(itemsResult);
+    const totalRow = getRows<{ total: number }>(countResult)[0];
+    const total = totalRow ? Number(totalRow.total) : 0;
+
+    return { items, total };
   },
 };

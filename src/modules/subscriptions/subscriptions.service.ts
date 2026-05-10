@@ -213,52 +213,39 @@ export class SubscriptionsService {
 
     const tempPassword = randomFourDigits();
     const passwordHash = await argon2.hash(tempPassword);
-    let parentId: string;
     const actorUserId = await this.resolveActorUserId(input.actorUserId);
-    try {
-      parentId = await this.repository.createParent({
-        fullName: input.payload.full_name,
-        phone: input.payload.phone,
-        email: input.payload.email,
-        passwordHash,
-      });
-    } catch (error) {
-      const code = (error as { code?: string } | null)?.code;
-      if (code === '23505') {
-        throw new SubscriptionsModuleError('Parent already exists', 409, 'PARENT_ALREADY_EXISTS');
-      }
-      throw error;
-    }
 
     const totalAmount =
       feature.sms_unit_price_fcfa *
       input.payload.student_ids.length *
       input.payload.duration_months;
     const { startsAt, endsAt } = this.repository.computeStartsAndEnds(input.payload.duration_months);
-    const subscriptionId = await this.repository.createSubscription({
-      parentId,
-      unitPriceFcfa: feature.sms_unit_price_fcfa,
-      studentCount: input.payload.student_ids.length,
-      totalAmountFcfa: totalAmount,
-      durationMonths: input.payload.duration_months,
-      startsAt,
-      endsAt,
-      createdBy: actorUserId,
-    });
 
-    await this.repository.createParentStudentLinks({
-      parentId,
-      subscriptionId,
-      studentIds: input.payload.student_ids,
-    });
-
-    if (input.payload.paid_now) {
-      await this.repository.createPayment({
-        subscriptionId,
-        amountFcfa: totalAmount,
+    let parentId: string;
+    let subscriptionId: string;
+    try {
+      ({ parentId, subscriptionId } = await this.repository.createParentWithSubscriptionTx({
+        fullName: input.payload.full_name,
+        phone: input.payload.phone,
+        email: input.payload.email,
+        passwordHash,
+        unitPriceFcfa: feature.sms_unit_price_fcfa,
+        studentCount: input.payload.student_ids.length,
+        totalAmountFcfa: totalAmount,
+        durationMonths: input.payload.duration_months,
+        startsAt,
+        endsAt,
+        createdBy: actorUserId,
+        studentIds: input.payload.student_ids,
+        paidNow: input.payload.paid_now,
         paymentMethod: input.payload.payment_method,
-        recordedBy: actorUserId,
-      });
+      }));
+    } catch (error) {
+      const code = (error as { code?: string } | null)?.code;
+      if (code === '23505') {
+        throw new SubscriptionsModuleError('Parent already exists', 409, 'PARENT_ALREADY_EXISTS');
+      }
+      throw error;
     }
 
     return {
@@ -328,7 +315,8 @@ export class SubscriptionsService {
     );
     const actorUserId = await this.resolveActorUserId(input.actorUserId);
     const totalAmount = feature.sms_unit_price_fcfa * students.length * input.payload.duration_months;
-    const subscriptionId = await this.repository.createSubscription({
+
+    const { subscriptionId } = await this.repository.renewSubscriptionTx({
       parentId: input.parentId,
       unitPriceFcfa: feature.sms_unit_price_fcfa,
       studentCount: students.length,
@@ -338,24 +326,25 @@ export class SubscriptionsService {
       endsAt,
       createdBy: actorUserId,
       autoRenewAlert: latest.auto_renew_alert,
-    });
-    await this.repository.createParentStudentLinks({
-      parentId: input.parentId,
-      subscriptionId,
       studentIds: students.map((item) => item.id),
+      paidNow: input.payload.paid_now,
+      paymentMethod: input.payload.payment_method,
     });
-    if (input.payload.paid_now) {
-      await this.repository.createPayment({
-        subscriptionId,
-        amountFcfa: totalAmount,
-        paymentMethod: input.payload.payment_method,
-        recordedBy: actorUserId,
-      });
-    }
+
     return { id: subscriptionId, starts_at: startsAt, ends_at: endsAt, total_amount_fcfa: totalAmount };
   }
 
-  async cancelSubscription(subscriptionId: string, actorUserId: string): Promise<void> {
+  async cancelSubscription(subscriptionId: string, parentId: string, actorUserId: string): Promise<void> {
+    const subscription = await this.repository.getSubscriptionById(subscriptionId);
+    if (!subscription) {
+      throw new SubscriptionsModuleError('Subscription not found', 404, 'SUBSCRIPTION_NOT_FOUND');
+    }
+    if (subscription.parent_id !== parentId) {
+      throw new SubscriptionsModuleError('Subscription does not belong to this parent', 403, 'SUBSCRIPTION_OWNERSHIP_MISMATCH');
+    }
+    if (subscription.status === 'cancelled') {
+      throw new SubscriptionsModuleError('Subscription is already cancelled', 409, 'SUBSCRIPTION_ALREADY_CANCELLED');
+    }
     const resolvedActorId = await this.resolveActorUserId(actorUserId);
     await this.repository.updateSubscriptionStatus(subscriptionId, 'cancelled', resolvedActorId);
   }
@@ -455,7 +444,6 @@ export class SubscriptionsService {
     if (!tenantId) {
       throw new SubscriptionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
     }
-    void tenantId;
     return this.repository.listRevenueSubscriptionDetails(month);
   }
 

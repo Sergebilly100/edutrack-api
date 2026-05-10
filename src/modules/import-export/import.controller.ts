@@ -14,10 +14,6 @@ import {
 import { ImportModuleError, buildImportService } from './import.service.js';
 import { importTypeParamsSchema, type ImportType } from './import.types.js';
 
-const reportHasConflicts = (report: { conflicts?: unknown[] }): boolean => {
-  return Array.isArray(report.conflicts) && report.conflicts.length > 0;
-};
-
 const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
   if (error instanceof ZodError) {
     return reply.code(400).send({
@@ -76,6 +72,7 @@ const readImportPayload = async (
         continue;
       }
       fileBuffer = await part.toBuffer();
+      // Use the first file encountered; ignore subsequent ones
       continue;
     }
     fields[part.fieldname] = String(part.value ?? '');
@@ -112,12 +109,26 @@ const ensureTenantDb = (request: FastifyRequest) => {
 
 const importHistoryQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
+  page: z.coerce.number().int().min(1).default(1),
+  month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional(),
+  type: z.enum(['students', 'teachers', 'schedule']).optional(),
 });
 
 const IMPORT_PERMISSION_BY_TYPE: Readonly<Record<ImportType, PermissionKey>> = {
   students: 'import.students',
   teachers: 'import.teachers',
   schedule: 'import.schedule',
+};
+
+// Returns true if the authenticated user has at least one import permission
+const hasAnyImportPermission = (request: FastifyRequest): boolean => {
+  const perms = request.permissions;
+  if (!perms) return false;
+  return (
+    perms.has('import.students') ||
+    perms.has('import.teachers') ||
+    perms.has('import.schedule')
+  );
 };
 
 const requireImportTypePermission = async (
@@ -127,6 +138,33 @@ const requireImportTypePermission = async (
   const { type } = importTypeParamsSchema.parse(request.params ?? {});
   const permission = IMPORT_PERMISSION_BY_TYPE[type];
   await requirePermission(permission)(request, reply);
+};
+
+// Authenticates and grants access if the user holds any import permission.
+// Uses requirePermission('import.students') to handle auth, then broadens the check.
+const requireAnyImportPermission = async (
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> => {
+  // authenticateRequest is called inside requirePermission — reuse it to populate
+  // request.permissions without sending a 403 for the specific permission yet.
+  const { authenticateRequest } = await import('../../shared/middleware/auth.middleware.js');
+  await authenticateRequest(request, reply);
+  if (reply.sent) return;
+
+  if (!hasAnyImportPermission(request)) {
+    reply.code(403).send({
+      error: 'Permission import required',
+      code: 'FORBIDDEN',
+      statusCode: 403,
+    });
+  }
+};
+
+const getTenantContext = (request: FastifyRequest): { tenantId: string; schemaName: string } | undefined => {
+  const claims = request.claims;
+  if (!claims?.schemaName) return undefined;
+  return { tenantId: claims.sub, schemaName: claims.schemaName };
 };
 
 export default async function importExportController(app: FastifyInstance): Promise<void> {
@@ -193,28 +231,14 @@ export default async function importExportController(app: FastifyInstance): Prom
       try {
         const { type } = importTypeParamsSchema.parse(request.params ?? {});
         const payload = await readImportPayload(request);
-        const tenantDb = ensureTenantDb(request);
         const service = buildImportService();
-        if (
-          type === 'schedule' &&
-          reportHasConflicts(
-            await service.dryRun(type, payload.fileBuffer, tenantDb, {
-              mode: payload.mode,
-              schedulePeriod: payload.schedulePeriod,
-            })
-          ) &&
-          !payload.conflictAcknowledged
-        ) {
-          throw new ImportModuleError(
-            'Conflits EDT détectés. Merci de confirmer le remplacement.',
-            400,
-            'IMPORT_CONFLICT_ACK_REQUIRED'
-          );
-        }
 
-        const report = await service.confirm(type, payload.fileBuffer, tenantDb, {
+        // Conflict acknowledgment is validated inside service.confirm() for schedule imports.
+        const report = await service.confirm(type, payload.fileBuffer, ensureTenantDb(request), {
           mode: payload.mode,
           schedulePeriod: payload.schedulePeriod,
+          conflictAcknowledged: payload.conflictAcknowledged,
+          tenantContext: getTenantContext(request),
         });
 
         return reply.send(report);
@@ -226,13 +250,14 @@ export default async function importExportController(app: FastifyInstance): Prom
 
   app.get(
     '/api/v1/import/history',
-    { preHandler: [requirePermission('import.students'), attachTenantDb] },
+    // Any user with at least one import permission can view the shared history.
+    { preHandler: [requireAnyImportPermission, attachTenantDb] },
     async (request, reply) => {
       try {
-        const { limit } = importHistoryQuerySchema.parse(request.query ?? {});
+        const { limit, page, month, type } = importHistoryQuerySchema.parse(request.query ?? {});
         const service = buildImportService();
-        const items = await service.listHistory(ensureTenantDb(request), limit);
-        return reply.send({ items });
+        const result = await service.listHistory(ensureTenantDb(request), { limit, page, month, type });
+        return reply.send(result);
       } catch (error) {
         return handleError(reply, error);
       }
