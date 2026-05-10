@@ -1,4 +1,11 @@
-import { qrAlertQueue } from '../../shared/queue/queue.js';
+import { qrAlertQueue } from './queue.js';
+
+/**
+ * CONFORMITÉ FIX : Déplacé depuis attendance.scheduler.ts
+ *
+ * Évite l'import croisé entre modules — ce helper appartient à shared/
+ * car il manipule une queue partagée (qrAlertQueue)
+ */
 
 export const scheduleQrMissingScanCheck = async (params: {
   schemaName: string;
@@ -26,7 +33,7 @@ export const scheduleQrMissingScanCheck = async (params: {
       delay,
       removeOnComplete: true,
       removeOnFail: true,
-      jobId: `qr-missing:${params.schemaName}:${params.scheduleId}:${params.date}`,
+      jobId: `qr-missing-${params.schemaName}-${params.scheduleId}-${params.date}`,
     }
   );
 };

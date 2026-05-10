@@ -258,8 +258,7 @@ export class ValidationsService {
   }
 
   async cancelEndScanSanction(
-    input: { attendanceId: string; reason: string },
-    context: ServiceContext
+    input: { attendanceId: string; reason: string }
   ): Promise<{ success: true }> {
     const record = await this.repository.findAttendanceForEndScanAction(input.attendanceId);
     if (!record) {

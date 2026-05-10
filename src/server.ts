@@ -12,6 +12,7 @@ import { Worker } from 'bullmq';
 import adminController from './modules/admin/admin.controller.js';
 import attendanceController from './modules/attendance/attendance.controller.js';
 import { runAttendanceMissingQrScanHandler } from './modules/attendance/attendance.worker-handler.js';
+import { geoAutoApproveWorker, scheduleGeoAutoApprove } from './modules/attendance/attendance.geo-auto-approve.worker.js';
 import authController from './modules/auth/auth.controller.js';
 import billingController from './modules/billing/billing.controller.js'
 import { createBillingPdfQueue } from './modules/billing/billing.queue.js'
@@ -43,7 +44,7 @@ import scheduleController from './modules/schedule/schedule.controller.js';
 import teachersController from './modules/teachers/teachers.controller.js';
 import validationsController from './modules/validations/validations.controller.js';
 import { db } from './shared/database/db.js';
-import { qrAlertQueue } from './shared/queue/queue.js';
+import { qrAlertQueue, geoAutoApproveQueue } from './shared/queue/queue.js';
 
 const app = Fastify({ logger: true });
 const port = Number(process.env.PORT || 3000);
@@ -195,12 +196,18 @@ app.addHook('onClose', async () => {
   await qrAlertWorker.close();
   await qrAlertQueue.close();
   await qrAlertRedis.quit();
+  await geoAutoApproveWorker.close();
+  await geoAutoApproveQueue.close();
 });
 
 const start = async (): Promise<void> => {
   try {
     const subscriptionMaintenanceSchemaName =
       process.env.SUBSCRIPTION_MAINTENANCE_SCHEMA ?? 'school_sainte_marie';
+
+    // Schedule geo auto-approve job (daily at 3 AM)
+    await scheduleGeoAutoApprove();
+
     await subscriptionsMaintenanceQueue.upsertJobScheduler(
       'subscription-maintenance-daily',
       {

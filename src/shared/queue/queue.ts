@@ -8,3 +8,10 @@ export const qrAlertQueue = new Queue('qr-alert', {
     maxRetriesPerRequest: null,
   },
 });
+
+export const geoAutoApproveQueue = new Queue('geo-auto-approve', {
+  connection: {
+    url: redisUrl,
+    maxRetriesPerRequest: null,
+  },
+});

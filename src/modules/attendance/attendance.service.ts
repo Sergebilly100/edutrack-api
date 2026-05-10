@@ -9,7 +9,14 @@ import { AttendanceRepository } from './attendance.repository.js';
 import type { ActiveAttendanceItem, CheckInResult } from './attendance.types.js';
 import { calculateAttendanceStatus, validateRoomScan } from '../../shared/utils/attendance.js';
 import { haversineDistance, type GeoStatus } from '../../shared/utils/geo.js';
-import { scheduleQrMissingScanCheck } from './attendance.scheduler.js';
+import { scheduleQrMissingScanCheck } from '../../shared/queue/attendance-queue.js';
+import {
+  currentDateIso,
+  dayOfWeekFromDate,
+  monthBoundsFromDate as getMonthBounds,
+  toIso,
+  toSlotDateTime,
+} from '../../shared/utils/date.js';
 
 export class AttendanceModuleError extends Error {
   constructor(
@@ -27,16 +34,6 @@ type ServiceContext = {
   userId: string;
 };
 
-const currentDateIso = (): string => new Date().toISOString().slice(0, 10);
-
-const dayOfWeekFromDate = (date: Date): number => {
-  const d = date.getUTCDay();
-  return d === 0 ? 7 : d;
-};
-
-const toSlotDateTime = (date: string, time: string): Date => new Date(`${date}T${time}.000Z`);
-
-const toIso = (date: Date): string => date.toISOString();
 const DEFAULT_SCHOOL_PHONE = process.env.DEFAULT_SCHOOL_PHONE ?? '2250000000000';
 
 const resolveGeo = (input: {
@@ -72,18 +69,8 @@ const resolveGeo = (input: {
   };
 };
 
-export const monthBoundsFromDate = (date: string): { monthStart: string; monthEnd: string } => {
-  const monthStart = `${date.slice(0, 7)}-01`;
-  const [yearRaw, monthRaw] = date.slice(0, 7).split('-');
-  const m = Number(monthRaw);
-  const y = Number(yearRaw);
-  const end = new Date(Date.UTC(
-    m === 12 ? y + 1 : y,
-    m === 12 ? 0 : m,
-    0
-  ));
-  return { monthStart, monthEnd: end.toISOString().slice(0, 10) };
-};
+// QUALITÉ FIX : monthBoundsFromDate déplacé vers shared/utils/date.ts
+export const monthBoundsFromDate = getMonthBounds;
 
 export class AttendanceService {
   constructor(private readonly repository: AttendanceRepository) {}
@@ -144,12 +131,18 @@ export class AttendanceService {
 
     if (status.status !== 'absent') {
       try {
-        await scheduleQrMissingScanCheck({
-          schemaName: context.schemaName,
-          scheduleId: schedule.scheduleId,
-          date,
-          slotStartTimeUtc: schedule.slotStartTime,
-        });
+        // CRITIQUE FIX : Timeout de 5s pour éviter blocage si Redis down
+        await Promise.race([
+          scheduleQrMissingScanCheck({
+            schemaName: context.schemaName,
+            scheduleId: schedule.scheduleId,
+            date,
+            slotStartTimeUtc: schedule.slotStartTime,
+          }),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Redis queue timeout')), 5000)
+          )
+        ]);
       } catch (error) {
         // Ne pas bloquer le pointage si la queue Redis est indisponible.
         console.error('[attendance] failed to schedule qr missing-scan check', error);

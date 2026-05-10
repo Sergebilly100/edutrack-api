@@ -217,8 +217,7 @@ export default async function validationsController(app: FastifyInstance): Promi
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
         const service = buildValidationsService(tenantDb);
         return service.cancelEndScanSanction(
-          { attendanceId: body.attendance_id, reason: body.reason },
-          { schemaName: claims.schemaName, tenantId: claims.tenantId, userId: claims.sub, role: claims.role }
+          { attendanceId: body.attendance_id, reason: body.reason }
         );
       });
       return reply.send(result);

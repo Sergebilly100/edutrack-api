@@ -744,9 +744,15 @@ export class AttendanceRepository {
     }>(sql`
       SELECT u.phone AS director_phone, u.email AS director_email
       FROM users u
+      INNER JOIN teachers t ON t.user_id = u.id
       WHERE u.role = 'director'
         AND u.is_active = true
         AND (u.phone IS NOT NULL OR u.email IS NOT NULL)
+        AND EXISTS (
+          SELECT 1
+          FROM teachers t_check
+          WHERE t_check.id = ${params.teacherId}
+        )
       ORDER BY u.created_at ASC
       LIMIT 1
     `);
@@ -872,32 +878,35 @@ export class AttendanceRepository {
       status: absentSet.has(studentId) ? 'absent' : 'present',
     }));
 
-    // Upsert par batch — PostgreSQL VALUES list via sql template
-    // On construit dynamiquement la liste VALUES
-    let upsertedCount = 0;
-    for (const { studentId, status } of values) {
-      await this.db.execute(sql`
-        INSERT INTO attendances_student (
-          student_id,
-          schedule_id,
-          date,
-          status,
-          marked_by
-        )
-        VALUES (
-          ${studentId},
-          ${params.scheduleId},
-          ${params.date},
-          ${status},
-          ${params.markedByUserId}
-        )
-        ON CONFLICT (student_id, schedule_id, date)
-        DO UPDATE SET
-          status = EXCLUDED.status,
-          marked_by = EXCLUDED.marked_by
-      `);
-      upsertedCount += 1;
-    }
+    // CRITIQUE FIX : Envelopper dans une transaction pour éviter les états partiels
+    // Si crash au milieu du loop, rollback automatique → cohérence garantie
+    const upsertedCount = await this.db.transaction(async (tx) => {
+      let count = 0;
+      for (const { studentId, status } of values) {
+        await tx.execute(sql`
+          INSERT INTO attendances_student (
+            student_id,
+            schedule_id,
+            date,
+            status,
+            marked_by
+          )
+          VALUES (
+            ${studentId},
+            ${params.scheduleId},
+            ${params.date},
+            ${status},
+            ${params.markedByUserId}
+          )
+          ON CONFLICT (student_id, schedule_id, date)
+          DO UPDATE SET
+            status = EXCLUDED.status,
+            marked_by = EXCLUDED.marked_by
+        `);
+        count += 1;
+      }
+      return count;
+    });
 
     return { upsertedCount };
   }
