@@ -76,6 +76,7 @@ export type PermissionKey =
   | 'students.create'
   | 'students.edit'
   | 'students.documents'
+  | 'students.excuse'
   | 'schedule.view'
   | 'schedule.edit'
   | 'attendance.view'

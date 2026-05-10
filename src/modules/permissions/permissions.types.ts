@@ -152,7 +152,7 @@ export const updateSchoolConfigBodySchema = z
   );
 
 export const updateLimitsBodySchema = z.object({
-  max_admin_positions: z.number().int().min(1).max(50),
+  max_admin_positions: z.number().int().min(0).max(500),
 });
 
 export const STAFF_BASE_PERMISSIONS: readonly PermissionKey[] = [];

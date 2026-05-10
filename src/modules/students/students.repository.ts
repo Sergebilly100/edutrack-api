@@ -6,6 +6,7 @@ import type {
   AttendanceStudentRecord,
   BulkAttendanceInput,
   CreateStudentInput,
+  ExcusedAbsenceRecord,
   StudentAbsenceDetailRecord,
   StudentAbsenceStatRecord,
   StudentDetailRecord,
@@ -22,6 +23,8 @@ import type {
 export type QueryExecutor = {
   execute: (query: ReturnType<typeof sql>) => Promise<unknown>;
 };
+
+// ─── Raw DB row types ─────────────────────────────────────────────────────────
 
 type StudentRow = {
   id: string;
@@ -91,6 +94,7 @@ type TodayAbsenceDbRow = {
   date: string;
   created_at: Date;
   sms_status: 'queued' | 'sent' | 'failed' | 'delivered' | null;
+  status: 'absent' | 'excused';
 };
 
 type TenantIdentityRow = {
@@ -99,11 +103,13 @@ type TenantIdentityRow = {
 
 type StudentAbsenceSummaryRow = {
   total_absences: string | number;
+  excused_count: string | number;
   month_absences: string | number;
   week_absences: string | number;
 };
 
 type StudentRecentAbsenceRow = {
+  id: string;
   date: string;
   subject: string | null;
   teacher_name: string | null;
@@ -111,6 +117,8 @@ type StudentRecentAbsenceRow = {
   end_time: string | null;
   room_name: string | null;
   sms_status: 'queued' | 'sent' | 'failed' | 'delivered' | null;
+  status: 'absent' | 'excused';
+  excuse_reason: string | null;
 };
 
 type StudentDocumentRow = {
@@ -135,17 +143,21 @@ type StudentAbsenceStatsDbRow = {
   parent_phone: string | null;
   parent_phone_2: string | null;
   absence_count: string | number;
+  excused_count: string | number;
   total_scheduled: string | number;
   absence_rate: string | number | null;
   sms_summary: 'all_sent' | 'partial' | 'none';
 };
 
 type StudentAbsenceDetailDbRow = {
+  id: string;
   date: string;
   subject: string;
   class_name: string;
   start_time: string;
   end_time: string;
+  status: 'absent' | 'excused';
+  excuse_reason: string | null;
   phone_1: string | null;
   phone_2: string | null;
   sms1_status: 'queued' | 'sent' | 'failed' | 'delivered' | null;
@@ -153,6 +165,18 @@ type StudentAbsenceDetailDbRow = {
   sms2_status: 'queued' | 'sent' | 'failed' | 'delivered' | null;
   sms2_sent_at: string | null;
 };
+
+type ExcuseAbsenceDbRow = {
+  id: string;
+  student_id: string;
+  date: string;
+  schedule_id: string | null;
+  status: 'excused';
+  excuse_reason: string;
+  excused_at: string;
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const getRows = <T>(result: unknown): T[] => {
   if (typeof result !== 'object' || result === null || !('rows' in result)) {
@@ -170,7 +194,7 @@ const toIsoDateTime = (value: Date | string): string => {
 
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
-    return new Date().toISOString();
+    throw new Error(`[students.repository] Invalid date value: ${String(value)}`);
   }
 
   return parsed.toISOString();
@@ -208,112 +232,66 @@ const mapAttendance = (row: AttendanceRow): AttendanceStudentRecord => ({
 });
 
 const toTotal = (row: TotalRow | undefined): number => {
-  if (!row) {
-    return 0;
-  }
-
+  if (!row) return 0;
   const value = typeof row.total === 'string' ? Number(row.total) : row.total;
   return Number.isFinite(value) ? value : 0;
 };
 
 const toNumber = (value: string | number | null | undefined): number => {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : 0;
-  }
-
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
   if (typeof value === 'string') {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : 0;
   }
-
   return 0;
 };
 
 const toSmsStatus = (
   value: 'queued' | 'sent' | 'failed' | 'delivered' | null
 ): 'sent' | 'failed' | 'not_sent' => {
-  if (value === 'sent' || value === 'delivered') {
-    return 'sent';
-  }
+  if (value === 'sent' || value === 'delivered') return 'sent';
+  if (value === 'failed') return 'failed';
+  return 'not_sent';
+};
 
-  if (value === 'failed') {
-    return 'failed';
-  }
-
+const toRecentSmsStatus = (
+  value: 'queued' | 'sent' | 'failed' | 'delivered' | null
+): StudentRecentAbsence['smsStatus'] => {
+  if (value === 'sent' || value === 'delivered') return 'sent';
+  if (value === 'failed') return 'failed';
   return 'not_sent';
 };
 
 const buildStudentsWhere = (query: StudentsListQuery): SQL[] => {
   const where: SQL[] = [];
-
-  if (query.class_id) {
-    where.push(sql`s.class_id = ${query.class_id}`);
-  }
-
-  if (typeof query.is_active === 'boolean') {
-    where.push(sql`s.is_active = ${query.is_active}`);
-  }
-
+  if (query.class_id) where.push(sql`s.class_id = ${query.class_id}`);
+  if (typeof query.is_active === 'boolean') where.push(sql`s.is_active = ${query.is_active}`);
   if (query.search) {
-    where.push(sql`(s.first_name ILIKE ${`%${query.search}%`} OR s.last_name ILIKE ${`%${query.search}%`})`);
+    where.push(
+      sql`(s.first_name ILIKE ${`%${query.search}%`} OR s.last_name ILIKE ${`%${query.search}%`})`
+    );
   }
-
   return where;
 };
 
 const buildAttendanceWhere = (query: AttendanceHistoryQuery): SQL[] => {
-  const where: SQL[] = [sql`a.status = 'absent'`];
-
-  if (query.class_id) {
-    where.push(sql`c.id = ${query.class_id}`);
-  }
-
-  if (query.student_id) {
-    where.push(sql`s.id = ${query.student_id}`);
-  }
-
-  if (query.schedule_id) {
-    where.push(sql`a.schedule_id = ${query.schedule_id}`);
-  }
-
-  if (query.date_from) {
-    where.push(sql`a.date >= ${query.date_from}`);
-  }
-
-  if (query.date_to) {
-    where.push(sql`a.date <= ${query.date_to}`);
-  }
-
+  const where: SQL[] = [sql`a.status IN ('absent', 'excused')`];
+  if (query.class_id) where.push(sql`c.id = ${query.class_id}`);
+  if (query.student_id) where.push(sql`s.id = ${query.student_id}`);
+  if (query.schedule_id) where.push(sql`a.schedule_id = ${query.schedule_id}`);
+  if (query.date_from) where.push(sql`a.date >= ${query.date_from}`);
+  if (query.date_to) where.push(sql`a.date <= ${query.date_to}`);
   return where;
 };
 
 const makeWhereClause = (conditions: SQL[]): SQL => {
-  if (conditions.length === 0) {
-    return sql``;
-  }
-
+  if (conditions.length === 0) return sql``;
   return sql`WHERE ${sql.join(conditions, sql` AND `)}`;
 };
 
 const deduplicateIds = (ids: string[]): string[] => Array.from(new Set(ids));
 
-const toRecentSmsStatus = (
-  value: 'queued' | 'sent' | 'failed' | 'delivered' | null
-): StudentRecentAbsence['smsStatus'] => {
-  if (value === 'sent' || value === 'delivered') {
-    return 'sent';
-  }
-
-  if (value === 'failed') {
-    return 'failed';
-  }
-
-  if (value === 'queued' || value === null) {
-    return 'not_sent';
-  }
-
-  return null;
-};
+// ─── Repository ───────────────────────────────────────────────────────────────
 
 export class StudentsRepository {
   constructor(
@@ -332,9 +310,7 @@ export class StudentsRepository {
     return getRows<TenantIdentityRow>(result)[0]?.id ?? null;
   }
 
-  async listStudents(
-    query: StudentsListQuery
-  ): Promise<{ rows: StudentRecord[]; total: number }> {
+  async listStudents(query: StudentsListQuery): Promise<{ rows: StudentRecord[]; total: number }> {
     const offset = (query.page - 1) * query.limit;
     const where = makeWhereClause(buildStudentsWhere(query));
 
@@ -388,7 +364,7 @@ export class StudentsRepository {
         WHERE t.user_id = ${input.teacherUserId}
           AND s.class_id = ${input.classId}
           AND s.is_active = true
-          AND (s.end_date IS NULL OR s.end_date > ${input.date}::date)
+          AND (s.end_date IS NULL OR s.end_date >= ${input.date}::date)
           AND sp.is_active = true
           AND sp.valid_from <= ${input.date}::date
           AND sp.valid_to >= ${input.date}::date
@@ -403,50 +379,29 @@ export class StudentsRepository {
   async createStudent(input: CreateStudentInput): Promise<StudentRecord> {
     const result = await this.db.execute(sql`
       INSERT INTO students (
-        class_id,
-        first_name,
-        last_name,
-        parent_name,
-        parent_phone,
-        parent_name_2,
-        parent_phone_2,
-        notes,
-        is_active
+        class_id, first_name, last_name,
+        parent_name, parent_phone,
+        parent_name_2, parent_phone_2,
+        notes, is_active
       )
       VALUES (
-        ${input.class_id},
-        ${input.first_name},
-        ${input.last_name},
-        ${input.parent_name},
-        ${input.parent_phone},
-        ${input.parent_name_2},
-        ${input.parent_phone_2},
-        ${input.notes},
-        ${input.is_active}
+        ${input.class_id}, ${input.first_name}, ${input.last_name},
+        ${input.parent_name}, ${input.parent_phone},
+        ${input.parent_name_2}, ${input.parent_phone_2},
+        ${input.notes}, ${input.is_active}
       )
       RETURNING
-        id,
-        class_id,
+        id, class_id,
         (SELECT name FROM classes WHERE id = class_id) AS class_name,
-        first_name,
-        last_name,
-        parent_name,
-        parent_phone,
-        parent_name_2,
-        parent_phone_2,
-        notes,
-        is_active,
-        created_at
+        first_name, last_name,
+        parent_name, parent_phone,
+        parent_name_2, parent_phone_2,
+        notes, is_active, created_at
     `);
 
     const created = getRows<StudentRow>(result)[0];
-    if (!created) {
-      throw new Error('Unable to create student');
-    }
-
-    if (!created.class_name) {
-      throw new Error('Class not found');
-    }
+    if (!created) throw new Error('Unable to create student');
+    if (!created.class_name) throw new Error('Class not found');
 
     if (created.is_active) {
       await this.adjustClassStudentCount(created.class_id, 1);
@@ -458,18 +413,11 @@ export class StudentsRepository {
   async findStudentById(studentId: string): Promise<StudentRecord | null> {
     const result = await this.db.execute(sql`
       SELECT
-        s.id,
-        s.class_id,
-        c.name AS class_name,
-        s.first_name,
-        s.last_name,
-        s.parent_name,
-        s.parent_phone,
-        s.parent_name_2,
-        s.parent_phone_2,
-        s.notes,
-        s.is_active,
-        s.created_at
+        s.id, s.class_id, c.name AS class_name,
+        s.first_name, s.last_name,
+        s.parent_name, s.parent_phone,
+        s.parent_name_2, s.parent_phone_2,
+        s.notes, s.is_active, s.created_at
       FROM students s
       INNER JOIN classes c ON c.id = s.class_id
       WHERE s.id = ${studentId}
@@ -480,28 +428,22 @@ export class StudentsRepository {
     return row ? mapStudent(row) : null;
   }
 
-  async updateStudent(studentId: string, input: UpdateStudentInput): Promise<StudentRecord | null> {
+  async updateStudent(
+    studentId: string,
+    input: UpdateStudentInput
+  ): Promise<StudentRecord | null> {
     const currentResult = await this.db.execute(sql`
-      SELECT
-        id,
-        class_id,
-        first_name,
-        last_name,
-        parent_name,
-        parent_phone,
-        parent_name_2,
-        parent_phone_2,
-        notes,
-        is_active
+      SELECT id, class_id, first_name, last_name,
+             parent_name, parent_phone,
+             parent_name_2, parent_phone_2,
+             notes, is_active
       FROM students
       WHERE id = ${studentId}
       LIMIT 1
     `);
 
     const current = getRows<ExistingStudentRow>(currentResult)[0];
-    if (!current) {
-      return null;
-    }
+    if (!current) return null;
 
     const nextClassId = input.class_id ?? current.class_id;
     const nextIsActive = input.is_active ?? current.is_active;
@@ -531,17 +473,11 @@ export class StudentsRepository {
       RETURNING id
     `);
 
-    if (!getRows<{ id: string }>(updateResult)[0]) {
-      return null;
-    }
+    if (!getRows<{ id: string }>(updateResult)[0]) return null;
 
     if (current.class_id !== nextClassId) {
-      if (current.is_active) {
-        await this.adjustClassStudentCount(current.class_id, -1);
-      }
-      if (nextIsActive) {
-        await this.adjustClassStudentCount(nextClassId, 1);
-      }
+      if (current.is_active) await this.adjustClassStudentCount(current.class_id, -1);
+      if (nextIsActive) await this.adjustClassStudentCount(nextClassId, 1);
     } else if (current.is_active !== nextIsActive) {
       await this.adjustClassStudentCount(nextClassId, nextIsActive ? 1 : -1);
     }
@@ -558,24 +494,15 @@ export class StudentsRepository {
         AND s.is_active = true
         AND c.id = s.class_id
       RETURNING
-        s.id,
-        s.class_id,
-        c.name AS class_name,
-        s.first_name,
-        s.last_name,
-        s.parent_name,
-        s.parent_phone,
-        s.parent_name_2,
-        s.parent_phone_2,
-        s.notes,
-        s.is_active,
-        s.created_at
+        s.id, s.class_id, c.name AS class_name,
+        s.first_name, s.last_name,
+        s.parent_name, s.parent_phone,
+        s.parent_name_2, s.parent_phone_2,
+        s.notes, s.is_active, s.created_at
     `);
 
     const row = getRows<StudentRow>(result)[0];
-    if (!row) {
-      return null;
-    }
+    if (!row) return null;
 
     await this.adjustClassStudentCount(row.class_id, -1);
     return mapStudent(row);
@@ -583,22 +510,21 @@ export class StudentsRepository {
 
   async findStudentDetailById(studentId: string): Promise<StudentDetailRecord | null> {
     const student = await this.findStudentById(studentId);
-    if (!student) {
-      return null;
-    }
+    if (!student) return null;
 
     const [summaryResult, recentAbsencesResult, documentsResult, parentSmsResult] =
       await Promise.all([
         this.db.execute(sql`
           SELECT
             COUNT(*) FILTER (WHERE a.status = 'absent') AS total_absences,
+            COUNT(*) FILTER (WHERE a.status = 'excused') AS excused_count,
             COUNT(*) FILTER (
-              WHERE a.status = 'absent'
+              WHERE a.status IN ('absent', 'excused')
                 AND a.date >= date_trunc('month', CURRENT_DATE)::date
                 AND a.date <= CURRENT_DATE
             ) AS month_absences,
             COUNT(*) FILTER (
-              WHERE a.status = 'absent'
+              WHERE a.status IN ('absent', 'excused')
                 AND a.date >= date_trunc('week', CURRENT_DATE)::date
                 AND a.date <= CURRENT_DATE
             ) AS week_absences
@@ -607,12 +533,15 @@ export class StudentsRepository {
         `),
         this.db.execute(sql`
           SELECT
+            a.id,
             a.date::text AS date,
             sch.subject,
             u.name AS teacher_name,
             ts.start_time::text AS start_time,
             ts.end_time::text AS end_time,
             r.name AS room_name,
+            a.status::text AS status,
+            a.excuse_reason,
             sms_log.status::text AS sms_status
           FROM attendances_student a
           INNER JOIN students s ON s.id = a.student_id
@@ -632,7 +561,7 @@ export class StudentsRepository {
             LIMIT 1
           ) sms_log ON true
           WHERE a.student_id = ${studentId}
-            AND a.status = 'absent'
+            AND a.status IN ('absent', 'excused')
           ORDER BY a.date DESC, a.created_at DESC
           LIMIT 20
         `),
@@ -646,6 +575,7 @@ export class StudentsRepository {
             AND d.entity_id = ${studentId}
           ORDER BY d.created_at DESC
         `),
+        // FIX B3: use sub-select, not INNER JOIN acting as cross join
         this.db.execute(sql`
           SELECT
             n.id,
@@ -654,9 +584,12 @@ export class StudentsRepository {
             n.recipient_phone,
             n.status::text AS status
           FROM notifications_log n
-          INNER JOIN students s ON s.id = ${studentId}
           WHERE n.type = 'student_absent_parent'
-            AND n.recipient_phone IN (s.parent_phone, s.parent_phone_2)
+            AND n.recipient_phone IN (
+              SELECT parent_phone FROM students WHERE id = ${studentId}
+              UNION
+              SELECT parent_phone_2 FROM students WHERE id = ${studentId}
+            )
           ORDER BY COALESCE(n.sent_at, n.created_at) DESC, n.created_at DESC
           LIMIT 50
         `),
@@ -665,6 +598,7 @@ export class StudentsRepository {
     const summaryRow = getRows<StudentAbsenceSummaryRow>(summaryResult)[0];
     const recentAbsences = getRows<StudentRecentAbsenceRow>(recentAbsencesResult).map(
       (row): StudentRecentAbsence => ({
+        id: row.id,
         date: row.date,
         subject: row.subject ?? 'Matière non renseignée',
         teacherName: row.teacher_name ?? 'Professeur non renseigné',
@@ -672,6 +606,8 @@ export class StudentsRepository {
         endTime: row.end_time,
         roomName: row.room_name,
         smsStatus: toRecentSmsStatus(row.sms_status),
+        status: row.status,
+        excuseReason: row.excuse_reason,
       })
     );
     const documents = getRows<StudentDocumentRow>(documentsResult).map(
@@ -707,6 +643,7 @@ export class StudentsRepository {
       createdAt: student.createdAt,
       absenceSummary: {
         total: summaryRow ? toTotal({ total: summaryRow.total_absences }) : 0,
+        excused: summaryRow ? toTotal({ total: summaryRow.excused_count }) : 0,
         thisMonth: summaryRow ? toTotal({ total: summaryRow.month_absences }) : 0,
         thisWeek: summaryRow ? toTotal({ total: summaryRow.week_absences }) : 0,
       },
@@ -716,7 +653,9 @@ export class StudentsRepository {
     };
   }
 
-  async findScheduleById(scheduleId: string): Promise<{ id: string; classId: string; subject: string } | null> {
+  async findScheduleById(
+    scheduleId: string
+  ): Promise<{ id: string; classId: string; subject: string } | null> {
     const result = await this.db.execute(sql`
       SELECT id, class_id, subject
       FROM schedules
@@ -725,29 +664,18 @@ export class StudentsRepository {
     `);
 
     const row = getRows<ScheduleRow>(result)[0];
-    if (!row) {
-      return null;
-    }
-
-    return {
-      id: row.id,
-      classId: row.class_id,
-      subject: row.subject,
-    };
+    if (!row) return null;
+    return { id: row.id, classId: row.class_id, subject: row.subject };
   }
 
-  async findStudentsForAbsence(classId: string, studentIds: string[]): Promise<
-    Array<{
-      id: string;
-      firstName: string;
-      parentPhone: string | null;
-      parentEmail: string | null;
-    }>
+  async findStudentsForAbsence(
+    classId: string,
+    studentIds: string[]
+  ): Promise<
+    Array<{ id: string; firstName: string; parentPhone: string | null; parentEmail: string | null }>
   > {
     const ids = deduplicateIds(studentIds);
-    if (ids.length === 0) {
-      return [];
-    }
+    if (ids.length === 0) return [];
 
     const placeholders = sql.join(
       ids.map((id) => sql`${id}`),
@@ -791,28 +719,101 @@ export class StudentsRepository {
     studentIds: string[];
     markedBy: string;
   }): Promise<number> {
-    // Deduplication defensive: le service deduplique deja en amont.
     const ids = deduplicateIds(input.studentIds);
-    if (ids.length === 0) {
-      return 0;
-    }
+    if (ids.length === 0) return 0;
 
     const values = sql.join(
-      ids.map((id) => sql`(${id}, ${input.scheduleId}, ${input.date}, 'absent', ${input.markedBy})`),
+      ids.map(
+        (id) => sql`(${id}, ${input.scheduleId}, ${input.date}, 'absent', ${input.markedBy})`
+      ),
       sql`, `
     );
 
+    // FIX B4: preserve 'excused' status — never downgrade it back to 'absent'
     const result = await this.db.execute(sql`
       INSERT INTO attendances_student (student_id, schedule_id, date, status, marked_by)
       VALUES ${values}
       ON CONFLICT (student_id, schedule_id, date)
       DO UPDATE SET
-        status = EXCLUDED.status,
+        status = CASE
+          WHEN attendances_student.status = 'excused' THEN 'excused'
+          ELSE EXCLUDED.status
+        END,
         marked_by = EXCLUDED.marked_by
       RETURNING id
     `);
 
     return getRows<{ id: string }>(result).length;
+  }
+
+  async findAbsenceById(attendanceId: string): Promise<{
+    id: string;
+    studentId: string;
+    date: string;
+    scheduleId: string | null;
+    status: 'present' | 'absent' | 'excused';
+  } | null> {
+    const result = await this.db.execute(sql`
+      SELECT id, student_id, date::text AS date, schedule_id, status::text AS status
+      FROM attendances_student
+      WHERE id = ${attendanceId}
+      LIMIT 1
+    `);
+
+    const row = getRows<{
+      id: string;
+      student_id: string;
+      date: string;
+      schedule_id: string | null;
+      status: 'present' | 'absent' | 'excused';
+    }>(result)[0];
+
+    if (!row) return null;
+    return {
+      id: row.id,
+      studentId: row.student_id,
+      date: row.date,
+      scheduleId: row.schedule_id,
+      status: row.status,
+    };
+  }
+
+  async excuseAbsence(
+    attendanceId: string,
+    reason: string,
+    excusedBy: string
+  ): Promise<ExcusedAbsenceRecord | null> {
+    const result = await this.db.execute(sql`
+      UPDATE attendances_student
+      SET
+        status = 'excused',
+        excuse_reason = ${reason},
+        excused_by = ${excusedBy},
+        excused_at = NOW()
+      WHERE id = ${attendanceId}
+        AND status = 'absent'
+      RETURNING
+        id,
+        student_id,
+        date::text AS date,
+        schedule_id,
+        status::text AS status,
+        excuse_reason,
+        excused_at::text AS excused_at
+    `);
+
+    const row = getRows<ExcuseAbsenceDbRow>(result)[0];
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      studentId: row.student_id,
+      date: row.date,
+      scheduleId: row.schedule_id,
+      status: 'excused',
+      excuseReason: row.excuse_reason,
+      excusedAt: row.excused_at,
+    };
   }
 
   async getSchoolPhone(): Promise<string | null> {
@@ -893,6 +894,7 @@ export class StudentsRepository {
         a.schedule_id,
         a.date::text AS date,
         a.created_at,
+        a.status::text AS status,
         sms_log.status::text AS sms_status
       FROM attendances_student a
       INNER JOIN students s ON s.id = a.student_id
@@ -907,7 +909,7 @@ export class StudentsRepository {
         ORDER BY n.created_at DESC
         LIMIT 1
       ) sms_log ON true
-      WHERE a.status = 'absent'
+      WHERE a.status IN ('absent', 'excused')
         AND a.date = COALESCE(${date ?? null}::date, CURRENT_DATE)
       ORDER BY a.created_at DESC, s.last_name ASC, s.first_name ASC
     `);
@@ -923,11 +925,15 @@ export class StudentsRepository {
       createdAt: toIsoDateTime(row.created_at),
       smsStatus: row.sms_status,
       smsNotified: row.sms_status === 'sent' || row.sms_status === 'delivered',
+      status: row.status,
     }));
   }
 
   async getStudentAbsenceStats(query: AbsenceStatsQuery): Promise<StudentAbsenceStatRecord[]> {
-    const filters: SQL[] = [sql`st.is_active = true`, sql`sa.absence_count >= ${query.min_absences}`];
+    const filters: SQL[] = [
+      sql`st.is_active = true`,
+      sql`(sa.absence_count + sa.excused_count) >= ${query.min_absences}`,
+    ];
 
     if (query.class_id) {
       filters.push(sql`st.class_id = ${query.class_id}::uuid`);
@@ -941,7 +947,9 @@ export class StudentsRepository {
       filters.push(sql`sa.has_failed = true`);
     }
 
-    const subjectScheduledFilter = query.subject ? sql`AND s.subject = ${query.subject}` : sql``;
+    const subjectScheduledFilter = query.subject
+      ? sql`AND s.subject = ${query.subject}`
+      : sql``;
     const subjectAbsenceFilter = query.subject ? sql`AND s.subject = ${query.subject}` : sql``;
 
     const result = await this.db.execute(sql`
@@ -965,13 +973,14 @@ export class StudentsRepository {
           ON s.schedule_period_id = ap.id
          AND s.day_of_week = EXTRACT(ISODOW FROM d.date)::int
          AND s.is_active = true
-         AND (s.end_date IS NULL OR s.end_date > d.date)
+         AND (s.end_date IS NULL OR s.end_date >= d.date)
         ${subjectScheduledFilter}
         GROUP BY s.class_id
       ),
       absence_rows AS (
         SELECT
           ast.student_id,
+          ast.status,
           CASE WHEN COALESCE(nl.sent_count, 0) > 0 THEN 1 ELSE 0 END AS has_sent,
           CASE WHEN COALESCE(nl.failed_count, 0) > 0 THEN 1 ELSE 0 END AS has_failed
         FROM attendances_student ast
@@ -986,14 +995,15 @@ export class StudentsRepository {
             AND n.type = 'student_absent_parent'
             AND n.recipient_phone IN (st.parent_phone, st.parent_phone_2)
         ) nl ON true
-        WHERE ast.status = 'absent'
+        WHERE ast.status IN ('absent', 'excused')
           AND ast.date BETWEEN ${query.from}::date AND ${query.to}::date
           ${subjectAbsenceFilter}
       ),
       student_absences AS (
         SELECT
           student_id,
-          COUNT(*)::int AS absence_count,
+          COUNT(*) FILTER (WHERE status = 'absent')::int AS absence_count,
+          COUNT(*) FILTER (WHERE status = 'excused')::int AS excused_count,
           COUNT(*) FILTER (WHERE has_sent = 1)::int AS sms_sent_count,
           BOOL_OR(has_failed = 1) AS has_failed
         FROM absence_rows
@@ -1007,9 +1017,10 @@ export class StudentsRepository {
         st.parent_phone,
         st.parent_phone_2,
         sa.absence_count,
+        sa.excused_count,
         COALESCE(cs.total, 0) AS total_scheduled,
         ROUND(
-          100.0 * sa.absence_count::numeric / NULLIF(COALESCE(cs.total, 0), 0),
+          100.0 * (sa.absence_count + sa.excused_count)::numeric / NULLIF(COALESCE(cs.total, 0), 0),
           2
         )::float AS absence_rate,
         CASE
@@ -1022,20 +1033,21 @@ export class StudentsRepository {
       INNER JOIN classes c ON c.id = st.class_id
       LEFT JOIN class_scheduled cs ON cs.class_id = st.class_id
       WHERE ${sql.join(filters, sql` AND `)}
-      ORDER BY sa.absence_count DESC, student_name ASC
+      ORDER BY (sa.absence_count + sa.excused_count) DESC, student_name ASC
     `);
 
     return getRows<StudentAbsenceStatsDbRow>(result).map((row) => ({
-      student_id: row.student_id,
-      student_name: row.student_name,
-      class_name: row.class_name,
-      class_id: row.class_id,
-      parent_phone: row.parent_phone,
-      parent_phone_2: row.parent_phone_2,
-      absence_count: toNumber(row.absence_count),
-      total_scheduled: toNumber(row.total_scheduled),
-      absence_rate: toNumber(row.absence_rate),
-      sms_summary: row.sms_summary,
+      studentId: row.student_id,
+      studentName: row.student_name,
+      className: row.class_name,
+      classId: row.class_id,
+      parentPhone: row.parent_phone,
+      parentPhone2: row.parent_phone_2,
+      absenceCount: toNumber(row.absence_count),
+      excusedCount: toNumber(row.excused_count),
+      totalScheduled: toNumber(row.total_scheduled),
+      absenceRate: toNumber(row.absence_rate),
+      smsSummary: row.sms_summary,
     }));
   }
 
@@ -1047,11 +1059,14 @@ export class StudentsRepository {
 
     const result = await this.db.execute(sql`
       SELECT
+        ast.id,
         ast.date::text AS date,
         s.subject,
         c.name AS class_name,
         ts.start_time::text AS start_time,
         ts.end_time::text AS end_time,
+        ast.status::text AS status,
+        ast.excuse_reason,
         st.parent_phone AS phone_1,
         st.parent_phone_2 AS phone_2,
         nl1.status::text AS sms1_status,
@@ -1060,9 +1075,10 @@ export class StudentsRepository {
         nl2.sent_at::text AS sms2_sent_at
       FROM attendances_student ast
       INNER JOIN students st ON st.id = ast.student_id
-      INNER JOIN schedules s ON s.id = ast.schedule_id
-      INNER JOIN classes c ON c.id = s.class_id
-      INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+      -- FIX B1: LEFT JOIN instead of INNER JOIN so absences without schedule_id are included
+      LEFT JOIN schedules s ON s.id = ast.schedule_id
+      LEFT JOIN classes c ON c.id = s.class_id
+      LEFT JOIN time_slots ts ON ts.id = s.time_slot_id
       LEFT JOIN LATERAL (
         SELECT n.status, n.sent_at
         FROM notifications_log n
@@ -1082,27 +1098,30 @@ export class StudentsRepository {
         LIMIT 1
       ) nl2 ON true
       WHERE ast.student_id = ${studentId}::uuid
-        AND ast.status = 'absent'
+        AND ast.status IN ('absent', 'excused')
         AND ast.date BETWEEN ${query.from}::date AND ${query.to}::date
         ${subjectFilter}
       ORDER BY ast.date DESC
     `);
 
     return getRows<StudentAbsenceDetailDbRow>(result).map((row) => ({
+      id: row.id,
       date: row.date,
-      subject: row.subject,
-      class_name: row.class_name,
-      start_time: row.start_time,
-      end_time: row.end_time,
-      sms_phone_1: {
+      subject: row.subject ?? 'Non renseigné',
+      className: row.class_name ?? 'Non renseignée',
+      startTime: row.start_time ?? '—',
+      endTime: row.end_time ?? '—',
+      status: row.status,
+      excuseReason: row.excuse_reason,
+      smsPhone1: {
         phone: row.phone_1,
         status: toSmsStatus(row.sms1_status),
-        sent_at: row.sms1_sent_at,
+        sentAt: row.sms1_sent_at,
       },
-      sms_phone_2: {
+      smsPhone2: {
         phone: row.phone_2,
         status: toSmsStatus(row.sms2_status),
-        sent_at: row.sms2_sent_at,
+        sentAt: row.sms2_sent_at,
       },
     }));
   }

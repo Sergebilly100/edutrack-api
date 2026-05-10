@@ -366,6 +366,9 @@ export const attendancesStudent = tenant.table(
     status: attendanceStudentStatusEnum('status').notNull().default('absent'),
     markedBy: uuid('marked_by').references(() => users.id),
     note: text('note'),
+    excuseReason: text('excuse_reason'),
+    excusedBy: uuid('excused_by').references(() => users.id),
+    excusedAt: timestamp('excused_at', { withTimezone: true, mode: 'date' }),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
       .notNull()
       .defaultNow(),
@@ -377,6 +380,9 @@ export const attendancesStudent = tenant.table(
       table.date
     ),
     attStudentDateIdx: index('idx_att_student_date').on(table.studentId, table.date),
+    attStudentExcusedIdx: index('idx_att_student_excused')
+      .on(table.studentId, table.date)
+      .where(sql`status = 'excused'`),
   })
 );
 

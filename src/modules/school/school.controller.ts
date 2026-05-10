@@ -31,7 +31,7 @@ type DirectorPhoneRow = {
 
 const schoolInfoPatchSchema = z.object({
   name: z.string().trim().min(2).max(255).optional(),
-  address: z.string().trim().max(255).optional(),
+  city: z.string().trim().min(2).max(100).optional(),
   phone: z.string().trim().min(6).max(20).optional(),
 });
 
@@ -290,6 +290,14 @@ export default async function schoolController(app: FastifyInstance): Promise<vo
         await db.execute(sql`
           UPDATE public.tenants
           SET name = ${body.name}, updated_at = NOW()
+          WHERE schema_name = ${claims.schemaName}
+        `);
+      }
+
+      if (body.city) {
+        await db.execute(sql`
+          UPDATE public.tenants
+          SET city = ${body.city}, updated_at = NOW()
           WHERE schema_name = ${claims.schemaName}
         `);
       }

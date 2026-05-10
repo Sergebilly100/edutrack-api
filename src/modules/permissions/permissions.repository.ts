@@ -88,15 +88,6 @@ const mapPosition = (row: PositionListRow) => ({
 export class PermissionsRepository {
   constructor(private readonly db: QueryExecutor) {}
 
-  private async ensurePublicTenantColumns(): Promise<void> {
-    await this.db.execute(sql`
-      ALTER TABLE public.tenants
-      ADD COLUMN IF NOT EXISTS logo_url text,
-      ADD COLUMN IF NOT EXISTS active_school_year varchar(20),
-      ADD COLUMN IF NOT EXISTS allow_teacher_qr_skip boolean NOT NULL DEFAULT false
-    `);
-  }
-
   async countActiveUsers(): Promise<number> {
     const result = await this.db.execute<AssignmentCountRow>(sql`
       SELECT COUNT(*)::int AS count
@@ -139,7 +130,7 @@ export class PermissionsRepository {
   }
 
   async getSchoolConfigBySchemaName(schemaName: string): Promise<SchoolConfigRow | null> {
-    await this.ensurePublicTenantColumns();
+    // Columns logo_url, active_school_year, allow_teacher_qr_skip are guaranteed by the boot migration
     const result = await this.db.execute<SchoolConfigRow>(sql`
       SELECT
         name,
@@ -572,7 +563,6 @@ export class PermissionsRepository {
       allowTeacherQrSkip?: boolean;
     }
   ): Promise<void> {
-    await this.ensurePublicTenantColumns();
     await this.db.execute(sql`
       UPDATE public.tenants
       SET

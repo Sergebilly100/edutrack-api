@@ -4,6 +4,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
 
 const tenantSchemasReady = new Set<string>();
+const tenantSchemasInitializing = new Map<string, Promise<void>>();
 let publicReady = false;
 
 const getRows = <TRow,>(result: unknown): TRow[] => {
@@ -55,7 +56,16 @@ export const ensureTenantRealHoursInfrastructure = async (
 
   await ensurePublicRealHoursInfrastructure(db);
 
-  if (!tenantSchemasReady.has(schemaName)) {
+  if (tenantSchemasReady.has(schemaName)) return;
+
+  // Serialize concurrent calls for the same schema within this process
+  const existing = tenantSchemasInitializing.get(schemaName);
+  if (existing) {
+    await existing;
+    return;
+  }
+
+  const init = (async () => {
     await db.execute(sql`
       DO $$ BEGIN
         CREATE TYPE attendance_validation_status AS ENUM (
@@ -139,7 +149,26 @@ export const ensureTenantRealHoursInfrastructure = async (
     `);
 
     try {
-      await db.execute(sql`DROP VIEW IF EXISTS teacher_scan_compliance`);
+      // Drop whatever type of object exists (table or view) before recreating as view
+      await db.execute(sql`
+        DO $$ BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relname = 'teacher_scan_compliance'
+              AND n.nspname = current_schema()
+              AND c.relkind = 'r'
+          ) THEN
+            EXECUTE 'DROP TABLE teacher_scan_compliance';
+          ELSIF EXISTS (
+            SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relname = 'teacher_scan_compliance'
+              AND n.nspname = current_schema()
+              AND c.relkind = 'v'
+          ) THEN
+            EXECUTE 'DROP VIEW teacher_scan_compliance';
+          END IF;
+        END $$
+      `);
       await db.execute(sql`
         CREATE OR REPLACE VIEW teacher_scan_compliance AS
     SELECT
@@ -319,5 +348,12 @@ export const ensureTenantRealHoursInfrastructure = async (
     `);
 
     tenantSchemasReady.add(schemaName);
+  })();
+
+  tenantSchemasInitializing.set(schemaName, init);
+  try {
+    await init;
+  } finally {
+    tenantSchemasInitializing.delete(schemaName);
   }
 };

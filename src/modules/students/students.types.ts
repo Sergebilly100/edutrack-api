@@ -3,6 +3,22 @@ import { z } from 'zod';
 export const PHONE_CI_REGEX = /^225\d{10}$/;
 export const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
+// ─── Shared validators ────────────────────────────────────────────────────────
+
+const parentPhoneSchema = z
+  .string()
+  .regex(PHONE_CI_REGEX, 'parent_phone must match 225 followed by 10 digits')
+  .nullable();
+
+const parentNameSchema = z.string().trim().min(1).max(255).nullable();
+
+const parentPhone2Schema = z
+  .string()
+  .regex(PHONE_CI_REGEX, 'parent_phone_2 must match 225 followed by 10 digits')
+  .nullable();
+
+// ─── Students CRUD ────────────────────────────────────────────────────────────
+
 export const studentsListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
@@ -11,36 +27,11 @@ export const studentsListQuerySchema = z.object({
     .enum(['true', 'false'])
     .optional()
     .transform((value) => {
-      if (value === undefined) {
-        return undefined;
-      }
-
+      if (value === undefined) return undefined;
       return value === 'true';
     }),
-  search: z
-    .string()
-    .trim()
-    .min(1)
-    .max(100)
-    .optional(),
+  search: z.string().trim().min(1).max(100).optional(),
 });
-
-const parentPhoneSchema = z
-  .string()
-  .regex(PHONE_CI_REGEX, 'parent_phone must match 225 followed by 10 digits')
-  .nullable();
-
-const parentNameSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(255)
-  .nullable();
-
-const parentPhone2Schema = z
-  .string()
-  .regex(PHONE_CI_REGEX, 'parent_phone_2 must match 225 followed by 10 digits')
-  .nullable();
 
 export const createStudentBodySchema = z.object({
   class_id: z.uuid(),
@@ -74,6 +65,8 @@ export const updateStudentBodySchema = z
     message: 'At least one field is required',
   });
 
+// ─── Attendance / absences ────────────────────────────────────────────────────
+
 export const bulkAttendanceBodySchema = z.object({
   scheduleId: z.uuid(),
   date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format'),
@@ -89,6 +82,18 @@ export const attendanceHistoryQuerySchema = z.object({
   date_from: z.string().regex(ISO_DATE_REGEX).optional(),
   date_to: z.string().regex(ISO_DATE_REGEX).optional(),
 });
+
+// ─── Excuse ───────────────────────────────────────────────────────────────────
+
+export const excuseAbsenceParamsSchema = z.object({
+  attendanceId: z.uuid(),
+});
+
+export const excuseAbsenceBodySchema = z.object({
+  reason: z.string().trim().min(1).max(1000),
+});
+
+// ─── Stats ────────────────────────────────────────────────────────────────────
 
 export const absenceStatsQuerySchema = z.object({
   from: z.string().regex(ISO_DATE_REGEX),
@@ -109,18 +114,9 @@ export const studentAbsencesQuerySchema = z.object({
   subject: z.string().trim().min(1).optional(),
 });
 
+// ─── Domain types ─────────────────────────────────────────────────────────────
+
 export type UserRole = 'director' | 'staff' | 'teacher' | 'super_admin';
-
-export type AccessContext = {
-  userId: string;
-  schemaName: string;
-  role: UserRole;
-};
-
-export type PaginationQuery = {
-  page: number;
-  limit: number;
-};
 
 export type PaginationMeta = {
   page: number;
@@ -145,6 +141,7 @@ export type StudentRecord = {
 };
 
 export type StudentRecentAbsence = {
+  id: string;
   date: string;
   subject: string;
   teacherName: string;
@@ -152,6 +149,8 @@ export type StudentRecentAbsence = {
   endTime: string | null;
   roomName: string | null;
   smsStatus: 'sent' | 'failed' | 'not_sent' | null;
+  status: 'absent' | 'excused';
+  excuseReason: string | null;
 };
 
 export type StudentDocumentRecord = {
@@ -184,6 +183,7 @@ export type StudentDetailRecord = {
   createdAt: string;
   absenceSummary: {
     total: number;
+    excused: number;
     thisMonth: number;
     thisWeek: number;
   };
@@ -208,6 +208,16 @@ export type AttendanceStudentRecord = {
   createdAt: string;
 };
 
+export type ExcusedAbsenceRecord = {
+  id: string;
+  studentId: string;
+  date: string;
+  scheduleId: string | null;
+  status: 'excused';
+  excuseReason: string;
+  excusedAt: string;
+};
+
 export type TodayAbsenceRow = {
   classId: string;
   className: string;
@@ -219,6 +229,7 @@ export type TodayAbsenceRow = {
   createdAt: string;
   smsStatus: 'queued' | 'sent' | 'failed' | 'delivered' | null;
   smsNotified: boolean;
+  status: 'absent' | 'excused';
 };
 
 export type TodayAbsenceGroup = {
@@ -233,45 +244,52 @@ export type TodayAbsenceGroup = {
     createdAt: string;
     smsStatus: 'queued' | 'sent' | 'failed' | 'delivered' | null;
     smsNotified: boolean;
+    status: 'absent' | 'excused';
   }>;
 };
 
-export type AbsenceStatsQuery = z.infer<typeof absenceStatsQuerySchema>;
-export type StudentAbsencesQuery = z.infer<typeof studentAbsencesQuerySchema>;
-
 export type StudentAbsenceStatRecord = {
-  student_id: string;
-  student_name: string;
-  class_name: string;
-  class_id: string;
-  parent_phone: string | null;
-  parent_phone_2: string | null;
-  absence_count: number;
-  total_scheduled: number;
-  absence_rate: number;
-  sms_summary: 'all_sent' | 'partial' | 'none';
+  studentId: string;
+  studentName: string;
+  className: string;
+  classId: string;
+  parentPhone: string | null;
+  parentPhone2: string | null;
+  absenceCount: number;
+  excusedCount: number;
+  totalScheduled: number;
+  absenceRate: number;
+  smsSummary: 'all_sent' | 'partial' | 'none';
 };
 
 export type StudentAbsenceDetailRecord = {
+  id: string;
   date: string;
   subject: string;
-  class_name: string;
-  start_time: string;
-  end_time: string;
-  sms_phone_1: {
+  className: string;
+  startTime: string;
+  endTime: string;
+  status: 'absent' | 'excused';
+  excuseReason: string | null;
+  smsPhone1: {
     phone: string | null;
     status: 'sent' | 'failed' | 'not_sent';
-    sent_at: string | null;
+    sentAt: string | null;
   };
-  sms_phone_2: {
+  smsPhone2: {
     phone: string | null;
     status: 'sent' | 'failed' | 'not_sent';
-    sent_at: string | null;
+    sentAt: string | null;
   };
 };
+
+// ─── Inferred input types ─────────────────────────────────────────────────────
 
 export type BulkAttendanceInput = z.infer<typeof bulkAttendanceBodySchema>;
 export type StudentsListQuery = z.infer<typeof studentsListQuerySchema>;
 export type CreateStudentInput = z.infer<typeof createStudentBodySchema>;
 export type UpdateStudentInput = z.infer<typeof updateStudentBodySchema>;
 export type AttendanceHistoryQuery = z.infer<typeof attendanceHistoryQuerySchema>;
+export type AbsenceStatsQuery = z.infer<typeof absenceStatsQuerySchema>;
+export type StudentAbsencesQuery = z.infer<typeof studentAbsencesQuerySchema>;
+export type ExcuseAbsenceInput = z.infer<typeof excuseAbsenceBodySchema>;

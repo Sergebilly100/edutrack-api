@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { StudentsService } from '../../src/modules/students/students.service.js';
 
+// ─── Repository mock ──────────────────────────────────────────────────────────
+
 const repository = {
   listStudents: vi.fn(),
   createStudent: vi.fn(),
@@ -15,16 +17,26 @@ const repository = {
   getSchoolPhone: vi.fn(),
   listAttendanceHistory: vi.fn(),
   listTodayAbsences: vi.fn(),
+  getStudentAbsenceStats: vi.fn(),
+  getStudentAbsenceDetails: vi.fn(),
+  findAbsenceById: vi.fn(),
+  excuseAbsence: vi.fn(),
+  teacherHasClassAccess: vi.fn(),
 };
 
 const eventEmitter = vi.fn();
+
+const buildService = () =>
+  new StudentsService(repository as never, { eventEmitter });
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe('students.service', () => {
-  it('listStudents() retourne une pagination correcte', async () => {
+// ─── listStudents ─────────────────────────────────────────────────────────────
+
+describe('listStudents()', () => {
+  it('retourne une pagination correcte', async () => {
     repository.listStudents.mockResolvedValue({
       rows: [
         {
@@ -42,11 +54,7 @@ describe('students.service', () => {
       total: 45,
     });
 
-    const service = new StudentsService(repository as never, {
-      eventEmitter,
-    });
-
-    const result = await service.listStudents({
+    const result = await buildService().listStudents({
       page: 2,
       limit: 20,
       class_id: undefined,
@@ -54,93 +62,91 @@ describe('students.service', () => {
       search: undefined,
     });
 
-    expect(result.pagination).toEqual({
-      page: 2,
-      limit: 20,
-      total: 45,
-      totalPages: 3,
-    });
+    expect(result.pagination).toEqual({ page: 2, limit: 20, total: 45, totalPages: 3 });
     expect(result.data).toHaveLength(1);
   });
 
-  it('bulkMarkAbsences() crée les attendances et émet seulement pour les parents avec phone', async () => {
-    repository.findScheduleById.mockResolvedValue({
-      id: 'schedule-1',
-      classId: 'class-1',
-      subject: 'Maths',
-    });
-    repository.findStudentsForAbsence.mockResolvedValue([
-      {
-        id: 'student-1',
-        firstName: 'Awa',
-        parentPhone: '2250700000001',
-      },
-      {
-        id: 'student-2',
-        firstName: 'Yao',
-        parentPhone: null,
-      },
-      {
-        id: 'student-3',
-        firstName: 'Mariam',
-        parentPhone: '2250700000003',
-      },
-    ]);
-    repository.upsertStudentAbsences.mockResolvedValue(3);
-    repository.getTenantIdBySchemaName.mockResolvedValue('tenant-1');
-    repository.getSchoolPhone.mockResolvedValue('2250701234567');
+  it('totalPages = 0 quand total = 0', async () => {
+    repository.listStudents.mockResolvedValue({ rows: [], total: 0 });
+    const result = await buildService().listStudents({ page: 1, limit: 20 } as never);
+    expect(result.pagination.totalPages).toBe(0);
+  });
+});
 
-    const service = new StudentsService(repository as never, {
-      eventEmitter,
-    });
+// ─── createStudent ────────────────────────────────────────────────────────────
 
-    const result = await service.bulkMarkAbsences(
-      {
-        scheduleId: 'schedule-1',
-        date: '2026-04-13',
-        absences: ['student-1', 'student-2', 'student-3'],
-      },
-      {
-        userId: 'user-1',
-        schemaName: 'school_sainte_marie',
-      }
-    );
-
-    expect(result).toEqual({
-      createdAttendances: 3,
-      emittedEvents: 2,
+describe('createStudent()', () => {
+  it('lève CLASS_NOT_FOUND sur message "Class not found"', async () => {
+    repository.createStudent.mockRejectedValue(new Error('Class not found'));
+    await expect(buildService().createStudent({} as never)).rejects.toMatchObject({
+      code: 'CLASS_NOT_FOUND',
+      statusCode: 404,
     });
-    expect(repository.upsertStudentAbsences).toHaveBeenCalledWith({
-      scheduleId: 'schedule-1',
-      date: '2026-04-13',
-      studentIds: ['student-1', 'student-2', 'student-3'],
-      markedBy: 'user-1',
-    });
-    expect(eventEmitter).toHaveBeenCalledTimes(2);
-    expect(eventEmitter).toHaveBeenNthCalledWith(
-      1,
-      'student.absent',
-      expect.objectContaining({
-        tenantId: 'tenant-1',
-        scheduleId: 'schedule-1',
-        studentId: 'student-1',
-        parentPhone: '2250700000001',
-      })
-    );
   });
 
-  it('softDeleteStudent() lève STUDENT_NOT_FOUND si l\'élève est déjà inactif', async () => {
-    repository.softDeleteStudent.mockResolvedValue(null);
+  it('lève CLASS_NOT_FOUND sur erreur FK 23503', async () => {
+    const fkError = Object.assign(new Error('FK'), { code: '23503' });
+    repository.createStudent.mockRejectedValue(fkError);
+    await expect(buildService().createStudent({} as never)).rejects.toMatchObject({
+      code: 'CLASS_NOT_FOUND',
+    });
+  });
+});
 
-    const service = new StudentsService(repository as never, { eventEmitter });
+// ─── updateStudent ────────────────────────────────────────────────────────────
 
-    await expect(service.softDeleteStudent('student-inactive')).rejects.toMatchObject({
+describe('updateStudent()', () => {
+  it('lève STUDENT_NOT_FOUND si repository retourne null', async () => {
+    repository.updateStudent.mockResolvedValue(null);
+    await expect(buildService().updateStudent('missing', {})).rejects.toMatchObject({
       code: 'STUDENT_NOT_FOUND',
       statusCode: 404,
     });
   });
 
-  it('getStudentDetail() retourne les données complètes', async () => {
+  it('lève CLASS_NOT_FOUND sur erreur FK 23503', async () => {
+    const fkError = Object.assign(new Error('FK'), { code: '23503' });
+    repository.updateStudent.mockRejectedValue(fkError);
+    await expect(buildService().updateStudent('s-1', {})).rejects.toMatchObject({
+      code: 'CLASS_NOT_FOUND',
+    });
+  });
+
+  it('retransmet une StudentsModuleError telle quelle', async () => {
+    const { StudentsModuleError } = await import(
+      '../../src/modules/students/students.service.js'
+    );
+    const err = new StudentsModuleError('Custom', 422, 'CUSTOM');
+    repository.updateStudent.mockRejectedValue(err);
+    await expect(buildService().updateStudent('s-1', {})).rejects.toMatchObject({
+      code: 'CUSTOM',
+    });
+  });
+});
+
+// ─── softDeleteStudent ────────────────────────────────────────────────────────
+
+describe('softDeleteStudent()', () => {
+  it("lève STUDENT_NOT_FOUND si l'élève est déjà inactif", async () => {
+    repository.softDeleteStudent.mockResolvedValue(null);
+    await expect(buildService().softDeleteStudent('student-inactive')).rejects.toMatchObject({
+      code: 'STUDENT_NOT_FOUND',
+      statusCode: 404,
+    });
+  });
+
+  it('retourne le record si succès', async () => {
+    const record = { id: 's-1', isActive: false };
+    repository.softDeleteStudent.mockResolvedValue(record);
+    const result = await buildService().softDeleteStudent('s-1');
+    expect(result).toBe(record);
+  });
+});
+
+// ─── getStudentDetail ─────────────────────────────────────────────────────────
+
+describe('getStudentDetail()', () => {
+  it('retourne les données complètes', async () => {
     repository.findStudentDetailById.mockResolvedValue({
       id: 'student-1',
       firstName: 'Awa',
@@ -154,107 +160,291 @@ describe('students.service', () => {
       parentName2: null,
       note: 'RAS',
       createdAt: '2026-04-13T10:00:00.000Z',
-      absenceSummary: { total: 3, thisMonth: 1, thisWeek: 0 },
+      absenceSummary: { total: 3, excused: 1, thisMonth: 1, thisWeek: 0 },
       recentAbsences: [],
       documents: [],
       parentSms: [],
     });
 
-    const service = new StudentsService(repository as never, { eventEmitter });
-    const result = await service.getStudentDetail('student-1');
-
+    const result = await buildService().getStudentDetail('student-1');
     expect(result.id).toBe('student-1');
+    expect(result.absenceSummary.excused).toBe(1);
     expect(repository.findStudentDetailById).toHaveBeenCalledWith('student-1');
   });
 
-  it('bulkMarkAbsences() lève INVALID_ABSENCE_STUDENT_IDS si un ID est hors classe', async () => {
+  it('lève STUDENT_NOT_FOUND si introuvable', async () => {
+    repository.findStudentDetailById.mockResolvedValue(null);
+    await expect(buildService().getStudentDetail('x')).rejects.toMatchObject({
+      code: 'STUDENT_NOT_FOUND',
+    });
+  });
+});
+
+// ─── excuseAbsence ────────────────────────────────────────────────────────────
+
+describe('excuseAbsence()', () => {
+  const input = { reason: 'Certificat médical' };
+  const absenceRecord = {
+    id: 'att-1',
+    studentId: 'student-1',
+    date: '2026-04-13',
+    scheduleId: 'sched-1',
+    status: 'absent' as const,
+  };
+  const excusedRecord = {
+    id: 'att-1',
+    studentId: 'student-1',
+    date: '2026-04-13',
+    scheduleId: 'sched-1',
+    status: 'excused' as const,
+    excuseReason: 'Certificat médical',
+    excusedAt: '2026-04-14T08:00:00.000Z',
+  };
+
+  it('excuse une absence valide', async () => {
+    repository.findAbsenceById.mockResolvedValue(absenceRecord);
+    repository.excuseAbsence.mockResolvedValue(excusedRecord);
+
+    const result = await buildService().excuseAbsence('att-1', input, 'user-director');
+
+    expect(result.status).toBe('excused');
+    expect(result.excuseReason).toBe('Certificat médical');
+    expect(repository.excuseAbsence).toHaveBeenCalledWith('att-1', 'Certificat médical', 'user-director');
+  });
+
+  it('lève ABSENCE_NOT_FOUND si introuvable', async () => {
+    repository.findAbsenceById.mockResolvedValue(null);
+    await expect(buildService().excuseAbsence('missing', input, 'user-1')).rejects.toMatchObject({
+      code: 'ABSENCE_NOT_FOUND',
+      statusCode: 404,
+    });
+  });
+
+  it('lève ALREADY_EXCUSED si déjà excusée', async () => {
+    repository.findAbsenceById.mockResolvedValue({ ...absenceRecord, status: 'excused' });
+    await expect(buildService().excuseAbsence('att-1', input, 'user-1')).rejects.toMatchObject({
+      code: 'ALREADY_EXCUSED',
+      statusCode: 409,
+    });
+  });
+
+  it("lève INVALID_STATUS_FOR_EXCUSE si statut n'est pas absent", async () => {
+    repository.findAbsenceById.mockResolvedValue({ ...absenceRecord, status: 'present' });
+    await expect(buildService().excuseAbsence('att-1', input, 'user-1')).rejects.toMatchObject({
+      code: 'INVALID_STATUS_FOR_EXCUSE',
+      statusCode: 422,
+    });
+  });
+
+  it('lève ALREADY_EXCUSED en cas de race condition (excuseAbsence retourne null)', async () => {
+    repository.findAbsenceById.mockResolvedValue(absenceRecord);
+    repository.excuseAbsence.mockResolvedValue(null);
+    await expect(buildService().excuseAbsence('att-1', input, 'user-1')).rejects.toMatchObject({
+      code: 'ALREADY_EXCUSED',
+      statusCode: 409,
+    });
+  });
+});
+
+// ─── bulkMarkAbsences ─────────────────────────────────────────────────────────
+
+describe('bulkMarkAbsences()', () => {
+  const context = { userId: 'user-1', schemaName: 'school_test' };
+
+  beforeEach(() => {
     repository.findScheduleById.mockResolvedValue({
       id: 'schedule-1',
       classId: 'class-1',
       subject: 'Maths',
     });
+    repository.getTenantIdBySchemaName.mockResolvedValue('tenant-1');
+    repository.getSchoolPhone.mockResolvedValue('2250701234567');
+    repository.upsertStudentAbsences.mockResolvedValue(3);
+  });
+
+  it('crée les absences et émet seulement pour les parents avec téléphone', async () => {
     repository.findStudentsForAbsence.mockResolvedValue([
-      { id: 'student-1', firstName: 'Awa', parentPhone: '2250700000001' },
-      { id: 'student-2', firstName: 'Yao', parentPhone: null },
+      { id: 'student-1', firstName: 'Awa', parentPhone: '2250700000001', parentEmail: null },
+      { id: 'student-2', firstName: 'Yao', parentPhone: null, parentEmail: null },
+      { id: 'student-3', firstName: 'Mariam', parentPhone: '2250700000003', parentEmail: null },
     ]);
 
-    const service = new StudentsService(repository as never, { eventEmitter });
+    const result = await buildService().bulkMarkAbsences(
+      { scheduleId: 'schedule-1', date: '2026-04-13', absences: ['student-1', 'student-2', 'student-3'] },
+      context
+    );
 
-    await expect(
-      service.bulkMarkAbsences(
-        {
-          scheduleId: 'schedule-1',
-          date: '2026-04-13',
-          absences: ['student-1', 'student-2', 'student-unknown'],
-        },
-        { userId: 'user-1', schemaName: 'school_sainte_marie' }
-      )
-    ).rejects.toMatchObject({
-      code: 'INVALID_ABSENCE_STUDENT_IDS',
-      statusCode: 400,
+    expect(result).toEqual({ createdAttendances: 3, emittedEvents: 2 });
+    expect(repository.upsertStudentAbsences).toHaveBeenCalledWith({
+      scheduleId: 'schedule-1',
+      date: '2026-04-13',
+      studentIds: ['student-1', 'student-2', 'student-3'],
+      markedBy: 'user-1',
     });
+    expect(eventEmitter).toHaveBeenCalledTimes(2);
+    expect(eventEmitter).toHaveBeenNthCalledWith(
+      1,
+      'student.absent',
+      expect.objectContaining({ tenantId: 'tenant-1', studentId: 'student-1' })
+    );
   });
 
-  it('bulkMarkAbsences() lève SCHEDULE_NOT_FOUND si le schedule n\'existe pas', async () => {
+  it('retourne 0/0 si absences est vide', async () => {
+    const result = await buildService().bulkMarkAbsences(
+      { scheduleId: 'schedule-1', date: '2026-04-13', absences: [] },
+      context
+    );
+    expect(result).toEqual({ createdAttendances: 0, emittedEvents: 0 });
+    expect(repository.upsertStudentAbsences).not.toHaveBeenCalled();
+  });
+
+  it('déduplique les IDs avant de les traiter', async () => {
+    repository.findStudentsForAbsence.mockResolvedValue([
+      { id: 'student-1', firstName: 'Awa', parentPhone: '2250700000001', parentEmail: null },
+    ]);
+    repository.upsertStudentAbsences.mockResolvedValue(1);
+
+    await buildService().bulkMarkAbsences(
+      { scheduleId: 'schedule-1', date: '2026-04-13', absences: ['student-1', 'student-1'] },
+      context
+    );
+
+    expect(repository.findStudentsForAbsence).toHaveBeenCalledWith('class-1', ['student-1']);
+  });
+
+  it('lève SCHEDULE_NOT_FOUND si le schedule est introuvable', async () => {
     repository.findScheduleById.mockResolvedValue(null);
-
-    const service = new StudentsService(repository as never, { eventEmitter });
-
     await expect(
-      service.bulkMarkAbsences(
-        { scheduleId: 'schedule-inexistant', date: '2026-04-13', absences: ['student-1'] },
-        { userId: 'user-1', schemaName: 'school_sainte_marie' }
+      buildService().bulkMarkAbsences(
+        { scheduleId: 'missing', date: '2026-04-13', absences: ['student-1'] },
+        context
       )
-    ).rejects.toMatchObject({
-      code: 'SCHEDULE_NOT_FOUND',
-      statusCode: 404,
-    });
+    ).rejects.toMatchObject({ code: 'SCHEDULE_NOT_FOUND', statusCode: 404 });
   });
 
-  it('listTodayAbsences() regroupe correctement plusieurs absences de la même classe', async () => {
+  it('lève INVALID_ABSENCE_STUDENT_IDS si un ID est hors classe', async () => {
+    repository.findStudentsForAbsence.mockResolvedValue([
+      { id: 'student-1', firstName: 'Awa', parentPhone: '2250700000001', parentEmail: null },
+    ]);
+
+    await expect(
+      buildService().bulkMarkAbsences(
+        { scheduleId: 'schedule-1', date: '2026-04-13', absences: ['student-1', 'student-unknown'] },
+        context
+      )
+    ).rejects.toMatchObject({ code: 'INVALID_ABSENCE_STUDENT_IDS', statusCode: 400 });
+  });
+
+  it('lève TENANT_NOT_FOUND si le schéma est inconnu', async () => {
+    repository.findStudentsForAbsence.mockResolvedValue([
+      { id: 'student-1', firstName: 'Awa', parentPhone: '2250700000001', parentEmail: null },
+    ]);
+    repository.getTenantIdBySchemaName.mockResolvedValue(null);
+
+    await expect(
+      buildService().bulkMarkAbsences(
+        { scheduleId: 'schedule-1', date: '2026-04-13', absences: ['student-1'] },
+        context
+      )
+    ).rejects.toMatchObject({ code: 'TENANT_NOT_FOUND', statusCode: 404 });
+    // Upsert ne doit PAS avoir été appelé (FIX B5)
+    expect(repository.upsertStudentAbsences).not.toHaveBeenCalled();
+  });
+
+  it("continue les événements suivants si l'un échoue (FIX L8)", async () => {
+    repository.findStudentsForAbsence.mockResolvedValue([
+      { id: 'student-1', firstName: 'Awa', parentPhone: '2250700000001', parentEmail: null },
+      { id: 'student-2', firstName: 'Mariam', parentPhone: '2250700000003', parentEmail: null },
+    ]);
+    repository.upsertStudentAbsences.mockResolvedValue(2);
+
+    let callCount = 0;
+    eventEmitter.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) throw new Error('Redis down');
+    });
+
+    const result = await buildService().bulkMarkAbsences(
+      { scheduleId: 'schedule-1', date: '2026-04-13', absences: ['student-1', 'student-2'] },
+      context
+    );
+
+    // Premier event échoue, deuxième réussit
+    expect(result.emittedEvents).toBe(1);
+    expect(eventEmitter).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ─── listTodayAbsences ────────────────────────────────────────────────────────
+
+describe('listTodayAbsences()', () => {
+  it('regroupe correctement plusieurs absences de la même classe', async () => {
     repository.listTodayAbsences.mockResolvedValue([
       {
-        classId: 'class-1',
-        className: '3eme A',
-        studentId: 'student-1',
-        studentFirstName: 'Awa',
-        studentLastName: 'Kouassi',
-        scheduleId: 'sched-1',
-        date: '2026-04-13',
-        smsStatus: 'sent',
-        smsNotified: true,
+        classId: 'class-1', className: '3eme A',
+        studentId: 'student-1', studentFirstName: 'Awa', studentLastName: 'Kouassi',
+        scheduleId: 'sched-1', date: '2026-04-13', createdAt: new Date('2026-04-13T08:00:00Z'),
+        smsStatus: 'sent', smsNotified: true, status: 'absent',
       },
       {
-        classId: 'class-1',
-        className: '3eme A',
-        studentId: 'student-2',
-        studentFirstName: 'Yao',
-        studentLastName: 'Bamba',
-        scheduleId: 'sched-1',
-        date: '2026-04-13',
-        smsStatus: null,
-        smsNotified: false,
+        classId: 'class-1', className: '3eme A',
+        studentId: 'student-2', studentFirstName: 'Yao', studentLastName: 'Bamba',
+        scheduleId: 'sched-1', date: '2026-04-13', createdAt: new Date('2026-04-13T08:00:00Z'),
+        smsStatus: null, smsNotified: false, status: 'excused',
       },
       {
-        classId: 'class-2',
-        className: '3eme B',
-        studentId: 'student-3',
-        studentFirstName: 'Mariam',
-        studentLastName: 'Traore',
-        scheduleId: 'sched-2',
-        date: '2026-04-13',
-        smsStatus: 'queued',
-        smsNotified: false,
+        classId: 'class-2', className: '3eme B',
+        studentId: 'student-3', studentFirstName: 'Mariam', studentLastName: 'Traore',
+        scheduleId: 'sched-2', date: '2026-04-13', createdAt: new Date('2026-04-13T08:00:00Z'),
+        smsStatus: 'queued', smsNotified: false, status: 'absent',
       },
     ]);
 
-    const service = new StudentsService(repository as never, { eventEmitter });
-    const result = await service.listTodayAbsences('2026-04-13');
+    const result = await buildService().listTodayAbsences('2026-04-13');
 
     expect(result).toHaveLength(2);
     const classeA = result.find((g) => g.classId === 'class-1');
     expect(classeA?.absences).toHaveLength(2);
+    expect(classeA?.absences.find((a) => a.studentId === 'student-2')?.status).toBe('excused');
     const classeB = result.find((g) => g.classId === 'class-2');
     expect(classeB?.absences).toHaveLength(1);
+  });
+});
+
+// ─── getAbsenceStats ──────────────────────────────────────────────────────────
+
+describe('getAbsenceStats()', () => {
+  it('délègue au repository et retourne les données', async () => {
+    const stats = [{ studentId: 'student-1', absenceCount: 5, excusedCount: 1 }];
+    repository.getStudentAbsenceStats.mockResolvedValue(stats);
+
+    const result = await buildService().getAbsenceStats({
+      from: '2026-04-01',
+      to: '2026-04-30',
+      min_absences: 1,
+    } as never);
+
+    expect(result).toBe(stats);
+    expect(repository.getStudentAbsenceStats).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── getStudentAbsences ───────────────────────────────────────────────────────
+
+describe('getStudentAbsences()', () => {
+  it('délègue au repository avec le bon studentId', async () => {
+    const details = [{ id: 'att-1', date: '2026-04-13', status: 'absent' }];
+    repository.getStudentAbsenceDetails.mockResolvedValue(details);
+
+    const result = await buildService().getStudentAbsences('student-1', {
+      from: '2026-04-01',
+      to: '2026-04-30',
+    });
+
+    expect(result).toBe(details);
+    expect(repository.getStudentAbsenceDetails).toHaveBeenCalledWith('student-1', {
+      from: '2026-04-01',
+      to: '2026-04-30',
+    });
   });
 });

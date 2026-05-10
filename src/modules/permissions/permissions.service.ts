@@ -1,11 +1,26 @@
 import argon2 from 'argon2';
 
-import type { AccessTokenClaims } from '../auth/auth.service.js';
-
 import { PermissionsRepository } from './permissions.repository.js';
+
+type ClaimsCoreFields = {
+  sub: string;
+  role: 'director' | 'super_admin' | 'staff' | 'teacher' | 'parent';
+  schemaName: string;
+};
 import { PERMISSION_KEYS, STAFF_BASE_PERMISSIONS } from './permissions.types.js';
 import type { PermissionKey } from '../../shared/types/index.js';
 import { getPlanLimitsBySchemaName } from '../../shared/utils/users-limit.js';
+
+const extractDbError = (error: unknown): { code: string; constraint: string; detail: string } => {
+  if (typeof error !== 'object' || error === null) {
+    return { code: '', constraint: '', detail: '' };
+  }
+  return {
+    code: 'code' in error ? String((error as { code: unknown }).code) : '',
+    constraint: 'constraint' in error ? String((error as { constraint: unknown }).constraint) : '',
+    detail: 'detail' in error ? String((error as { detail: unknown }).detail) : '',
+  };
+};
 
 const ALL_PERMISSIONS_SET = new Set<PermissionKey>(PERMISSION_KEYS);
 const STAFF_BASE_PERMISSIONS_SET = new Set<PermissionKey>(STAFF_BASE_PERMISSIONS);
@@ -16,7 +31,7 @@ const dedupePermissions = (permissions: readonly PermissionKey[]): PermissionKey
   return PERMISSION_KEYS.filter((key) => uniq.has(key));
 };
 
-const baseRolePermissions = (role: AccessTokenClaims['role']): Set<PermissionKey> => {
+const baseRolePermissions = (role: ClaimsCoreFields['role']): Set<PermissionKey> => {
   if (role === 'director' || role === 'super_admin') {
     return new Set(ALL_PERMISSIONS_SET);
   }
@@ -280,7 +295,7 @@ export class PermissionsService {
       throw new PermissionsModuleError(
         'Limite du plan atteinte',
         403,
-        'PLAN_LIMIT_REACHED'
+        'ADMIN_USERS_LIMIT_REACHED'
       );
     }
 
@@ -296,20 +311,10 @@ export class PermissionsService {
 
       return { user };
     } catch (error) {
-      const code =
-        typeof error === 'object' && error !== null && 'code' in error
-          ? String((error as { code: unknown }).code)
-          : '';
-      const constraint =
-        typeof error === 'object' && error !== null && 'constraint' in error
-          ? String((error as { constraint: unknown }).constraint)
-          : '';
-      const detail =
-        typeof error === 'object' && error !== null && 'detail' in error
-          ? String((error as { detail: unknown }).detail)
-          : '';
+      const dbErr = extractDbError(error);
 
-      if (code === '23505') {
+      if (dbErr.code === '23505') {
+        // tenter la réactivation d'abord
         const reactivatedUser = await this.repository.reactivateInactiveAdministrativeUserByContact({
           name: input.name,
           email: input.email ?? null,
@@ -320,20 +325,18 @@ export class PermissionsService {
         if (reactivatedUser) {
           return { user: reactivatedUser };
         }
-      }
 
-      if (
-        code === '23505' &&
-        (constraint.includes('users_email_unique') || detail.includes('(email)'))
-      ) {
-        throw new PermissionsModuleError('Cet email est déjà utilisé', 409, 'EMAIL_ALREADY_USED');
-      }
+        // l'inactif n'existait pas → conflit sur un user actif
+        if (dbErr.constraint.includes('users_email_unique') || dbErr.detail.includes('(email)')) {
+          throw new PermissionsModuleError('Cet email est déjà utilisé', 409, 'EMAIL_ALREADY_USED');
+        }
 
-      if (
-        code === '23505' &&
-        (constraint.includes('users_phone_unique') || detail.includes('(phone)'))
-      ) {
-        throw new PermissionsModuleError('Ce numéro est déjà utilisé', 409, 'PHONE_ALREADY_USED');
+        if (dbErr.constraint.includes('users_phone_unique') || dbErr.detail.includes('(phone)')) {
+          throw new PermissionsModuleError('Ce numéro est déjà utilisé', 409, 'PHONE_ALREADY_USED');
+        }
+
+        // autre contrainte unique non identifiée
+        throw new PermissionsModuleError('Un utilisateur avec ces informations existe déjà', 409, 'DUPLICATE_USER');
       }
 
       throw error;
@@ -365,29 +368,18 @@ export class PermissionsService {
 
       return { user };
     } catch (error) {
-      const code =
-        typeof error === 'object' && error !== null && 'code' in error
-          ? String((error as { code: unknown }).code)
-          : '';
-      const constraint =
-        typeof error === 'object' && error !== null && 'constraint' in error
-          ? String((error as { constraint: unknown }).constraint)
-          : '';
-      const detail =
-        typeof error === 'object' && error !== null && 'detail' in error
-          ? String((error as { detail: unknown }).detail)
-          : '';
+      const dbErr = extractDbError(error);
 
       if (
-        code === '23505' &&
-        (constraint.includes('users_email_unique') || detail.includes('(email)'))
+        dbErr.code === '23505' &&
+        (dbErr.constraint.includes('users_email_unique') || dbErr.detail.includes('(email)'))
       ) {
         throw new PermissionsModuleError('Cet email est déjà utilisé', 409, 'EMAIL_ALREADY_USED');
       }
 
       if (
-        code === '23505' &&
-        (constraint.includes('users_phone_unique') || detail.includes('(phone)'))
+        dbErr.code === '23505' &&
+        (dbErr.constraint.includes('users_phone_unique') || dbErr.detail.includes('(phone)'))
       ) {
         throw new PermissionsModuleError('Ce numéro est déjà utilisé', 409, 'PHONE_ALREADY_USED');
       }
@@ -422,11 +414,12 @@ export class PermissionsService {
 
     const passwordHash = await argon2.hash(input.newPassword);
     await this.repository.updateAdministrativeUserPasswordHash(userId, passwordHash);
+    // TODO: émettre un event pour invalider les sessions actives de ${userId}
     return { updated: true };
   }
 
   async getEffectivePermissions(
-    claims: Pick<AccessTokenClaims, 'sub' | 'role' | 'schemaName'>
+    claims: Pick<ClaimsCoreFields, 'sub' | 'role' | 'schemaName'>
   ) {
     const permissions = await resolveEffectivePermissions(this.repository, claims);
 
@@ -440,7 +433,7 @@ export class PermissionsService {
 
 export const resolveEffectivePermissions = async (
   repository: PermissionsRepository,
-  claims: Pick<AccessTokenClaims, 'sub' | 'role' | 'schemaName'>
+  claims: Pick<ClaimsCoreFields, 'sub' | 'role' | 'schemaName'>
 ): Promise<PermissionKey[]> => {
   const rolePermissions = baseRolePermissions(claims.role);
   if (claims.role === 'super_admin') {
