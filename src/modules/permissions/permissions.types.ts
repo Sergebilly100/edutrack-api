@@ -12,6 +12,7 @@ export const PERMISSION_KEYS = [
   'students.create',
   'students.edit',
   'students.documents',
+  'students.excuse',
   'schedule.view',
   'schedule.edit',
   'attendance.view',

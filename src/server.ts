@@ -166,7 +166,7 @@ app.addHook('onRequest', async (request, reply) => {
 app.register(authController);
 app.register(adminController);
 app.register(attendanceController);
-app.register(notificationsController);
+app.register(notificationsController, { smsQueue: notificationsQueue });
 app.register(billingController, { billingPdfQueue })
 app.register(studentsController);
 app.register(teachersController);

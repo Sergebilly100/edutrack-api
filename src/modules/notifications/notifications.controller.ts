@@ -2,12 +2,14 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { sql } from 'drizzle-orm';
 import { ZodError, z } from 'zod';
 import { randomUUID } from 'node:crypto';
+import type { Queue } from 'bullmq';
 
 import { db as publicDb, withTenantSchema } from '../../shared/database/db.js';
 import { requireDirector, requirePermission, requireTeacher } from '../../shared/middleware/auth.middleware.js';
 import type { NotificationType } from '../../shared/types/index.js';
 
 import { defaultRepository } from './notifications.repository.js';
+import type { NotificationJobData } from './notifications.queue.js';
 
 const notificationTypes: NotificationType[] = [
   'teacher_absent_director',
@@ -158,7 +160,16 @@ const handleError = (
   });
 };
 
-export default async function notificationsController(app: FastifyInstance): Promise<void> {
+const retryParamsSchema = z.object({ id: z.uuid() });
+
+type NotificationsControllerOptions = {
+  smsQueue?: Queue<NotificationJobData>;
+};
+
+export default async function notificationsController(
+  app: FastifyInstance,
+  options: NotificationsControllerOptions = {}
+): Promise<void> {
   app.post('/api/v1/notifications/orange/test-send', async (request, reply) => {
     try {
       if (process.env.NODE_ENV === 'production') {
@@ -300,6 +311,78 @@ export default async function notificationsController(app: FastifyInstance): Pro
       return handleError(request, reply, error);
     }
   });
+
+  app.post(
+    '/api/v1/notifications/:id/retry',
+    { preHandler: requirePermission('students.excuse') },
+    async (request, reply) => {
+      if (!options.smsQueue) {
+        return reply.code(503).send({
+          error: 'SMS queue not available',
+          code: 'SERVICE_UNAVAILABLE',
+          statusCode: 503,
+        });
+      }
+
+      try {
+        const claims = request.claims!;
+        const params = retryParamsSchema.parse(request.params ?? {});
+
+        const row = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          const result = await (tenantDb as { execute: <T>(q: unknown) => Promise<{ rows: T[] }> }).execute<{
+            id: string;
+            type: string;
+            channel: string;
+            message: string;
+            recipient_phone: string | null;
+            status: string;
+          }>(sql`
+            SELECT id::text, type::text, channel::text, message, recipient_phone, status::text
+            FROM notifications_log
+            WHERE id = ${params.id}::uuid
+            LIMIT 1
+          `);
+          return result.rows[0] ?? null;
+        });
+
+        if (!row) {
+          return reply.code(404).send({ error: 'Notification not found', code: 'NOT_FOUND', statusCode: 404 });
+        }
+
+        if (row.status !== 'failed') {
+          return reply.code(409).send({ error: 'Only failed notifications can be retried', code: 'INVALID_STATUS', statusCode: 409 });
+        }
+
+        if (row.channel !== 'sms' || !row.recipient_phone) {
+          return reply.code(422).send({ error: 'Only SMS notifications can be retried', code: 'UNPROCESSABLE', statusCode: 422 });
+        }
+
+        const queueRef = randomUUID();
+
+        await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          await (tenantDb as { execute: (q: unknown) => Promise<unknown> }).execute(sql`
+            UPDATE notifications_log
+            SET status = 'queued', provider_ref = ${queueRef}, sent_at = NULL
+            WHERE id = ${params.id}::uuid
+          `);
+        });
+
+        await options.smsQueue!.add('send-sms', {
+          type: 'send-sms',
+          to: row.recipient_phone,
+          message: row.message,
+          notificationType: row.type as NotificationType,
+          schemaName: claims.schemaName,
+          recipientPhone: row.recipient_phone,
+          queueRef,
+        });
+
+        return reply.send({ success: true, queueRef });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
 
   app.get('/api/v1/notifications/log', { preHandler: requireDirector }, async (request, reply) => {
     try {
