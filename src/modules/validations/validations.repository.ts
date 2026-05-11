@@ -159,7 +159,7 @@ export class ValidationsRepository {
   async countPending(): Promise<PendingValidationCount> {
     await ensureTenantRealHoursInfrastructure(this.db);
 
-    type CountRow = { kind: ValidationKind; cnt: string };
+    type CountRow = { kind: ValidationKind | 'missing_end_scan'; cnt: string };
     const result = await this.db.execute<CountRow>(sql`
       WITH feature_flags AS (
         SELECT COALESCE(f.checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
@@ -183,15 +183,33 @@ export class ValidationsRepository {
           )
         )
       GROUP BY 1
+      UNION ALL
+      SELECT
+        'missing_end_scan' AS kind,
+        COUNT(*)::text AS cnt
+      FROM attendances_teacher at
+      INNER JOIN schedules s ON s.id = at.schedule_id
+      INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+      WHERE at.checked_in_at IS NOT NULL
+        AND at.checked_out_at IS NULL
+        AND at.room_scan_end_at IS NULL
+        AND at.validation_status NOT IN ('approved', 'rejected')
+        AND at.date <= (NOW() AT TIME ZONE 'Africa/Abidjan')::date
+        AND (
+          at.date < (NOW() AT TIME ZONE 'Africa/Abidjan')::date
+          OR (NOW() AT TIME ZONE 'Africa/Abidjan') > (at.date::timestamp + ts.end_time + INTERVAL '30 minutes')
+        )
     `);
 
     let gps = 0;
     let short = 0;
+    let missingEndScan = 0;
     for (const row of getRows(result)) {
       if (row.kind === 'gps_suspicious') gps = Number(row.cnt);
-      else short = Number(row.cnt);
+      else if (row.kind === 'short_hours') short = Number(row.cnt);
+      else if (row.kind === 'missing_end_scan') missingEndScan = Number(row.cnt);
     }
-    return { gps_suspicious: gps, short_hours: short, total: gps + short };
+    return { gps_suspicious: gps, short_hours: short, missing_end_scan: missingEndScan, total: gps + short + missingEndScan };
   }
 
   async findValidationContext(attendanceId: string, tx?: QueryExecutor): Promise<AttendanceValidationContextRow | null> {
@@ -417,6 +435,7 @@ export class ValidationsRepository {
       subject: string;
       slot_label: string;
       room_name: string | null;
+      room_scan_start_at: string | null;
       warning_sent: boolean;
       end_scan_action: EndScanAction | null;
       end_scan_action_reason: string | null;
@@ -440,6 +459,7 @@ export class ValidationsRepository {
             AND nl.recipient_id = u.id
             AND nl.metadata->>'month' = ${month}
         ) AS warning_sent,
+        at.room_scan_start_at::text AS room_scan_start_at,
         at.end_scan_action,
         at.end_scan_action_reason,
         at.end_scan_action_at::text AS end_scan_action_at,
@@ -454,7 +474,10 @@ export class ValidationsRepository {
         AND at.checked_in_at IS NOT NULL
         AND at.checked_out_at IS NULL
         AND at.room_scan_end_at IS NULL
-        AND at.date < CURRENT_DATE
+        AND (
+          at.date < CURRENT_DATE
+          OR (NOW() AT TIME ZONE 'Africa/Abidjan') > (at.date::timestamp + ts.end_time + INTERVAL '30 minutes')
+        )
       ORDER BY u.name ASC, at.date DESC
     `);
 
@@ -485,6 +508,7 @@ export class ValidationsRepository {
         subject: row.subject,
         timeSlot: row.slot_label,
         roomName: row.room_name ?? null,
+        startScanAt: row.room_scan_start_at ?? null,
         endScanAction: row.end_scan_action ?? null,
         endScanActionReason: row.end_scan_action_reason ?? null,
         endScanActionAt: row.end_scan_action_at ?? null,

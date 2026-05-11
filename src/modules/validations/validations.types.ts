@@ -46,6 +46,7 @@ export type PendingValidationGroups = {
 export type PendingValidationCount = {
   gps_suspicious: number;
   short_hours: number;
+  missing_end_scan: number;
   total: number;
 };
 
@@ -98,6 +99,7 @@ export type MissingEndScanSession = {
   subject: string;
   timeSlot: string;
   roomName: string | null;
+  startScanAt: string | null;
   endScanAction: EndScanAction | null;
   endScanActionReason: string | null;
   endScanActionAt: string | null;

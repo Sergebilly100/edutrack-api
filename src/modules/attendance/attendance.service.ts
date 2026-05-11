@@ -236,10 +236,20 @@ export class AttendanceService {
       Math.floor((slotEnd.getTime() - slotStart.getTime()) / 60000)
     );
     const fullHours = Math.round((scheduleDurationMinutes / 60) * 100) / 100;
-    const validationStatus =
-      flags.use_real_hours && actualMinutes < scheduleDurationMinutes - flags.checkout_tolerance_minutes
-        ? 'pending'
-        : 'not_required';
+
+    // Heures réellement effectuées = de l'heure de début du cours à l'heure de fin réelle.
+    // Si le prof est arrivé en retard, on recalcule la durée depuis le début du créneau.
+    // Règle : heure_effectuée = min(checkout, slotEnd) - slotStart
+    // Si heure_effectuée >= scheduleDuration - tolerance → comptabilisé automatiquement
+    const checkedOutCapped = new Date(Math.min(checkedOutAt.getTime(), slotEnd.getTime()));
+    const effectiveMinutes = Math.max(
+      0,
+      Math.floor((checkedOutCapped.getTime() - slotStart.getTime()) / 60000)
+    );
+    const needsValidation =
+      flags.use_real_hours &&
+      effectiveMinutes < scheduleDurationMinutes - flags.checkout_tolerance_minutes;
+    const validationStatus = needsValidation ? 'pending' : 'not_required';
     const validatedHours =
       flags.use_real_hours && validationStatus === 'not_required' ? fullHours : null;
 
@@ -319,9 +329,23 @@ export class AttendanceService {
       );
     }
 
+    // Pour le scan de fin, comparer avec la salle réellement scannée au début.
+    // Si aucun scan de début n'existe, fallback sur la salle prévue dans l'EDT.
+    let expectedRoomToken = schedule.plannedRoomToken;
+    if (input.scanType === 'end') {
+      const startScanToken = await this.repository.getStartScanRoomToken({
+        teacherId: teacher.id,
+        scheduleId: schedule.scheduleId,
+        date,
+      });
+      if (startScanToken) {
+        expectedRoomToken = startScanToken;
+      }
+    }
+
     const validation = validateRoomScan({
       scannedRoomToken: input.qrToken,
-      expectedRoomToken: schedule.plannedRoomToken,
+      expectedRoomToken,
       scheduleDate: date,
       slotStartTime: schedule.slotStartTime,
       slotEndTime: schedule.slotEndTime,

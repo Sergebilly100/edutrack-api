@@ -480,6 +480,25 @@ export class AttendanceRepository {
     `);
   }
 
+  async getStartScanRoomToken(params: {
+    teacherId: string;
+    scheduleId: string;
+    date: string;
+  }): Promise<string | null> {
+    const result = await this.db.execute<{ qr_token: string | null }>(sql`
+      SELECT r.qr_token
+      FROM attendances_teacher at
+      JOIN rooms r ON r.id = at.room_scanned_id
+      WHERE at.teacher_id = ${params.teacherId}
+        AND at.schedule_id = ${params.scheduleId}
+        AND at.date = ${params.date}
+        AND at.room_scan_start_at IS NOT NULL
+      LIMIT 1
+    `);
+    const [row] = getRows(result);
+    return row?.qr_token ?? null;
+  }
+
   async recordQrScan(params: {
     teacherId: string;
     scheduleId: string;
