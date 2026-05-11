@@ -26,6 +26,13 @@ const extractDbError = (error: unknown): { code: string; constraint: string; det
 const ALL_PERMISSIONS_SET = new Set<PermissionKey>(PERMISSION_KEYS);
 const STAFF_BASE_PERMISSIONS_SET = new Set<PermissionKey>(STAFF_BASE_PERMISSIONS);
 const SMS_TEMPLATE_PERMISSION: PermissionKey = 'settings.sms_templates';
+const SUBSCRIPTION_PERMISSIONS = new Set<PermissionKey>([
+  'subscriptions.view',
+  'subscriptions.create',
+  'subscriptions.renew',
+  'subscriptions.cancel',
+  'subscriptions.revenue',
+]);
 
 const dedupePermissions = (permissions: readonly PermissionKey[]): PermissionKey[] => {
   const uniq = new Set<PermissionKey>(permissions);
@@ -44,16 +51,20 @@ const baseRolePermissions = (role: ClaimsCoreFields['role']): Set<PermissionKey>
   return new Set();
 };
 
-const withSmsTemplatePermissionGuard = (
+const withFeaturePermissionGuards = (
   permissions: readonly PermissionKey[],
-  canEditSmsTemplate: boolean
+  options: { canEditSmsTemplate: boolean; monetizeParentAlerts: boolean }
 ): PermissionKey[] => {
-  if (canEditSmsTemplate) {
-    return dedupePermissions(permissions);
+  const smsGuarded = options.canEditSmsTemplate
+    ? permissions
+    : permissions.filter((permission) => permission !== SMS_TEMPLATE_PERMISSION);
+
+  if (options.monetizeParentAlerts) {
+    return dedupePermissions(smsGuarded);
   }
 
   return dedupePermissions(
-    permissions.filter((permission) => permission !== SMS_TEMPLATE_PERMISSION)
+    smsGuarded.filter((permission) => !SUBSCRIPTION_PERMISSIONS.has(permission))
   );
 };
 
@@ -105,10 +116,10 @@ export class PermissionsService {
       },
       positions: positions.map((position) => ({
         ...position,
-        permissions: withSmsTemplatePermissionGuard(
-          position.permissions,
-          schoolConfig.can_edit_sms_template
-        ),
+        permissions: withFeaturePermissionGuards(position.permissions, {
+          canEditSmsTemplate: schoolConfig.can_edit_sms_template,
+          monetizeParentAlerts: schoolConfig.monetize_parent_alerts,
+        }),
       })),
       users,
     };
@@ -144,10 +155,10 @@ export class PermissionsService {
     return {
       positions: positions.map((position) => ({
         ...position,
-        permissions: withSmsTemplatePermissionGuard(
-          position.permissions,
-          schoolConfig.can_edit_sms_template
-        ),
+        permissions: withFeaturePermissionGuards(position.permissions, {
+          canEditSmsTemplate: schoolConfig.can_edit_sms_template,
+          monetizeParentAlerts: schoolConfig.monetize_parent_alerts,
+        }),
       })),
     };
   }
@@ -165,10 +176,10 @@ export class PermissionsService {
 
     const position = await this.repository.createPosition({
       name: input.name,
-      permissions: withSmsTemplatePermissionGuard(
-        input.permissions,
-        schoolConfig.can_edit_sms_template
-      ),
+      permissions: withFeaturePermissionGuards(input.permissions, {
+        canEditSmsTemplate: schoolConfig.can_edit_sms_template,
+        monetizeParentAlerts: schoolConfig.monetize_parent_alerts,
+      }),
       createdBy: input.createdBy,
     });
 
@@ -188,10 +199,10 @@ export class PermissionsService {
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.permissions !== undefined
         ? {
-            permissions: withSmsTemplatePermissionGuard(
-              input.permissions,
-              schoolConfig.can_edit_sms_template
-            ),
+            permissions: withFeaturePermissionGuards(input.permissions, {
+              canEditSmsTemplate: schoolConfig.can_edit_sms_template,
+              monetizeParentAlerts: schoolConfig.monetize_parent_alerts,
+            }),
           }
         : {}),
     });
@@ -447,14 +458,21 @@ export const resolveEffectivePermissions = async (
 
   const schoolConfig = await repository.getSchoolConfigBySchemaName(claims.schemaName);
   const canEditSmsTemplate = schoolConfig?.can_edit_sms_template ?? false;
+  const monetizeParentAlerts = schoolConfig?.monetize_parent_alerts ?? false;
 
   if (claims.role === 'director') {
-    return withSmsTemplatePermissionGuard([...rolePermissions], canEditSmsTemplate);
+    return withFeaturePermissionGuards([...rolePermissions], {
+      canEditSmsTemplate,
+      monetizeParentAlerts,
+    });
   }
 
   const assignedPermissions = await repository.listAssignedPermissions(claims.sub);
   const effective = new Set<PermissionKey>([...rolePermissions, ...assignedPermissions]);
-  return withSmsTemplatePermissionGuard([...effective], canEditSmsTemplate);
+  return withFeaturePermissionGuards([...effective], {
+    canEditSmsTemplate,
+    monetizeParentAlerts,
+  });
 };
 
 export const buildPermissionsService = (db: ConstructorParameters<typeof PermissionsRepository>[0]) =>

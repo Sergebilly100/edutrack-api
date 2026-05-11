@@ -131,6 +131,12 @@ export type ParentAlertContactRow = {
 };
 
 const firstDayOfMonth = (month: string): string => `${month}-01`;
+const lastDayOfMonth = (month: string): string => {
+  const [yearRaw, monthRaw] = month.split('-');
+  const year = Number(yearRaw);
+  const monthNumber = Number(monthRaw);
+  return new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10);
+};
 
 export class SubscriptionsRepository {
   constructor(private readonly tenantDb: TenantDb) {}
@@ -969,12 +975,13 @@ export class SubscriptionsRepository {
     commission_paid_fcfa: number;
   }> {
     const monthDate = firstDayOfMonth(params.month);
-    const businessToday = todayInBusinessTimezone();
+    const monthEnd = lastDayOfMonth(params.month);
     const activeResult = await this.tenantDb.execute<{ count: number }>(sql`
       SELECT COUNT(*)::int AS count
       FROM parent_subscriptions
-      WHERE status = 'active'
-        AND ends_at >= ${businessToday}::date
+      WHERE status <> 'cancelled'
+        AND starts_at <= ${monthEnd}::date
+        AND ends_at >= ${monthDate}::date
     `);
     const newResult = await this.tenantDb.execute<{ count: number }>(sql`
       SELECT COUNT(*)::int AS count

@@ -14,9 +14,43 @@ import { buildBillingService } from './billing.service.js';
 
 export const BILLING_PDF_QUEUE_NAME = 'pdf-exports';
 
-export const BILLING_EXPORT_DIR = '/tmp/edutrack-exports';
+// Configurable via variable d'environnement (fallback: /tmp pour dev local)
+// En production Railway, utiliser un volume persistant ou un stockage cloud (R2/S3)
+export const BILLING_EXPORT_DIR = process.env.BILLING_EXPORT_DIR ?? '/tmp/edutrack-exports';
 
 const toSafeFilePart = (value: string): string => value.replace(/[^a-zA-Z0-9_-]+/g, '_');
+
+/**
+ * Formate le statut de paiement pour l'affichage dans les PDFs.
+ */
+const formatPaymentStatus = (status: string): string => {
+  switch (status) {
+    case 'paid':
+      return 'Payé';
+    case 'disputed':
+      return 'Litige';
+    case 'pending':
+      return 'En attente';
+    case 'nothing_to_pay':
+      return 'Rien à payer';
+    default:
+      return status;
+  }
+};
+
+/**
+ * Formate le type de rémunération pour l'affichage dans les PDFs.
+ */
+const formatCompensationType = (
+  teacherType: 'vacataire' | 'permanent',
+  hourlyRate: number | null,
+  monthlySalary: number | null
+): string => {
+  if (teacherType === 'permanent') {
+    return `Salaire mensuel: ${monthlySalary ?? 'Non renseigné'} FCFA`;
+  }
+  return `Taux horaire: ${hourlyRate ?? 'Non renseigné'} FCFA/h`;
+};
 
 const toMonthDateUtc = (month: string): Date => {
   const [yearRaw, monthRaw] = month.split('-');
@@ -137,15 +171,21 @@ const detectImageFormat = (bytes: Uint8Array, contentType?: string): 'png' | 'jp
   return null;
 };
 
-const loadLogo = async (logoUrl: string | null): Promise<LoadedLogo | null> => {
+/**
+ * Télécharge le logo école avec retry automatique (backoff exponentiel).
+ * Logs les échecs pour monitoring via Sentry.
+ */
+const loadLogo = async (logoUrl: string | null, logger?: { warn: (msg: string, meta?: Record<string, unknown>) => void }): Promise<LoadedLogo | null> => {
   if (!logoUrl) {
     return null;
   }
 
+  // Cas 1: Data URI (déjà encodé en base64)
   const dataUri = parseDataUri(logoUrl);
   if (dataUri) {
     const format = detectImageFormat(dataUri.data, dataUri.contentType);
     if (!format) {
+      logger?.warn('[billing] Invalid image format in data URI', { logoUrl: logoUrl.slice(0, 50) });
       return null;
     }
 
@@ -155,48 +195,77 @@ const loadLogo = async (logoUrl: string | null): Promise<LoadedLogo | null> => {
     };
   }
 
+  // Cas 2: URL HTTP(S)
   if (!/^https?:\/\//i.test(logoUrl)) {
+    logger?.warn('[billing] Invalid logo URL (not http/https)', { logoUrl });
     return null;
   }
 
-  try {
-    const response = await fetch(logoUrl, {
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!response.ok) {
-      return null;
-    }
+  // Retry avec backoff exponentiel : 3 tentatives (0ms, 500ms, 2000ms)
+  const maxRetries = 3;
+  const baseDelay = 500;
+  let lastError: Error | null = null;
 
-    const arrayBuffer = await response.arrayBuffer();
-    const bytes = new Uint8Array(arrayBuffer);
-    const format = detectImageFormat(bytes, response.headers.get('content-type') ?? undefined);
-    if (!format) {
-      return null;
-    }
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await fetch(logoUrl, {
+        signal: AbortSignal.timeout(8000), // Augmenté de 5s à 8s
+      });
 
-    return {
-      bytes,
-      format,
-    };
-  } catch {
-    return null;
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      const format = detectImageFormat(bytes, response.headers.get('content-type') ?? undefined);
+
+      if (!format) {
+        logger?.warn('[billing] Invalid image format from URL', { logoUrl, contentType: response.headers.get('content-type') });
+        return null;
+      }
+
+      // Succès !
+      if (attempt > 0) {
+        logger?.warn('[billing] Logo loaded after retry', { logoUrl, attempt: attempt + 1 });
+      }
+
+      return {
+        bytes,
+        format,
+      };
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+
+      if (attempt < maxRetries - 1) {
+        // Attendre avant de retry (backoff exponentiel)
+        const delay = baseDelay * Math.pow(2, attempt);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
   }
+
+  // Échec après tous les retries
+  logger?.warn('[billing] Failed to load logo after retries', {
+    logoUrl,
+    attempts: maxRetries,
+    error: lastError?.message,
+  });
+
+  return null;
 };
 
 const buildTeacherExportLines = (details: TeacherExportPayload): string[] => {
-  const compensationLine =
-    details.teacher.type === 'permanent'
-      ? `Salaire mensuel: ${details.teacher.monthlySalary ?? 'Non renseigne'}`
-      : `Taux horaire: ${details.teacher.hourlyRate ?? 'Non renseigne'}`;
-  const paymentStatus =
-    details.summary.status === 'paid'
-      ? 'Paye'
-      : details.summary.status === 'disputed'
-        ? 'Litige'
-        : 'En attente';
+  const compensationLine = formatCompensationType(
+    details.teacher.type,
+    details.teacher.hourlyRate,
+    details.teacher.monthlySalary
+  );
+
   const paymentDateLine = details.payment.paidAt
     ? `Dernier paiement: ${new Date(details.payment.paidAt).toISOString()}`
     : 'Dernier paiement: Aucun';
+
   const paymentNoteLine = details.payment.notes
     ? `Note paiement: ${details.payment.notes}`
     : 'Note paiement: -';
@@ -206,13 +275,13 @@ const buildTeacherExportLines = (details: TeacherExportPayload): string[] => {
     `Mois: ${details.month}`,
     `Type: ${details.teacher.type}`,
     compensationLine,
-    `Statut paiement: ${paymentStatus}`,
+    `Statut paiement: ${formatPaymentStatus(details.summary.status)}`,
     paymentDateLine,
-    `Montant deja paye: ${details.summary.amountAlreadyPaid ?? 0}`,
-    `Montant restant a payer: ${details.summary.amountRemainingToPayNow ?? 0}`,
+    `Montant deja paye: ${details.summary.amountAlreadyPaid ?? 0} FCFA`,
+    `Montant restant a payer: ${details.summary.amountRemainingToPayNow ?? 0} FCFA`,
     paymentNoteLine,
-    `Heures prevues: ${details.summary.hoursPlanned.toFixed(2)}`,
-    `Heures effectuees: ${details.summary.hoursDone.toFixed(2)}`,
+    `Heures prevues: ${details.summary.hoursPlanned.toFixed(2)}h`,
+    `Heures effectuees: ${details.summary.hoursDone.toFixed(2)}h`,
     `Total FCFA: ${details.summary.totalFcfa ?? 'N/A'}`,
     '',
     'Details jour par jour:',
@@ -392,9 +461,17 @@ export const processBillingPdfJob = async (
   job: Job<BillingPdfJobData>
 ): Promise<BillingPdfJobResult> => {
   const schoolBranding = await fetchSchoolBranding(job.data.schemaName);
+
+  // Logger simple pour le contexte du job (console.warn sera capturé par le runtime)
+  const logger = {
+    warn: (msg: string, meta?: Record<string, unknown>) => {
+      console.warn(`[Job ${job.id}] ${msg}`, meta ? JSON.stringify(meta) : '');
+    },
+  };
+
   const branding: PdfBranding = {
     schoolName: schoolBranding.schoolName,
-    logo: await loadLogo(schoolBranding.logoUrl),
+    logo: await loadLogo(schoolBranding.logoUrl, logger),
   };
 
   return withTenantSchema(job.data.schemaName, async (tenantDb) => {

@@ -15,6 +15,7 @@ import { runAttendanceMissingQrScanHandler } from './modules/attendance/attendan
 import { geoAutoApproveWorker, scheduleGeoAutoApprove } from './modules/attendance/attendance.geo-auto-approve.worker.js';
 import authController from './modules/auth/auth.controller.js';
 import billingController from './modules/billing/billing.controller.js'
+import dashboardController from './modules/dashboard/dashboard.controller.js';
 import { createBillingPdfQueue } from './modules/billing/billing.queue.js'
 import { createBillingPdfWorker } from './modules/billing/billing.queue.js';
 import documentsController from './modules/documents/documents.controller.js';
@@ -166,6 +167,7 @@ app.addHook('onRequest', async (request, reply) => {
 app.register(authController);
 app.register(adminController);
 app.register(attendanceController);
+app.register(dashboardController);
 app.register(notificationsController, { smsQueue: notificationsQueue });
 app.register(billingController, { billingPdfQueue })
 app.register(studentsController);

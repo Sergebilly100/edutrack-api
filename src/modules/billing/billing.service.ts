@@ -165,7 +165,7 @@ const computeTeacherFinancials = (
     teacher.teacher_type !== 'permanent' &&
     hourlyRate !== null &&
     hasMeaningfulValue(effectivePaidHours) &&
-    effectivePaidHours + EPSILON < totals.hoursDone;
+    effectivePaidHours + HOURS_PRECISION_EPSILON < totals.hoursDone;
 
   return {
     totals,
@@ -181,10 +181,14 @@ const computeTeacherFinancials = (
     isPartiallyPaid,
   };
 };
-const EPSILON = 0.0001;
-const hasMeaningfulValue = (value: number): boolean => value > EPSILON;
+// Tolérance pour les comparaisons d'heures (évite les erreurs d'arrondi flottant)
+// Exemple: 10.0000001 heures ≈ 10.0 heures (différence < HOURS_PRECISION_EPSILON)
+// Utilisé pour comparer hours_done vs paid_hours et déterminer si un salaire est entièrement payé
+const HOURS_PRECISION_EPSILON = 0.0001;
+
+const hasMeaningfulValue = (value: number): boolean => value > HOURS_PRECISION_EPSILON;
 const isZeroDueVacataire = (hoursDone: number, totalFcfa: number): boolean =>
-  hoursDone <= EPSILON || totalFcfa <= 0;
+  hoursDone <= HOURS_PRECISION_EPSILON || totalFcfa <= 0;
 const resolveVacataireStatus = (input: {
   currentStatus: SalaryRecordStatus | null;
   hoursDone: number;
@@ -199,7 +203,7 @@ const resolveVacataireStatus = (input: {
     return 'nothing_to_pay';
   }
 
-  return input.paidHours + EPSILON >= input.hoursDone ? 'paid' : 'pending';
+  return input.paidHours + HOURS_PRECISION_EPSILON >= input.hoursDone ? 'paid' : 'pending';
 };
 export class BillingService {
   constructor(private readonly repository: BillingRepository) {}
@@ -235,7 +239,7 @@ export class BillingService {
         const permanentStatus: SalaryRecordStatus =
           row.salary_status === 'disputed'
             ? 'disputed'
-            : hasMeaningfulValue(effectivePaidAmount) && effectivePaidAmount + EPSILON >= (row.monthly_salary ?? 0)
+            : hasMeaningfulValue(effectivePaidAmount) && effectivePaidAmount + HOURS_PRECISION_EPSILON >= (row.monthly_salary ?? 0)
               ? 'paid'
               : row.salary_status ?? 'pending';
         return {
@@ -270,7 +274,7 @@ export class BillingService {
           ? hoursDone
           : 0;
       const paidHoursForStatus = effectiveVacatairePaidHours;
-      const isPartiallyPaid = hasMeaningfulValue(paidHoursForStatus) && paidHoursForStatus + EPSILON < hoursDone;
+      const isPartiallyPaid = hasMeaningfulValue(paidHoursForStatus) && paidHoursForStatus + HOURS_PRECISION_EPSILON < hoursDone;
       const baseStatus = row.salary_status ?? 'pending';
       const normalizedStatus = resolveVacataireStatus({
         currentStatus: baseStatus,
@@ -367,7 +371,7 @@ export class BillingService {
           })
         : baseStatus === 'disputed'
           ? 'disputed'
-          : hasMeaningfulValue(effectivePaidAmount) && effectivePaidAmount + EPSILON >= (teacher.monthly_salary ?? 0)
+          : hasMeaningfulValue(effectivePaidAmount) && effectivePaidAmount + HOURS_PRECISION_EPSILON >= (teacher.monthly_salary ?? 0)
             ? 'paid'
             : baseStatus;
 
@@ -477,11 +481,11 @@ export class BillingService {
       const nextStatus: SalaryRecordStatus =
         currentStatus === 'disputed'
           ? 'disputed'
-          : row.teacher_type === 'vacataire' && hoursDone <= EPSILON
+          : row.teacher_type === 'vacataire' && hoursDone <= HOURS_PRECISION_EPSILON
             ? 'nothing_to_pay'
             : row.teacher_type === 'permanent'
-              ? (paidAmount + EPSILON >= totalFcfa ? 'paid' : 'pending')
-              : (paidHours + EPSILON >= hoursDone ? 'paid' : 'pending');
+              ? (paidAmount + HOURS_PRECISION_EPSILON >= totalFcfa ? 'paid' : 'pending')
+              : (paidHours + HOURS_PRECISION_EPSILON >= hoursDone ? 'paid' : 'pending');
       const storedStatus =
         nextStatus === 'nothing_to_pay' && !canStoreNothingToPay ? 'pending' : nextStatus;
 
@@ -559,7 +563,7 @@ export class BillingService {
           hasMeaningfulValue(paidAmountFromPayments) || !existing.paid_at
             ? paidAmountFromPayments
             : existing.total_fcfa;
-        if (paidAmount + EPSILON >= existing.total_fcfa) {
+        if (paidAmount + HOURS_PRECISION_EPSILON >= existing.total_fcfa) {
           throw new BillingModuleError(
             'Salary already paid for this month',
             409,
@@ -581,19 +585,7 @@ export class BillingService {
           paidBy: input.actor.userId,
         });
       } else {
-        const paidHoursFromPayments = BillingRepository.toNumber(paidSummary.paid_hours);
-        const doneHours = BillingRepository.toNumber(existing.hours_done);
-        const paidHours = paidHoursFromPayments;
-        const remainingHours = Math.max(0, doneHours - paidHours);
-
-        if (remainingHours <= EPSILON) {
-          throw new BillingModuleError(
-            'Salary already paid for this month',
-            409,
-            'SALARY_ALREADY_PAID_FOR_MONTH'
-          );
-        }
-
+        // Validation préliminaire (avant transaction)
         if (input.hoursToPay === undefined || !Number.isFinite(input.hoursToPay) || input.hoursToPay <= 0) {
           throw new BillingModuleError(
             'hoursToPay is required for vacataire payment',
@@ -603,32 +595,41 @@ export class BillingService {
         }
 
         const requestedHours = roundHours(input.hoursToPay);
-        if (requestedHours - remainingHours > EPSILON) {
-          throw new BillingModuleError(
-            'hoursToPay exceeds remaining unpaid hours',
-            400,
-            'HOURS_TO_PAY_EXCEEDS_REMAINING'
-          );
+
+        // Utiliser la méthode atomique avec SELECT FOR UPDATE pour éviter les race conditions
+        try {
+          const result = await this.repository.createVacatairePartialPaymentAtomic({
+            recordId: input.recordId,
+            requestedHours,
+            hourlyRate: existing.hourly_rate,
+            paidBy: input.actor.userId,
+            notes: input.notes,
+          });
+
+          updated = result.record;
+        } catch (error) {
+          // La transaction a échoué : soit heures insuffisantes, soit record non trouvé
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+          if (errorMessage.includes('insufficient remaining hours')) {
+            throw new BillingModuleError(
+              'hoursToPay exceeds remaining unpaid hours',
+              400,
+              'HOURS_TO_PAY_EXCEEDS_REMAINING'
+            );
+          }
+
+          if (errorMessage.includes('record not found')) {
+            throw new BillingModuleError(
+              'Salary record not found',
+              404,
+              'SALARY_RECORD_NOT_FOUND'
+            );
+          }
+
+          // Autre erreur inattendue
+          throw error;
         }
-
-        const amountFcfa = Math.round(requestedHours * existing.hourly_rate);
-        await this.repository.createSalaryPayment({
-          recordId: input.recordId,
-          hoursPaid: requestedHours,
-          amountFcfa,
-          paidBy: input.actor.userId,
-          notes: input.notes,
-        });
-
-        const newPaidHours = paidHours + requestedHours;
-        const nextStatus: SalaryRecordStatus = newPaidHours + EPSILON >= doneHours ? 'paid' : 'pending';
-        updated = await this.repository.updateSalaryRecordAfterPayment({
-          recordId: input.recordId,
-          status: nextStatus,
-          notes: input.notes,
-          paidBy: input.actor.userId,
-          touchPaidAt: nextStatus === 'paid',
-        });
       }
     }
 
@@ -661,13 +662,13 @@ export class BillingService {
     return this.getSalarySummary(month);
   }
 
-  async getTeacherPaymentHistory(teacherId: string, limit: number) {
+  async getTeacherPaymentHistory(teacherId: string, limit: number, offset = 0) {
     const teacher = await this.repository.findTeacherById(teacherId);
     if (!teacher) {
       throw new BillingModuleError('Teacher not found', 404, 'TEACHER_NOT_FOUND');
     }
 
-    const rows = await this.repository.listTeacherPaymentHistory(teacherId, limit);
+    const rows = await this.repository.listTeacherPaymentHistory(teacherId, limit, offset);
     return {
       teacher: {
         id: teacher.teacher_id,

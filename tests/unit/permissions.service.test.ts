@@ -35,6 +35,7 @@ const repository = {
   listAssignedPermissions: vi.fn(),
   createPosition: vi.fn(),
   updateAdministrativeUserPasswordHash: vi.fn(),
+  revokeAllUserRefreshTokens: vi.fn(),
   findAdministrativeUserById: vi.fn(),
 };
 
@@ -46,8 +47,10 @@ beforeEach(() => {
   repository.countActiveAdministrativeUsers.mockResolvedValue(0);
   repository.getSchoolConfigBySchemaName.mockResolvedValue({
     can_edit_sms_template: false,
+    monetize_parent_alerts: false,
     max_admin_positions: 10,
   });
+  repository.revokeAllUserRefreshTokens.mockResolvedValue(undefined);
 });
 
 // ---------------------------------------------------------------------------
@@ -353,7 +356,10 @@ describe('permissions.service resolveEffectivePermissions', () => {
   });
 
   it('director avec can_edit_sms_template → settings.sms_templates présent', async () => {
-    repository.getSchoolConfigBySchemaName.mockResolvedValue({ can_edit_sms_template: true });
+    repository.getSchoolConfigBySchemaName.mockResolvedValue({
+      can_edit_sms_template: true,
+      monetize_parent_alerts: false,
+    });
 
     const result = await resolveEffectivePermissions(repository as never, {
       sub: 'dir-1',
@@ -364,8 +370,43 @@ describe('permissions.service resolveEffectivePermissions', () => {
     expect(result).toContain('settings.sms_templates');
   });
 
+  it('director sans monetize_parent_alerts → permissions abonnements absentes', async () => {
+    repository.getSchoolConfigBySchemaName.mockResolvedValue({
+      can_edit_sms_template: false,
+      monetize_parent_alerts: false,
+    });
+
+    const result = await resolveEffectivePermissions(repository as never, {
+      sub: 'dir-1',
+      role: 'director',
+      schemaName: 'school_sainte_marie',
+    });
+
+    expect(result).not.toContain('subscriptions.view');
+    expect(result).not.toContain('subscriptions.revenue');
+  });
+
+  it('director avec monetize_parent_alerts → permissions abonnements présentes', async () => {
+    repository.getSchoolConfigBySchemaName.mockResolvedValue({
+      can_edit_sms_template: false,
+      monetize_parent_alerts: true,
+    });
+
+    const result = await resolveEffectivePermissions(repository as never, {
+      sub: 'dir-1',
+      role: 'director',
+      schemaName: 'school_sainte_marie',
+    });
+
+    expect(result).toContain('subscriptions.view');
+    expect(result).toContain('subscriptions.revenue');
+  });
+
   it('staff avec postes assignés → cumule les permissions des postes', async () => {
-    repository.getSchoolConfigBySchemaName.mockResolvedValue({ can_edit_sms_template: false });
+    repository.getSchoolConfigBySchemaName.mockResolvedValue({
+      can_edit_sms_template: false,
+      monetize_parent_alerts: false,
+    });
     repository.listAssignedPermissions.mockResolvedValue(['teachers.view', 'students.view']);
 
     const result = await resolveEffectivePermissions(repository as never, {
@@ -378,8 +419,28 @@ describe('permissions.service resolveEffectivePermissions', () => {
     expect(result).toContain('students.view');
   });
 
+  it('staff sans monetize_parent_alerts → permissions abonnements assignées retirées', async () => {
+    repository.getSchoolConfigBySchemaName.mockResolvedValue({
+      can_edit_sms_template: false,
+      monetize_parent_alerts: false,
+    });
+    repository.listAssignedPermissions.mockResolvedValue(['teachers.view', 'subscriptions.view']);
+
+    const result = await resolveEffectivePermissions(repository as never, {
+      sub: 'staff-1',
+      role: 'staff',
+      schemaName: 'school_sainte_marie',
+    });
+
+    expect(result).toContain('teachers.view');
+    expect(result).not.toContain('subscriptions.view');
+  });
+
   it('staff sans poste → aucune permission', async () => {
-    repository.getSchoolConfigBySchemaName.mockResolvedValue({ can_edit_sms_template: false });
+    repository.getSchoolConfigBySchemaName.mockResolvedValue({
+      can_edit_sms_template: false,
+      monetize_parent_alerts: false,
+    });
     repository.listAssignedPermissions.mockResolvedValue([]);
 
     const result = await resolveEffectivePermissions(repository as never, {

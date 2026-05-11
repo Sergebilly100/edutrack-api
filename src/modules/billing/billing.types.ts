@@ -12,6 +12,7 @@ export const teacherParamsSchema = z.object({
 
 export const salaryHistoryQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(2000).optional().default(24),
+  offset: z.coerce.number().int().min(0).optional().default(0),
 });
 
 export const recordParamsSchema = z.object({

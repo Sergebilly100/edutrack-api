@@ -1,18 +1,20 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { access } from 'node:fs/promises';
+import { access, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
 import { requirePermission } from '../../shared/middleware/auth.middleware.js';
+import { buildDashboardRepository } from '../dashboard/dashboard.repository.js';
 
 import {
   BILLING_EXPORT_DIR,
   type BillingPdfJobData,
 } from './billing.queue.js';
 import { BillingModuleError, buildBillingService } from './billing.service.js';
+import { mapJobStatus, resolveJobFileResult } from './billing.helpers.js';
 import {
   jobParamsSchema,
   jobDownloadQuerySchema,
@@ -91,37 +93,6 @@ const buildSignedDownloadUrl = (request: FastifyRequest, jobId: string): string 
     signature,
   });
   return `${resolveBaseUrl(request)}/api/v1/jobs/${encodeURIComponent(jobId)}/download?${query.toString()}`;
-};
-
-const mapJobStatus = (state: string): 'pending' | 'processing' | 'done' | 'failed' => {
-  if (state === 'completed') {
-    return 'done';
-  }
-
-  if (state === 'active') {
-    return 'processing';
-  }
-
-  if (state === 'failed') {
-    return 'failed';
-  }
-
-  return 'pending';
-};
-
-const resolveJobFileResult = (result: unknown): { filePath: string; fileName: string } | null => {
-  if (!result || typeof result !== 'object') {
-    return null;
-  }
-
-  const resultRecord = result as Record<string, unknown>;
-  const filePath = resultRecord.filePath;
-  const fileName = resultRecord.fileName;
-  if (typeof filePath !== 'string' || typeof fileName !== 'string') {
-    return null;
-  }
-
-  return { filePath, fileName };
 };
 
 type BillingPdfJobHandle = {
@@ -219,6 +190,48 @@ export default async function billingController(
   );
 
   app.get(
+    '/api/v1/salaries/summary',
+    { preHandler: requirePermission('salary.view') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const query = monthQuerySchema.parse(request.query ?? {});
+        const currentDate = new Date().toISOString().slice(0, 10);
+
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          const repository = buildDashboardRepository(tenantDb);
+          const billingService = buildBillingService(tenantDb);
+          const [salaryStats, salarySummary, teacherAttendance] = await Promise.all([
+            repository.getSalaryStatsForMonth(query.month, currentDate),
+            billingService.getSalarySummary(query.month),
+            repository.getTeacherAttendanceForMonth(query.month, currentDate),
+          ]);
+          const totalPayroll = salarySummary.items.reduce((sum, item) => sum + (item.totalFcfa ?? 0), 0);
+          const totalPaid = salarySummary.items.reduce((sum, item) => sum + item.amountAlreadyPaid, 0);
+          const totalToPay = salarySummary.items.reduce((sum, item) => {
+            if (item.status === 'paid' || item.status === 'nothing_to_pay') {
+              return sum;
+            }
+            return sum + Math.max(0, (item.totalFcfa ?? 0) - item.amountAlreadyPaid);
+          }, 0);
+
+          return {
+            totalToPay,
+            totalPaid,
+            totalPayroll,
+            economy: salaryStats.economy,
+            teacherAttendance,
+          };
+        });
+
+        return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.get(
     '/api/v1/billing/salary/unpaid-alerts',
     { preHandler: requirePermission('salary.view') },
     async (request, reply) => {
@@ -267,7 +280,11 @@ export default async function billingController(
         const query = salaryHistoryQuerySchema.parse(request.query ?? {});
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-          return buildBillingService(tenantDb).getTeacherPaymentHistory(params.teacherId, query.limit);
+          return buildBillingService(tenantDb).getTeacherPaymentHistory(
+            params.teacherId,
+            query.limit,
+            query.offset
+          );
         });
 
         return reply.send(result);
@@ -575,7 +592,27 @@ export default async function billingController(
       }
 
       const absoluteFilePath = path.resolve(result.filePath);
-      if (!absoluteFilePath.startsWith(`${exportDirRoot}${path.sep}`)) {
+
+      // Sécurité: utiliser realpath pour résoudre les liens symboliques et prévenir path traversal
+      let resolvedFilePath: string;
+      let resolvedExportRoot: string;
+      try {
+        resolvedFilePath = await realpath(absoluteFilePath);
+        resolvedExportRoot = await realpath(exportDirRoot);
+      } catch {
+        return reply.code(400).send({
+          error: 'Invalid file path or export directory',
+          code: 'INVALID_EXPORT_PATH',
+          statusCode: 400,
+        });
+      }
+
+      // Vérifier que le fichier résolu est bien dans le répertoire d'export
+      if (!resolvedFilePath.startsWith(`${resolvedExportRoot}${path.sep}`)) {
+        request.log.warn(
+          { requestedPath: absoluteFilePath, resolvedPath: resolvedFilePath },
+          '[billing] Path traversal attempt detected'
+        );
         return reply.code(400).send({
           error: 'Invalid file path',
           code: 'INVALID_EXPORT_PATH',
@@ -583,14 +620,14 @@ export default async function billingController(
         });
       }
 
-      await access(absoluteFilePath);
+      await access(resolvedFilePath);
 
       const extension = path.extname(result.fileName).toLowerCase();
       const contentType = extension === '.zip' ? 'application/zip' : 'application/pdf';
 
       reply.header('Content-Type', contentType);
       reply.header('Content-Disposition', `attachment; filename="${result.fileName}"`);
-      return reply.send(createReadStream(absoluteFilePath));
+      return reply.send(createReadStream(resolvedFilePath));
     } catch (error) {
       return handleError(request, reply, error);
     }

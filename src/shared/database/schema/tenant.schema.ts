@@ -337,6 +337,10 @@ export const attendancesTeacher = tenant.table(
       'att_teacher_late_minutes_positive',
       sql`${table.lateMinutes} IS NULL OR ${table.lateMinutes} >= 0`
     ),
+    actualMinutesRange: check(
+      'att_teacher_actual_minutes_range',
+      sql`${table.actualMinutes} IS NULL OR (${table.actualMinutes} >= 0 AND ${table.actualMinutes} <= 1440)`
+    ),
     scanTimeRange: check(
       'att_teacher_scan_time_range',
       sql`${table.roomScanEndAt} IS NULL OR ${table.roomScanStartAt} IS NULL OR ${
@@ -662,6 +666,34 @@ export const subscriptionPayments = tenant.table(
       sql`${table.amountFcfa} >= 0`
     ),
     subscriptionPaymentsSubscriptionIdx: index('idx_sub_payments_sub').on(table.subscriptionId),
+  })
+);
+
+export const subscriptionReversals = tenant.table(
+  'subscription_reversals',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    tenantId: text('tenant_id').notNull(),
+    month: text('month').notNull(),
+    amountCollected: numeric('amount_collected', { precision: 10, scale: 2 }).notNull().default('0'),
+    commissionRate: numeric('commission_rate', { precision: 5, scale: 2 }).notNull().default('10.00'),
+    schoolGain: numeric('school_gain', { precision: 10, scale: 2 }).notNull().default('0'),
+    reversedAt: timestamp('reversed_at', { withTimezone: true, mode: 'date' }),
+    notificationSentAt: timestamp('notification_sent_at', { withTimezone: true, mode: 'date' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    subscriptionReversalsMonthCheck: check(
+      'subscription_reversals_month_check',
+      sql`${table.month} ~ '^\d{4}-\d{2}$'`
+    ),
+    subscriptionReversalsTenantMonthUnique: unique('subscription_reversals_tenant_month_unique').on(
+      table.tenantId,
+      table.month
+    ),
+    subscriptionReversalsTenantIdx: index('idx_subscription_reversals_tenant').on(table.tenantId),
+    subscriptionReversalsMonthIdx: index('idx_subscription_reversals_month').on(table.month),
+    subscriptionReversalsReversedAtIdx: index('idx_subscription_reversals_reversed_at').on(table.reversedAt),
   })
 );
 

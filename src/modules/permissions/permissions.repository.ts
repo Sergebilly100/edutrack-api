@@ -35,6 +35,7 @@ type SchoolConfigRow = {
   max_users: number;
   max_admin_positions: number;
   can_edit_sms_template: boolean;
+  monetize_parent_alerts: boolean;
   allow_teacher_qr_skip: boolean;
   logo_url: string | null;
   active_school_year: string | null;
@@ -133,19 +134,21 @@ export class PermissionsRepository {
     // Columns logo_url, active_school_year, allow_teacher_qr_skip are guaranteed by the boot migration
     const result = await this.db.execute<SchoolConfigRow>(sql`
       SELECT
-        name,
-        subdomain,
-        plan,
-        city,
-        teaching_type,
-        max_users,
-        max_admin_positions,
-        COALESCE(can_edit_sms_template, false) AS can_edit_sms_template,
-        COALESCE(allow_teacher_qr_skip, false) AS allow_teacher_qr_skip,
-        logo_url,
-        active_school_year
-      FROM public.tenants
-      WHERE schema_name = ${schemaName}
+        tenants.name,
+        tenants.subdomain,
+        tenants.plan,
+        tenants.city,
+        tenants.teaching_type,
+        tenants.max_users,
+        tenants.max_admin_positions,
+        COALESCE(tenants.can_edit_sms_template, false) AS can_edit_sms_template,
+        COALESCE(features.monetize_parent_alerts, false) AS monetize_parent_alerts,
+        COALESCE(tenants.allow_teacher_qr_skip, false) AS allow_teacher_qr_skip,
+        tenants.logo_url,
+        tenants.active_school_year
+      FROM public.tenants tenants
+      LEFT JOIN public.school_sms_features features ON features.tenant_id = tenants.id
+      WHERE tenants.schema_name = ${schemaName}
       LIMIT 1
     `);
 

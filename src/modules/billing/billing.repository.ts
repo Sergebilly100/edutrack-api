@@ -130,6 +130,8 @@ export class BillingRepository {
     await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<SalaryMetricRow>(sql`
+      -- CTE 1: Récupère le flag use_real_hours depuis public.school_sms_features
+      -- Ce flag détermine si on utilise actual_minutes (durée réelle mesurée) ou la durée planifiée du créneau
       WITH feature_flags AS (
         SELECT COALESCE(f.use_real_hours, false) AS use_real_hours
         FROM public.tenants t
@@ -137,9 +139,14 @@ export class BillingRepository {
         WHERE t.schema_name = current_schema()
         LIMIT 1
       ),
+
+      -- CTE 2: Génère une série de dates pour le mois ciblé (ex: 2026-04-01 à 2026-04-30)
       month_days AS (
         SELECT generate_series(${monthStart}::date, ${monthEnd}::date, interval '1 day')::date AS d
       ),
+
+      -- CTE 3: Calcule les heures PLANIFIÉES en croisant l'EDT (schedules + schedule_periods) avec les créneaux (time_slots)
+      -- On somme la durée de tous les créneaux prévus dans le mois pour chaque professeur
       planned AS (
         SELECT
           s.teacher_id,
@@ -158,6 +165,13 @@ export class BillingRepository {
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id
         GROUP BY s.teacher_id
       ),
+
+      -- CTE 4: Calcule les heures EFFECTUÉES (hours_done) selon 3 priorités :
+      --   1. Si validation_status='approved' → utiliser validated_hours (validation manuelle directeur)
+      --   2. Si validation_status IN ('pending','rejected') → 0 (heures rejetées ou en attente = pas comptabilisées)
+      --   3. Si use_real_hours=true ET actual_minutes valide → utiliser actual_minutes / 60
+      --   4. Sinon → utiliser la durée planifiée du créneau (fallback)
+      -- Seules les présences avec status IN ('present', 'late', 'excused') sont comptées
       done_hours AS (
         SELECT
           s.teacher_id,
@@ -168,6 +182,10 @@ export class BillingRepository {
                 WHEN at.validation_status IN ('pending', 'rejected') THEN 0
                 WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
                   AND at.actual_minutes IS NOT NULL
+                  -- Validation: actual_minutes doit être dans [0, 1440]
+                  -- La contrainte DB le garantit, mais on ajoute une sécurité supplémentaire
+                  AND at.actual_minutes >= 0
+                  AND at.actual_minutes <= 1440
                   THEN at.actual_minutes / 60.0
                 ELSE EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0
               END
@@ -181,6 +199,8 @@ export class BillingRepository {
           AND at.status IN ('present', 'late', 'excused')
         GROUP BY s.teacher_id
       )
+
+      -- SELECT principal : agrège les données de tous les professeurs avec leurs métriques de salaire
       SELECT
         t.id AS teacher_id,
         u.name AS teacher_name,
@@ -214,6 +234,10 @@ export class BillingRepository {
         ON sr.teacher_id = t.id
        AND sr.period_month = ${monthStart}::date
       LEFT JOIN users up ON up.id = sr.paid_by
+
+      -- LATERAL JOIN 1: hours_done_since_paid
+      -- Calcule les heures effectuées APRÈS le dernier paiement (sr.paid_at)
+      -- Utilisé pour les vacataires avec paiements partiels : permet de savoir combien d'heures ont été faites depuis le dernier versement
       LEFT JOIN LATERAL (
         SELECT
           COALESCE(
@@ -223,6 +247,8 @@ export class BillingRepository {
                 WHEN at.validation_status IN ('pending', 'rejected') THEN 0
                 WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
                   AND at.actual_minutes IS NOT NULL
+                  AND at.actual_minutes >= 0
+                  AND at.actual_minutes <= 1440
                   THEN at.actual_minutes / 60.0
                 ELSE EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0
               END
@@ -237,8 +263,12 @@ export class BillingRepository {
           AND at.teacher_id = t.id
           AND at.date BETWEEN ${monthStart}::date AND ${monthEnd}::date
           AND at.status IN ('present', 'late', 'excused')
-          AND ((at.date::timestamp + ts.end_time)::timestamp > sr.paid_at) 
+          AND ((at.date::timestamp + ts.end_time)::timestamp > sr.paid_at)
       ) done_after_payment ON true
+
+      -- LATERAL JOIN 2: payments_summary
+      -- Somme tous les paiements effectués via salary_payments pour ce salary_record
+      -- Permet de gérer les paiements partiels (vacataires) : un prof peut être payé en plusieurs fois
       LEFT JOIN LATERAL (
         SELECT
           COALESCE(
@@ -250,6 +280,10 @@ export class BillingRepository {
         WHERE sr.id IS NOT NULL
           AND sp.salary_record_id = sr.id
       ) payments_summary ON true
+
+      -- LATERAL JOIN 3: payments_before_cutoff
+      -- Paiements effectués AVANT ou À la date de sr.paid_at
+      -- Utilisé pour réconcilier les anciens enregistrements legacy (avant introduction de salary_payments)
       LEFT JOIN LATERAL (
         SELECT
           COALESCE(SUM(sp.hours_paid), 0)::numeric(8,2) AS paid_hours,
@@ -260,6 +294,10 @@ export class BillingRepository {
           AND sp.salary_record_id = sr.id
           AND sp.paid_at <= sr.paid_at
       ) payments_before_cutoff ON true
+
+      -- LATERAL JOIN 4: payments_after_cutoff
+      -- Paiements effectués APRÈS la date de sr.paid_at
+      -- Permet de tracker les paiements partiels ultérieurs
       LEFT JOIN LATERAL (
         SELECT
           COALESCE(SUM(sp.hours_paid), 0)::numeric(8,2) AS paid_hours,
@@ -270,6 +308,9 @@ export class BillingRepository {
           AND sp.salary_record_id = sr.id
           AND sp.paid_at > sr.paid_at
       ) payments_after_cutoff ON true
+
+      -- Filtres : on ne retourne que les professeurs actifs
+      -- Si teacherId fourni, on filtre sur ce prof uniquement
       WHERE u.is_active = true
         ${teacherId ? sql`AND t.id = ${teacherId}` : sql``}
       ORDER BY u.name ASC
@@ -331,6 +372,8 @@ export class BillingRepository {
           WHEN at.validation_status IN ('pending', 'rejected') THEN 0::numeric(8,2)
           WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
             AND at.actual_minutes IS NOT NULL
+            AND at.actual_minutes >= 0
+            AND at.actual_minutes <= 1440
             THEN (at.actual_minutes / 60.0)::numeric(8,2)
           ELSE (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0)::numeric(8,2)
         END AS hours_done,
@@ -590,7 +633,8 @@ export class BillingRepository {
 
   async listTeacherPaymentHistory(
     teacherId: string,
-    limit: number
+    limit: number,
+    offset = 0
   ): Promise<SalaryPaymentHistoryRow[]> {
     const result = await this.db.execute<SalaryPaymentHistoryRow>(sql`
       WITH explicit_payments AS (
@@ -734,6 +778,7 @@ export class BillingRepository {
       ) payments
       ORDER BY paid_at DESC NULLS LAST
       LIMIT ${limit}
+      OFFSET ${offset}
     `);
 
     return getRows(result);
@@ -799,6 +844,196 @@ export class BillingRepository {
     }
 
     return row;
+  }
+
+  /**
+   * Effectue un paiement partiel de vacataire de manière atomique avec SELECT FOR UPDATE.
+   * Prévient les race conditions lors de paiements simultanés.
+   *
+   * @returns Le salary_record mis à jour avec son nouveau statut
+   */
+  async createVacatairePartialPaymentAtomic(input: {
+    recordId: string;
+    requestedHours: number;
+    hourlyRate: number;
+    paidBy: string;
+    notes?: string;
+  }): Promise<{
+    record: SalaryRecordRow;
+    payment: SalaryPaymentRow;
+    paidHoursBefore: number;
+    remainingHoursBefore: number;
+  }> {
+    // Utiliser une transaction pour garantir l'atomicité
+    const result = await this.db.execute<{
+      record_id: string;
+      teacher_id: string;
+      teacher_type: 'vacataire' | 'permanent';
+      period_month: string;
+      hours_planned: string | number;
+      hours_done: string | number;
+      hourly_rate: number;
+      total_fcfa: number;
+      status: SalaryRecordStatus;
+      paid_at: string | null;
+      paid_by: string | null;
+      notes: string | null;
+      created_at: string;
+      payment_id: string;
+      payment_hours_paid: string | number;
+      payment_amount_fcfa: number;
+      payment_paid_at: string;
+      paid_hours_before: string | number;
+      remaining_hours_before: string | number;
+    }>(sql`
+      WITH locked_record AS (
+        -- Verrouiller le record pour éviter les modifications concurrentes
+        SELECT
+          sr.id,
+          sr.teacher_id,
+          t.type::text AS teacher_type,
+          sr.period_month,
+          sr.hours_planned,
+          sr.hours_done,
+          sr.hourly_rate,
+          sr.total_fcfa,
+          sr.status,
+          sr.paid_at,
+          sr.paid_by,
+          sr.notes,
+          sr.created_at
+        FROM salary_records sr
+        INNER JOIN teachers t ON t.id = sr.teacher_id
+        WHERE sr.id = ${input.recordId}
+        FOR UPDATE
+      ),
+      current_payments AS (
+        -- Calculer le total déjà payé APRÈS le verrouillage
+        SELECT
+          COALESCE(SUM(hours_paid), 0)::numeric AS paid_hours,
+          COALESCE(SUM(amount_fcfa), 0)::int AS paid_amount
+        FROM salary_payments
+        WHERE salary_record_id = ${input.recordId}
+      ),
+      validation AS (
+        -- Valider que les heures restantes sont suffisantes
+        SELECT
+          lr.*,
+          cp.paid_hours,
+          cp.paid_amount,
+          GREATEST(0, lr.hours_done - cp.paid_hours)::numeric AS remaining_hours
+        FROM locked_record lr
+        CROSS JOIN current_payments cp
+      ),
+      new_payment AS (
+        -- Créer le paiement uniquement si validation OK
+        INSERT INTO salary_payments (
+          salary_record_id,
+          hours_paid,
+          amount_fcfa,
+          notes,
+          paid_by
+        )
+        SELECT
+          v.id,
+          ${input.requestedHours}::numeric,
+          ROUND(${input.requestedHours}::numeric * ${input.hourlyRate})::int,
+          ${input.notes ?? null},
+          ${input.paidBy}
+        FROM validation v
+        WHERE v.remaining_hours >= ${input.requestedHours}::numeric
+        RETURNING id, salary_record_id, hours_paid, amount_fcfa, paid_at, paid_by, notes
+      ),
+      updated_record AS (
+        -- Mettre à jour le status du salary_record
+        UPDATE salary_records
+        SET
+          status = CASE
+            WHEN (
+              SELECT v.paid_hours + ${input.requestedHours}::numeric >= v.hours_done
+              FROM validation v
+            ) THEN 'paid'::salary_status
+            ELSE 'pending'::salary_status
+          END,
+          paid_at = CASE
+            WHEN (
+              SELECT v.paid_hours + ${input.requestedHours}::numeric >= v.hours_done
+              FROM validation v
+            ) THEN NOW()
+            ELSE paid_at
+          END,
+          paid_by = CASE
+            WHEN (
+              SELECT v.paid_hours + ${input.requestedHours}::numeric >= v.hours_done
+              FROM validation v
+            ) THEN ${input.paidBy}::uuid
+            ELSE paid_by
+          END,
+          notes = COALESCE(${input.notes ?? null}, notes),
+          updated_at = NOW()
+        WHERE id = ${input.recordId}
+          AND EXISTS (SELECT 1 FROM new_payment)
+        RETURNING id, teacher_id, period_month, hours_planned, hours_done, hourly_rate, total_fcfa, status, paid_at, paid_by, notes, created_at
+      )
+      SELECT
+        ur.id AS record_id,
+        ur.teacher_id,
+        v.teacher_type,
+        ur.period_month::text,
+        ur.hours_planned,
+        ur.hours_done,
+        ur.hourly_rate,
+        ur.total_fcfa,
+        ur.status::text,
+        ur.paid_at::text,
+        ur.paid_by,
+        ur.notes,
+        ur.created_at::text,
+        np.id AS payment_id,
+        np.hours_paid AS payment_hours_paid,
+        np.amount_fcfa AS payment_amount_fcfa,
+        np.paid_at::text AS payment_paid_at,
+        v.paid_hours AS paid_hours_before,
+        v.remaining_hours AS remaining_hours_before
+      FROM updated_record ur
+      CROSS JOIN new_payment np
+      CROSS JOIN validation v
+    `);
+
+    const row = getRows(result)[0];
+    if (!row) {
+      throw new Error('Payment failed: insufficient remaining hours or record not found');
+    }
+
+    return {
+      record: {
+        id: row.record_id,
+        teacher_id: row.teacher_id,
+        teacher_type: row.teacher_type,
+        period_month: row.period_month,
+        hours_planned: row.hours_planned,
+        hours_done: row.hours_done,
+        hourly_rate: row.hourly_rate,
+        total_fcfa: row.total_fcfa,
+        status: row.status,
+        paid_at: row.paid_at,
+        paid_by: row.paid_by,
+        notes: row.notes,
+        created_at: row.created_at,
+      },
+      payment: {
+        id: row.payment_id,
+        salary_record_id: row.record_id,
+        hours_paid: row.payment_hours_paid,
+        amount_fcfa: row.payment_amount_fcfa,
+        paid_at: row.payment_paid_at,
+        paid_by: input.paidBy,
+        paid_by_name: null,
+        notes: input.notes ?? null,
+      },
+      paidHoursBefore: toNumber(row.paid_hours_before),
+      remainingHoursBefore: toNumber(row.remaining_hours_before),
+    };
   }
 
   async listPaymentsForRecord(recordId: string): Promise<SalaryPaymentRow[]> {
