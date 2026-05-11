@@ -51,6 +51,7 @@ type ExistingTeacherAttendanceRow = {
   status: 'present' | 'absent' | 'late' | 'excused';
   checked_in_at: string | null;
   checked_out_at: string | null;
+  room_scan_end_at: string | null;
   geo_status: 'verified' | 'suspicious' | 'unavailable' | 'not_checked' | null;
   validation_status: 'not_required' | 'pending' | 'approved' | 'rejected';
 };
@@ -160,6 +161,8 @@ type FeatureFlagsRow = {
   use_real_hours: boolean;
   geo_check_enabled: boolean;
   checkout_tolerance_minutes: number;
+  /** Lorsque true, le checkout API exige que room_scan_end_at soit renseigné. */
+  require_end_scan: boolean;
 };
 
 type TeacherComplianceRow = {
@@ -357,6 +360,7 @@ export class AttendanceRepository {
         status::text AS status,
         checked_in_at::text AS checked_in_at,
         checked_out_at::text AS checked_out_at,
+        room_scan_end_at::text AS room_scan_end_at,
         geo_status,
         validation_status::text AS validation_status
       FROM attendances_teacher
@@ -586,7 +590,8 @@ export class AttendanceRepository {
       SELECT
         COALESCE(f.use_real_hours, false) AS use_real_hours,
         COALESCE(f.geo_check_enabled, false) AS geo_check_enabled,
-        COALESCE(f.checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
+        COALESCE(f.checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes,
+        COALESCE(f.require_end_scan, false) AS require_end_scan
       FROM public.tenants t
       LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
       WHERE t.schema_name = ${schemaName}
@@ -597,6 +602,7 @@ export class AttendanceRepository {
       use_real_hours: false,
       geo_check_enabled: false,
       checkout_tolerance_minutes: 5,
+      require_end_scan: false,
     };
   }
 

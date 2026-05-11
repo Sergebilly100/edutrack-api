@@ -27,7 +27,8 @@ export const ensurePublicRealHoursInfrastructure = async (
     ALTER TABLE public.school_sms_features
       ADD COLUMN IF NOT EXISTS use_real_hours boolean NOT NULL DEFAULT false,
       ADD COLUMN IF NOT EXISTS geo_check_enabled boolean NOT NULL DEFAULT false,
-      ADD COLUMN IF NOT EXISTS checkout_tolerance_minutes integer NOT NULL DEFAULT 5
+      ADD COLUMN IF NOT EXISTS checkout_tolerance_minutes integer NOT NULL DEFAULT 5,
+      ADD COLUMN IF NOT EXISTS require_end_scan boolean NOT NULL DEFAULT false
   `);
 
   await db.execute(sql`

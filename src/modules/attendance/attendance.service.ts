@@ -214,13 +214,25 @@ export class AttendanceService {
       throw new AttendanceModuleError('Check-out already recorded', 409, 'CHECKOUT_ALREADY_RECORDED');
     }
 
+    const flags = await this.repository.getSchoolFeatureFlags(context.schemaName);
+
+    // Si la policy de l'école exige le scan QR de fin, le checkout API est bloqué
+    // tant que room_scan_end_at n'est pas renseigné. Cela empêche de contourner
+    // la contrainte UI en appelant directement l'API.
+    if (flags.require_end_scan && !existing.room_scan_end_at) {
+      throw new AttendanceModuleError(
+        'End QR scan is required before check-out',
+        422,
+        'END_SCAN_REQUIRED'
+      );
+    }
+
     const checkedOutAt = new Date();
     const checkedInAt = new Date(existing.checked_in_at);
     const actualMinutes = Math.max(
       0,
       Math.floor((checkedOutAt.getTime() - checkedInAt.getTime()) / 60000)
     );
-    const flags = await this.repository.getSchoolFeatureFlags(context.schemaName);
     const geo = resolveGeo({
       enabled: flags.geo_check_enabled,
       latitude: input.latitude,

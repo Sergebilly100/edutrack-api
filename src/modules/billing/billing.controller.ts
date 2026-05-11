@@ -25,7 +25,9 @@ import {
   salarySingleExportBodySchema,
   teacherParamsSchema,
   updateSalaryStatusBodySchema,
+  recalculateSalaryBodySchema,
 } from './billing.types.js';
+import { SalariesModuleError, buildSalariesService } from '../salaries/salaries.service.js';
 
 // const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
 const EXPORT_SIGNING_WINDOW_MS = 15 * 60 * 1000;
@@ -632,4 +634,46 @@ export default async function billingController(
       return handleError(request, reply, error);
     }
   });
+
+  /**
+   * POST /api/v1/salaries/recalculate
+   *
+   * Recalcule le(s) salary_record(s) en lisant l'état courant des pointages,
+   * y compris les annulations de sanctions (end_scan_action_cancelled_at).
+   *
+   * - body.teacher_id présent → recalcul pour un seul prof/mois
+   * - body.teacher_id absent  → recalcul pour tous les profs du mois
+   */
+  app.post(
+    '/api/v1/salaries/recalculate',
+    { preHandler: requirePermission('salary.view') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const body = recalculateSalaryBodySchema.parse(request.body ?? {});
+
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          const service = buildSalariesService(tenantDb);
+          if (body.teacher_id) {
+            return service.recalculateForTeacherMonth({
+              teacherId: body.teacher_id,
+              month: body.month,
+            });
+          }
+          return service.recalculateAllForMonth({ month: body.month });
+        });
+
+        return reply.code(200).send(result);
+      } catch (error) {
+        if (error instanceof SalariesModuleError) {
+          return reply.code(error.statusCode).send({
+            error: error.message,
+            code: error.code,
+            statusCode: error.statusCode,
+          });
+        }
+        return handleError(request, reply, error);
+      }
+    }
+  );
 }

@@ -59,3 +59,9 @@ export type UpdateSalaryStatusBody = z.infer<typeof updateSalaryStatusBodySchema
 export type SalarySingleExportBody = z.infer<typeof salarySingleExportBodySchema>;
 export type SalaryBulkExportBody = z.infer<typeof salaryBulkExportBodySchema>;
 export type JobDownloadQuery = z.infer<typeof jobDownloadQuerySchema>;
+
+export const recalculateSalaryBodySchema = z.object({
+  month: z.string().regex(monthRegex),
+  teacher_id: z.string().uuid().optional(),
+});
+

@@ -19,6 +19,9 @@ export type RoomScanValidationResult = {
   alertType: 'teacher_qr_mismatch' | 'teacher_qr_scan_out_of_time' | null;
 };
 
+// Africa/Abidjan is UTC+0 year-round (no DST), so storing/comparing timestamps as UTC
+// is correct today. If this product ever serves schools in a non-UTC+0 timezone,
+// time comparisons here (late_minutes, QR window) will silently produce wrong results.
 const toUtcDateTime = (date: string, time: string): Date => {
   return new Date(`${date}T${time}.000Z`);
 };
