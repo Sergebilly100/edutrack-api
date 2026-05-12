@@ -237,8 +237,10 @@ const processTeacherDailySummaryJob = async (
 };
 
 const processValidationDailySummaryJob = async (
+  data: ValidationDailySummaryJobData,
   deps: NotificationsWorkerDeps
 ): Promise<void> => {
+  const date = data.date ?? currentBusinessDate();
   const tenants = await listActiveTenantSchemas();
 
   for (const tenant of tenants) {
@@ -296,25 +298,78 @@ const processValidationDailySummaryJob = async (
       const message = `[EduTrack] ${pendingCount} présence(s) en attente de validation. Consultez l'app.`;
       const tasks: Array<Promise<void>> = [];
       if (row.director_phone) {
+        const queueRef = buildQueueRef(tenant.schemaName, 'custom', date, 'sms');
+
+        await deps.repository.insertNotificationLog(tenantDb, {
+          type: 'custom',
+          channel: 'sms',
+          recipientPhone: row.director_phone,
+          message,
+          status: 'queued',
+          providerRef: queueRef,
+        });
+
         tasks.push(
-          deps.smsSender({
-            to: row.director_phone,
-            message,
-            type: 'custom',
-            schemaName: tenant.schemaName,
-          }).then(() => undefined)
+          deps
+            .smsSender({
+              to: row.director_phone,
+              message,
+              type: 'custom',
+              schemaName: tenant.schemaName,
+            })
+            .then((smsResult) =>
+              deps.repository.updateNotificationLogStatus(tenantDb, {
+                queueRef,
+                status: smsResult.status === 'sent' ? 'sent' : 'failed',
+                providerRef: smsResult.providerRef,
+                sentAt: smsResult.status === 'sent' ? new Date() : undefined,
+              })
+            )
+            .catch(() =>
+              deps.repository.updateNotificationLogStatus(tenantDb, {
+                queueRef,
+                status: 'failed',
+              })
+            )
         );
       }
       if (row.director_email) {
+        const emailQueueRef = buildQueueRef(tenant.schemaName, 'custom', date, 'email');
         const emailText = `${message}\n\nValidations pendantes :\n${row.pending_details ?? '- Aucun détail disponible'}`;
+
+        await deps.repository.insertNotificationLog(tenantDb, {
+          type: 'custom',
+          channel: 'email',
+          recipientPhone: row.director_phone ?? '',
+          recipientEmail: row.director_email,
+          message: emailText,
+          status: 'queued',
+          providerRef: emailQueueRef,
+        });
+
         tasks.push(
-          deps.emailSender({
-            to: row.director_email,
-            subject: '[EduTrack] Validations horaires en attente',
-            text: emailText,
-            type: 'custom',
-            schemaName: tenant.schemaName,
-          }).then(() => undefined)
+          deps
+            .emailSender({
+              to: row.director_email,
+              subject: '[EduTrack] Validations horaires en attente',
+              text: emailText,
+              type: 'custom',
+              schemaName: tenant.schemaName,
+            })
+            .then((emailResult) =>
+              deps.repository.updateNotificationLogStatus(tenantDb, {
+                queueRef: emailQueueRef,
+                status: emailResult.status === 'sent' ? 'sent' : 'failed',
+                providerRef: emailResult.providerRef,
+                sentAt: emailResult.status === 'sent' ? new Date() : undefined,
+              })
+            )
+            .catch(() =>
+              deps.repository.updateNotificationLogStatus(tenantDb, {
+                queueRef: emailQueueRef,
+                status: 'failed',
+              })
+            )
         );
       }
       await Promise.all(tasks);
@@ -332,7 +387,7 @@ export const processNotificationJob = async (
   }
 
   if (data.type === 'validation-daily-summary-all') {
-    await processValidationDailySummaryJob(deps);
+    await processValidationDailySummaryJob(data, deps);
     return;
   }
 

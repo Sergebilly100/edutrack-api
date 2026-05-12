@@ -60,6 +60,10 @@ export type NotificationsRepository = {
     tenantDb: TenantDbLike,
     payload: Pick<TeacherQrAlertPayload, 'teacherId' | 'scheduleId' | 'date'>
   ) => Promise<QrAlertContext | null>;
+  getQrInvalidAlertContext: (
+    tenantDb: TenantDbLike,
+    payload: { teacherId: string }
+  ) => Promise<{ directorPhone: string | null; directorEmail: string | null } | null>;
   insertNotificationLog: (
     tenantDb: TenantDbLike,
     params: {
@@ -114,6 +118,10 @@ export type NotificationsRepository = {
       types?: NotificationType[];
     }
   ) => Promise<NotificationLogRow[]>;
+  listTeacherNotifications: (
+    tenantDb: TenantDbLike,
+    params: { userId: string; limit: number }
+  ) => Promise<Array<{ id: string; type: string; message: string; created_at: string; metadata: unknown }>>;
 };
 
 const getFirstRow = <TRow>(result: { rows: TRow[] }): TRow | null => {
@@ -228,6 +236,31 @@ export const defaultRepository: NotificationsRepository = {
       expectedRoom: row.expected_room,
       scannedRoom: row.scanned_room ?? 'inconnue',
       directorPhone: row.director_phone,
+    };
+  },
+
+  async getQrInvalidAlertContext(tenantDb, _payload) {
+    const result = await asExecutor(tenantDb).execute<{
+      director_phone: string | null;
+      director_email: string | null;
+    }>(sql`
+      SELECT u.phone AS director_phone, u.email AS director_email
+      FROM users u
+      WHERE u.role = 'director'
+        AND u.is_active = true
+        AND (u.phone IS NOT NULL OR u.email IS NOT NULL)
+      ORDER BY u.created_at ASC
+      LIMIT 1
+    `);
+
+    const row = getFirstRow(result);
+    if (!row) {
+      return null;
+    }
+
+    return {
+      directorPhone: row.director_phone,
+      directorEmail: row.director_email,
     };
   },
 
@@ -422,6 +455,30 @@ export const defaultRepository: NotificationsRepository = {
       FROM notifications_log
       ${whereClause}
       ORDER BY COALESCE(sent_at, created_at) DESC, created_at DESC
+      LIMIT ${safeLimit}
+    `);
+
+    return result.rows;
+  },
+
+  async listTeacherNotifications(tenantDb, params) {
+    const safeLimit = Math.max(1, Math.min(params.limit, 50));
+    const result = await asExecutor(tenantDb).execute<{
+      id: string;
+      type: string;
+      message: string;
+      created_at: string;
+      metadata: unknown;
+    }>(sql`
+      SELECT nl.id::text, nl.type::text, nl.message, nl.created_at::text, nl.metadata
+      FROM notifications_log nl
+      INNER JOIN users u ON u.id = ${params.userId}::uuid
+      WHERE (
+          (nl.recipient_email IS NOT NULL AND nl.recipient_email = u.email)
+          OR (nl.recipient_phone IS NOT NULL AND nl.recipient_phone = u.phone)
+        )
+        AND nl.type IN ('attendance_rejected', 'attendance_approved', 'scan_end_warning', 'scan_end_sanction', 'scan_end_sanction_cancelled')
+      ORDER BY nl.created_at DESC
       LIMIT ${safeLimit}
     `);
 

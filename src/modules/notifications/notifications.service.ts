@@ -109,7 +109,7 @@ const loadSmsPlatformConfig = async (): Promise<SmsPlatformRuntimeConfig> => {
     sms_fallback_sender_id: string | null;
     sms_maintenance_mode: boolean | null;
     sms_maintenance_message: string | null;
-  }>(sql.raw(`
+  }>(sql`
     SELECT
       sms_provider,
       sms_api_base_url,
@@ -121,7 +121,7 @@ const loadSmsPlatformConfig = async (): Promise<SmsPlatformRuntimeConfig> => {
     FROM public.app_settings
     ORDER BY updated_at DESC
     LIMIT 1
-  `));
+  `);
 
   const row = result.rows?.[0];
   const value: SmsPlatformRuntimeConfig = {
@@ -133,6 +133,9 @@ const loadSmsPlatformConfig = async (): Promise<SmsPlatformRuntimeConfig> => {
     smsMaintenanceMode: row?.sms_maintenance_mode ?? false,
     smsMaintenanceMessage: row?.sms_maintenance_message ?? 'Service SMS en maintenance',
   };
+  if (value.provider === 'mock' && process.env.NODE_ENV === 'production') {
+    console.warn('[notifications] SMS provider is mock in production — vérifier app_settings.sms_provider');
+  }
   smsConfigCache = { fetchedAt: now, value };
   return value;
 };
@@ -584,6 +587,9 @@ const sendBrevoEmail = async (params: {
 export const defaultEmailSender: EmailSender = async ({ to, subject, text }) => {
   const provider = (process.env.EMAIL_PROVIDER ?? 'mock').trim().toLowerCase();
   const mockEnabled = (process.env.EMAIL_MOCK ?? 'false').toLowerCase() === 'true';
+  if ((provider === 'mock' || mockEnabled) && process.env.NODE_ENV === 'production') {
+    console.warn('[notifications] Email provider is mock in production — set EMAIL_PROVIDER env var');
+  }
   if (provider === 'mock' || mockEnabled) {
     console.info(`[email][mock] to=${to}`);
     return { status: 'sent', providerRef: 'mock-email' };
@@ -730,38 +736,34 @@ export class NotificationsService {
   start(): void {
     if (this._started) return;
     this._started = true;
-    if (this.deps.eventBus.on === defaultOn) {
-      this.deps.eventBus.on('teacher.late', this.teacherLateListener);
-      this.deps.eventBus.on('teacher.qr_alert', this.teacherQrAlertListener);
-      this.deps.eventBus.on('teacher.qr_invalid', this.teacherQrInvalidListener);
-      this.deps.eventBus.on(
-        'teacher.attendance_rejected',
-        this.teacherAttendanceRejectedListener
-      );
-      this.deps.eventBus.on(
-        'teacher.attendance_approved',
-        this.teacherAttendanceApprovedListener
-      );
-    }
+    this.deps.eventBus.on('teacher.late', this.teacherLateListener);
+    this.deps.eventBus.on('teacher.qr_alert', this.teacherQrAlertListener);
+    this.deps.eventBus.on('teacher.qr_invalid', this.teacherQrInvalidListener);
+    this.deps.eventBus.on(
+      'teacher.attendance_rejected',
+      this.teacherAttendanceRejectedListener
+    );
+    this.deps.eventBus.on(
+      'teacher.attendance_approved',
+      this.teacherAttendanceApprovedListener
+    );
     this.deps.eventBus.on('student.absent', this.studentAbsentListener);
     this.deps.eventBus.on('subscription.expired', this.subscriptionExpiredListener);
   }
 
   stop(): void {
     this._started = false;
-    if (this.deps.eventBus.off === defaultOff) {
-      this.deps.eventBus.off('teacher.late', this.teacherLateListener);
-      this.deps.eventBus.off('teacher.qr_alert', this.teacherQrAlertListener);
-      this.deps.eventBus.off('teacher.qr_invalid', this.teacherQrInvalidListener);
-      this.deps.eventBus.off(
-        'teacher.attendance_rejected',
-        this.teacherAttendanceRejectedListener
-      );
-      this.deps.eventBus.off(
-        'teacher.attendance_approved',
-        this.teacherAttendanceApprovedListener
-      );
-    }
+    this.deps.eventBus.off('teacher.late', this.teacherLateListener);
+    this.deps.eventBus.off('teacher.qr_alert', this.teacherQrAlertListener);
+    this.deps.eventBus.off('teacher.qr_invalid', this.teacherQrInvalidListener);
+    this.deps.eventBus.off(
+      'teacher.attendance_rejected',
+      this.teacherAttendanceRejectedListener
+    );
+    this.deps.eventBus.off(
+      'teacher.attendance_approved',
+      this.teacherAttendanceApprovedListener
+    );
     this.deps.eventBus.off('student.absent', this.studentAbsentListener);
     this.deps.eventBus.off('subscription.expired', this.subscriptionExpiredListener);
   }
@@ -784,6 +786,15 @@ export class NotificationsService {
 
       const queueRef = buildQueueRef(payload.schemaName, 'teacher_late_director');
 
+      await this.deps.repository.insertNotificationLog(tenantDb, {
+        type: 'teacher_late_director',
+        recipientPhone: context.directorPhone,
+        message,
+        status: 'queued',
+        providerRef: queueRef,
+        relatedId: payload.scheduleId,
+      });
+
       await this.deps.smsQueue.add(
         'send-sms',
         toSmsJobData({
@@ -802,15 +813,6 @@ export class NotificationsService {
           removeOnFail: true,
         }
       );
-
-      await this.deps.repository.insertNotificationLog(tenantDb, {
-        type: 'teacher_late_director',
-        recipientPhone: context.directorPhone,
-        message,
-        status: 'queued',
-        providerRef: queueRef,
-        relatedId: payload.scheduleId,
-      });
     });
   }
 
@@ -835,6 +837,15 @@ export class NotificationsService {
 
       const queueRef = buildQueueRef(payload.schemaName, notificationType);
 
+      await this.deps.repository.insertNotificationLog(tenantDb, {
+        type: notificationType,
+        recipientPhone: context.directorPhone,
+        message,
+        status: 'queued',
+        providerRef: queueRef,
+        relatedId: payload.scheduleId,
+      });
+
       await this.deps.smsQueue.add(
         'send-sms',
         toSmsJobData({
@@ -858,36 +869,15 @@ export class NotificationsService {
           removeOnFail: true,
         }
       );
-
-      await this.deps.repository.insertNotificationLog(tenantDb, {
-        type: notificationType,
-        recipientPhone: context.directorPhone,
-        message,
-        status: 'queued',
-        providerRef: queueRef,
-        relatedId: payload.scheduleId,
-      });
     });
   }
 
   async handleTeacherQrInvalid(payload: TeacherQrInvalidPayload): Promise<void> {
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
-      const result = await (tenantDb as {
-        execute: <TRow = Record<string, unknown>>(query: unknown) => Promise<{ rows: TRow[] }>;
-      }).execute<{
-        director_phone: string | null;
-        director_email: string | null;
-      }>(sql`
-        SELECT u.phone AS director_phone, u.email AS director_email
-        FROM users u
-        WHERE u.role = 'director'
-          AND u.is_active = true
-          AND (u.phone IS NOT NULL OR u.email IS NOT NULL)
-        ORDER BY u.created_at ASC
-        LIMIT 1
-      `);
-      const director = result.rows[0];
-      if (!director?.director_phone && !director?.director_email) {
+      const director = await this.deps.repository.getQrInvalidAlertContext(tenantDb, {
+        teacherId: payload.teacherId,
+      });
+      if (!director?.directorPhone && !director?.directorEmail) {
         return;
       }
 
@@ -899,12 +889,12 @@ export class NotificationsService {
       const message = `[EduTrack] ${payload.teacherName} a tenté de scanner un QR inconnu à ${scanTime}. Accès refusé.`;
       const tasks: Array<Promise<void>> = [];
 
-      if (director.director_phone) {
+      if (director.directorPhone) {
         const queueRef = buildQueueRef(payload.schemaName, 'qr_invalid_alert');
         await this.deps.repository.insertNotificationLog(tenantDb, {
           type: 'qr_invalid_alert',
           channel: 'sms',
-          recipientPhone: director.director_phone,
+          recipientPhone: director.directorPhone,
           message,
           status: 'queued',
           providerRef: queueRef,
@@ -915,7 +905,7 @@ export class NotificationsService {
             'send-sms',
             toSmsJobData({
               queueRef,
-              to: director.director_phone,
+              to: director.directorPhone,
               message,
               notificationType: 'qr_invalid_alert',
               schemaName: payload.schemaName,
@@ -932,14 +922,14 @@ export class NotificationsService {
         );
       }
 
-      if (director.director_email) {
+      if (director.directorEmail) {
         const emailQueueRef = buildQueueRef(payload.schemaName, 'qr_invalid_alert');
         const emailText = `${payload.teacherName} a tenté de scanner un QR non reconnu le ${payload.timestamp}. QR: ${payload.qrToken}.`;
         await this.deps.repository.insertNotificationLog(tenantDb, {
           type: 'qr_invalid_alert',
           channel: 'email',
-          recipientPhone: director.director_phone ?? '',
-          recipientEmail: director.director_email,
+          recipientPhone: director.directorPhone ?? '',
+          recipientEmail: director.directorEmail,
           message: emailText,
           status: 'queued',
           providerRef: emailQueueRef,
@@ -950,10 +940,10 @@ export class NotificationsService {
             'send-email',
             toEmailJobData({
               queueRef: emailQueueRef,
-              to: director.director_email,
+              to: director.directorEmail,
               subject: 'Alerte sécurité - QR non reconnu',
               text: emailText,
-              recipientPhone: director.director_phone ?? '',
+              recipientPhone: director.directorPhone ?? '',
               notificationType: 'qr_invalid_alert',
               schemaName: payload.schemaName,
               relatedId: payload.teacherId,
@@ -985,25 +975,17 @@ export class NotificationsService {
       const queueRef = buildQueueRef(payload.schemaName, 'attendance_rejected');
       const text = `Votre présence pour le cours ${payload.courseName} du ${payload.date} n'a pas pu être validée.\nMotif : ${payload.reason}.\nContactez votre direction pour plus d'informations.`;
 
-      await (tenantDb as NodePgDatabase<Record<string, unknown>>).execute(sql`
-        WITH target AS (
-          SELECT id
-          FROM notifications_log
-          WHERE type = 'attendance_rejected'
-            AND channel = 'email'
-            AND related_id = ${payload.attendanceId}::uuid
-            AND recipient_id = ${payload.teacherUserId}::uuid
-          ORDER BY created_at DESC
-          LIMIT 1
-        )
-        UPDATE notifications_log
-        SET
-          provider_ref = ${queueRef},
-          message = ${text},
-          recipient_email = ${teacherEmail},
-          status = 'queued'
-        WHERE id IN (SELECT id FROM target)
-      `);
+      // FIXME: removed recipient_id reference — column does not exist in schema
+      await this.deps.repository.insertNotificationLog(tenantDb, {
+        type: 'attendance_rejected',
+        channel: 'email',
+        recipientPhone: payload.teacherPhone ?? '',
+        recipientEmail: teacherEmail,
+        message: text,
+        status: 'queued',
+        providerRef: queueRef,
+        relatedId: payload.attendanceId,
+      });
 
       await this.deps.smsQueue.add(
         'send-email',
@@ -1043,19 +1025,16 @@ export class NotificationsService {
         const smsMessage = `[EduTrack] Présence validée — ${payload.courseName} du ${payload.date}. ${validatedHoursLabel}. Consultez l'app pour le détail.`;
         const smsQueueRef = buildQueueRef(payload.schemaName, 'attendance_approved');
 
-        await (tenantDb as NodePgDatabase<Record<string, unknown>>).execute(sql`
-          WITH target AS (
-            SELECT id FROM notifications_log
-            WHERE type = 'attendance_approved'
-              AND channel = 'sms'
-              AND related_id = ${payload.attendanceId}::uuid
-              AND recipient_id = ${payload.teacherUserId}::uuid
-            ORDER BY created_at DESC LIMIT 1
-          )
-          UPDATE notifications_log
-          SET provider_ref = ${smsQueueRef}, message = ${smsMessage}, status = 'queued'
-          WHERE id IN (SELECT id FROM target)
-        `);
+        // FIXME: removed recipient_id reference — column does not exist in schema
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'attendance_approved',
+          channel: 'sms',
+          recipientPhone: payload.teacherPhone,
+          message: smsMessage,
+          status: 'queued',
+          providerRef: smsQueueRef,
+          relatedId: payload.attendanceId,
+        });
 
         tasks.push(
           this.deps.smsQueue.add(
@@ -1077,36 +1056,23 @@ export class NotificationsService {
             }
           ).then(() => undefined)
         );
-
-        await this.deps.repository.insertNotificationLog(tenantDb, {
-          type: 'attendance_approved',
-          channel: 'sms',
-          recipientPhone: payload.teacherPhone,
-          message: smsMessage,
-          status: 'queued',
-          providerRef: smsQueueRef,
-          relatedId: payload.attendanceId,
-        });
       }
 
       if (payload.teacherEmail) {
         const emailText = `Votre présence pour le cours ${payload.courseName} du ${payload.date} a été validée.\n${validatedHoursLabel}.\nConsultez votre espace EduTrack pour le récapitulatif.`;
         const emailQueueRef = buildQueueRef(payload.schemaName, 'attendance_approved');
 
-        await (tenantDb as NodePgDatabase<Record<string, unknown>>).execute(sql`
-          WITH target AS (
-            SELECT id FROM notifications_log
-            WHERE type = 'attendance_approved'
-              AND channel = 'email'
-              AND related_id = ${payload.attendanceId}::uuid
-              AND recipient_id = ${payload.teacherUserId}::uuid
-            ORDER BY created_at DESC LIMIT 1
-          )
-          UPDATE notifications_log
-          SET provider_ref = ${emailQueueRef}, message = ${emailText},
-              recipient_email = ${payload.teacherEmail}, status = 'queued'
-          WHERE id IN (SELECT id FROM target)
-        `);
+        // FIXME: removed recipient_id reference — column does not exist in schema
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'attendance_approved',
+          channel: 'email',
+          recipientPhone: payload.teacherPhone ?? '',
+          recipientEmail: payload.teacherEmail,
+          message: emailText,
+          status: 'queued',
+          providerRef: emailQueueRef,
+          relatedId: payload.attendanceId,
+        });
 
         tasks.push(
           this.deps.smsQueue.add(
@@ -1130,17 +1096,6 @@ export class NotificationsService {
             }
           ).then(() => undefined)
         );
-
-        await this.deps.repository.insertNotificationLog(tenantDb, {
-          type: 'attendance_approved',
-          channel: 'email',
-          recipientPhone: payload.teacherPhone ?? '',
-          recipientEmail: payload.teacherEmail,
-          message: emailText,
-          status: 'queued',
-          providerRef: emailQueueRef,
-          relatedId: payload.attendanceId,
-        });
       }
 
       await Promise.all(tasks);
@@ -1199,6 +1154,16 @@ export class NotificationsService {
     const queueRef = buildQueueRef(payload.schemaName, 'student_absent_parent');
     const recipientPhone = canSend.parentPhone ?? payload.parentPhone;
 
+    await this.deps.repository.insertNotificationLog(tenantDb, {
+      type: 'student_absent_parent',
+      channel: 'sms',
+      recipientPhone,
+      message,
+      status: 'queued',
+      providerRef: queueRef,
+      relatedId: payload.scheduleId,
+    });
+
     await this.deps.smsQueue.add(
       'send-sms',
       toSmsJobData({
@@ -1217,15 +1182,6 @@ export class NotificationsService {
         removeOnFail: true,
       }
     );
-    await this.deps.repository.insertNotificationLog(tenantDb, {
-      type: 'student_absent_parent',
-      channel: 'sms',
-      recipientPhone,
-      message,
-      status: 'queued',
-      providerRef: queueRef,
-      relatedId: payload.scheduleId,
-    });
     if (canSend.subscriptionId) {
       await subscriptionsService.incrementUsage({
         studentId: payload.studentId,
@@ -1283,6 +1239,17 @@ export class NotificationsService {
       schoolPhone: payload.schoolPhone,
     });
     const emailQueueRef = buildQueueRef(payload.schemaName, 'student_absent_parent');
+    await this.deps.repository.insertNotificationLog(tenantDb, {
+      type: 'student_absent_parent',
+      channel: 'email',
+      recipientPhone,
+      recipientEmail: emailAddress,
+      message: emailText,
+      status: 'queued',
+      providerRef: emailQueueRef,
+      relatedId: payload.scheduleId,
+    });
+
     await this.deps.smsQueue.add(
       'send-email',
       toEmailJobData({
@@ -1303,16 +1270,6 @@ export class NotificationsService {
         removeOnFail: true,
       }
     );
-    await this.deps.repository.insertNotificationLog(tenantDb, {
-      type: 'student_absent_parent',
-      channel: 'email',
-      recipientPhone,
-      recipientEmail: emailAddress,
-      message: emailText,
-      status: 'queued',
-      providerRef: emailQueueRef,
-      relatedId: payload.scheduleId,
-    });
     if (canSendEmail.subscriptionId) {
       await subscriptionsService.incrementUsage({
         studentId: payload.studentId,
@@ -1439,6 +1396,16 @@ export class NotificationsService {
         }
 
         const queueRef = buildQueueRef(payload.schemaName, 'student_absent_parent');
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'student_absent_parent',
+          channel: 'sms',
+          recipientPhone: contact.parent_phone,
+          message,
+          status: 'queued',
+          providerRef: queueRef,
+          relatedId: payload.scheduleId,
+        });
+
         await this.deps.smsQueue.add(
           'send-sms',
           toSmsJobData({
@@ -1457,16 +1424,6 @@ export class NotificationsService {
             removeOnFail: true,
           }
         );
-
-        await this.deps.repository.insertNotificationLog(tenantDb, {
-          type: 'student_absent_parent',
-          channel: 'sms',
-          recipientPhone: contact.parent_phone,
-          message,
-          status: 'queued',
-          providerRef: queueRef,
-          relatedId: payload.scheduleId,
-        });
 
         if (feature.monetize_parent_alerts && contact.subscription_id) {
           await subscriptionsRepository.incrementUsage({
@@ -1490,6 +1447,17 @@ export class NotificationsService {
         }
 
         const emailQueueRef = buildQueueRef(payload.schemaName, 'student_absent_parent');
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'student_absent_parent',
+          channel: 'email',
+          recipientPhone: contact.parent_phone,
+          recipientEmail: contact.parent_email,
+          message: emailText,
+          status: 'queued',
+          providerRef: emailQueueRef,
+          relatedId: payload.scheduleId,
+        });
+
         await this.deps.smsQueue.add(
           'send-email',
           toEmailJobData({
@@ -1510,17 +1478,6 @@ export class NotificationsService {
             removeOnFail: true,
           }
         );
-
-        await this.deps.repository.insertNotificationLog(tenantDb, {
-          type: 'student_absent_parent',
-          channel: 'email',
-          recipientPhone: contact.parent_phone,
-          recipientEmail: contact.parent_email,
-          message: emailText,
-          status: 'queued',
-          providerRef: emailQueueRef,
-          relatedId: payload.scheduleId,
-        });
 
         if (feature.monetize_parent_alerts && contact.subscription_id) {
           await subscriptionsRepository.incrementUsage({
@@ -1553,6 +1510,15 @@ export class NotificationsService {
 
       const queueRef = buildQueueRef(payload.schemaName, 'payment_reminder');
 
+      await this.deps.repository.insertNotificationLog(tenantDb, {
+        type: 'payment_reminder',
+        channel: 'sms',
+        recipientPhone: payload.directorPhone,
+        message,
+        status: 'queued',
+        providerRef: queueRef,
+      });
+
       await this.deps.smsQueue.add(
         'send-sms',
         toSmsJobData({
@@ -1570,15 +1536,6 @@ export class NotificationsService {
           removeOnFail: true,
         }
       );
-
-      await this.deps.repository.insertNotificationLog(tenantDb, {
-        type: 'payment_reminder',
-        channel: 'sms',
-        recipientPhone: payload.directorPhone,
-        message,
-        status: 'queued',
-        providerRef: queueRef,
-      });
 
       if (!payload.directorEmail) {
         await this.deps.repository.insertNotificationLog(tenantDb, {
@@ -1599,6 +1556,16 @@ export class NotificationsService {
       });
       const emailQueueRef = buildQueueRef(payload.schemaName, 'payment_reminder');
 
+      await this.deps.repository.insertNotificationLog(tenantDb, {
+        type: 'payment_reminder',
+        channel: 'email',
+        recipientPhone: payload.directorPhone,
+        recipientEmail: payload.directorEmail,
+        message: emailText,
+        status: 'queued',
+        providerRef: emailQueueRef,
+      });
+
       await this.deps.smsQueue.add(
         'send-email',
         toEmailJobData({
@@ -1618,16 +1585,6 @@ export class NotificationsService {
           removeOnFail: true,
         }
       );
-
-      await this.deps.repository.insertNotificationLog(tenantDb, {
-        type: 'payment_reminder',
-        channel: 'email',
-        recipientPhone: payload.directorPhone,
-        recipientEmail: payload.directorEmail,
-        message: emailText,
-        status: 'queued',
-        providerRef: emailQueueRef,
-      });
     });
   }
 }

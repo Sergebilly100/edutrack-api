@@ -410,21 +410,10 @@ export default async function notificationsController(
     try {
       const claims = request.claims!;
       const data = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-        const result = await tenantDb.execute<{
-          id: string;
-          type: string;
-          message: string;
-          created_at: string;
-          metadata: unknown;
-        }>(sql`
-          SELECT id::text, type::text, message, created_at::text, metadata
-          FROM notifications_log
-          WHERE recipient_id = ${claims.sub}::uuid
-            AND type IN ('attendance_rejected', 'attendance_approved', 'scan_end_warning', 'scan_end_sanction', 'scan_end_sanction_cancelled')
-          ORDER BY created_at DESC
-          LIMIT 20
-        `);
-        return result.rows;
+        return defaultRepository.listTeacherNotifications(tenantDb, {
+          userId: claims.sub,
+          limit: 20,
+        });
       });
 
       return reply.send(data);
