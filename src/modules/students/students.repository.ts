@@ -34,6 +34,7 @@ type StudentRow = {
   last_name: string;
   parent_name: string | null;
   parent_phone: string | null;
+  parent_email: string | null;
   parent_name_2: string | null;
   parent_phone_2: string | null;
   notes: string | null;
@@ -50,6 +51,7 @@ type ExistingStudentRow = {
   last_name: string;
   parent_name: string | null;
   parent_phone: string | null;
+  parent_email: string | null;
   parent_name_2: string | null;
   parent_phone_2: string | null;
   notes: string | null;
@@ -208,6 +210,7 @@ const mapStudent = (row: StudentRow): StudentRecord => ({
   lastName: row.last_name,
   parentName: row.parent_name,
   parentPhone: row.parent_phone,
+  parentEmail: row.parent_email,
   parentName2: row.parent_name_2,
   parentPhone2: row.parent_phone_2,
   note: row.notes,
@@ -324,6 +327,7 @@ export class StudentsRepository {
           s.last_name,
           s.parent_name,
           s.parent_phone,
+          s.parent_email,
           s.parent_name_2,
           s.parent_phone_2,
           s.notes,
@@ -380,13 +384,13 @@ export class StudentsRepository {
     const result = await this.db.execute(sql`
       INSERT INTO students (
         class_id, first_name, last_name,
-        parent_name, parent_phone,
+        parent_name, parent_phone, parent_email,
         parent_name_2, parent_phone_2,
         notes, is_active
       )
       VALUES (
         ${input.class_id}, ${input.first_name}, ${input.last_name},
-        ${input.parent_name}, ${input.parent_phone},
+        ${input.parent_name}, ${input.parent_phone}, ${input.parent_email ?? null},
         ${input.parent_name_2}, ${input.parent_phone_2},
         ${input.notes}, ${input.is_active}
       )
@@ -394,7 +398,7 @@ export class StudentsRepository {
         id, class_id,
         (SELECT name FROM classes WHERE id = class_id) AS class_name,
         first_name, last_name,
-        parent_name, parent_phone,
+        parent_name, parent_phone, parent_email,
         parent_name_2, parent_phone_2,
         notes, is_active, created_at
     `);
@@ -415,7 +419,7 @@ export class StudentsRepository {
       SELECT
         s.id, s.class_id, c.name AS class_name,
         s.first_name, s.last_name,
-        s.parent_name, s.parent_phone,
+        s.parent_name, s.parent_phone, s.parent_email,
         s.parent_name_2, s.parent_phone_2,
         s.notes, s.is_active, s.created_at
       FROM students s
@@ -434,7 +438,7 @@ export class StudentsRepository {
   ): Promise<StudentRecord | null> {
     const currentResult = await this.db.execute(sql`
       SELECT id, class_id, first_name, last_name,
-             parent_name, parent_phone,
+             parent_name, parent_phone, parent_email,
              parent_name_2, parent_phone_2,
              notes, is_active
       FROM students
@@ -451,6 +455,8 @@ export class StudentsRepository {
       input.parent_name !== undefined ? input.parent_name : current.parent_name;
     const nextParentPhone =
       input.parent_phone !== undefined ? input.parent_phone : current.parent_phone;
+    const nextParentEmail =
+      input.parent_email !== undefined ? input.parent_email : current.parent_email;
     const nextParentName2 =
       input.parent_name_2 !== undefined ? input.parent_name_2 : current.parent_name_2;
     const nextParentPhone2 =
@@ -465,6 +471,7 @@ export class StudentsRepository {
         last_name = ${input.last_name ?? current.last_name},
         parent_name = ${nextParentName},
         parent_phone = ${nextParentPhone},
+        parent_email = ${nextParentEmail},
         parent_name_2 = ${nextParentName2},
         parent_phone_2 = ${nextParentPhone2},
         notes = ${nextNotes},
@@ -496,7 +503,7 @@ export class StudentsRepository {
       RETURNING
         s.id, s.class_id, c.name AS class_name,
         s.first_name, s.last_name,
-        s.parent_name, s.parent_phone,
+        s.parent_name, s.parent_phone, s.parent_email,
         s.parent_name_2, s.parent_phone_2,
         s.notes, s.is_active, s.created_at
     `);
@@ -636,6 +643,7 @@ export class StudentsRepository {
       classId: student.classId,
       isActive: student.isActive,
       parentPhone: student.parentPhone,
+      parentEmail: student.parentEmail ?? null,
       parentPhone2: student.parentPhone2,
       parentName: student.parentName ?? null,
       parentName2: student.parentName2 ?? null,

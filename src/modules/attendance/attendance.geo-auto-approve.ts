@@ -39,12 +39,13 @@ export const autoApproveOldGeoValidations = async (
   return count;
 };
 
+// Job pour tous les tenants, appelé quotidiennement par le scheduler
 export const runGeoAutoApproveForAllTenants = async (): Promise<void> => {
   const tenantsResult = await withTenantSchema('public', async (publicDb) => {
     return publicDb.execute<{ schema_name: string }>(sql`
       SELECT schema_name
       FROM tenants
-      WHERE is_active = true
+      WHERE status == 'active'
       ORDER BY schema_name ASC
     `);
   });

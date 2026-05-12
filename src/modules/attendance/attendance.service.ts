@@ -587,6 +587,7 @@ export class AttendanceService {
       allStudentIds,
     });
 
+    // Envoyer les notifications pour les élèves marqués absents
     const notificationCandidates =
       await this.repository.listStudentAbsenceNotificationCandidates({
         schemaName: context.schemaName,

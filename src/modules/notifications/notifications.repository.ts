@@ -362,9 +362,10 @@ export const defaultRepository: NotificationsRepository = {
   async listNotificationLog(tenantDb, params) {
     const safeLimit = Math.max(1, Math.min(params.limit, 50));
     const filteredTypes = params.types?.filter(Boolean) ?? [];
+    const DIRECTOR_EXCLUDED_TYPES = ['student_absent_parent'] as const;
     const whereClause =
       filteredTypes.length === 0
-        ? sql``
+        ? sql`WHERE type NOT IN (${sql.join(DIRECTOR_EXCLUDED_TYPES.map((item) => sql`${item}`), sql`, `)})`
         : sql`WHERE type IN (${sql.join(filteredTypes.map((item) => sql`${item}`), sql`, `)})`;
     const columnsResult = await asExecutor(tenantDb).execute<{
       has_channel: boolean;

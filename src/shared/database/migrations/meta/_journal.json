@@ -120,6 +120,20 @@
       "when": 1777422600000,
       "tag": "0019_subscriptions_runtime_support",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1747008000000,
+      "tag": "0033_parent_email_field",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1747008060000,
+      "tag": "0034_attendance_approved_notification",
+      "breakpoints": true
     }
   ]
 }

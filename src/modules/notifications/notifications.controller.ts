@@ -20,6 +20,10 @@ const notificationTypes: NotificationType[] = [
   'qr_invalid_alert',
   'student_absent_parent',
   'attendance_rejected',
+  'attendance_approved',
+  'scan_end_warning',
+  'scan_end_sanction',
+  'scan_end_sanction_cancelled',
   'subscription_expiry_alert',
   'payment_reminder',
   'custom',
@@ -416,9 +420,9 @@ export default async function notificationsController(
           SELECT id::text, type::text, message, created_at::text, metadata
           FROM notifications_log
           WHERE recipient_id = ${claims.sub}::uuid
-            AND type = 'attendance_rejected'
+            AND type IN ('attendance_rejected', 'attendance_approved', 'scan_end_warning', 'scan_end_sanction', 'scan_end_sanction_cancelled')
           ORDER BY created_at DESC
-          LIMIT 10
+          LIMIT 20
         `);
         return result.rows;
       });

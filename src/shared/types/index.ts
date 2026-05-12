@@ -59,6 +59,7 @@ export type NotificationType =
   | 'qr_invalid_alert'
   | 'student_absent_parent'
   | 'attendance_rejected'
+  | 'attendance_approved'
   | 'scan_end_warning'
   | 'scan_end_sanction'
   | 'scan_end_sanction_cancelled'

@@ -63,6 +63,26 @@ export class ValidationsService {
       },
     });
 
+    await this.repository.insertApprovedTeacherNotification({
+      context: before.ctx,
+      validatedHours: before.validatedHours,
+      validatedBy: context.userId,
+    });
+    emit('teacher.attendance_approved', {
+      tenantId: context.tenantId ?? '',
+      schemaName: context.schemaName,
+      teacherId: before.ctx.teacher_id,
+      teacherUserId: before.ctx.teacher_user_id,
+      teacherName: before.ctx.teacher_name,
+      teacherPhone: before.ctx.teacher_phone,
+      teacherEmail: before.ctx.teacher_email,
+      attendanceId: before.ctx.attendance_id,
+      courseName: before.ctx.course_name,
+      date: before.ctx.date,
+      validatedHours: before.validatedHours,
+      validatedBy: context.userId,
+    });
+
     return { success: true };
   }
 

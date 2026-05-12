@@ -39,6 +39,7 @@ export const createStudentBodySchema = z.object({
   last_name: z.string().trim().min(1).max(100),
   parent_name: parentNameSchema.optional().default(null),
   parent_phone: parentPhoneSchema.default(null),
+  parent_email: z.string().trim().email().nullable().optional().default(null),
   parent_name_2: parentNameSchema.optional().default(null),
   parent_phone_2: parentPhone2Schema.optional().default(null),
   notes: z.string().trim().max(5000).nullable().optional().default(null),
@@ -56,6 +57,7 @@ export const updateStudentBodySchema = z
     last_name: z.string().trim().min(1).max(100).optional(),
     parent_name: parentNameSchema.optional(),
     parent_phone: parentPhoneSchema.optional(),
+    parent_email: z.string().trim().email().nullable().optional(),
     parent_name_2: parentNameSchema.optional(),
     parent_phone_2: parentPhone2Schema.optional(),
     notes: z.string().trim().max(5000).nullable().optional(),
@@ -133,6 +135,7 @@ export type StudentRecord = {
   lastName: string;
   parentName?: string | null;
   parentPhone: string | null;
+  parentEmail?: string | null;
   parentName2?: string | null;
   parentPhone2: string | null;
   note?: string | null;
@@ -176,6 +179,7 @@ export type StudentDetailRecord = {
   classId: string;
   isActive: boolean;
   parentPhone: string | null;
+  parentEmail: string | null;
   parentPhone2: string | null;
   parentName: string | null;
   parentName2: string | null;

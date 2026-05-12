@@ -327,6 +327,47 @@ export class ValidationsRepository {
     `);
   }
 
+  async insertApprovedTeacherNotification(params: {
+    context: AttendanceValidationContextRow;
+    validatedHours: number;
+    validatedBy: string;
+  }): Promise<void> {
+    const validatedHoursLabel =
+      params.validatedHours > 0
+        ? `${params.validatedHours.toFixed(2).replace('.00', '')}h validées`
+        : 'heures validées';
+    const message = `Votre présence pour ${params.context.course_name} du ${params.context.date} a été validée. ${validatedHoursLabel}.`;
+    await this.db.execute(sql`
+      INSERT INTO notifications_log (
+        type,
+        channel,
+        recipient_id,
+        recipient_phone,
+        recipient_email,
+        message,
+        status,
+        related_id,
+        metadata
+      )
+      VALUES (
+        'attendance_approved',
+        'email',
+        ${params.context.teacher_user_id}::uuid,
+        ${params.context.teacher_phone ?? ''},
+        ${params.context.teacher_email ?? null},
+        ${message},
+        'queued',
+        ${params.context.attendance_id}::uuid,
+        ${JSON.stringify({
+          courseName: params.context.course_name,
+          date: params.context.date,
+          validatedHours: params.validatedHours,
+          validatedBy: params.validatedBy,
+        })}::jsonb
+      )
+    `);
+  }
+
   async auditValidation(params: {
     schemaName: string;
     actorId: string;
@@ -794,7 +835,7 @@ export class ValidationsRepository {
         metadata
       FROM notifications_log
       WHERE recipient_id = ${userId}::uuid
-        AND type IN ('attendance_rejected', 'scan_end_warning')
+        AND type IN ('attendance_rejected', 'attendance_approved', 'scan_end_warning', 'scan_end_sanction', 'scan_end_sanction_cancelled')
       ORDER BY created_at DESC
       LIMIT 50
     `);
@@ -815,7 +856,7 @@ export class ValidationsRepository {
       FROM notifications_log
       WHERE id = ${notificationId}::uuid
         AND recipient_id = ${userId}::uuid
-        AND type IN ('attendance_rejected', 'scan_end_warning')
+        AND type IN ('attendance_rejected', 'attendance_approved', 'scan_end_warning', 'scan_end_sanction', 'scan_end_sanction_cancelled')
       LIMIT 1
     `);
     return getRows(result)[0] ?? null;
@@ -834,7 +875,7 @@ export class ValidationsRepository {
       UPDATE notifications_log
       SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('read_at', NOW()::text)
       WHERE recipient_id = ${userId}::uuid
-        AND type IN ('attendance_rejected', 'scan_end_warning')
+        AND type IN ('attendance_rejected', 'attendance_approved', 'scan_end_warning', 'scan_end_sanction', 'scan_end_sanction_cancelled')
         AND (metadata->>'read_at' IS NULL)
     `);
   }

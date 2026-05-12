@@ -14,6 +14,7 @@ import type {
   EventMap,
   StudentAbsentPayload,
   SubscriptionExpiredPayload,
+  TeacherAttendanceApprovedPayload,
   TeacherAttendanceRejectedPayload,
   TeacherLatePayload,
   TeacherQrAlertPayload,
@@ -48,11 +49,11 @@ type NotificationsServiceDeps = {
     callback: (tenantDb: TenantDbLike) => Promise<T>
   ) => Promise<T>;
   eventBus: {
-    on: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'teacher.qr_invalid' | 'teacher.attendance_rejected' | 'student.absent' | 'subscription.expired'>>(
+    on: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'teacher.qr_invalid' | 'teacher.attendance_rejected' | 'teacher.attendance_approved' | 'student.absent' | 'subscription.expired'>>(
       event: K,
       handler: (payload: EventMap[K]) => void
     ) => void;
-    off: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'teacher.qr_invalid' | 'teacher.attendance_rejected' | 'student.absent' | 'subscription.expired'>>(
+    off: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'teacher.qr_invalid' | 'teacher.attendance_rejected' | 'teacher.attendance_approved' | 'student.absent' | 'subscription.expired'>>(
       event: K,
       handler: (payload: EventMap[K]) => void
     ) => void;
@@ -582,7 +583,7 @@ const sendBrevoEmail = async (params: {
 
 export const defaultEmailSender: EmailSender = async ({ to, subject, text }) => {
   const provider = (process.env.EMAIL_PROVIDER ?? 'mock').trim().toLowerCase();
-  const mockEnabled = (process.env.EMAIL_MOCK ?? 'true').toLowerCase() === 'true';
+  const mockEnabled = (process.env.EMAIL_MOCK ?? 'false').toLowerCase() === 'true';
   if (provider === 'mock' || mockEnabled) {
     console.info(`[email][mock] to=${to}`);
     return { status: 'sent', providerRef: 'mock-email' };
@@ -704,6 +705,14 @@ export class NotificationsService {
     });
   };
 
+  private readonly teacherAttendanceApprovedListener = (
+    payload: EventMap['teacher.attendance_approved']
+  ): void => {
+    void this.handleTeacherAttendanceApproved(payload).catch((error) => {
+      console.error('[notifications] failed to process teacher.attendance_approved', error);
+    });
+  };
+
   private readonly studentAbsentListener = (payload: EventMap['student.absent']): void => {
     void this.handleStudentAbsent(payload).catch((error) => {
       console.error('[notifications] failed to process student.absent', error);
@@ -729,6 +738,10 @@ export class NotificationsService {
         'teacher.attendance_rejected',
         this.teacherAttendanceRejectedListener
       );
+      this.deps.eventBus.on(
+        'teacher.attendance_approved',
+        this.teacherAttendanceApprovedListener
+      );
     }
     this.deps.eventBus.on('student.absent', this.studentAbsentListener);
     this.deps.eventBus.on('subscription.expired', this.subscriptionExpiredListener);
@@ -743,6 +756,10 @@ export class NotificationsService {
       this.deps.eventBus.off(
         'teacher.attendance_rejected',
         this.teacherAttendanceRejectedListener
+      );
+      this.deps.eventBus.off(
+        'teacher.attendance_approved',
+        this.teacherAttendanceApprovedListener
       );
     }
     this.deps.eventBus.off('student.absent', this.studentAbsentListener);
@@ -1008,6 +1025,125 @@ export class NotificationsService {
           removeOnFail: true,
         }
       );
+    });
+  }
+
+  async handleTeacherAttendanceApproved(
+    payload: TeacherAttendanceApprovedPayload
+  ): Promise<void> {
+    const tasks: Array<Promise<void>> = [];
+
+    await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
+      const validatedHoursLabel =
+        payload.validatedHours > 0
+          ? `${payload.validatedHours.toFixed(2).replace('.00', '')}h validées`
+          : 'heures validées';
+
+      if (payload.teacherPhone) {
+        const smsMessage = `[EduTrack] Présence validée — ${payload.courseName} du ${payload.date}. ${validatedHoursLabel}. Consultez l'app pour le détail.`;
+        const smsQueueRef = buildQueueRef(payload.schemaName, 'attendance_approved');
+
+        await (tenantDb as NodePgDatabase<Record<string, unknown>>).execute(sql`
+          WITH target AS (
+            SELECT id FROM notifications_log
+            WHERE type = 'attendance_approved'
+              AND channel = 'sms'
+              AND related_id = ${payload.attendanceId}::uuid
+              AND recipient_id = ${payload.teacherUserId}::uuid
+            ORDER BY created_at DESC LIMIT 1
+          )
+          UPDATE notifications_log
+          SET provider_ref = ${smsQueueRef}, message = ${smsMessage}, status = 'queued'
+          WHERE id IN (SELECT id FROM target)
+        `);
+
+        tasks.push(
+          this.deps.smsQueue.add(
+            'send-sms',
+            toSmsJobData({
+              queueRef: smsQueueRef,
+              to: payload.teacherPhone,
+              message: smsMessage,
+              notificationType: 'attendance_approved',
+              schemaName: payload.schemaName,
+              relatedId: payload.attendanceId,
+            }),
+            {
+              jobId: smsQueueRef,
+              attempts: 3,
+              backoff: { type: 'exponential', delay: 5_000 },
+              removeOnComplete: true,
+              removeOnFail: true,
+            }
+          ).then(() => undefined)
+        );
+
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'attendance_approved',
+          channel: 'sms',
+          recipientPhone: payload.teacherPhone,
+          message: smsMessage,
+          status: 'queued',
+          providerRef: smsQueueRef,
+          relatedId: payload.attendanceId,
+        });
+      }
+
+      if (payload.teacherEmail) {
+        const emailText = `Votre présence pour le cours ${payload.courseName} du ${payload.date} a été validée.\n${validatedHoursLabel}.\nConsultez votre espace EduTrack pour le récapitulatif.`;
+        const emailQueueRef = buildQueueRef(payload.schemaName, 'attendance_approved');
+
+        await (tenantDb as NodePgDatabase<Record<string, unknown>>).execute(sql`
+          WITH target AS (
+            SELECT id FROM notifications_log
+            WHERE type = 'attendance_approved'
+              AND channel = 'email'
+              AND related_id = ${payload.attendanceId}::uuid
+              AND recipient_id = ${payload.teacherUserId}::uuid
+            ORDER BY created_at DESC LIMIT 1
+          )
+          UPDATE notifications_log
+          SET provider_ref = ${emailQueueRef}, message = ${emailText},
+              recipient_email = ${payload.teacherEmail}, status = 'queued'
+          WHERE id IN (SELECT id FROM target)
+        `);
+
+        tasks.push(
+          this.deps.smsQueue.add(
+            'send-email',
+            toEmailJobData({
+              queueRef: emailQueueRef,
+              to: payload.teacherEmail,
+              subject: `[EduTrack] Présence validée — ${payload.courseName} du ${payload.date}`,
+              text: emailText,
+              recipientPhone: payload.teacherPhone ?? '',
+              notificationType: 'attendance_approved',
+              schemaName: payload.schemaName,
+              relatedId: payload.attendanceId,
+            }),
+            {
+              jobId: emailQueueRef,
+              attempts: 3,
+              backoff: { type: 'exponential', delay: 5_000 },
+              removeOnComplete: true,
+              removeOnFail: true,
+            }
+          ).then(() => undefined)
+        );
+
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'attendance_approved',
+          channel: 'email',
+          recipientPhone: payload.teacherPhone ?? '',
+          recipientEmail: payload.teacherEmail,
+          message: emailText,
+          status: 'queued',
+          providerRef: emailQueueRef,
+          relatedId: payload.attendanceId,
+        });
+      }
+
+      await Promise.all(tasks);
     });
   }
 

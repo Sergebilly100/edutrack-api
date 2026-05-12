@@ -51,6 +51,21 @@ export type TeacherAttendanceRejectedPayload = {
   validatedBy: string;
 };
 
+export type TeacherAttendanceApprovedPayload = {
+  tenantId: string;
+  schemaName: string;
+  teacherId: string;
+  teacherUserId: string;
+  teacherName: string;
+  teacherPhone?: string | null;
+  teacherEmail?: string | null;
+  attendanceId: string;
+  courseName: string;
+  date: string;
+  validatedHours: number;
+  validatedBy: string;
+};
+
 export type TeacherAbsentPayload = {
   tenantId: string;
   schemaName: string;
@@ -135,6 +150,7 @@ export type EventMap = {
   'teacher.qr_alert': TeacherQrAlertPayload;
   'teacher.qr_invalid': TeacherQrInvalidPayload;
   'teacher.attendance_rejected': TeacherAttendanceRejectedPayload;
+  'teacher.attendance_approved': TeacherAttendanceApprovedPayload;
   'teacher.absent': TeacherAbsentPayload;
   'teacher.*':
     | TeacherCheckedInPayload
@@ -142,6 +158,7 @@ export type EventMap = {
     | TeacherQrAlertPayload
     | TeacherQrInvalidPayload
     | TeacherAttendanceRejectedPayload
+    | TeacherAttendanceApprovedPayload
     | TeacherAbsentPayload;
   'student.absent': StudentAbsentPayload;
   'subscription.expired': SubscriptionExpiredPayload;
