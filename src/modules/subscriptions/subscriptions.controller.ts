@@ -21,6 +21,7 @@ import {
   revenueHistoryQuerySchema,
   revenueSummaryQuerySchema,
   renewParentSubscriptionBodySchema,
+  updateParentContactBodySchema,
   subscriptionClassesQuerySchema,
   subscriptionClassStudentsQuerySchema,
   updateSmsPriceBodySchema,
@@ -208,6 +209,31 @@ export default async function subscriptionsController(app: FastifyInstance): Pro
           });
         });
         return reply.code(201).send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.patch(
+    '/api/v1/subscriptions/parents/:parentId/contact',
+    { preHandler: requirePermission('subscriptions.create') },
+    async (request, reply) => {
+      try {
+        const { parentId } = parentIdParamsSchema.parse(request.params ?? {});
+        const body = updateParentContactBodySchema.parse(request.body ?? {});
+        const claims = request.claims!;
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          const service = new SubscriptionsService(new SubscriptionsRepository(tenantDb));
+          return service.updateParentContact({
+            parentId,
+            actorUserId: claims.sub,
+            actorRole: claims.role,
+            schemaName: claims.schemaName,
+            payload: body,
+          });
+        });
+        return reply.send(result);
       } catch (error) {
         return handleError(request, reply, error);
       }

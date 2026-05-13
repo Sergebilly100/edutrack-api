@@ -333,6 +333,7 @@ export default async function billingController(
             actor: {
               userId: claims.sub,
               role: claims.role as 'director' | 'staff' | 'teacher' | 'super_admin',
+              schemaName: claims.schemaName,
             },
           });
         });

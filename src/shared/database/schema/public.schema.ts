@@ -14,6 +14,8 @@ import {
   timestamp,
   uuid,
   varchar,
+  serial,
+  bigint,
 } from 'drizzle-orm/pg-core';
 
 export const tenantPlanEnum = pgEnum('tenant_plan', [
@@ -178,6 +180,7 @@ export const schoolSmsFeatures = pgTable(
     useRealHours: boolean('use_real_hours').notNull().default(false),
     geoCheckEnabled: boolean('geo_check_enabled').notNull().default(false),
     checkoutToleranceMinutes: integer('checkout_tolerance_minutes').notNull().default(5),
+    requireEndScan: boolean("require_end_scan").default(false).notNull(),
     activatedAt: timestamp('activated_at', { withTimezone: true, mode: 'date' }),
     activatedBy: uuid('activated_by'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
@@ -250,3 +253,29 @@ export const edutrackCommissionRecords = pgTable(
     ),
   })
 );
+
+export const smsAdminAuditLog = pgTable("sms_admin_audit_log", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  adminId: uuid("admin_id"),
+  action: varchar({ length: 80 }).notNull(),
+  details: jsonb().default({}).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+});
+
+export const planCatalog = pgTable("plan_catalog", {
+  plan: tenantPlanEnum().primaryKey().notNull(),
+  monthlyPriceFcfa: integer("monthly_price_fcfa").default(0).notNull(),
+  annualPriceFcfa: integer("annual_price_fcfa").default(0).notNull(),
+  defaultBillingCycle: billingCycleEnum("default_billing_cycle").default('monthly').notNull(),
+  maxUsers: integer("max_users").default(10).notNull(),
+  maxAdminPositions: integer("max_admin_positions").default(5).notNull(),
+  maxSmsPerMonth: integer("max_sms_per_month").default(2000).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+});
+
+export const drizzleMigrations = pgTable("drizzle_migrations", {
+  id: serial().primaryKey().notNull(),
+  hash: text().notNull(),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  createdAt: bigint("created_at", { mode: "number" }),
+});

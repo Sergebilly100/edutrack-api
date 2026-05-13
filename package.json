@@ -14,6 +14,7 @@
     "test:integration": "vitest run --project=integration",
     "test:integration:a3": "vitest run tests/integration/permissions.routes.test.ts",
     "test:integration:a5": "vitest run tests/integration/admin.v3.routes.test.ts",
+    "smoke:notifications": "tsx scripts/notification-smoke.ts",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",

@@ -388,6 +388,7 @@ export class BillingService {
                 paid_at: teacherMetrics.paid_at,
                 paid_by: teacherMetrics.paid_by ?? '',
                 paid_by_name: teacherMetrics.paid_by_name,
+                paid_by_role: null,
                 notes: teacherMonthlyRecord?.notes ?? teacherMetrics.notes ?? null,
               },
             ]
@@ -422,6 +423,7 @@ export class BillingService {
         paidAt: lastPayment?.paid_at ?? teacherMetrics?.paid_at ?? null,
         paidBy: lastPayment?.paid_by ?? teacherMetrics?.paid_by ?? null,
         paidByName: lastPayment?.paid_by_name ?? teacherMetrics?.paid_by_name ?? null,
+        paidByRole: lastPayment?.paid_by_role ?? null,
         notes: lastPayment?.notes ?? teacherMonthlyRecord?.notes ?? teacherMetrics?.notes ?? null,
       },
       payments: normalizedPaymentRows.map((paymentRow) => ({
@@ -431,6 +433,7 @@ export class BillingService {
         paidAt: paymentRow.paid_at,
         paidBy: paymentRow.paid_by,
         paidByName: paymentRow.paid_by_name,
+        paidByRole: paymentRow.paid_by_role,
         notes: paymentRow.notes,
       })),
       rows,
@@ -531,7 +534,7 @@ export class BillingService {
     status: 'paid' | 'disputed';
     notes?: string;
     hoursToPay?: number;
-    actor: { userId: string; role: 'director' | 'staff' | 'teacher' | 'super_admin' };
+    actor: { userId: string; role: 'director' | 'staff' | 'teacher' | 'super_admin'; schemaName: string };
   }) {
     if (input.status === 'paid' && input.actor.role !== 'director') {
       throw new BillingModuleError(
@@ -637,6 +640,25 @@ export class BillingService {
       throw new BillingModuleError('Salary record not found', 404, 'SALARY_RECORD_NOT_FOUND');
     }
 
+    await this.repository.auditSalaryAction({
+      schemaName: input.actor.schemaName,
+      actorId: input.actor.userId,
+      actorRole: input.actor.role,
+      action: input.status === 'paid' ? 'salary.mark_paid' : 'salary.mark_disputed',
+      before: existing,
+      after: {
+        recordId: updated.id,
+        teacherId: updated.teacher_id,
+        periodMonth: updated.period_month,
+        status: updated.status,
+        totalFcfa: updated.total_fcfa,
+        paidAt: updated.paid_at,
+        paidBy: updated.paid_by,
+        notes: updated.notes,
+        hoursToPay: input.hoursToPay ?? null,
+      },
+    });
+
     return {
       record: {
         id: updated.id,
@@ -685,6 +707,7 @@ export class BillingService {
         paidAt: row.paid_at,
         paidBy: row.paid_by,
         paidByName: row.paid_by_name,
+        paidByRole: row.paid_by_role,
         notes: row.notes,
       })),
     };

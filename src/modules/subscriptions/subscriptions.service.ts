@@ -14,6 +14,7 @@ import type {
   ListParentsQuery,
   NotificationChannel,
   RenewParentSubscriptionBody,
+  UpdateParentContactBody,
 } from './subscriptions.types.js';
 
 export class SubscriptionsModuleError extends Error {
@@ -332,6 +333,61 @@ export class SubscriptionsService {
     });
 
     return { id: subscriptionId, starts_at: startsAt, ends_at: endsAt, total_amount_fcfa: totalAmount };
+  }
+
+  async updateParentContact(input: {
+    parentId: string;
+    actorUserId: string;
+    actorRole: string;
+    schemaName: string;
+    payload: UpdateParentContactBody;
+  }) {
+    const parent = await this.repository.getParentById(input.parentId);
+    if (!parent) {
+      throw new SubscriptionsModuleError('Parent not found', 404, 'PARENT_NOT_FOUND');
+    }
+
+    const activeSubscription = await this.repository.getActiveSubscriptionByParentId(input.parentId);
+    if (!activeSubscription) {
+      throw new SubscriptionsModuleError(
+        'Parent contact can only be updated for an active subscription',
+        409,
+        'ACTIVE_SUBSCRIPTION_REQUIRED'
+      );
+    }
+
+    const existingParent = await this.repository.findParentByPhone(input.payload.phone);
+    if (existingParent && existingParent.id !== input.parentId) {
+      throw new SubscriptionsModuleError('Parent already exists', 409, 'PARENT_ALREADY_EXISTS');
+    }
+
+    const actorUserId = await this.resolveActorUserId(input.actorUserId);
+    const updated = await this.repository.updateParentContact({
+      parentId: input.parentId,
+      phone: input.payload.phone,
+      email: input.payload.email ?? null,
+    });
+
+    await this.repository.auditParentContactUpdate({
+      schemaName: input.schemaName,
+      actorId: actorUserId,
+      actorRole: input.actorRole,
+      subscriptionId: activeSubscription.id,
+      before: {
+        parentId: parent.id,
+        fullName: parent.full_name,
+        phone: parent.phone,
+        email: parent.email,
+      },
+      after: {
+        parentId: updated.id,
+        fullName: updated.full_name,
+        phone: updated.phone,
+        email: updated.email,
+      },
+    });
+
+    return { parent: updated };
   }
 
   async cancelSubscription(subscriptionId: string, parentId: string, actorUserId: string): Promise<void> {

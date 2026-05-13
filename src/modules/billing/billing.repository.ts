@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { QueryResult, QueryResultRow } from 'pg';
+import { db as publicDb } from '../../shared/database/db.js';
 import { ensureTenantRealHoursInfrastructure } from '../../shared/database/real-hours-infrastructure.js';
 import { toNumber } from '../../shared/utils/numbers.js';
 
@@ -88,6 +89,7 @@ type SalaryPaymentHistoryRow = {
   paid_at: string | null;
   paid_by: string | null;
   paid_by_name: string | null;
+  paid_by_role: string | null;
   notes: string | null;
 };
 
@@ -112,6 +114,7 @@ type SalaryPaymentRow = {
   paid_at: string;
   paid_by: string;
   paid_by_name: string | null;
+  paid_by_role: string | null;
   notes: string | null;
 };
 
@@ -651,6 +654,14 @@ export class BillingRepository {
           sr.paid_at AS salary_paid_at_ts,
           sp.paid_by,
           up.name AS paid_by_name,
+          (
+            SELECT p.name
+            FROM position_assignments pa
+            INNER JOIN admin_positions p ON p.id = pa.position_id
+            WHERE pa.user_id = sp.paid_by
+            ORDER BY pa.created_at DESC
+            LIMIT 1
+          ) AS paid_by_role,
           sp.notes
         FROM salary_payments sp
         INNER JOIN salary_records sr ON sr.id = sp.salary_record_id
@@ -700,6 +711,14 @@ export class BillingRepository {
           sr.paid_at::text AS paid_at,
           sr.paid_by,
           up.name AS paid_by_name,
+          (
+            SELECT p.name
+            FROM position_assignments pa
+            INNER JOIN admin_positions p ON p.id = pa.position_id
+            WHERE pa.user_id = sr.paid_by
+            ORDER BY pa.created_at DESC
+            LIMIT 1
+          ) AS paid_by_role,
           sr.notes
         FROM salary_records sr
         LEFT JOIN users up ON up.id = sr.paid_by
@@ -748,6 +767,7 @@ export class BillingRepository {
         paid_at,
         paid_by,
         paid_by_name,
+        paid_by_role,
         notes
       FROM (
         SELECT
@@ -760,6 +780,7 @@ export class BillingRepository {
           paid_at,
           paid_by,
           paid_by_name,
+          paid_by_role,
           notes
         FROM explicit_payments
         UNION ALL
@@ -773,6 +794,7 @@ export class BillingRepository {
           paid_at,
           paid_by,
           paid_by_name,
+          paid_by_role,
           notes
         FROM inferred_legacy_records
       ) payments
@@ -1029,6 +1051,7 @@ export class BillingRepository {
         paid_at: row.payment_paid_at,
         paid_by: input.paidBy,
         paid_by_name: null,
+        paid_by_role: null,
         notes: input.notes ?? null,
       },
       paidHoursBefore: toNumber(row.paid_hours_before),
@@ -1046,6 +1069,14 @@ export class BillingRepository {
         sp.paid_at::text,
         sp.paid_by,
         up.name AS paid_by_name,
+        (
+          SELECT p.name
+          FROM position_assignments pa
+          INNER JOIN admin_positions p ON p.id = pa.position_id
+          WHERE pa.user_id = sp.paid_by
+          ORDER BY pa.created_at DESC
+          LIMIT 1
+        ) AS paid_by_role,
         sp.notes
       FROM salary_payments sp
       LEFT JOIN users up ON up.id = sp.paid_by
@@ -1088,6 +1119,57 @@ export class BillingRepository {
     `);
 
     return getRows(result)[0] ?? null;
+  }
+
+  async auditSalaryAction(params: {
+    schemaName: string;
+    actorId: string;
+    actorRole: string;
+    action: 'salary.mark_paid' | 'salary.mark_disputed';
+    before: Record<string, unknown>;
+    after: Record<string, unknown>;
+  }): Promise<void> {
+    const actorResult = await this.db.execute<{ actor_name: string | null; actor_position: string | null }>(sql`
+      SELECT
+        u.name AS actor_name,
+        (
+          SELECT p.name
+          FROM position_assignments pa
+          INNER JOIN admin_positions p ON p.id = pa.position_id
+          WHERE pa.user_id = u.id
+          ORDER BY pa.created_at DESC
+          LIMIT 1
+        ) AS actor_position
+      FROM users u
+      WHERE u.id = ${params.actorId}::uuid
+      LIMIT 1
+    `);
+    const actor = actorResult.rows[0] ?? { actor_name: null, actor_position: null };
+
+    await publicDb.execute(sql`
+      INSERT INTO public.audit_financial_events (
+        tenant_id,
+        actor_id,
+        actor_role,
+        action,
+        payload_before,
+        payload_after
+      )
+      SELECT
+        t.id,
+        ${params.actorId}::uuid,
+        ${actor.actor_position ?? params.actorRole},
+        ${params.action},
+        ${JSON.stringify(params.before)}::jsonb,
+        ${JSON.stringify({
+          ...params.after,
+          actorName: actor.actor_name,
+          actorRole: actor.actor_position ?? params.actorRole,
+        })}::jsonb
+      FROM public.tenants t
+      WHERE t.schema_name = ${params.schemaName}
+      LIMIT 1
+    `);
   }
 
   async listTeacherSalaryRecordsInRange(input: {

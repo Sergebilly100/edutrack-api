@@ -48,8 +48,9 @@ export class ValidationsService {
       );
       return { ctx, validatedHours };
     });
-
+    // actualiser le cache de salaire de l'enseignant pour la date concernée
     await this.repository.recomputeForAttendanceDate(before.ctx.teacher_id, before.ctx.date);
+    // Auditer l'action d'approbation
     await this.repository.auditValidation({
       schemaName: context.schemaName,
       actorId: context.userId,
@@ -62,7 +63,7 @@ export class ValidationsService {
         validatedHours: before.validatedHours,
       },
     });
-
+    // Envoyer la notification d'approbation à l'enseignant
     await this.repository.insertApprovedTeacherNotification({
       context: before.ctx,
       validatedHours: before.validatedHours,
@@ -85,7 +86,7 @@ export class ValidationsService {
 
     return { success: true };
   }
-
+  // ajout de la possibilité de rejeter une validation d'assiduité, avec envoi d'une notification à l'enseignant et audit de l'action
   async reject(
     input: { attendanceId: string; reason: string },
     context: ServiceContext
@@ -122,10 +123,11 @@ export class ValidationsService {
       validatedBy: context.userId,
     });
     await this.repository.recomputeForAttendanceDate(before.teacher_id, before.date);
+    // Auditer l'action de rejet
     await this.repository.auditValidation({
-      schemaName: context.schemaName,
-      actorId: context.userId,
-      actorRole: context.role,
+      schemaName: context.schemaName, 
+      actorId: context.userId, // ID de l'utilisateur qui rejette la validation
+      actorRole: context.role, // Rôle de l'utilisateur qui rejette la validation
       action: 'attendance_validation_rejected',
       before,
       after: {

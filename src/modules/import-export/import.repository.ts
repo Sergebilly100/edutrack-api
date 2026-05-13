@@ -38,6 +38,9 @@ type ImportHistoryRow = {
   import_type: ImportType;
   imported_count: number;
   updated_count: number;
+  imported_by: string | null;
+  imported_by_name: string | null;
+  imported_by_role: string | null;
 };
 
 export type ImportHistoryFilter = {
@@ -153,6 +156,8 @@ export type ImportRepository = {
       importType: ImportType;
       importedCount: number;
       updatedCount: number;
+      importedBy?: string;
+      importedByRole?: string;
     }
   ) => Promise<void>;
   listImportHistory: (
@@ -680,8 +685,14 @@ export const defaultImportRepository: ImportRepository = {
 
   async createImportHistory(db, entry) {
     await db.execute(sql`
-      INSERT INTO import_history (import_type, imported_count, updated_count)
-      VALUES (${entry.importType}, ${entry.importedCount}, ${entry.updatedCount})
+      INSERT INTO import_history (import_type, imported_count, updated_count, imported_by, imported_by_role)
+      VALUES (
+        ${entry.importType},
+        ${entry.importedCount},
+        ${entry.updatedCount},
+        ${entry.importedBy ?? null}::uuid,
+        ${entry.importedByRole ?? null}
+      )
     `);
   },
 
@@ -703,10 +714,27 @@ export const defaultImportRepository: ImportRepository = {
 
     const [itemsResult, countResult] = await Promise.all([
       db.execute(sql`
-        SELECT id, imported_at::text AS imported_at, import_type, imported_count, updated_count
-        FROM import_history
+        SELECT
+          ih.id,
+          ih.imported_at::text AS imported_at,
+          ih.import_type,
+          ih.imported_count,
+          ih.updated_count,
+          ih.imported_by::text,
+          u.name AS imported_by_name,
+          COALESCE(ih.imported_by_role, ap.name, u.role::text) AS imported_by_role
+        FROM import_history ih
+        LEFT JOIN users u ON u.id = ih.imported_by
+        LEFT JOIN LATERAL (
+          SELECT p.name
+          FROM position_assignments pa
+          INNER JOIN admin_positions p ON p.id = pa.position_id
+          WHERE pa.user_id = ih.imported_by
+          ORDER BY pa.created_at DESC
+          LIMIT 1
+        ) ap ON true
         ${where}
-        ORDER BY imported_at DESC
+        ORDER BY ih.imported_at DESC
         LIMIT ${limit} OFFSET ${offset}
       `),
       db.execute(sql`

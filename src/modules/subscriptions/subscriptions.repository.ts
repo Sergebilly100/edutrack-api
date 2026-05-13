@@ -895,6 +895,90 @@ export class SubscriptionsRepository {
     return result.rows[0] ?? null;
   }
 
+  async getActiveSubscriptionByParentId(parentId: string): Promise<{ id: string } | null> {
+    const today = todayInBusinessTimezone();
+    const result = await this.tenantDb.execute<{ id: string }>(sql`
+      SELECT id::text AS id
+      FROM parent_subscriptions
+      WHERE parent_id = ${parentId}::uuid
+        AND status = 'active'
+        AND ends_at >= ${today}::date
+      ORDER BY ends_at DESC, created_at DESC
+      LIMIT 1
+    `);
+    return result.rows[0] ?? null;
+  }
+
+  async updateParentContact(params: {
+    parentId: string;
+    phone: string;
+    email: string | null;
+  }): Promise<ParentDetailRow> {
+    const result = await this.tenantDb.execute<ParentDetailRow>(sql`
+      UPDATE parents
+      SET phone = ${params.phone},
+          email = ${params.email}
+      WHERE id = ${params.parentId}::uuid
+      RETURNING id::text, full_name, phone, email, is_active, created_at::text
+    `);
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error('Failed to update parent contact');
+    }
+    return row;
+  }
+
+  async auditParentContactUpdate(params: {
+    schemaName: string;
+    actorId: string;
+    actorRole: string;
+    subscriptionId: string;
+    before: Record<string, unknown>;
+    after: Record<string, unknown>;
+  }): Promise<void> {
+    const actorResult = await this.tenantDb.execute<{ actor_name: string | null; actor_position: string | null }>(sql`
+      SELECT
+        u.name AS actor_name,
+        (
+          SELECT p.name
+          FROM position_assignments pa
+          INNER JOIN admin_positions p ON p.id = pa.position_id
+          WHERE pa.user_id = u.id
+          ORDER BY pa.created_at DESC
+          LIMIT 1
+        ) AS actor_position
+      FROM users u
+      WHERE u.id = ${params.actorId}::uuid
+      LIMIT 1
+    `);
+    const actor = actorResult.rows[0] ?? { actor_name: null, actor_position: null };
+    await publicDb.execute(sql`
+      INSERT INTO public.audit_financial_events (
+        tenant_id,
+        actor_id,
+        actor_role,
+        action,
+        payload_before,
+        payload_after
+      )
+      SELECT
+        t.id,
+        ${params.actorId}::uuid,
+        ${actor.actor_position ?? params.actorRole},
+        'subscription.parent_contact_updated',
+        ${JSON.stringify(params.before)}::jsonb,
+        ${JSON.stringify({
+          ...params.after,
+          subscriptionId: params.subscriptionId,
+          actorName: actor.actor_name,
+          actorRole: actor.actor_position ?? params.actorRole,
+        })}::jsonb
+      FROM public.tenants t
+      WHERE t.schema_name = ${params.schemaName}
+      LIMIT 1
+    `);
+  }
+
   async getSubscriptionById(subscriptionId: string): Promise<{ id: string; parent_id: string; status: SubscriptionStatus } | null> {
     const result = await this.tenantDb.execute<{ id: string; parent_id: string; status: SubscriptionStatus }>(sql`
       SELECT id::text, parent_id::text, status::text AS status

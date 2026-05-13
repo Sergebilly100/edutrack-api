@@ -161,10 +161,17 @@ const requireAnyImportPermission = async (
   }
 };
 
-const getTenantContext = (request: FastifyRequest): { tenantId: string; schemaName: string } | undefined => {
+const getTenantContext = (
+  request: FastifyRequest
+): { tenantId: string; schemaName: string; actorUserId: string; actorRole: string } | undefined => {
   const claims = request.claims;
   if (!claims?.schemaName) return undefined;
-  return { tenantId: claims.sub, schemaName: claims.schemaName };
+  return {
+    tenantId: claims.tenantId ?? '',
+    schemaName: claims.schemaName,
+    actorUserId: claims.sub,
+    actorRole: claims.role,
+  };
 };
 
 export default async function importExportController(app: FastifyInstance): Promise<void> {

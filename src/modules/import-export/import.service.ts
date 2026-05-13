@@ -566,7 +566,7 @@ export class ImportService {
       mode?: ImportMode;
       schedulePeriod?: SchedulePeriodInput;
       conflictAcknowledged?: boolean;
-      tenantContext?: { tenantId: string; schemaName: string };
+      tenantContext?: { tenantId: string; schemaName: string; actorUserId?: string; actorRole?: string };
     }
   ): Promise<ConfirmReport> {
     const mode = options?.mode ?? 'merge';
@@ -599,13 +599,16 @@ export class ImportService {
     db: QueryExecutor,
     filter: { limit: number; page: number; month?: string; type?: ImportType }
   ): Promise<{
-    items: Array<{
-      id: string;
-      imported_at: string;
-      type: ImportType;
-      imported_count: number;
-      updated_count: number;
-    }>;
+      items: Array<{
+        id: string;
+        imported_at: string;
+        type: ImportType;
+        imported_count: number;
+        updated_count: number;
+        imported_by: string | null;
+        imported_by_name: string | null;
+        imported_by_role: string | null;
+      }>;
     total: number;
     page: number;
     totalPages: number;
@@ -618,6 +621,9 @@ export class ImportService {
         type: row.import_type,
         imported_count: row.imported_count,
         updated_count: row.updated_count,
+        imported_by: row.imported_by,
+        imported_by_name: row.imported_by_name,
+        imported_by_role: row.imported_by_role,
       })),
       total,
       page: filter.page,
@@ -1251,7 +1257,7 @@ export class ImportService {
     validation: StudentValidation,
     db: QueryExecutor,
     mode: ImportMode,
-    tenantContext?: { tenantId: string; schemaName: string }
+    tenantContext?: { tenantId: string; schemaName: string; actorUserId?: string; actorRole?: string }
   ): Promise<ConfirmReport> {
     this.ensureNoValidationErrors(validation.report);
 
@@ -1292,6 +1298,8 @@ export class ImportService {
         importType: 'students',
         importedCount: imported,
         updatedCount: updated,
+        importedBy: tenantContext?.actorUserId,
+        importedByRole: tenantContext?.actorRole,
       });
 
       return {
@@ -1324,7 +1332,7 @@ export class ImportService {
     validation: TeacherValidation,
     db: QueryExecutor,
     mode: ImportMode,
-    tenantContext?: { tenantId: string; schemaName: string }
+    tenantContext?: { tenantId: string; schemaName: string; actorUserId?: string; actorRole?: string }
   ): Promise<ConfirmReport> {
     this.ensureNoValidationErrors(validation.report);
 
@@ -1379,6 +1387,8 @@ export class ImportService {
         importType: 'teachers',
         importedCount: imported,
         updatedCount: updated,
+        importedBy: tenantContext?.actorUserId,
+        importedByRole: tenantContext?.actorRole,
       });
 
       return {
@@ -1412,7 +1422,7 @@ export class ImportService {
     db: QueryExecutor,
     schedulePeriod?: SchedulePeriodInput,
     importMode: ImportMode = 'merge',
-    tenantContext?: { tenantId: string; schemaName: string }
+    tenantContext?: { tenantId: string; schemaName: string; actorUserId?: string; actorRole?: string }
   ): Promise<ConfirmReport> {
     this.ensureNoValidationErrors(validation.report);
     const period = validateSchedulePeriodInput(schedulePeriod);
@@ -1535,6 +1545,8 @@ export class ImportService {
         importType: 'schedule',
         importedCount: imported,
         updatedCount: updated,
+        importedBy: tenantContext?.actorUserId,
+        importedByRole: tenantContext?.actorRole,
       });
 
       return {

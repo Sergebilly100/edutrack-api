@@ -376,6 +376,23 @@ export class ValidationsRepository {
     before: AttendanceValidationContextRow;
     after: Record<string, unknown>;
   }): Promise<void> {
+    const actorResult = await this.db.execute<{ actor_name: string | null; actor_position: string | null }>(sql`
+      SELECT
+        u.name AS actor_name,
+        (
+          SELECT p.name
+          FROM position_assignments pa
+          INNER JOIN admin_positions p ON p.id = pa.position_id
+          WHERE pa.user_id = u.id
+          ORDER BY pa.created_at DESC
+          LIMIT 1
+        ) AS actor_position
+      FROM users u
+      WHERE u.id = ${params.actorId}::uuid
+      LIMIT 1
+    `);
+    const actor = actorResult.rows[0] ?? { actor_name: null, actor_position: null };
+
     await this.db.execute(sql`
       INSERT INTO public.audit_financial_events (
         tenant_id,
@@ -388,10 +405,14 @@ export class ValidationsRepository {
       SELECT
         t.id,
         ${params.actorId}::uuid,
-        ${params.actorRole},
+        ${actor.actor_position ?? params.actorRole},
         ${params.action},
         ${JSON.stringify(params.before)}::jsonb,
-        ${JSON.stringify(params.after)}::jsonb
+        ${JSON.stringify({
+          ...params.after,
+          actorName: actor.actor_name,
+          actorRole: actor.actor_position ?? params.actorRole,
+        })}::jsonb
       FROM public.tenants t
       WHERE t.schema_name = ${params.schemaName}
       LIMIT 1

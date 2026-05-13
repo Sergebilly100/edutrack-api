@@ -50,6 +50,11 @@ export const renewParentSubscriptionBodySchema = z.object({
   paid_now: z.boolean().default(true),
 });
 
+export const updateParentContactBodySchema = z.object({
+  phone: ciPhoneSchema,
+  email: z.string().trim().toLowerCase().email().nullable().optional(),
+});
+
 export const resetPasswordParamsSchema = z.object({
   parentId: z.string().uuid(),
 });
@@ -93,3 +98,4 @@ export const updateSmsPriceBodySchema = z.object({
 export type ListParentsQuery = z.infer<typeof listParentsQuerySchema>;
 export type CreateParentSubscriptionBody = z.infer<typeof createParentSubscriptionBodySchema>;
 export type RenewParentSubscriptionBody = z.infer<typeof renewParentSubscriptionBodySchema>;
+export type UpdateParentContactBody = z.infer<typeof updateParentContactBodySchema>;
