@@ -38,6 +38,7 @@ type ImportHistoryRow = {
   import_type: ImportType;
   imported_count: number;
   updated_count: number;
+  schedule_period: string | null;
   imported_by: string | null;
   imported_by_name: string | null;
   imported_by_role: string | null;
@@ -156,6 +157,7 @@ export type ImportRepository = {
       importType: ImportType;
       importedCount: number;
       updatedCount: number;
+      schedulePeriod: string | null;
       importedBy?: string;
       importedByRole?: string;
     }
@@ -538,8 +540,10 @@ export const defaultImportRepository: ImportRepository = {
       return 'updated';
     }
 
-    // Both inserts happen within the same transaction (caller wraps in runInTransaction).
-    // If INSERT teachers fails after INSERT users succeeds, the transaction rolls back both.
+    // les enseignants sont aussi des utilisateurs dans notre système, il faut donc créer une entrée dans la table users avant de pouvoir créer l'enseignant lui-même 
+    // dans la table teachers (qui référence la table users via user_id).
+    // si plusieurs lignes du fichier d'import font référence au même enseignant (même username), cela ne posera pas de problème car la requête d'insertion dans users est protégée 
+    // par une contrainte d'unicité sur le champ username, et nous faisons un upsert basé sur ce champ.
     const userResult = await db.execute(sql`
       INSERT INTO users (
         role,
@@ -685,17 +689,21 @@ export const defaultImportRepository: ImportRepository = {
 
   async createImportHistory(db, entry) {
     await db.execute(sql`
-      INSERT INTO import_history (import_type, imported_count, updated_count, imported_by, imported_by_role)
+      INSERT INTO import_history (import_type, imported_count, updated_count, schedule_period, imported_by, imported_by_role)
       VALUES (
         ${entry.importType},
         ${entry.importedCount},
         ${entry.updatedCount},
+        ${entry.schedulePeriod ?? null},
         ${entry.importedBy ?? null}::uuid,
         ${entry.importedByRole ?? null}
       )
     `);
   },
 
+  // listImportHistory est un peu plus complexe que les autres méthodes du repository car elle doit construire dynamiquement 
+  // la clause WHERE en fonction des filtres fournis (mois et type d'import), 
+  // et elle doit aussi faire le lien avec la table des utilisateurs pour récupérer le nom et le rôle de l'importateur.
   async listImportHistory(db, filter) {
     const { limit, page, month, type } = filter;
     const offset = (page - 1) * limit;
@@ -720,6 +728,7 @@ export const defaultImportRepository: ImportRepository = {
           ih.import_type,
           ih.imported_count,
           ih.updated_count,
+          ih.schedule_period,
           ih.imported_by::text,
           u.name AS imported_by_name,
           COALESCE(ih.imported_by_role, ap.name, u.role::text) AS imported_by_role

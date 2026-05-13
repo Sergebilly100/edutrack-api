@@ -287,6 +287,9 @@ const isMonday = (isoDate: string): boolean => {
   return parsed.getUTCDay() === 1;
 };
 
+// validateSchedulePeriodInput est une fonction qui valide les paramètres de période d'import du planning, 
+// en s'assurant que les dates sont au format ISO, que weekStart est un lundi, que weekEnd est un lundi ultérieur à weekStart, 
+// et que la période couvre un nombre entier de semaines.
 const validateSchedulePeriodInput = (period?: SchedulePeriodInput): SchedulePeriodInput | undefined => {
   if (!period) {
     return undefined;
@@ -300,7 +303,7 @@ const validateSchedulePeriodInput = (period?: SchedulePeriodInput): SchedulePeri
     );
   }
 
-  // weekEnd must be strictly after weekStart (at least one week difference)
+  // Un EDT doit toujours couvrir au moins une semaine complète, pour éviter les cas où des cours seraient perdus faute de période suffisamment longue pour les accueillir.
   if (!isMonday(period.weekStart) || !isMonday(period.weekEnd) || period.weekStart >= period.weekEnd) {
     throw new ImportModuleError(
       `Impossible de laisser une semaine sans EDT entre ${period.weekStart} et ${period.weekEnd}`,
@@ -312,6 +315,7 @@ const validateSchedulePeriodInput = (period?: SchedulePeriodInput): SchedulePeri
   const start = new Date(`${period.weekStart}T00:00:00.000Z`);
   const end = new Date(`${period.weekEnd}T00:00:00.000Z`);
   const diffMs = end.getTime() - start.getTime();
+  // La période doit être un multiple de 7 jours
   if (diffMs % (7 * 24 * 60 * 60 * 1000) !== 0) {
     throw new ImportModuleError(
       `Impossible de laisser une semaine sans EDT entre ${period.weekStart} et ${period.weekEnd}`,
@@ -333,6 +337,9 @@ const normalizeSubjectsForCompare = (subjects: string[]): string =>
 // Identity key helpers — single source of truth for deduplication
 // ---------------------------------------------------------------------------
 
+// buildStudentIdentityKey construit une clé d'identité pour un étudiant à partir de ses données. 
+// Si le matricule est présent, il est utilisé comme clé unique. Sinon, la combinaison du nom, prénom et classe est utilisée. 
+// Cette clé est normalisée pour assurer une comparaison insensible à la casse et aux espaces.
 const buildStudentIdentityKey = (params: {
   matricule: string | null;
   firstName: string;
@@ -345,6 +352,7 @@ const buildStudentIdentityKey = (params: {
   return `name::${normalizeKey(`${params.className}::${params.firstName}::${params.lastName}`)}`;
 };
 
+// buildTeacherIdentityKey construit une clé d'identité pour un enseignant à partir de ses données.
 const buildTeacherIdentityKey = (params: {
   matricule: string | null;
   firstName: string;
@@ -400,6 +408,8 @@ const runInTransaction = async <T>(
 // Row-level validation helpers
 // ---------------------------------------------------------------------------
 
+// validateStudentRow valide une ligne du fichier Excel pour les étudiants, en vérifiant la présence des données requises, 
+// la validité des formats (date, téléphone), et en détectant les doublons de matricule à la fois dans le batch et par rapport à la base de données.
 const validateStudentRow = (
   sheetRow: ParsedWorkbookRow,
   classesByName: Map<string, string>,
@@ -490,6 +500,7 @@ const validateStudentRow = (
     });
   }
 
+  // le téléphone parent 1 est obligatoire, donc on génère une erreur s'il est absent ou invalide.
   if (parentPhoneRaw && !IMPORT_PHONE_REGEX.test(parentPhoneRaw)) {
     errors.push({
       ...makeError({
@@ -502,6 +513,7 @@ const validateStudentRow = (
     });
   }
 
+  // contrairement au téléphone parent 1, le téléphone parent 2 est optionnel, donc on ne génère une erreur que s'il est présent mais invalide.
   if (parentPhone2Raw && !IMPORT_PHONE_REGEX.test(parentPhone2Raw)) {
     errors.push({
       ...makeError({
@@ -537,6 +549,7 @@ const validateStudentRow = (
 export class ImportService {
   constructor(private readonly repository: ImportRepository = defaultImportRepository) {}
 
+  // dryRun effectue une validation des données du fichier Excel pour le type d'import spécifié, sans appliquer de changements en base.
   async dryRun(
     type: ImportType,
     fileBuffer: Buffer,
@@ -545,7 +558,11 @@ export class ImportService {
       mode?: ImportMode;
       schedulePeriod?: SchedulePeriodInput;
     }
-  ): Promise<DryRunReport> {
+  ): Promise<DryRunReport> { 
+    // le service doit valider les données du fichier Excel pour le type d'import spécifié, en vérifiant la présence des colonnes requises, 
+    // la validité des données (format de date, format de téléphone), et en comparant avec les données existantes dans la base pour détecter les ajouts, 
+    // mises à jour et suppressions potentielles. Le rapport de validation doit inclure une liste d'erreurs détectées, ainsi qu'un aperçu des changements 
+    // qui seraient appliqués en cas de confirmation de l'import.
     const mode = options?.mode ?? 'merge';
     if (type === 'students') {
       return (await this.validateStudents(fileBuffer, db, mode)).report;
@@ -558,6 +575,10 @@ export class ImportService {
     return (await this.validateSchedule(fileBuffer, db, options?.schedulePeriod)).report;
   }
 
+  // la logique est plus complexe pour la confirmation d'import de planning, 
+  // car elle doit gérer les conflits potentiels détectés lors du dry-run et s'assurer que 
+  // l'utilisateur a bien pris connaissance de ces conflits avant de procéder à l'import effectif. 
+  // C'est pourquoi la validation de la reconnaissance des conflits appartient au service et non au contrôleur.
   async confirm(
     type: ImportType,
     fileBuffer: Buffer,
@@ -570,11 +591,14 @@ export class ImportService {
     }
   ): Promise<ConfirmReport> {
     const mode = options?.mode ?? 'merge';
+    // pour les étudiants, la confirmation d'import est nécessaire pour permettre à l'utilisateur de prendre connaissance des changements 
+    // qui seront appliqués (ajouts, mises à jour, suppressions) et de confirmer qu'il souhaite procéder à ces changements.
     if (type === 'students') {
       const validation = await this.validateStudents(fileBuffer, db, mode);
       return this.confirmStudents(validation, db, mode, options?.tenantContext);
     }
 
+    // pour les enseignants, la logique de confirmation est similaire à celle des étudiants, même si les conflits potentiels sont moins fréquents que pour les plannings.
     if (type === 'teachers') {
       const validation = await this.validateTeachers(fileBuffer, db, mode);
       return this.confirmTeachers(validation, db, mode, options?.tenantContext);
@@ -582,7 +606,8 @@ export class ImportService {
 
     const validation = await this.validateSchedule(fileBuffer, db, options?.schedulePeriod);
 
-    // Conflict gate belongs in the service, not the controller
+    // le service doit vérifier que l'utilisateur a bien reconnu les conflits avant de procéder à l'import effectif, 
+    // afin d'éviter les imports accidentels qui écraseraient des données existantes sans que l'utilisateur en ait conscience.
     const hasConflicts = Array.isArray(validation.report.conflicts) && validation.report.conflicts.length > 0;
     if (hasConflicts && !options?.conflictAcknowledged) {
       throw new ImportModuleError(
@@ -595,6 +620,7 @@ export class ImportService {
     return this.confirmSchedule(validation, db, options?.schedulePeriod, mode, options?.tenantContext);
   }
 
+  // listHistory retourne les rapports d'import passés pour le tenant, avec pagination et filtres optionnels par mois et type d'import.
   async listHistory(
     db: QueryExecutor,
     filter: { limit: number; page: number; month?: string; type?: ImportType }
@@ -605,6 +631,7 @@ export class ImportService {
         type: ImportType;
         imported_count: number;
         updated_count: number;
+        schedule_period?: string | null;
         imported_by: string | null;
         imported_by_name: string | null;
         imported_by_role: string | null;
@@ -621,6 +648,7 @@ export class ImportService {
         type: row.import_type,
         imported_count: row.imported_count,
         updated_count: row.updated_count,
+        schedule_period: row.schedule_period,
         imported_by: row.imported_by,
         imported_by_name: row.imported_by_name,
         imported_by_role: row.imported_by_role,
@@ -631,6 +659,9 @@ export class ImportService {
     };
   }
 
+  // validateStudents valide les données du fichier Excel pour les étudiants, en vérifiant la présence des colonnes requises, 
+  // la validité des données (format de date, format de téléphone), et en comparant avec les données existantes dans la base pour 
+  // détecter les ajouts, mises à jour et suppressions potentielles.
   private async validateStudents(
     fileBuffer: Buffer,
     db: QueryExecutor,
@@ -747,6 +778,7 @@ export class ImportService {
     };
   }
 
+  // validateTeachers valide les données du fichier Excel pour les enseignants, en vérifiant la présence des colonnes requises,
   private async validateTeachers(
     fileBuffer: Buffer,
     db: QueryExecutor,
@@ -1008,6 +1040,9 @@ export class ImportService {
     };
   }
 
+  // validateSchedule valide les données du fichier Excel pour le planning, en vérifiant la présence des colonnes requises, 
+  // la validité des données (correspondance avec les classes, enseignants et créneaux horaires existants en base), 
+  // et en détectant les conflits potentiels avec les données de planning existantes pour la période concernée.
   private async validateSchedule(
     fileBuffer: Buffer,
     db: QueryExecutor,
@@ -1253,6 +1288,10 @@ export class ImportService {
     throw new ImportModuleError('Validation import échouée', 400, 'IMPORT_VALIDATION_FAILED', report);
   }
 
+  // confirmStudents et confirmTeachers sont responsables de l'exécution de l'import effectif des élève et des profs dans la base de données, 
+  // en appliquant les ajouts, mises à jour et suppressions détectés lors de la validation, 
+  // et en enregistrant un historique de l'import. Ils émettent également un événement une fois 
+  // l'import terminé pour permettre à d'autres parties du système de réagir à ce changement (ex: rafraîchir des caches).
   private async confirmStudents(
     validation: StudentValidation,
     db: QueryExecutor,
@@ -1294,10 +1333,13 @@ export class ImportService {
         deactivated = await this.repository.deactivateStudentsByIds(executor, toDeactivateIds);
       }
 
+      // c'est ici que createImportHistory est appelé pour enregistrer un historique de l'import dans la base de données, avec des informations sur le nombre d'enregistrements 
+      // importés, mis à jour, désactivés, ainsi que l'utilisateur qui a effectué l'import et son rôle.
       await this.repository.createImportHistory(executor, {
         importType: 'students',
         importedCount: imported,
         updatedCount: updated,
+        schedulePeriod: null,
         importedBy: tenantContext?.actorUserId,
         importedByRole: tenantContext?.actorRole,
       });
@@ -1312,6 +1354,9 @@ export class ImportService {
       };
     };
 
+    // runInTransaction est utilisé pour exécuter l'ensemble du processus d'import dans une transaction de base de données, 
+    // ce qui garantit que toutes les opérations d'import sont atomiques : si une erreur survient à n'importe quelle étape du processus, la transaction sera annulée et 
+    // la base de données restera dans un état cohérent.
     const report = await runInTransaction(db, run);
 
     if (tenantContext) {
@@ -1387,6 +1432,7 @@ export class ImportService {
         importType: 'teachers',
         importedCount: imported,
         updatedCount: updated,
+        schedulePeriod: null,
         importedBy: tenantContext?.actorUserId,
         importedByRole: tenantContext?.actorRole,
       });
@@ -1417,6 +1463,9 @@ export class ImportService {
     return report;
   }
 
+  // confirmSchedule est responsable de l'exécution de l'import effectif du planning dans la base de données, en appliquant les ajouts et mises à jour détectés lors de la validation,
+  // et en enregistrant un historique de l'import. Il gère également la création automatique des salles si elles n'existent pas, 
+  // et vérifie les références aux classes, enseignants, créneaux horaires pour s'assurer qu'elles sont valides avant de procéder à l'import.
   private async confirmSchedule(
     validation: ScheduleValidation,
     db: QueryExecutor,
@@ -1430,6 +1479,7 @@ export class ImportService {
     const periodStart = period?.weekStart ?? today;
     const periodEnd = period?.weekEnd ?? periodStart;
 
+    // on charge en parallèle les données de référence nécessaires à l'import du planning : classes, enseignants, créneaux horaires, salles.
     const [classes, teacherDirectory, timeSlots, rooms] = await Promise.all([
       this.repository.listClasses(db),
       this.repository.listTeacherDirectory(db),
@@ -1438,6 +1488,7 @@ export class ImportService {
     ]);
 
     let schedulePeriodId: string;
+    // si une période est spécifiée dans les paramètres d'import, on la crée ou la récupère en base, sinon on utilise la période active actuelle.
     if (period) {
       schedulePeriodId = await this.repository.findOrCreateSchedulePeriod(db, {
         name: `Import EDT ${periodStart} - ${periodEnd}`,
@@ -1460,6 +1511,8 @@ export class ImportService {
     const slotIdByLabel = new Map(timeSlots.map((item) => [normalizeKey(item.label), item.id]));
     const roomIdByName = new Map(rooms.map((item) => [normalizeKey(item.name), item.id]));
 
+    // resolveRoomId est une fonction utilitaire qui prend un nom de salle et tente de trouver l'ID correspondant en base. Si la salle n'existe pas, 
+    // elle tente de la créer automatiquement.
     const resolveRoomId = async (
       executor: QueryExecutor,
       row: ScheduleImportRow
@@ -1470,7 +1523,8 @@ export class ImportService {
         return known;
       }
 
-      // Retry on the very unlikely qr_token uniqueness collision.
+      // c'est ici que l'upsert de la salle est effectué, avec une logique de retry pour gérer les éventuelles conditions de concurrence 
+      // (si plusieurs lignes du planning font référence à la même salle qui n'existe pas encore, elles tenteront de la créer en même temps).
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
           const created = await this.repository.upsertRoom(executor, {
@@ -1498,11 +1552,14 @@ export class ImportService {
       teacherByName.set(normalizeKey(teacher.name), teacher.teacher_id);
     }
 
+    // run est la fonction qui contient la logique principale d'import du planning. Elle itère sur les lignes validées du fichier Excel,
+    // résout les références aux classes, enseignants, créneaux horaires, salles, et effectue les opérations d'insertion ou de mise à jour dans la base de données.
     const run = async (executor: QueryExecutor): Promise<ConfirmReport> => {
       let imported = 0;
       let updated = 0;
       const upsertedScheduleIds: string[] = [];
 
+      // on parcourt les lignes validées du planning, et pour chacune d'elles, on tente de résoudre les références à la classe, l'enseignant, le créneau horaire et la salle.
       for (const row of validation.rows) {
         const classId = classIdByName.get(normalizeKey(row.className));
         const teacherId = teacherByName.get(normalizeKey(row.teacherName));
@@ -1517,6 +1574,8 @@ export class ImportService {
           );
         }
 
+        // upsertSchedule est une fonction qui effectue l'insertion ou la mise à jour d'un créneau de planning dans la base de données, 
+        // en fonction de l'existence ou non d'un créneau similaire pour la même période, classe, enseignant, créneau horaire.
         const result = await this.repository.upsertSchedule(executor, row, {
           schedulePeriodId,
           teacherId,
@@ -1541,10 +1600,15 @@ export class ImportService {
         );
       }
 
+      // c'est ici que createImportHistory est appelé pour enregistrer un historique de l'import du planning dans la base de données, 
+      // avec des informations sur le nombre d'enregistrements importés, mis à jour, ainsi que l'utilisateur qui a effectué l'import et son rôle.
       await this.repository.createImportHistory(executor, {
         importType: 'schedule',
         importedCount: imported,
         updatedCount: updated,
+        schedulePeriod: schedulePeriod?.weekStart && schedulePeriod?.weekEnd
+          ? `${schedulePeriod.weekStart} - ${schedulePeriod.weekEnd}`
+          : null,
         importedBy: tenantContext?.actorUserId,
         importedByRole: tenantContext?.actorRole,
       });

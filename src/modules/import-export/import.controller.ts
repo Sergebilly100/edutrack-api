@@ -179,6 +179,8 @@ export default async function importExportController(app: FastifyInstance): Prom
     await releaseTenantDb(request);
   });
 
+  // ce endpoint permet de télécharger un template Excel pour le type d'import spécifié (students, teachers, schedule). 
+  // Le template est stocké dans le dossier "templates" à la racine du projet et doit être nommé selon le format "{type}.xlsx". Seuls les utilisateurs ayant la permission d'import correspondante peuvent accéder au template. Si le template n'existe pas, une erreur 404 est retournée.
   app.get(
     '/api/v1/import/:type/template',
     { preHandler: [requireImportTypePermission, attachTenantDb] },
@@ -211,6 +213,7 @@ export default async function importExportController(app: FastifyInstance): Prom
     }
   );
 
+  // ce endpoint gère à la fois les imports de données (students, teachers) et d'emploi du temps, d'où la logique plus complexe pour les options spécifiques à l'emploi du temps
   app.post(
     '/api/v1/import/:type/dry-run',
     { preHandler: [requireImportTypePermission, attachTenantDb] },
@@ -231,6 +234,8 @@ export default async function importExportController(app: FastifyInstance): Prom
     }
   );
 
+  // ce endpoint finalise l'import après un dry-run, en appliquant les changements et en enregistrant un rapport d'import dans l'historique.
+  // la confirmation d'import est nécessaire pour les imports de planning, afin de s'assurer que l'utilisateur a bien pris connaissance des conflits potentiels détectés lors du dry-run.
   app.post(
     '/api/v1/import/:type/confirm',
     { preHandler: [requireImportTypePermission, attachTenantDb] },
@@ -240,7 +245,8 @@ export default async function importExportController(app: FastifyInstance): Prom
         const payload = await readImportPayload(request);
         const service = buildImportService();
 
-        // Conflict acknowledgment is validated inside service.confirm() for schedule imports.
+        // c'est ici que la logique de confirmation d'import devient cruciale, notamment pour les imports de planning où des conflits peuvent survenir. 
+        // Le service doit vérifier que l'utilisateur a bien reconnu les conflits avant de procéder à l'import effectif.
         const report = await service.confirm(type, payload.fileBuffer, ensureTenantDb(request), {
           mode: payload.mode,
           schedulePeriod: payload.schedulePeriod,
@@ -255,6 +261,7 @@ export default async function importExportController(app: FastifyInstance): Prom
     }
   );
 
+  // ce endpoint permet de consulter l'historique des imports effectués, avec pagination et filtres optionnels par mois et type d'import. L'accès est accordé à tout utilisateur ayant au moins une permission d'import, et les résultats affichent les imports de tous les types confondus pour le tenant.
   app.get(
     '/api/v1/import/history',
     // Any user with at least one import permission can view the shared history.

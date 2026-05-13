@@ -431,6 +431,7 @@ export const importHistory = tenant.table(
     importType: importTypeEnum('import_type').notNull(),
     importedCount: integer('imported_count').notNull().default(0),
     updatedCount: integer('updated_count').notNull().default(0),
+    schedule_period: varchar('schedule_period', { length: 255 }),
     importedBy: uuid('imported_by').references(() => users.id),
     importedByRole: varchar('imported_by_role', { length: 100 }),
     importedAt: timestamp('imported_at', { withTimezone: true, mode: 'date' })
