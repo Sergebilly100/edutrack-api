@@ -7,11 +7,12 @@ import { sql } from 'drizzle-orm';
 import Fastify from 'fastify';
 import { Redis } from 'ioredis';
 
-import { Worker } from 'bullmq';
+import { Queue, Worker } from 'bullmq';
 
 import adminController from './modules/admin/admin.controller.js';
 import attendanceController from './modules/attendance/attendance.controller.js';
 import { runAttendanceMissingQrScanHandler } from './modules/attendance/attendance.worker-handler.js';
+import { runAbsenceMarkingForSchema } from './modules/attendance/attendance.absence-marking.worker.js';
 import { geoAutoApproveWorker, scheduleGeoAutoApprove } from './modules/attendance/attendance.geo-auto-approve.worker.js';
 import authController from './modules/auth/auth.controller.js';
 import billingController from './modules/billing/billing.controller.js'
@@ -45,6 +46,7 @@ import scheduleController from './modules/schedule/schedule.controller.js';
 import teachersController from './modules/teachers/teachers.controller.js';
 import validationsController from './modules/validations/validations.controller.js';
 import { db } from './shared/database/db.js';
+import { registerSalaryEventListeners } from './modules/salaries/salaries.service.js';
 import { qrAlertQueue, geoAutoApproveQueue } from './shared/queue/queue.js';
 
 const app = Fastify({ logger: true });
@@ -73,6 +75,15 @@ const qrAlertWorker = new Worker(
     });
   },
   { connection: qrAlertRedis }
+);
+const absenceMarkingRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
+const absenceMarkingQueue = new Queue('absence-marking', { connection: absenceMarkingRedis });
+const absenceMarkingWorker = new Worker(
+  'absence-marking',
+  async (job) => {
+    await runAbsenceMarkingForSchema({ schemaName: job.data.schemaName });
+  },
+  { connection: absenceMarkingRedis }
 );
 const notificationsService = new NotificationsService({
   smsQueue: notificationsQueue,
@@ -126,6 +137,7 @@ const loadMaintenanceState = async (): Promise<{ mode: boolean; message: string 
 };
 
 notificationsService.start();
+registerSalaryEventListeners();
 
 app.register(cors, {
   origin: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : true,
@@ -198,6 +210,9 @@ app.addHook('onClose', async () => {
   await qrAlertWorker.close();
   await qrAlertQueue.close();
   await qrAlertRedis.quit();
+  await absenceMarkingWorker.close();
+  await absenceMarkingQueue.close();
+  await absenceMarkingRedis.quit();
   await geoAutoApproveWorker.close();
   await geoAutoApproveQueue.close();
 });
@@ -209,6 +224,14 @@ const start = async (): Promise<void> => {
 
     // Schedule geo auto-approve job (daily at 3 AM)
     await scheduleGeoAutoApprove();
+
+    const absenceMarkingSchemaName =
+      process.env.ABSENCE_MARKING_SCHEMA ?? process.env.SUBSCRIPTION_MAINTENANCE_SCHEMA ?? 'school_sainte_marie';
+    await absenceMarkingQueue.upsertJobScheduler(
+      'absence-marking-every-15min',
+      { pattern: '*/15 6-18 * * 1-6', tz: 'Africa/Abidjan' },
+      { name: 'mark-absences', data: { schemaName: absenceMarkingSchemaName } }
+    );
 
     await subscriptionsMaintenanceQueue.upsertJobScheduler(
       'subscription-maintenance-daily',

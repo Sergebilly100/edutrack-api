@@ -3,14 +3,11 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import { ensureTenantRealHoursInfrastructure } from '../../shared/database/real-hours-infrastructure.js';
 import { monthBoundsFromDate } from '../../shared/utils/date.js';
+import { getRowsUntyped as getRows } from '../../shared/utils/db-helpers.js';
+import { on } from '../../shared/events/event-bus.js';
+import { withTenantSchema } from '../../shared/database/db.js';
 
 type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
-
-const getRows = <TRow,>(result: unknown): TRow[] => {
-  if (typeof result !== 'object' || result === null || !('rows' in result)) return [];
-  const rows = (result as { rows: TRow[] }).rows;
-  return Array.isArray(rows) ? rows : [];
-};
 
 export class SalariesModuleError extends Error {
   constructor(
@@ -192,3 +189,15 @@ export class SalariesService {
 
 export const buildSalariesService = (db: QueryExecutor): SalariesService =>
   new SalariesService(db);
+
+export const registerSalaryEventListeners = (): void => {
+  on('teacher.checkout_completed', (payload) => {
+    void withTenantSchema(payload.schemaName, async (tenantDb) => {
+      const service = buildSalariesService(tenantDb);
+      await service.recalculateForTeacherMonth({
+        teacherId: payload.teacherId,
+        month: payload.monthStart.slice(0, 7),
+      });
+    });
+  });
+};

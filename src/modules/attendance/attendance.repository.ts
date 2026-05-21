@@ -187,7 +187,7 @@ type SuspiciousAttendanceRow = {
   checkin_accuracy: string | number | null;
 };
 
-type schex = {
+type WeekScheduleRow = {
   id: string;
   class_id: string;
   class_name: string;
@@ -828,76 +828,6 @@ export class AttendanceRepository {
     `);
   }
 
-  async recomputeTeacherSalaryForMonth(params: {
-    teacherId: string;
-    monthStart: string;
-    monthEnd: string;
-  }): Promise<void> {
-    await ensureTenantRealHoursInfrastructure(this.db);
-
-    await this.db.execute(sql`
-      WITH feature_flags AS (
-        SELECT COALESCE(f.use_real_hours, false) AS use_real_hours
-        FROM public.tenants t
-        LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
-        WHERE t.schema_name = current_schema()
-        LIMIT 1
-      ),
-      totals AS (
-        SELECT
-          COALESCE(
-            SUM(
-              CASE
-                WHEN at.validation_status = 'approved' THEN COALESCE(at.validated_hours, 0)
-                WHEN at.validation_status IN ('pending', 'rejected') THEN 0
-                WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
-                  AND at.actual_minutes IS NOT NULL
-                  THEN at.actual_minutes / 60.0
-                ELSE EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0
-              END
-            ),
-            0
-          )::numeric(8,2) AS hours_done
-        FROM attendances_teacher at
-        INNER JOIN schedules s ON s.id = at.schedule_id
-        INNER JOIN time_slots ts ON ts.id = s.time_slot_id
-        WHERE at.teacher_id = ${params.teacherId}
-          AND at.date BETWEEN ${params.monthStart}::date AND ${params.monthEnd}::date
-          AND at.status IN ('present', 'late', 'excused')
-      ),
-      payment_totals AS (
-        SELECT
-          sr.id AS record_id,
-          COALESCE(SUM(sp.hours_paid), 0)::numeric(8,2) AS paid_hours,
-          COALESCE(SUM(sp.amount_fcfa), 0)::int AS paid_amount
-        FROM salary_records sr
-        LEFT JOIN salary_payments sp ON sp.salary_record_id = sr.id
-        WHERE sr.teacher_id = ${params.teacherId}
-          AND sr.period_month = ${params.monthStart}::date
-        GROUP BY sr.id
-      )
-      UPDATE salary_records sr
-      SET
-        hours_done = totals.hours_done,
-        total_fcfa = CASE
-          WHEN t.type = 'permanent' THEN COALESCE(t.monthly_salary, sr.total_fcfa)
-          ELSE ROUND(totals.hours_done * sr.hourly_rate)::int
-        END,
-        status = CASE
-          WHEN sr.status = 'disputed' THEN sr.status
-          WHEN t.type = 'vacataire' AND totals.hours_done <= 0 THEN 'nothing_to_pay'::salary_status
-          WHEN t.type = 'vacataire' AND COALESCE(payment_totals.paid_hours, 0) >= totals.hours_done THEN 'paid'::salary_status
-          WHEN t.type = 'permanent' AND COALESCE(payment_totals.paid_amount, 0) >= COALESCE(t.monthly_salary, sr.total_fcfa) THEN 'paid'::salary_status
-          ELSE 'pending'::salary_status
-        END
-      FROM totals, teachers t
-      LEFT JOIN payment_totals ON true
-      WHERE sr.teacher_id = ${params.teacherId}
-        AND sr.period_month = ${params.monthStart}::date
-        AND t.id = sr.teacher_id
-    `);
-  }
-
   // ── NOUVEAU — appel élèves en masse par le prof ───────────────────────────
   async bulkUpsertStudentAttendance(params: {
     scheduleId: string;
@@ -911,45 +841,26 @@ export class AttendanceRepository {
     }
 
     const absentSet = new Set(params.absentStudentIds);
+    const studentIds = params.allStudentIds;
+    const statuses = studentIds.map((id) => (absentSet.has(id) ? 'absent' : 'present'));
 
-    // Construire les valeurs à insérer pour chaque élève de la classe
-    // Statut : 'absent' si dans absentStudentIds, sinon 'present'
-    const values = params.allStudentIds.map((studentId) => ({
-      studentId,
-      status: absentSet.has(studentId) ? 'absent' : 'present',
-    }));
+    // Single bulk INSERT with unnest — O(1) RTT instead of O(N)
+    const result = await this.db.execute<{ id: string }>(sql`
+      INSERT INTO attendances_student (student_id, schedule_id, date, status, marked_by)
+      SELECT
+        unnest(${studentIds}::uuid[]) AS student_id,
+        ${params.scheduleId}::uuid   AS schedule_id,
+        ${params.date}::date         AS date,
+        unnest(${statuses}::text[])  AS status,
+        ${params.markedByUserId}     AS marked_by
+      ON CONFLICT (student_id, schedule_id, date)
+      DO UPDATE SET
+        status    = EXCLUDED.status,
+        marked_by = EXCLUDED.marked_by
+      RETURNING id::text
+    `);
 
-    // CRITIQUE FIX : Envelopper dans une transaction pour éviter les états partiels
-    // Si crash au milieu du loop, rollback automatique → cohérence garantie
-    const upsertedCount = await this.db.transaction(async (tx) => {
-      let count = 0;
-      for (const { studentId, status } of values) {
-        await tx.execute(sql`
-          INSERT INTO attendances_student (
-            student_id,
-            schedule_id,
-            date,
-            status,
-            marked_by
-          )
-          VALUES (
-            ${studentId},
-            ${params.scheduleId},
-            ${params.date},
-            ${status},
-            ${params.markedByUserId}
-          )
-          ON CONFLICT (student_id, schedule_id, date)
-          DO UPDATE SET
-            status = EXCLUDED.status,
-            marked_by = EXCLUDED.marked_by
-        `);
-        count += 1;
-      }
-      return count;
-    });
-
-    return { upsertedCount };
+    return { upsertedCount: getRows(result).length };
   }
 
   async listStudentAbsenceNotificationCandidates(params: {
@@ -1058,8 +969,8 @@ export class AttendanceRepository {
     return getRows(result);
   }
 
-  async getWeekScheduleForTeacher(userId: string, date: string): Promise<schex[]> {
-    const result = await this.db.execute<schex>(sql`
+  async getWeekScheduleForTeacher(userId: string, date: string): Promise<WeekScheduleRow[]> {
+    const result = await this.db.execute<WeekScheduleRow>(sql`
           WITH week_ctx AS (
             SELECT (
               ${date}::date

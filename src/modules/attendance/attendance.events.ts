@@ -2,6 +2,7 @@ import { emit } from '../../shared/events/event-bus.js';
 import type {
   StudentAbsentPayload,
   TeacherCheckedInPayload,
+  TeacherCheckoutCompletedPayload,
   TeacherLatePayload,
   TeacherQrAlertPayload,
   TeacherQrInvalidPayload,
@@ -25,4 +26,8 @@ export const emitTeacherQrInvalid = (payload: TeacherQrInvalidPayload): void => 
 
 export const emitStudentAbsent = (payload: StudentAbsentPayload): void => {
   emit('student.absent', payload);
+};
+
+export const emitTeacherCheckoutCompleted = (payload: TeacherCheckoutCompletedPayload): void => {
+  emit('teacher.checkout_completed', payload);
 };

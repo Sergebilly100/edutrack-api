@@ -18,7 +18,7 @@ vi.mock('../../src/modules/attendance/attendance.events.js', () => ({
   emitTeacherQrAlert: eventMocks.emitTeacherQrAlert,
 }));
 
-vi.mock('../../src/modules/attendance/attendance.scheduler.js', () => ({
+vi.mock('../../src/shared/queue/attendance-queue.js', () => ({
   scheduleQrMissingScanCheck: schedulerMocks.scheduleQrMissingScanCheck,
 }));
 

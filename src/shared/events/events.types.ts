@@ -144,6 +144,13 @@ export type ImportCompletedPayload = {
   deactivatedCount: number;
 };
 
+export type TeacherCheckoutCompletedPayload = {
+  schemaName: string;
+  teacherId: string;
+  monthStart: string;
+  monthEnd: string;
+};
+
 export type TeacherEndScanActionPayload = {
   tenantId: string;
   schemaName: string;
@@ -186,6 +193,7 @@ export type TeacherEndScanWarningPayload = {
 };
 
 export type EventMap = {
+  'teacher.checkout_completed': TeacherCheckoutCompletedPayload;
   'teacher.checked_in': TeacherCheckedInPayload;
   'teacher.late': TeacherLatePayload;
   'teacher.qr_alert': TeacherQrAlertPayload;
@@ -197,6 +205,7 @@ export type EventMap = {
   'teacher.end_scan_warning': TeacherEndScanWarningPayload;
   'teacher.absent': TeacherAbsentPayload;
   'teacher.*':
+    | TeacherCheckoutCompletedPayload
     | TeacherCheckedInPayload
     | TeacherLatePayload
     | TeacherQrAlertPayload

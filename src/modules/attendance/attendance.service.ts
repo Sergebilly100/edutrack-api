@@ -1,6 +1,7 @@
 import {
   emitStudentAbsent,
   emitTeacherCheckedIn,
+  emitTeacherCheckoutCompleted,
   emitTeacherLate,
   emitTeacherQrAlert,
   emitTeacherQrInvalid,
@@ -34,7 +35,13 @@ type ServiceContext = {
   userId: string;
 };
 
-const DEFAULT_SCHOOL_PHONE = process.env.DEFAULT_SCHOOL_PHONE ?? '2250000000000';
+const DEFAULT_SCHOOL_PHONE = (() => {
+  const phone = process.env.DEFAULT_SCHOOL_PHONE;
+  if (!phone && process.env.NODE_ENV === 'production') {
+    throw new Error('[attendance] DEFAULT_SCHOOL_PHONE env variable is required in production');
+  }
+  return phone ?? '0000000000';
+})();
 
 const resolveGeo = (input: {
   enabled: boolean;
@@ -280,7 +287,8 @@ export class AttendanceService {
     });
 
     const { monthStart, monthEnd } = monthBoundsFromDate(date);
-    await this.repository.recomputeTeacherSalaryForMonth({
+    emitTeacherCheckoutCompleted({
+      schemaName: context.schemaName,
       teacherId: teacher.id,
       monthStart,
       monthEnd,
@@ -649,6 +657,10 @@ export class AttendanceService {
     return missing.length;
   }
 
+  async markMissingAttendancesAsAbsent(): Promise<number> {
+    return this.repository.markMissingTeacherAttendancesAsAbsent();
+  }
+
   async getTodayForDirector(): Promise<{
     date: string;
     present: number;
@@ -682,7 +694,6 @@ export class AttendanceService {
       student_total_count: number;
     }>;
   }> {
-    await this.repository.markMissingTeacherAttendancesAsAbsent();
     const today = await this.repository.listTodayForDirector();
     return {
       date: today.date,

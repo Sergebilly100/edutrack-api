@@ -2,6 +2,8 @@ import argon2 from 'argon2';
 import { createHash, randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 
+import { getRowsUntyped as getRows } from '../../shared/utils/db-helpers.js';
+
 import {
   bindKeycloakSubjectIfNeeded,
   getRefreshTokenStatus,
@@ -84,14 +86,6 @@ const normalizeRole = (role: LegacyUserRole): UserRole => {
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
-
-const getRows = <TRow,>(result: unknown): TRow[] => {
-  if (typeof result !== 'object' || result === null || !('rows' in result)) {
-    return [];
-  }
-  const rows = (result as { rows: TRow[] }).rows;
-  return Array.isArray(rows) ? rows : [];
-};
 
 const parseBooleanEnv = (value: string | undefined, fallback: boolean): boolean => {
   if (!value) {
@@ -423,6 +417,31 @@ const sanitizeProfile = (user: AuthUser, positionNames: string[] = []) => {
   };
 };
 
+export const assertParentPortalEnabled = async (
+  publicDb: TenantDb,
+  tenantId: string
+): Promise<void> => {
+  const result = await publicDb.execute(sql`
+    SELECT is_enabled
+    FROM public.school_sms_features
+    WHERE tenant_id = ${tenantId}::uuid
+    LIMIT 1
+  `);
+  const isEnabled = getRows<{ is_enabled: boolean }>(result)[0]?.is_enabled ?? false;
+  if (!isEnabled) {
+    throw new Error('SERVICE_NOT_AVAILABLE');
+  }
+};
+
+export const assertSuperAdminDomain = (
+  user: { role: UserRole },
+  isSuperAdminDomain: boolean
+): void => {
+  if (isSuperAdminDomain && user.role !== 'super_admin') {
+    throw new Error('Only super admin can sign in from this domain');
+  }
+};
+
 export const login = async (db: TenantDb, input: LoginInput): Promise<LoginResult> => {
   const authUser = await (async () => {
     const byPhone = await findUserByPhone(db, input.identifier);
@@ -567,34 +586,18 @@ export const refreshAccessToken = async (
     };
   }
 
-  let parentResult: unknown;
-  try {
-    parentResult = await db.execute(sql`
-      SELECT
-        id::text AS id,
-        phone,
-        full_name,
-        email,
-        is_active,
-        must_change_password
-      FROM parents
-      WHERE id = ${payload.sub}::uuid
-      LIMIT 1
-    `);
-  } catch {
-    parentResult = await db.execute(sql`
-      SELECT
-        id::text AS id,
-        phone,
-        full_name,
-        email,
-        is_active,
-        false AS must_change_password
-      FROM parents
-      WHERE id = ${payload.sub}::uuid
-      LIMIT 1
-    `);
-  }
+  const parentResult = await db.execute(sql`
+    SELECT
+      id::text AS id,
+      phone,
+      full_name,
+      email,
+      is_active,
+      COALESCE(must_change_password, false) AS must_change_password
+    FROM parents
+    WHERE id = ${payload.sub}::uuid
+    LIMIT 1
+  `);
   const parent = getRows<{
     id: string;
     phone: string;

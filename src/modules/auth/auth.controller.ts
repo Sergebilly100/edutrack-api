@@ -3,7 +3,10 @@ import { sql } from 'drizzle-orm';
 import { z, ZodError } from 'zod';
 
 import { db, withTenantSchema } from '../../shared/database/db.js';
+import { getRowsUntyped as getRows } from '../../shared/utils/db-helpers.js';
 import {
+  assertParentPortalEnabled,
+  assertSuperAdminDomain,
   changePassword,
   getMe,
   login,
@@ -104,15 +107,6 @@ const LOGIN_RATE_LIMIT_MAX = (() => {
   return process.env.NODE_ENV === 'production' ? 10 : 200;
 })();
 const LOGIN_RATE_LIMIT_WINDOW = process.env.AUTH_LOGIN_RATE_LIMIT_WINDOW ?? '1 minute';
-
-const getRows = <TRow,>(result: unknown): TRow[] => {
-  if (typeof result !== 'object' || result === null || !('rows' in result)) {
-    return [];
-  }
-
-  const rows = (result as { rows: TRow[] }).rows;
-  return Array.isArray(rows) ? rows : [];
-};
 
 const extractHostname = (request: FastifyRequest): string | null => {
   const host = typeof request.headers.host === 'string' ? request.headers.host : '';
@@ -386,9 +380,7 @@ export default async function authController(app: FastifyInstance): Promise<void
             schemaName,
           })
         );
-        if (shouldRestrictToSuperAdmin(request) && result.user.role !== 'super_admin') {
-          throw new Error('Only super admin can sign in from this domain');
-        }
+        assertSuperAdminDomain(result.user, shouldRestrictToSuperAdmin(request));
 
         const refreshToken = await signRefreshToken(result.user.id, schemaName);
         try {
@@ -431,20 +423,7 @@ export default async function authController(app: FastifyInstance): Promise<void
           throw new Error('Tenant not found');
         }
 
-        const feature = await db.execute<{ is_enabled: boolean }>(sql`
-          SELECT is_enabled
-          FROM public.school_sms_features
-          WHERE tenant_id = ${tenant.id}::uuid
-          LIMIT 1
-        `);
-        const isEnabled = getRows<{ is_enabled: boolean }>(feature)[0]?.is_enabled ?? false;
-        if (!isEnabled) {
-          return reply.code(403).send({
-            error: 'SERVICE_NOT_AVAILABLE',
-            code: 'SERVICE_NOT_AVAILABLE',
-            statusCode: 403,
-          });
-        }
+        await assertParentPortalEnabled(db, tenant.id);
 
         const auth = await withTenantSchema(schemaName, async (tenantDb) => {
           const service = buildParentPortalService(tenantDb);
@@ -481,6 +460,13 @@ export default async function authController(app: FastifyInstance): Promise<void
           },
         });
       } catch (error) {
+        if (error instanceof Error && error.message === 'SERVICE_NOT_AVAILABLE') {
+          return reply.code(403).send({
+            error: 'SERVICE_NOT_AVAILABLE',
+            code: 'SERVICE_NOT_AVAILABLE',
+            statusCode: 403,
+          });
+        }
         if (error instanceof ParentPortalError) {
           return reply.code(error.statusCode).send({
             error: error.code === 'SUBSCRIPTION_EXPIRED' ? 'SUBSCRIPTION_EXPIRED' : error.message,
