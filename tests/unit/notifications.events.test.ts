@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { NotificationsService } from '../../src/modules/notifications/notifications.service.js';
+import { SubscriptionsRepository } from '../../src/modules/subscriptions/subscriptions.repository.js';
 import { emit, off, on } from '../../src/shared/events/event-bus.js';
 
 const repository = {
@@ -25,6 +26,32 @@ beforeEach(() => {
 
   withTenantSchema.mockImplementation(async (_schemaName, callback) => callback(tenantDb));
   smsQueue.add.mockResolvedValue({ id: 'job-1' });
+
+  // Mock SubscriptionsRepository used by handleStudentAbsent
+  vi.spyOn(SubscriptionsRepository.prototype, 'getTenantIdBySchemaName').mockResolvedValue('tenant-1');
+  vi.spyOn(SubscriptionsRepository.prototype, 'getSmsFeatureByTenantId').mockResolvedValue({
+    tenant_id: 'tenant-1',
+    is_enabled: true,
+    monetize_parent_alerts: false,
+    sms_cap_per_student: 10,
+    commission_pct: 15,
+    sms_unit_price_fcfa: 2000,
+    use_real_hours: false,
+    geo_check_enabled: false,
+    checkout_tolerance_minutes: 5,
+  });
+  vi.spyOn(SubscriptionsRepository.prototype, 'listParentAlertContactsByStudent').mockResolvedValue([
+    {
+      parent_id: 'parent-1',
+      subscription_id: null,
+      parent_phone: '2250700000009',
+      parent_email: null,
+      ends_at: null,
+      subscription_status: null,
+    },
+  ]);
+  vi.spyOn(SubscriptionsRepository.prototype, 'getUsageByStudentMonth').mockResolvedValue({ sms: 0, email: 0 });
+  vi.spyOn(SubscriptionsRepository.prototype, 'incrementUsage').mockResolvedValue(undefined);
 
   repository.getLateAlertContext.mockResolvedValue({
     teacherName: 'Kouassi Awa',
@@ -92,7 +119,7 @@ describe('notifications event-bus integration', () => {
     );
   });
 
-  it('emit(teacher.qr_alert) queue un job avec qrAlertSentUpdate', async () => {
+  it('emit(teacher.qr_alert) loggue en base sans SMS (dashboard only)', async () => {
     emit('teacher.qr_alert', {
       tenantId: 'tenant-1',
       schemaName: 'school_sainte_marie',
@@ -104,20 +131,16 @@ describe('notifications event-bus integration', () => {
     });
 
     await vi.waitFor(() => {
-      expect(smsQueue.add).toHaveBeenCalledTimes(1);
+      expect(repository.insertNotificationLog).toHaveBeenCalledTimes(1);
     });
 
-    expect(smsQueue.add).toHaveBeenCalledWith(
-      'send-sms',
+    expect(smsQueue.add).not.toHaveBeenCalled();
+    expect(repository.insertNotificationLog).toHaveBeenCalledWith(
+      tenantDb,
       expect.objectContaining({
-        notificationType: 'teacher_qr_mismatch',
-        qrAlertSentUpdate: {
-          teacherId: 'teacher-1',
-          scheduleId: 'schedule-1',
-          date: '2026-04-14',
-        },
-      }),
-      expect.any(Object)
+        type: 'teacher_qr_mismatch',
+        status: 'skipped_unknown',
+      })
     );
   });
 

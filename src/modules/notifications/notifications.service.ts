@@ -854,18 +854,18 @@ export class NotificationsService {
     });
   }
 
-  // La méthode handleTeacherQrAlert est une fonction asynchrone qui traite les événements de type 'teacher.qr_alert'. 
-  // elle envoie une notification SMS au directeur de l'école lorsque le professeur scanne un QR code qui ne correspond pas à sa salle prévue, oublie de scanner ou scanne en dehors de 
-  // la plage horaire autorisée.
+  // QR alerts (mismatch, missing, out-of-time) sont tracées en base pour le dashboard
+  // mais n'envoient pas de SMS — trop bruyant pour le directeur.
+  // Seul qr_invalid_alert (QR inconnu = alerte sécurité) envoie un SMS via handleTeacherQrInvalid.
   async handleTeacherQrAlert(payload: TeacherQrAlertPayload): Promise<void> {
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
       const context = await this.deps.repository.getQrAlertContext(tenantDb, payload);
-      if (!context?.directorPhone) {
+      if (!context) {
         return;
       }
 
       const notificationType = toQrNotificationType(payload.alertType);
-      
+
       const message = buildTeacherQrAlertSms(payload.alertType, {
         teacherName: context.teacherName,
         scannedRoom: context.scannedRoom,
@@ -876,40 +876,23 @@ export class NotificationsService {
         slotLabel: context.slotLabel,
       });
 
-      const queueRef = buildQueueRef(payload.schemaName, notificationType);
-
+      // Log uniquement — pas de SMS envoyé pour ces alertes QR (dashboard uniquement)
       await this.deps.repository.insertNotificationLog(tenantDb, {
         type: notificationType,
-        recipientPhone: context.directorPhone,
+        recipientPhone: context.directorPhone ?? '',
         message,
-        status: 'queued',
-        providerRef: queueRef,
+        status: 'skipped_unknown',
         relatedId: payload.scheduleId,
       });
 
-      await this.deps.smsQueue.add(
-        'send-sms',
-        toSmsJobData({
-          queueRef,
-          to: context.directorPhone,
-          message,
-          notificationType,
-          schemaName: payload.schemaName,
-          relatedId: payload.scheduleId,
-          qrAlertSentUpdate: {
-            teacherId: payload.teacherId,
-            scheduleId: payload.scheduleId,
-            date: payload.date,
-          },
-        }),
-        {
-          jobId: queueRef,
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 5_000 },
-          removeOnComplete: true,
-          removeOnFail: true,
-        }
-      );
+      // Marquer qr_alert_sent pour éviter les doublons de détection
+      if (context.directorPhone) {
+        await this.deps.repository.markQrAlertSent(tenantDb, {
+          teacherId: payload.teacherId,
+          scheduleId: payload.scheduleId,
+          date: payload.date,
+        });
+      }
     });
   }
 

@@ -394,8 +394,11 @@ export const defaultRepository: NotificationsRepository = {
 
   async listNotificationLog(tenantDb, params) {
     const safeLimit = Math.max(1, Math.min(params.limit, 50));
-    const filteredTypes = params.types?.filter(Boolean) ?? [];
-    const DIRECTOR_EXCLUDED_TYPES = ['student_absent_parent'] as const;
+    // Ces types sont destinés aux parents/élèves — jamais exposés au directeur dans son log
+    const DIRECTOR_EXCLUDED_TYPES: NotificationType[] = ['student_absent_parent'];
+    const filteredTypes = (params.types?.filter(Boolean) ?? []).filter(
+      (t) => !DIRECTOR_EXCLUDED_TYPES.includes(t)
+    );
     const whereClause =
       filteredTypes.length === 0
         ? sql`WHERE type NOT IN (${sql.join(DIRECTOR_EXCLUDED_TYPES.map((item) => sql`${item}`), sql`, `)})`
