@@ -408,12 +408,14 @@ const runInTransaction = async <T>(
 // Row-level validation helpers
 // ---------------------------------------------------------------------------
 
-// validateStudentRow valide une ligne du fichier Excel pour les étudiants, en vérifiant la présence des données requises, 
+const IMPORT_EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// validateStudentRow valide une ligne du fichier Excel pour les étudiants, en vérifiant la présence des données requises,
 // la validité des formats (date, téléphone), et en détectant les doublons de matricule à la fois dans le batch et par rapport à la base de données.
 const validateStudentRow = (
   sheetRow: ParsedWorkbookRow,
   classesByName: Map<string, string>,
-  existingByMatricule: Map<string, { id: string; key: string; matricule: string | null; firstName: string; lastName: string; className: string; birthDate: string | null; parentName: string | null; parentPhone: string | null; parentName2: string | null; parentPhone2: string | null; isActive: boolean }>,
+  existingByMatricule: Map<string, { id: string; key: string; matricule: string | null; firstName: string; lastName: string; className: string; birthDate: string | null; parentName: string | null; parentPhone: string | null; parentEmail: string | null; parentName2: string | null; parentPhone2: string | null; isActive: boolean }>,
   batchStudentMatricules: Map<string, number>,
   errors: ImportError[]
 ): {
@@ -424,6 +426,7 @@ const validateStudentRow = (
   birthDate: string | null;
   parentName: string | null;
   parentPhone: string | null;
+  parentEmail: string | null;
   parentName2: string | null;
   parentPhone2: string | null;
 } | null => {
@@ -436,6 +439,7 @@ const validateStudentRow = (
   const birthDate = parseDateToIso(birthDateRaw);
   const parentName = normalizeCell(sheetRow.values['Nom parent']) || null;
   const parentPhoneRaw = normalizeCell(sheetRow.values['Téléphone parent']);
+  const parentEmailRaw = normalizeCell(sheetRow.values['Email parent']) || null;
   const parentName2 = normalizeCell(sheetRow.values['Nom parent 2']) || null;
   const parentPhone2Raw = normalizeCell(sheetRow.values['Téléphone parent 2']);
   const normalizedMatricule = matricule ? normalizeKey(matricule) : null;
@@ -526,6 +530,18 @@ const validateStudentRow = (
     });
   }
 
+  if (parentEmailRaw && !IMPORT_EMAIL_REGEX.test(parentEmailRaw)) {
+    errors.push({
+      ...makeError({
+        row: line,
+        column: 'Email parent',
+        message: 'Format email invalide',
+        value: parentEmailRaw,
+      }),
+      sheet: sheetRow.sheetName,
+    });
+  }
+
   const hasRowError = errors.some((e) => e.row === line && e.sheet === sheetRow.sheetName);
   if (hasRowError) {
     return null;
@@ -539,6 +555,7 @@ const validateStudentRow = (
     birthDate,
     parentName,
     parentPhone: parentPhoneRaw || null,
+    parentEmail: parentEmailRaw,
     parentName2,
     parentPhone2: parentPhone2Raw || null,
   };
@@ -727,6 +744,9 @@ export class ImportService {
       }
       if ((existing.parentPhone ?? null) !== (fields.parentPhone ?? null)) {
         changes.parentPhone = { before: existing.parentPhone ?? null, after: fields.parentPhone ?? null };
+      }
+      if ((existing.parentEmail ?? null) !== (fields.parentEmail ?? null)) {
+        changes.parentEmail = { before: existing.parentEmail ?? null, after: fields.parentEmail ?? null };
       }
       if ((existing.parentName2 ?? null) !== (fields.parentName2 ?? null)) {
         changes.parentName2 = { before: existing.parentName2 ?? null, after: fields.parentName2 ?? null };
@@ -1574,15 +1594,17 @@ export class ImportService {
           );
         }
 
-        // upsertSchedule est une fonction qui effectue l'insertion ou la mise à jour d'un créneau de planning dans la base de données, 
+        // upsertSchedule est une fonction qui effectue l'insertion ou la mise à jour d'un créneau de planning dans la base de données,
         // en fonction de l'existence ou non d'un créneau similaire pour la même période, classe, enseignant, créneau horaire.
-        const result = await this.repository.upsertSchedule(executor, row, {
+        const { result, id: scheduleId } = await this.repository.upsertSchedule(executor, row, {
           schedulePeriodId,
           teacherId,
           classId,
           timeSlotId,
           roomId,
         });
+
+        upsertedScheduleIds.push(scheduleId);
 
         if (result === 'inserted') {
           imported += 1;

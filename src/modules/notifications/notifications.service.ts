@@ -16,9 +16,12 @@ import type {
   SubscriptionExpiredPayload,
   TeacherAttendanceApprovedPayload,
   TeacherAttendanceRejectedPayload,
+  TeacherEndScanActionPayload,
+  TeacherEndScanWarningPayload,
   TeacherLatePayload,
   TeacherQrAlertPayload,
   TeacherQrInvalidPayload,
+  TeacherSanctionCancelledPayload,
 } from '../../shared/events/events.types.js';
 import type { NotificationType } from '../../shared/types/index.js';
 
@@ -49,11 +52,11 @@ type NotificationsServiceDeps = {
     callback: (tenantDb: TenantDbLike) => Promise<T>
   ) => Promise<T>;
   eventBus: {
-    on: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'teacher.qr_invalid' | 'teacher.attendance_rejected' | 'teacher.attendance_approved' | 'student.absent' | 'subscription.expired'>>(
+    on: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'teacher.qr_invalid' | 'teacher.attendance_rejected' | 'teacher.attendance_approved' | 'teacher.end_scan_action' | 'teacher.sanction_cancelled' | 'teacher.end_scan_warning' | 'student.absent' | 'subscription.expired'>>(
       event: K,
       handler: (payload: EventMap[K]) => void
     ) => void;
-    off: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'teacher.qr_invalid' | 'teacher.attendance_rejected' | 'teacher.attendance_approved' | 'student.absent' | 'subscription.expired'>>(
+    off: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'teacher.qr_invalid' | 'teacher.attendance_rejected' | 'teacher.attendance_approved' | 'teacher.end_scan_action' | 'teacher.sanction_cancelled' | 'teacher.end_scan_warning' | 'student.absent' | 'subscription.expired'>>(
       event: K,
       handler: (payload: EventMap[K]) => void
     ) => void;
@@ -685,9 +688,12 @@ export class NotificationsService {
     };
   }
 
+  // ici teacherLateListener écoute les événements de type 'teacher.late' émis sur le bus d'événements, et pour chaque événement reçu, 
+  // il appelle la méthode handleTeacherLate pour traiter l'événement. 
+  // Si une erreur survient lors du traitement de l'événement, elle est capturée et un message d'erreur est affiché dans la console.
   private readonly teacherLateListener = (payload: EventMap['teacher.late']): void => {
-    void this.handleTeacherLate(payload).catch((error) => {
-      console.error('[notifications] failed to process teacher.late', error);
+    void this.handleTeacherLate(payload).catch((error) => { // Gestion des erreurs pour éviter que des exceptions non gérées ne fassent planter le service de notifications
+      console.error('[notifications] failed to process teacher.late', error); // Affiche une erreur dans la console si le traitement de l'événement 'teacher.late' échoue, avec des détails sur l'erreur
     });
   };
 
@@ -733,6 +739,30 @@ export class NotificationsService {
     });
   };
 
+  private readonly teacherEndScanActionListener = (
+    payload: EventMap['teacher.end_scan_action']
+  ): void => {
+    void this.handleTeacherEndScanAction(payload).catch((error) => {
+      console.error('[notifications] failed to process teacher.end_scan_action', error);
+    });
+  };
+
+  private readonly teacherSanctionCancelledListener = (
+    payload: EventMap['teacher.sanction_cancelled']
+  ): void => {
+    void this.handleTeacherSanctionCancelled(payload).catch((error) => {
+      console.error('[notifications] failed to process teacher.sanction_cancelled', error);
+    });
+  };
+
+  private readonly teacherEndScanWarningListener = (
+    payload: EventMap['teacher.end_scan_warning']
+  ): void => {
+    void this.handleTeacherEndScanWarning(payload).catch((error) => {
+      console.error('[notifications] failed to process teacher.end_scan_warning', error);
+    });
+  };
+
   start(): void {
     if (this._started) return;
     this._started = true;
@@ -747,6 +777,9 @@ export class NotificationsService {
       'teacher.attendance_approved',
       this.teacherAttendanceApprovedListener
     );
+    this.deps.eventBus.on('teacher.end_scan_action', this.teacherEndScanActionListener);
+    this.deps.eventBus.on('teacher.sanction_cancelled', this.teacherSanctionCancelledListener);
+    this.deps.eventBus.on('teacher.end_scan_warning', this.teacherEndScanWarningListener);
     this.deps.eventBus.on('student.absent', this.studentAbsentListener);
     this.deps.eventBus.on('subscription.expired', this.subscriptionExpiredListener);
   }
@@ -764,10 +797,15 @@ export class NotificationsService {
       'teacher.attendance_approved',
       this.teacherAttendanceApprovedListener
     );
+    this.deps.eventBus.off('teacher.end_scan_action', this.teacherEndScanActionListener);
+    this.deps.eventBus.off('teacher.sanction_cancelled', this.teacherSanctionCancelledListener);
+    this.deps.eventBus.off('teacher.end_scan_warning', this.teacherEndScanWarningListener);
     this.deps.eventBus.off('student.absent', this.studentAbsentListener);
     this.deps.eventBus.off('subscription.expired', this.subscriptionExpiredListener);
   }
 
+  // La méthode handleTeacherLate est une fonction asynchrone qui traite les événements de type 'teacher.late'. 
+  // elle envoie une notification SMS au directeur de l'école lorsque le professeur arrive en retard à une classe prévue.
   async handleTeacherLate(payload: TeacherLatePayload): Promise<void> {
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
       const context = await this.deps.repository.getLateAlertContext(tenantDb, payload);
@@ -816,6 +854,9 @@ export class NotificationsService {
     });
   }
 
+  // La méthode handleTeacherQrAlert est une fonction asynchrone qui traite les événements de type 'teacher.qr_alert'. 
+  // elle envoie une notification SMS au directeur de l'école lorsque le professeur scanne un QR code qui ne correspond pas à sa salle prévue, oublie de scanner ou scanne en dehors de 
+  // la plage horaire autorisée.
   async handleTeacherQrAlert(payload: TeacherQrAlertPayload): Promise<void> {
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
       const context = await this.deps.repository.getQrAlertContext(tenantDb, payload);
@@ -824,7 +865,7 @@ export class NotificationsService {
       }
 
       const notificationType = toQrNotificationType(payload.alertType);
-
+      
       const message = buildTeacherQrAlertSms(payload.alertType, {
         teacherName: context.teacherName,
         scannedRoom: context.scannedRoom,
@@ -872,6 +913,8 @@ export class NotificationsService {
     });
   }
 
+  // La méthode handleTeacherQrInvalid est une fonction asynchrone qui traite les événements de type 'teacher.qr_invalid'. 
+  // elle envoie une notification SMS et/ou email au directeur de l'école lorsque le professeur tente de scanner un QR code inconnu, avec des détails sur l'heure du scan et le QR token scanné.
   async handleTeacherQrInvalid(payload: TeacherQrInvalidPayload): Promise<void> {
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
       const director = await this.deps.repository.getQrInvalidAlertContext(tenantDb, {
@@ -963,6 +1006,8 @@ export class NotificationsService {
     });
   }
 
+  // La méthode handleTeacherAttendanceRejected est une fonction asynchrone qui traite les événements de type 'teacher.attendance_rejected'. 
+  // elle envoie une notification email au professeur lorsque sa présence pour un cours n'a pas pu être validée, avec des détails sur le cours, la date, le motif du rejet et les coordonnées de contact de la direction.
   async handleTeacherAttendanceRejected(
     payload: TeacherAttendanceRejectedPayload
   ): Promise<void> {
@@ -1010,6 +1055,8 @@ export class NotificationsService {
     });
   }
 
+  // La méthode handleTeacherAttendanceApproved est une fonction asynchrone qui traite les événements de type 'teacher.attendance_approved'.
+  // elle envoie une notification SMS et/ou email au professeur lorsque sa présence pour un cours a été validée, avec des détails sur le cours, la date, les heures validées et les coordonnées de contact de la direction.
   async handleTeacherAttendanceApproved(
     payload: TeacherAttendanceApprovedPayload
   ): Promise<void> {
@@ -1094,6 +1141,225 @@ export class NotificationsService {
               removeOnComplete: true,
               removeOnFail: true,
             }
+          ).then(() => undefined)
+        );
+      }
+
+      await Promise.all(tasks);
+    });
+  }
+
+  // La méthode handleStudentAbsentWithLegacySubscriptionCheck est une fonction asynchrone qui traite les événements de type 'student.absent'.
+  // elle vérifie les abonnements actifs de l'école pour déterminer si une notification SMS et/ou email peut être envoyée aux parents d'un élève absent, puis envoie les notifications correspondantes avec des détails sur l'élève, le cours et la date d'absence.
+  // Cette méthode utilise un service de gestion des abonnements pour vérifier les droits d'envoi de notifications, et enregistre des logs de notification avec le statut de chaque tentative d'envoi (envoyé, refusé, ou ignoré pour différentes raisons).
+  // voici une explication détaillée de son fonctionnement : 
+  // 1. Vérification des abonnements : La méthode commence par créer une instance du service de gestion des abonnements en utilisant le repository approprié pour accéder à la base de données du locataire. Elle appelle ensuite la méthode canSendNotification pour vérifier si une notification peut être envoyée pour l'élève concerné, en fonction de son ID, du tenant, du schéma et du type de notification (SMS dans ce cas). Si la vérification échoue (par exemple, en raison d'un abonnement expiré ou d'une fonctionnalité désactivée), un log de notification est enregistré avec le statut correspondant (refusé pour différentes raisons) et la méthode se termine sans envoyer de notification.
+  // 2. Envoi de la notification SMS : Si la vérification des abonnements est réussie, la méthode résout le template de message SMS à utiliser pour la notification d'absence d'élève, en fonction du schéma et du type de notification. Elle rend ensuite le message en remplissant les variables du template avec les informations de l'élève, du cours et de la date d'absence. Un log de notification est enregistré avec le statut "queued" pour indiquer que la notification est en attente d'envoi, puis un job est ajouté à la queue pour envoyer le SMS, avec des paramètres tels que le numéro de téléphone du parent, le message à envoyer, et des options de retry en cas d'échec.
+  // 3. Envoi de la notification email : Si une adresse email du parent est disponible, la méthode effectue une vérification similaire des abonnements pour l'envoi d'emails. Si l'envoi d'emails est autorisé, elle rend un message email à partir d'un template, enregistre un log de notification pour l'email, puis ajoute un job à la queue pour envoyer l'email avec les détails appropriés. Si l'envoi d'emails n'est pas autorisé, un log de notification est enregistré avec le statut correspondant et la méthode se termine.
+  async handleTeacherEndScanAction(payload: TeacherEndScanActionPayload): Promise<void> {
+    if (!payload.teacherEmail && !payload.teacherPhone) return;
+    if (!payload.schemaName) return;
+
+    const isSanction = payload.action === 'sanctioned';
+    const message = isSanction
+      ? `[EduTrack] Sanction pour absence de scan de fin — ${payload.courseName} du ${payload.date}. Présentez-vous à l'administration.`
+      : `[EduTrack] Avertissement — scan de fin manquant pour ${payload.courseName} du ${payload.date}. Aucun impact sur votre salaire.`;
+
+    const tasks: Array<Promise<void>> = [];
+
+    await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
+      if (payload.teacherPhone) {
+        const smsQueueRef = buildQueueRef(payload.schemaName, isSanction ? 'scan_end_sanction' : 'scan_end_warning');
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: isSanction ? 'scan_end_sanction' : 'scan_end_warning',
+          channel: 'sms',
+          recipientPhone: payload.teacherPhone,
+          message,
+          status: 'queued',
+          providerRef: smsQueueRef,
+          relatedId: payload.attendanceId,
+        });
+        tasks.push(
+          this.deps.smsQueue.add(
+            'send-sms',
+            toSmsJobData({
+              queueRef: smsQueueRef,
+              to: payload.teacherPhone,
+              message,
+              notificationType: isSanction ? 'scan_end_sanction' : 'scan_end_warning',
+              schemaName: payload.schemaName,
+              relatedId: payload.attendanceId,
+            }),
+            { jobId: smsQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: true }
+          ).then(() => undefined)
+        );
+      }
+
+      if (payload.teacherEmail) {
+        const emailText = isSanction
+          ? `Votre cours ${payload.courseName} du ${payload.date} n'a pas pu être comptabilisé (scan de fin manquant). Motif : ${payload.reason}. Veuillez vous présenter à l'administration.`
+          : `Vous avez un avertissement pour absence de scan de fin : ${payload.courseName} du ${payload.date}. Motif : ${payload.reason}. Votre salaire n'est pas impacté.`;
+        const emailQueueRef = buildQueueRef(payload.schemaName, isSanction ? 'scan_end_sanction' : 'scan_end_warning');
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: isSanction ? 'scan_end_sanction' : 'scan_end_warning',
+          channel: 'email',
+          recipientPhone: payload.teacherPhone ?? '',
+          recipientEmail: payload.teacherEmail,
+          message: emailText,
+          status: 'queued',
+          providerRef: emailQueueRef,
+          relatedId: payload.attendanceId,
+        });
+        tasks.push(
+          this.deps.smsQueue.add(
+            'send-email',
+            toEmailJobData({
+              queueRef: emailQueueRef,
+              to: payload.teacherEmail,
+              subject: isSanction ? `[EduTrack] Sanction — ${payload.courseName} du ${payload.date}` : `[EduTrack] Avertissement — scan de fin manquant`,
+              text: emailText,
+              recipientPhone: payload.teacherPhone ?? '',
+              notificationType: isSanction ? 'scan_end_sanction' : 'scan_end_warning',
+              schemaName: payload.schemaName,
+              relatedId: payload.attendanceId,
+            }),
+            { jobId: emailQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: true }
+          ).then(() => undefined)
+        );
+      }
+
+      await Promise.all(tasks);
+    });
+  }
+
+  async handleTeacherSanctionCancelled(payload: TeacherSanctionCancelledPayload): Promise<void> {
+    if (!payload.teacherEmail && !payload.teacherPhone) return;
+    if (!payload.schemaName) return;
+
+    const message = `[EduTrack] La sanction pour ${payload.courseName} du ${payload.date} a été annulée. Votre cours est de nouveau comptabilisé.`;
+    const tasks: Array<Promise<void>> = [];
+
+    await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
+      if (payload.teacherPhone) {
+        const smsQueueRef = buildQueueRef(payload.schemaName, 'scan_end_sanction_cancelled');
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'scan_end_sanction_cancelled',
+          channel: 'sms',
+          recipientPhone: payload.teacherPhone,
+          message,
+          status: 'queued',
+          providerRef: smsQueueRef,
+          relatedId: payload.attendanceId,
+        });
+        tasks.push(
+          this.deps.smsQueue.add(
+            'send-sms',
+            toSmsJobData({
+              queueRef: smsQueueRef,
+              to: payload.teacherPhone,
+              message,
+              notificationType: 'scan_end_sanction_cancelled',
+              schemaName: payload.schemaName,
+              relatedId: payload.attendanceId,
+            }),
+            { jobId: smsQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: true }
+          ).then(() => undefined)
+        );
+      }
+
+      if (payload.teacherEmail) {
+        const emailText = `La sanction appliquée pour ${payload.courseName} du ${payload.date} a été annulée. Motif de l'annulation : ${payload.cancelReason}. Votre cours est de nouveau comptabilisé dans votre salaire.`;
+        const emailQueueRef = buildQueueRef(payload.schemaName, 'scan_end_sanction_cancelled');
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'scan_end_sanction_cancelled',
+          channel: 'email',
+          recipientPhone: payload.teacherPhone ?? '',
+          recipientEmail: payload.teacherEmail,
+          message: emailText,
+          status: 'queued',
+          providerRef: emailQueueRef,
+          relatedId: payload.attendanceId,
+        });
+        tasks.push(
+          this.deps.smsQueue.add(
+            'send-email',
+            toEmailJobData({
+              queueRef: emailQueueRef,
+              to: payload.teacherEmail,
+              subject: `[EduTrack] Sanction annulée — ${payload.courseName} du ${payload.date}`,
+              text: emailText,
+              recipientPhone: payload.teacherPhone ?? '',
+              notificationType: 'scan_end_sanction_cancelled',
+              schemaName: payload.schemaName,
+              relatedId: payload.attendanceId,
+            }),
+            { jobId: emailQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: true }
+          ).then(() => undefined)
+        );
+      }
+
+      await Promise.all(tasks);
+    });
+  }
+
+  async handleTeacherEndScanWarning(payload: TeacherEndScanWarningPayload): Promise<void> {
+    if (!payload.teacherEmail && !payload.teacherPhone) return;
+    if (!payload.schemaName) return;
+
+    const message = `[EduTrack] ${payload.missingCount} cours sans scan de fin pour ${payload.month}. Veuillez régulariser.`;
+    const tasks: Array<Promise<void>> = [];
+
+    await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
+      if (payload.teacherPhone) {
+        const smsQueueRef = buildQueueRef(payload.schemaName, 'scan_end_warning');
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'scan_end_warning',
+          channel: 'sms',
+          recipientPhone: payload.teacherPhone,
+          message,
+          status: 'queued',
+          providerRef: smsQueueRef,
+        });
+        tasks.push(
+          this.deps.smsQueue.add(
+            'send-sms',
+            toSmsJobData({
+              queueRef: smsQueueRef,
+              to: payload.teacherPhone,
+              message,
+              notificationType: 'scan_end_warning',
+              schemaName: payload.schemaName,
+            }),
+            { jobId: smsQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: true }
+          ).then(() => undefined)
+        );
+      }
+
+      if (payload.teacherEmail) {
+        const emailText = `Vous avez ${payload.missingCount} cours sans scan de fin pour le mois ${payload.month}. Veuillez vous rapprocher de l'administration pour régulariser la situation.`;
+        const emailQueueRef = buildQueueRef(payload.schemaName, 'scan_end_warning');
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'scan_end_warning',
+          channel: 'email',
+          recipientPhone: payload.teacherPhone ?? '',
+          recipientEmail: payload.teacherEmail,
+          message: emailText,
+          status: 'queued',
+          providerRef: emailQueueRef,
+        });
+        tasks.push(
+          this.deps.smsQueue.add(
+            'send-email',
+            toEmailJobData({
+              queueRef: emailQueueRef,
+              to: payload.teacherEmail,
+              subject: `[EduTrack] Scans de fin manquants — ${payload.month}`,
+              text: emailText,
+              recipientPhone: payload.teacherPhone ?? '',
+              notificationType: 'scan_end_warning',
+              schemaName: payload.schemaName,
+            }),
+            { jobId: emailQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: true }
           ).then(() => undefined)
         );
       }
@@ -1279,6 +1545,16 @@ export class NotificationsService {
     }
   }
 
+  // La méthode handleStudentAbsent est une fonction asynchrone qui traite les événements de type 'student.absent'.
+  // elle envoie une notification SMS et/ou email aux parents de l'élève lorsqu'il est absent à un cours prévu, avec des détails sur le cours, la date et les coordonnées de contact de l'école.
+  // elle envoie les notification si l'école a activé la fonctionnalité pour les parents et si les parents ont un abonnement actif (ou si la fonctionnalité n'est pas monétisée).
+  // voici les étapes principales de la méthode :
+  // 1. Récupérer les informations d'abonnement de l'école et vérifier si la fonctionnalité de notifications pour les parents est activée.
+  // 2. Si la fonctionnalité est désactivée, enregistrer une entrée dans le journal des notifications avec le statut "skipped_feature_disabled" et ne pas envoyer de notification.
+  // 3. Si la fonctionnalité est activée, construire le message à envoyer en utilisant un template et les données de l'événement.
+  // 4. Récupérer les contacts des parents à notifier depuis la base de données. Si aucun contact n'est trouvé, utiliser les coordonnées fournies dans l'événement.
+  // 5. Pour chaque contact, vérifier si l'envoi de notifications est autorisé en fonction de l'abonnement du parent (si la fonctionnalité est monétisée). Si l'envoi n'est pas autorisé, enregistrer une entrée dans le journal des notifications avec le statut approprié et ne pas envoyer de notification.
+  // 6. Si l'envoi est autorisé, ajouter une tâche à la file d'attente pour envoyer la notification SMS et/ou email, et enregistrer une entrée dans le journal des notifications avec le statut "queued".
   async handleStudentAbsent(payload: StudentAbsentPayload): Promise<void> {
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
       const subscriptionsRepository = new SubscriptionsRepository(
@@ -1491,6 +1767,10 @@ export class NotificationsService {
     });
   }
 
+  // La méthode handleSubscriptionExpired est une fonction asynchrone qui traite les événements de type 'subscription.expired'.
+  // elle envoie une notification SMS et/ou email au directeur de l'école lorsque l'abonnement de l'école expire, avec des détails sur le montant restant à payer, la date d'échéance et les coordonnées de contact pour régulariser la situation.
+  // cet événement est déclenché lorsque l'abonnement de l'école arrive à expiration, et la méthode vérifie les informations nécessaires pour envoyer les notifications, puis construit les messages à envoyer et les ajoute à la file d'attente des notifications.
+  // comment elle sait que l'abonnement est expiré ? L'événement 'subscription.expired' doit être émis par un autre service (probablement le service de gestion des abonnements) au moment où l'abonnement d'une école expire. Cet événement doit contenir les informations nécessaires (comme le nom de l'école, le montant restant, la date d'échéance, etc.) pour que le service de notifications puisse traiter l'événement et envoyer les notifications appropriées.
   async handleSubscriptionExpired(payload: SubscriptionExpiredPayload): Promise<void> {
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
       const template = await resolveSmsTemplateMessage(

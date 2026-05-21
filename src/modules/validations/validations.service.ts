@@ -1,6 +1,6 @@
 import { ValidationsRepository } from './validations.repository.js';
 import { emit } from '../../shared/events/event-bus.js';
-import type { EndScanAction, MissingEndScanTeacher, PendingValidationCount, PendingValidationGroups, TeacherNotificationItem } from './validations.types.js';
+import type { EndScanAction, MissingEndScanTeacher, PendingValidationCount, PendingValidationGroups, TeacherNotificationItem, ValidationHistoryPage } from './validations.types.js';
 
 export class ValidationModuleError extends Error {
   constructor(
@@ -141,6 +141,17 @@ export class ValidationsService {
     return { success: true };
   }
 
+  listValidationHistory(params: {
+    kind?: 'short_hours' | 'gps_suspicious';
+    month?: string;
+    status?: 'approved' | 'rejected';
+    search?: string;
+    page: number;
+    limit: number;
+  }): Promise<ValidationHistoryPage> {
+    return this.repository.listValidationHistory(params);
+  }
+
   // ── Missing end-scan feature ──────────────────────────────────────────────
 
   async listMissingEndScans(month: string): Promise<MissingEndScanTeacher[]> {
@@ -174,6 +185,19 @@ export class ValidationsService {
         missingCount: entry.missingEndScanCount,
         validatedBy: context.userId,
       });
+
+      emit('teacher.end_scan_warning', {
+        tenantId: context.tenantId ?? '',
+        schemaName: context.schemaName,
+        teacherId: teacher.teacher_id,
+        teacherUserId: teacher.user_id,
+        teacherName: teacher.teacher_name,
+        teacherPhone: teacher.phone,
+        teacherEmail: teacher.email,
+        month,
+        missingCount: entry.missingEndScanCount,
+      });
+
       sentCount++;
     }
 
@@ -276,11 +300,27 @@ export class ValidationsService {
       reason: input.reason,
     });
 
+    emit('teacher.end_scan_action', {
+      tenantId: context.tenantId ?? '',
+      schemaName: context.schemaName,
+      teacherId: record.teacher_id,
+      teacherUserId: record.teacher_user_id,
+      teacherName: record.teacher_name,
+      teacherPhone: record.teacher_phone,
+      teacherEmail: record.teacher_email,
+      attendanceId: record.attendance_id,
+      courseName: record.course_name,
+      date: record.date,
+      action: input.action,
+      reason: input.reason,
+    });
+
     return { success: true };
   }
 
   async cancelEndScanSanction(
-    input: { attendanceId: string; reason: string }
+    input: { attendanceId: string; reason: string },
+    context?: ServiceContext
   ): Promise<{ success: true }> {
     const record = await this.repository.findAttendanceForEndScanAction(input.attendanceId);
     if (!record) {
@@ -306,6 +346,20 @@ export class ValidationsService {
       teacherPhone: record.teacher_phone,
       teacherEmail: record.teacher_email,
       teacherName: record.teacher_name,
+      courseName: record.course_name,
+      date: record.date,
+      cancelReason: input.reason,
+    });
+
+    emit('teacher.sanction_cancelled', {
+      tenantId: context?.tenantId ?? '',
+      schemaName: context?.schemaName ?? '',
+      teacherId: record.teacher_id,
+      teacherUserId: record.teacher_user_id,
+      teacherName: record.teacher_name,
+      teacherPhone: record.teacher_phone,
+      teacherEmail: record.teacher_email,
+      attendanceId: record.attendance_id,
       courseName: record.course_name,
       date: record.date,
       cancelReason: input.reason,

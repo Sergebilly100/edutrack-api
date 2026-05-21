@@ -10,6 +10,7 @@ import type {
   PendingValidationGroups,
   PendingValidationItem,
   TeacherNotificationItem,
+  ValidationHistoryPage,
   ValidationKind,
 } from './validations.types.js';
 
@@ -899,6 +900,111 @@ export class ValidationsRepository {
         AND type IN ('attendance_rejected', 'attendance_approved', 'scan_end_warning', 'scan_end_sanction', 'scan_end_sanction_cancelled')
         AND (metadata->>'read_at' IS NULL)
     `);
+  }
+
+  async listValidationHistory(params: {
+    kind?: 'short_hours' | 'gps_suspicious';
+    month?: string;
+    status?: 'approved' | 'rejected';
+    search?: string;
+    page: number;
+    limit: number;
+  }): Promise<ValidationHistoryPage> {
+    await ensureTenantRealHoursInfrastructure(this.db);
+
+    const offset = (params.page - 1) * params.limit;
+
+    const monthStart = params.month ? `${params.month}-01` : null;
+    const monthEnd = params.month ? monthBoundsFromDate(`${params.month}-01`).monthEnd : null;
+
+    type HistoryRow = {
+      attendance_id: string;
+      teacher_id: string;
+      teacher_name: string;
+      course_name: string;
+      class_name: string;
+      date: string;
+      validation_status: 'approved' | 'rejected';
+      validated_hours: string | null;
+      validation_reason: string | null;
+      validated_at: string | null;
+      kind: ValidationKind;
+      slot_label: string | null;
+      room_name: string | null;
+      schedule_duration_minutes: string | number;
+      actual_minutes: number | null;
+      hourly_rate: number | null;
+      total_count: string;
+    };
+
+    const result = await this.db.execute<HistoryRow>(sql`
+      SELECT
+        at.id::text AS attendance_id,
+        t.id::text AS teacher_id,
+        u.name AS teacher_name,
+        s.subject AS course_name,
+        c.name AS class_name,
+        at.date::text AS date,
+        at.validation_status::text AS validation_status,
+        at.validated_hours::text AS validated_hours,
+        at.validation_reason,
+        at.validated_at::text AS validated_at,
+        CASE
+          WHEN at.geo_status = 'suspicious' THEN 'gps_suspicious'
+          ELSE 'short_hours'
+        END AS kind,
+        ts.label AS slot_label,
+        r.name AS room_name,
+        (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0)::numeric(8,2) AS schedule_duration_minutes,
+        at.actual_minutes,
+        t.hourly_rate,
+        COUNT(*) OVER() AS total_count
+      FROM attendances_teacher at
+      INNER JOIN teachers t ON t.id = at.teacher_id
+      INNER JOIN users u ON u.id = t.user_id
+      INNER JOIN schedules s ON s.id = at.schedule_id
+      INNER JOIN classes c ON c.id = s.class_id
+      INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+      LEFT JOIN rooms r ON r.id = s.room_id
+      WHERE at.validation_status IN ('approved', 'rejected')
+        AND (
+          at.geo_status = 'suspicious'
+          OR at.actual_minutes IS NOT NULL
+        )
+        ${params.status ? sql`AND at.validation_status = ${params.status}` : sql``}
+        ${params.kind === 'gps_suspicious' ? sql`AND at.geo_status = 'suspicious'` : params.kind === 'short_hours' ? sql`AND at.geo_status != 'suspicious'` : sql``}
+        ${monthStart && monthEnd ? sql`AND at.date BETWEEN ${monthStart}::date AND ${monthEnd}::date` : sql``}
+        ${params.search ? sql`AND u.name ILIKE ${'%' + params.search + '%'}` : sql``}
+      ORDER BY at.validated_at DESC NULLS LAST, at.date DESC
+      LIMIT ${params.limit} OFFSET ${offset}
+    `);
+
+    const rows = getRows(result);
+    const total = rows.length > 0 ? Number(rows[0].total_count) : 0;
+
+    return {
+      items: rows.map((row) => ({
+        attendanceId: row.attendance_id,
+        teacherId: row.teacher_id,
+        teacherName: row.teacher_name,
+        courseName: row.course_name,
+        className: row.class_name,
+        date: row.date,
+        validationStatus: row.validation_status,
+        validatedHours: row.validated_hours !== null ? Number(row.validated_hours) : null,
+        validationReason: row.validation_reason,
+        validatedAt: row.validated_at,
+        kind: row.kind,
+        slotLabel: row.slot_label ?? null,
+        roomName: row.room_name ?? null,
+        scheduleDurationMinutes: toNumber(row.schedule_duration_minutes) ?? 0,
+        actualMinutes: row.actual_minutes,
+        hourlyRate: row.hourly_rate,
+      })),
+      total,
+      page: params.page,
+      limit: params.limit,
+    };
   }
 } // end class ValidationsRepository
 

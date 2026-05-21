@@ -20,6 +20,7 @@ import {
   realHoursConfigBodySchema,
   rejectValidationBodySchema,
   sendEndScanWarningBodySchema,
+  validationHistoryQuerySchema,
 } from './validations.types.js';
 
 const handleError = (
@@ -134,6 +135,29 @@ export default async function validationsController(app: FastifyInstance): Promi
     }
   });
 
+  // ── Validation history ───────────────────────────────────────────────────
+
+  app.get('/api/v1/validations/history', { preHandler: requirePermission('validations.view') }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const query = validationHistoryQuerySchema.parse(request.query ?? {});
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildValidationsService(tenantDb);
+        return service.listValidationHistory({
+          kind: query.kind,
+          month: query.month,
+          status: query.status,
+          search: query.search,
+          page: query.page,
+          limit: query.limit,
+        });
+      });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
   // ── Missing end-scan routes ──────────────────────────────────────────────
 
   app.get('/api/v1/validations/missing-end-scans', { preHandler: requirePermission('validations.view') }, async (request, reply) => {
@@ -217,7 +241,8 @@ export default async function validationsController(app: FastifyInstance): Promi
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
         const service = buildValidationsService(tenantDb);
         return service.cancelEndScanSanction(
-          { attendanceId: body.attendance_id, reason: body.reason }
+          { attendanceId: body.attendance_id, reason: body.reason },
+          { schemaName: claims.schemaName, tenantId: claims.tenantId, userId: claims.sub, role: claims.role }
         );
       });
       return reply.send(result);

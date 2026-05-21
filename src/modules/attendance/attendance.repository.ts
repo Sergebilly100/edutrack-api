@@ -529,11 +529,13 @@ export class AttendanceRepository {
       return;
     }
 
+    // Un scan de fin invalide (mauvaise salle) n'ouvre pas le checkout :
+    // room_scan_end_at reste NULL pour bloquer le checkOut tant que la bonne salle n'est pas scannée.
     await this.db.execute(sql`
       UPDATE attendances_teacher
       SET
         room_scanned_id = COALESCE(${params.scannedRoomId}, room_scanned_id),
-        room_scan_end_at = ${params.scannedAtIso}::timestamptz,
+        room_scan_end_at = CASE WHEN ${params.roomMismatch} THEN NULL ELSE ${params.scannedAtIso}::timestamptz END,
         room_mismatch = ${params.roomMismatch},
         qr_alert_sent = ${params.qrAlertSent}
       WHERE teacher_id = ${params.teacherId}
@@ -657,6 +659,20 @@ export class AttendanceRepository {
     return row;
   }
 
+  // listeTeacherCompliance fait le lien entre les données de présence (check-in, check-out, scan de salle, rollcall) et les enseignants, 
+  // pour calculer des taux de conformité globaux et par aspect (scan de salle, concordance de salle, rollcall). 
+  // Elle inclut aussi les enseignants sans pointage ce qui permet d'afficher une liste complète dans le dashboard directeur.
+  // la logique de calcul des taux est encapsulée dans la view teacher_scan_compliance pour garantir une cohérence des données et alléger la charge côté API.
+  // En résumé voici le calcul des taux :
+  // - compliance_rate : % de jours avec check-in parmi les jours planifiés
+  // - scan_end_rate : % de check-out avec scan de salle de fin parmi les check-out réalisés
+  // - room_correct_rate : % de check-in avec concordance de salle parmi les check-in réalisés
+  // - rollcall_rate : % de jours avec rollcall réalisé parmi les jours planifiés
+  // - attendance_rate : % de jours présents (status 'present') parmi les jours planifiés
+
+  // la difference entre compliance_rate et attendance_rate permet d'identifier les cas où le professeur a pointé (check-in) 
+  // mais a été finalement marqué absent (status 'absent') soit par une validation manuelle (validation_status 'rejected') soit par une règle automatique
+  // (ex: scan de salle non conforme, rollcall non réalisé, geolocalisation suspecte etc).  
   async listTeacherCompliance(params: {
     monthStart: string;
     monthEnd: string;

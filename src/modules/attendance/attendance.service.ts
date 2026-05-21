@@ -341,9 +341,22 @@ export class AttendanceService {
       );
     }
 
-    // Pour le scan de fin, comparer avec la salle réellement scannée au début.
-    // Si aucun scan de début n'existe, fallback sur la salle prévue dans l'EDT.
-    let expectedRoomToken = schedule.plannedRoomToken;
+    // roomMismatch : la salle scannée correspond-elle à la salle prévue dans l'EDT ?
+    // Cette valeur est indépendante du scan de début — elle reflète la conformité EDT.
+    const plannedValidation = validateRoomScan({
+      scannedRoomToken: input.qrToken,
+      expectedRoomToken: schedule.plannedRoomToken,
+      scheduleDate: date,
+      slotStartTime: schedule.slotStartTime,
+      slotEndTime: schedule.slotEndTime,
+      scanTime: scannedAt,
+    });
+    const roomMismatch = !plannedValidation.valid;
+
+    // Pour le scan de fin, la cohérence début↔fin est vérifiée séparément :
+    // le scan doit correspondre à la salle dans laquelle le cours a débuté.
+    // Si aucun scan de début n'existe, on accepte (cas dégradé).
+    let validation = plannedValidation;
     if (input.scanType === 'end') {
       const startScanToken = await this.repository.getStartScanRoomToken({
         teacherId: teacher.id,
@@ -351,18 +364,16 @@ export class AttendanceService {
         date,
       });
       if (startScanToken) {
-        expectedRoomToken = startScanToken;
+        validation = validateRoomScan({
+          scannedRoomToken: input.qrToken,
+          expectedRoomToken: startScanToken,
+          scheduleDate: date,
+          slotStartTime: schedule.slotStartTime,
+          slotEndTime: schedule.slotEndTime,
+          scanTime: scannedAt,
+        });
       }
     }
-
-    const validation = validateRoomScan({
-      scannedRoomToken: input.qrToken,
-      expectedRoomToken,
-      scheduleDate: date,
-      slotStartTime: schedule.slotStartTime,
-      slotEndTime: schedule.slotEndTime,
-      scanTime: scannedAt,
-    });
 
     await this.repository.ensureAttendanceRecord({
       teacherId: teacher.id,
@@ -370,7 +381,6 @@ export class AttendanceService {
       date,
     });
 
-    const roomMismatch = !validation.valid;
     await this.repository.recordQrScan({
       teacherId: teacher.id,
       scheduleId: schedule.scheduleId,
@@ -378,18 +388,18 @@ export class AttendanceService {
       scanType: input.scanType,
       scannedRoomId: scannedRoom?.id ?? null,
       roomMismatch,
-      qrAlertSent: !validation.valid,
+      qrAlertSent: roomMismatch,
       scannedAtIso: toIso(scannedAt),
     });
 
-    if (!validation.valid && validation.alertType) {
+    if (roomMismatch && plannedValidation.alertType) {
       emitTeacherQrAlert({
         tenantId: context.schemaName,
         schemaName: context.schemaName,
         teacherId: teacher.id,
         scheduleId: schedule.scheduleId,
         date,
-        alertType: validation.alertType,
+        alertType: plannedValidation.alertType,
         roomMismatch: true,
       });
     }
@@ -397,7 +407,7 @@ export class AttendanceService {
     return {
       valid: validation.valid,
       roomMismatch,
-      alertType: validation.alertType,
+      alertType: plannedValidation.alertType,
     };
   }
 
@@ -751,6 +761,8 @@ export class AttendanceService {
     });
   }
 
+  // getTeacherCompliance retourne pour chaque enseignant le taux de conformité de ses pointages (check-in et check-out effectués, scans QR effectués quand requis, etc.) 
+  // sur une période donnée. Utile pour identifier les enseignants qui auraient des difficultés à pointer correctement et leur apporter un accompagnement ciblé.
   async getTeacherCompliance(input: { month: string; role?: string; userId?: string }): Promise<
     Array<{
       teacherId: string;
@@ -758,6 +770,10 @@ export class AttendanceService {
       totalCheckins: number;
       totalCheckouts: number;
       complianceRate: number;
+      scanEndRate: number;
+      roomCorrectRate: number;
+      rollcallRate: number;
+      attendanceRate: number;
       rank: number;
     }>
   > {
@@ -784,11 +800,11 @@ export class AttendanceService {
       teacherName: row.teacher_name,
       totalCheckins: Number(row.total_checkins),
       totalCheckouts: Number(row.total_checkouts),
-      complianceRate: Number(row.compliance_rate),
+      complianceRate: Number(row.compliance_rate), // taux de conformité global resultat du calcul prenant en compte tous les aspects du pointage (check-in, check-out, scans QR, etc.)
       scanEndRate: Number(row.scan_end_rate),
       roomCorrectRate: Number(row.room_correct_rate),
       rollcallRate: Number(row.rollcall_rate),
-      attendanceRate: Number(row.attendance_rate),
+      attendanceRate: Number(row.attendance_rate), // taux de présence des cours (cours avec check-in ou check-out enregistré / cours totaux)
       rank: index + 1,
     }));
   }

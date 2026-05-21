@@ -271,12 +271,13 @@ export default async function attendanceController(app: FastifyInstance): Promis
     }
   });
 
+  // conformité des profs pour un mois donné, avec filtres de rôle et ID, utilisé par le classement de TeacherCompliancePage (taux de conformité prof)
   app.get('/api/v1/attendance/teacher-compliance', { preHandler: requireTeacherOrDirector }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const query = monthQuerySchema.parse(request.query ?? {});
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-        const service = buildAttendanceService(tenantDb);
+        const service = buildAttendanceService(tenantDb); // on réutilise la même logique que pour le classement global de TeacherCompliancePage, mais avec des filtres appliqués côté service pour retourner uniquement les données pertinentes pour le rôle et l'ID du user connecté (ex: un prof ne voit que sa propre conformité, un directeur voit tous les profs)
         return service.getTeacherCompliance({
           month: query.month,
           role: claims.role,

@@ -81,6 +81,41 @@ export const notificationIdParamsSchema = z.object({
   notificationId: z.string().uuid(),
 });
 
+export const validationHistoryQuerySchema = z.object({
+  kind: z.enum(['short_hours', 'gps_suspicious']).optional(),
+  month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+  status: z.enum(['approved', 'rejected']).optional(),
+  search: z.string().trim().max(100).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export type ValidationHistoryItem = {
+  attendanceId: string;
+  teacherId: string;
+  teacherName: string;
+  courseName: string;
+  className: string;
+  date: string;
+  validationStatus: 'approved' | 'rejected';
+  validatedHours: number | null;
+  validationReason: string | null;
+  validatedAt: string | null;
+  kind: ValidationKind;
+  slotLabel: string | null;
+  roomName: string | null;
+  scheduleDurationMinutes: number;
+  actualMinutes: number | null;
+  hourlyRate: number | null;
+};
+
+export type ValidationHistoryPage = {
+  items: ValidationHistoryItem[];
+  total: number;
+  page: number;
+  limit: number;
+};
+
 export type TeacherNotificationItem = {
   id: string;
   type: string;

@@ -60,6 +60,7 @@ export type StudentImportRow = {
   birthDate: string | null;
   parentName: string | null;
   parentPhone: string | null;
+  parentEmail: string | null;
   parentName2: string | null;
   parentPhone2: string | null;
 };

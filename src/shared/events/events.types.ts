@@ -144,6 +144,47 @@ export type ImportCompletedPayload = {
   deactivatedCount: number;
 };
 
+export type TeacherEndScanActionPayload = {
+  tenantId: string;
+  schemaName: string;
+  teacherId: string;
+  teacherUserId: string;
+  teacherName: string;
+  teacherPhone?: string | null;
+  teacherEmail?: string | null;
+  attendanceId: string;
+  courseName: string;
+  date: string;
+  action: 'warned' | 'sanctioned';
+  reason: string;
+};
+
+export type TeacherSanctionCancelledPayload = {
+  tenantId: string;
+  schemaName: string;
+  teacherId: string;
+  teacherUserId: string;
+  teacherName: string;
+  teacherPhone?: string | null;
+  teacherEmail?: string | null;
+  attendanceId: string;
+  courseName: string;
+  date: string;
+  cancelReason: string;
+};
+
+export type TeacherEndScanWarningPayload = {
+  tenantId: string;
+  schemaName: string;
+  teacherId: string;
+  teacherUserId: string;
+  teacherName: string;
+  teacherPhone?: string | null;
+  teacherEmail?: string | null;
+  month: string;
+  missingCount: number;
+};
+
 export type EventMap = {
   'teacher.checked_in': TeacherCheckedInPayload;
   'teacher.late': TeacherLatePayload;
@@ -151,6 +192,9 @@ export type EventMap = {
   'teacher.qr_invalid': TeacherQrInvalidPayload;
   'teacher.attendance_rejected': TeacherAttendanceRejectedPayload;
   'teacher.attendance_approved': TeacherAttendanceApprovedPayload;
+  'teacher.end_scan_action': TeacherEndScanActionPayload;
+  'teacher.sanction_cancelled': TeacherSanctionCancelledPayload;
+  'teacher.end_scan_warning': TeacherEndScanWarningPayload;
   'teacher.absent': TeacherAbsentPayload;
   'teacher.*':
     | TeacherCheckedInPayload
@@ -159,6 +203,9 @@ export type EventMap = {
     | TeacherQrInvalidPayload
     | TeacherAttendanceRejectedPayload
     | TeacherAttendanceApprovedPayload
+    | TeacherEndScanActionPayload
+    | TeacherSanctionCancelledPayload
+    | TeacherEndScanWarningPayload
     | TeacherAbsentPayload;
   'student.absent': StudentAbsentPayload;
   'subscription.expired': SubscriptionExpiredPayload;
@@ -179,3 +226,4 @@ export type EventMap = {
  * Seuls ces events peuvent être passés à emit().
  */
 export type EmittableEventMap = Omit<EventMap, 'teacher.*' | 'room.*'>;
+

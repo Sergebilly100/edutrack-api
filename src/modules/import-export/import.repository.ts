@@ -105,6 +105,7 @@ export type ImportRepository = {
       birthDate: string | null;
       parentName: string | null;
       parentPhone: string | null;
+      parentEmail: string | null;
       parentName2: string | null;
       parentPhone2: string | null;
       isActive: boolean;
@@ -145,7 +146,7 @@ export type ImportRepository = {
       timeSlotId: string;
       roomId: string;
     }
-  ) => Promise<'inserted' | 'updated'>;
+  ) => Promise<{ result: 'inserted' | 'updated'; id: string }>;
   deactivateSchedulesByPeriodExcluding: (
     db: QueryExecutor,
     schedulePeriodId: string,
@@ -204,8 +205,8 @@ export const defaultImportRepository: ImportRepository = {
       ON CONFLICT (name)
       DO UPDATE SET
         is_active = true,
-        building = COALESCE(EXCLUDED.building, rooms.building),
-        capacity = COALESCE(EXCLUDED.capacity, rooms.capacity)
+        building = CASE WHEN ${input.building ?? null} IS NOT NULL THEN ${input.building ?? null} ELSE rooms.building END,
+        capacity = CASE WHEN ${input.capacity ?? null} IS NOT NULL THEN ${input.capacity ?? null} ELSE rooms.capacity END
       RETURNING id, name
     `);
 
@@ -305,6 +306,7 @@ export const defaultImportRepository: ImportRepository = {
         s.birth_date::text AS birth_date,
         s.parent_name,
         s.parent_phone,
+        s.parent_email,
         s.parent_name_2,
         s.parent_phone_2,
         s.is_active
@@ -322,6 +324,7 @@ export const defaultImportRepository: ImportRepository = {
       birth_date: string | null;
       parent_name: string | null;
       parent_phone: string | null;
+      parent_email: string | null;
       parent_name_2: string | null;
       parent_phone_2: string | null;
       is_active: boolean;
@@ -335,6 +338,7 @@ export const defaultImportRepository: ImportRepository = {
       birthDate: row.birth_date,
       parentName: row.parent_name,
       parentPhone: row.parent_phone,
+      parentEmail: row.parent_email,
       parentName2: row.parent_name_2,
       parentPhone2: row.parent_phone_2,
       isActive: row.is_active,
@@ -460,6 +464,7 @@ export const defaultImportRepository: ImportRepository = {
           birth_date = ${row.birthDate},
           parent_name = ${row.parentName},
           parent_phone = ${row.parentPhone},
+          parent_email = ${row.parentEmail ?? null},
           parent_name_2 = ${row.parentName2},
           parent_phone_2 = ${row.parentPhone2},
           is_active = true
@@ -478,6 +483,7 @@ export const defaultImportRepository: ImportRepository = {
         birth_date,
         parent_name,
         parent_phone,
+        parent_email,
         parent_name_2,
         parent_phone_2,
         is_active
@@ -495,6 +501,7 @@ export const defaultImportRepository: ImportRepository = {
         ${row.birthDate},
         ${row.parentName},
         ${row.parentPhone},
+        ${row.parentEmail ?? null},
         ${row.parentName2},
         ${row.parentPhone2},
         true
@@ -625,10 +632,10 @@ export const defaultImportRepository: ImportRepository = {
           end_date = NULL
         WHERE id = ${existing.id}
       `);
-      return 'updated';
+      return { result: 'updated', id: existing.id };
     }
 
-    await db.execute(sql`
+    const insertResult = await db.execute(sql`
       INSERT INTO schedules (
         schedule_period_id,
         teacher_id,
@@ -649,9 +656,15 @@ export const defaultImportRepository: ImportRepository = {
         ${row.subject},
         true
       )
+      RETURNING id
     `);
 
-    return 'inserted';
+    const insertedId = getRows<ScheduleInsertRow>(insertResult)[0]?.id;
+    if (!insertedId) {
+      throw new Error('Unable to insert schedule');
+    }
+
+    return { result: 'inserted', id: insertedId };
   },
 
   async deactivateSchedulesByPeriodExcluding(db, schedulePeriodId, keepIds) {
