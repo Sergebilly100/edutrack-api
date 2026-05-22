@@ -4,6 +4,9 @@ import { sql } from 'drizzle-orm';
 
 import { db, withTenantSchema } from '../../shared/database/db.js';
 import type { NotificationType } from '../../shared/types/index.js';
+import { processInBatches } from '../../shared/utils/batch-process.js';
+
+const TENANT_BATCH_SIZE = Number(process.env.NOTIF_TENANT_BATCH_SIZE ?? 10);
 
 import type { NotificationsRepository } from './notifications.repository.js';
 import {
@@ -126,8 +129,11 @@ const processTeacherDailySummaryJob = async (
   const date = data.date ?? currentBusinessDate();
   const tenants = await listActiveTenantSchemas();
 
-  for (const tenant of tenants) {
-    await withTenantSchema(tenant.schemaName, async (tenantDb) => {
+  await processInBatches(
+    tenants,
+    TENANT_BATCH_SIZE,
+    async (tenant) => {
+      await withTenantSchema(tenant.schemaName, async (tenantDb) => {
       const context = await deps.repository.getTeacherDailySummaryContext(tenantDb, { date });
       if (context.totalCourses === 0 || (!context.directorPhone && !context.directorEmail)) {
         return;
@@ -233,7 +239,14 @@ const processTeacherDailySummaryJob = async (
 
       await Promise.all(tasks);
     });
-  }
+    },
+    (tenant, error) => {
+      console.error(
+        `[notifications] teacher daily summary failed for tenant ${tenant.schemaName}:`,
+        error
+      );
+    }
+  );
 };
 
 const processValidationDailySummaryJob = async (
@@ -243,8 +256,11 @@ const processValidationDailySummaryJob = async (
   const date = data.date ?? currentBusinessDate();
   const tenants = await listActiveTenantSchemas();
 
-  for (const tenant of tenants) {
-    await withTenantSchema(tenant.schemaName, async (tenantDb) => {
+  await processInBatches(
+    tenants,
+    TENANT_BATCH_SIZE,
+    async (tenant) => {
+      await withTenantSchema(tenant.schemaName, async (tenantDb) => {
       const result = await tenantDb.execute<{
         director_phone: string | null;
         director_email: string | null;
@@ -374,7 +390,14 @@ const processValidationDailySummaryJob = async (
       }
       await Promise.all(tasks);
     });
-  }
+    },
+    (tenant, error) => {
+      console.error(
+        `[notifications] validation daily summary failed for tenant ${tenant.schemaName}:`,
+        error
+      );
+    }
+  );
 };
 
 export const processNotificationJob = async (

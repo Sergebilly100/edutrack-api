@@ -13,6 +13,9 @@ export const jobResultSchema = z.object({
   fileName: z.string(),
   generatedAt: z.string().optional(),
   fileType: z.enum(['pdf', 'zip']).optional(),
+  // Present when the worker uploaded the export to R2. When set, the download
+  // endpoint redirects to a presigned URL instead of streaming from disk.
+  r2Key: z.string().optional(),
 });
 
 export type JobFileResult = z.infer<typeof jobResultSchema>;

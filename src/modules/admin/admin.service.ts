@@ -38,6 +38,8 @@ import { createTenantSchema } from '../../shared/database/tenant-init.js';
 import { signJwtRs256 } from '../../shared/auth/jwt.js';
 import { emit } from '../../shared/events/event-bus.js';
 import { SubscriptionsRepository } from '../subscriptions/subscriptions.repository.js';
+import { invalidateTenantCache } from '../../shared/cache/tenant-cache.js';
+import { processInBatches } from '../../shared/utils/batch-process.js';
 
 type TenantRow = {
   id: string;
@@ -773,6 +775,8 @@ export const createTenant = async (
     throw error;
   }
 
+  await invalidateTenantCache({ subdomain: payload.subdomain, schemaName });
+
   return {
     tenant: {
       id: tenant.id,
@@ -1335,6 +1339,8 @@ export const createSchool = async (
     `);
     throw error;
   }
+
+  await invalidateTenantCache({ subdomain: payload.subdomain, schemaName });
 
   return {
     tenantId: tenant.id,
@@ -2168,64 +2174,70 @@ export const getSmsDashboard = async (publicDb: TenantDb): Promise<SmsDashboardR
   let delivered = 0;
   let total = 0;
 
-  for (const tenant of tenants) {
-    try {
-      const schema = quoteIdentifier(tenant.schema_name);
-      const escapedSchoolName = tenant.name.replace(/'/g, "''");
-      const statsResult = await publicDb.execute<{ sent: number; delivered: number; total: number }>(sql.raw(`
-        SELECT
-          COUNT(*) FILTER (WHERE nl.status IN ('sent', 'delivered')
-            AND date_trunc('month', COALESCE(nl.sent_at, nl.created_at)) = date_trunc('month', CURRENT_DATE))::int AS sent,
-          COUNT(*) FILTER (WHERE nl.status = 'delivered')::int AS delivered,
-          COUNT(*)::int AS total
-        FROM ${schema}.notifications_log nl
-      `));
-      const stats = getRows<{ sent: number; delivered: number; total: number }>(statsResult)[0] ?? {
-        sent: 0,
-        delivered: 0,
-        total: 0,
-      };
-      sentThisMonth += parseNumeric(stats.sent);
-      delivered += parseNumeric(stats.delivered);
-      total += parseNumeric(stats.total);
+  await processInBatches(
+    tenants,
+    10,
+    async (tenant) => {
+      try {
+        const schema = quoteIdentifier(tenant.schema_name);
+        const escapedSchoolName = tenant.name.replace(/'/g, "''");
+        const statsResult = await publicDb.execute<{ sent: number; delivered: number; total: number }>(sql.raw(`
+          SELECT
+            COUNT(*) FILTER (WHERE nl.status IN ('sent', 'delivered')
+              AND date_trunc('month', COALESCE(nl.sent_at, nl.created_at)) = date_trunc('month', CURRENT_DATE))::int AS sent,
+            COUNT(*) FILTER (WHERE nl.status = 'delivered')::int AS delivered,
+            COUNT(*)::int AS total
+          FROM ${schema}.notifications_log nl
+        `));
+        const stats = getRows<{ sent: number; delivered: number; total: number }>(statsResult)[0] ?? {
+          sent: 0,
+          delivered: 0,
+          total: 0,
+        };
+        // Mutating shared accumulators is safe here: JS is single-threaded and
+        // each batch's awaits resolve serially within the event loop tick that runs += .
+        sentThisMonth += parseNumeric(stats.sent);
+        delivered += parseNumeric(stats.delivered);
+        total += parseNumeric(stats.total);
 
-      const usedPct = tenant.max_sms_per_month > 0
-        ? Math.min(100, Math.round((parseNumeric(stats.sent) / tenant.max_sms_per_month) * 100))
-        : 0;
+        const usedPct = tenant.max_sms_per_month > 0
+          ? Math.min(100, Math.round((parseNumeric(stats.sent) / tenant.max_sms_per_month) * 100))
+          : 0;
 
-      bySchool.push({
-        tenant_id: tenant.id,
-        school: tenant.name,
-        sent: parseNumeric(stats.sent),
-        quota: tenant.max_sms_per_month,
-        used_pct: usedPct,
-      });
+        bySchool.push({
+          tenant_id: tenant.id,
+          school: tenant.name,
+          sent: parseNumeric(stats.sent),
+          quota: tenant.max_sms_per_month,
+          used_pct: usedPct,
+        });
 
-      const historyResult = await publicDb.execute<SmsHistoryRow>(sql.raw(`
-        SELECT
-          nl.id::text AS id,
-          '${tenant.id}'::text AS tenant_id,
-          COALESCE(nl.sent_at, nl.created_at)::text AS date,
-          '${escapedSchoolName}'::text AS school,
-          nl.type::text AS type,
-          nl.recipient_phone,
-          nl.status::text AS status,
-          nl.message
-        FROM ${schema}.notifications_log nl
-        ORDER BY COALESCE(nl.sent_at, nl.created_at) DESC
-        LIMIT 20
-      `));
-      history.push(...getRows<SmsHistoryRow>(historyResult));
-    } catch {
-      bySchool.push({
-        tenant_id: tenant.id,
-        school: tenant.name,
-        sent: 0,
-        quota: tenant.max_sms_per_month,
-        used_pct: 0,
-      });
+        const historyResult = await publicDb.execute<SmsHistoryRow>(sql.raw(`
+          SELECT
+            nl.id::text AS id,
+            '${tenant.id}'::text AS tenant_id,
+            COALESCE(nl.sent_at, nl.created_at)::text AS date,
+            '${escapedSchoolName}'::text AS school,
+            nl.type::text AS type,
+            nl.recipient_phone,
+            nl.status::text AS status,
+            nl.message
+          FROM ${schema}.notifications_log nl
+          ORDER BY COALESCE(nl.sent_at, nl.created_at) DESC
+          LIMIT 20
+        `));
+        history.push(...getRows<SmsHistoryRow>(historyResult));
+      } catch {
+        bySchool.push({
+          tenant_id: tenant.id,
+          school: tenant.name,
+          sent: 0,
+          quota: tenant.max_sms_per_month,
+          used_pct: 0,
+        });
+      }
     }
-  }
+  );
 
   history.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 

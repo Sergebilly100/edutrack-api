@@ -4,6 +4,7 @@ import { z, ZodError } from 'zod';
 
 import { db, withTenantSchema } from '../../shared/database/db.js';
 import { getRowsUntyped as getRows } from '../../shared/utils/db-helpers.js';
+import { cached } from '../../shared/cache/redis-cache.js';
 import {
   assertParentPortalEnabled,
   assertSuperAdminDomain,
@@ -155,27 +156,31 @@ const shouldRestrictToSuperAdmin = (request: FastifyRequest): boolean => {
 };
 
 const resolveSchemaBySubdomain = async (subdomain: string): Promise<string | null> => {
-  const result = await db.execute<{ schema_name: string }>(sql`
-    SELECT schema_name
-    FROM public.tenants
-    WHERE subdomain = ${subdomain}
-    LIMIT 1
-  `);
+  return cached(`tenant:subdomain:${subdomain}`, 300, async () => {
+    const result = await db.execute<{ schema_name: string }>(sql`
+      SELECT schema_name
+      FROM public.tenants
+      WHERE subdomain = ${subdomain}
+      LIMIT 1
+    `);
 
-  return getRows<{ schema_name: string }>(result)[0]?.schema_name ?? null;
+    return getRows<{ schema_name: string }>(result)[0]?.schema_name ?? null;
+  });
 };
 
 const resolveTenantBySchema = async (
   schemaName: string
 ): Promise<{ id: string; schema_name: string } | null> => {
-  const result = await db.execute<{ id: string; schema_name: string }>(sql`
-    SELECT id::text, schema_name
-    FROM public.tenants
-    WHERE schema_name = ${schemaName}
-    LIMIT 1
-  `);
+  return cached(`tenant:schema:${schemaName}`, 300, async () => {
+    const result = await db.execute<{ id: string; schema_name: string }>(sql`
+      SELECT id::text, schema_name
+      FROM public.tenants
+      WHERE schema_name = ${schemaName}
+      LIMIT 1
+    `);
 
-  return getRows<{ id: string; schema_name: string }>(result)[0] ?? null;
+    return getRows<{ id: string; schema_name: string }>(result)[0] ?? null;
+  });
 };
 
 type TenantStatusRow = {

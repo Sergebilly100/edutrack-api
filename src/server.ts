@@ -1,6 +1,7 @@
 import 'dotenv/config';
 
 import cors from '@fastify/cors';
+import etag from '@fastify/etag';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import multipart from '@fastify/multipart';
@@ -190,6 +191,7 @@ app.register(rateLimit, {
   global: false,
   skipOnError: true,
 });
+app.register(etag);
 app.register(multipart, {
   limits: {
     fileSize: 10 * 1024 * 1024,

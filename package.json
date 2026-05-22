@@ -27,6 +27,7 @@
     "@aws-sdk/client-s3": "^3.1030.0",
     "@aws-sdk/s3-request-presigner": "^3.1030.0",
     "@fastify/cors": "^11.2.0",
+    "@fastify/etag": "^6.1.0",
     "@fastify/helmet": "^13.0.2",
     "@fastify/multipart": "^9.4.0",
     "@fastify/rate-limit": "^10.3.0",

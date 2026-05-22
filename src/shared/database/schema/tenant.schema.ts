@@ -280,6 +280,9 @@ export const schedules = tenant.table(
     schedulesActiveIdx: index('idx_schedules_active')
       .on(table.teacherId, table.dayOfWeek, table.timeSlotId)
       .where(sql`${table.isActive} = true`),
+    schedulesClassDayIdx: index('idx_schedules_class_day')
+      .on(table.classId, table.dayOfWeek)
+      .where(sql`${table.isActive} = true`),
   })
 );
 
@@ -359,6 +362,12 @@ export const attendancesTeacher = tenant.table(
     attTeacherSyncedIdx: index('idx_att_teacher_synced')
       .on(table.syncedAt)
       .where(sql`${table.syncedAt} IS NULL`),
+    attTeacherDateStatusAbsentIdx: index('idx_att_teacher_date_status_absent')
+      .on(table.date)
+      .where(sql`status = 'absent'`),
+    attTeacherValidationPendingIdx: index('idx_att_teacher_validation_pending')
+      .on(table.validationStatus, table.date)
+      .where(sql`validation_status = 'pending'`),
   })
 );
 
@@ -391,6 +400,10 @@ export const attendancesStudent = tenant.table(
     attStudentExcusedIdx: index('idx_att_student_excused')
       .on(table.studentId, table.date)
       .where(sql`status = 'excused'`),
+    attStudentScheduleDateIdx: index('idx_att_student_schedule_date').on(
+      table.scheduleId,
+      table.date
+    ),
   })
 );
 
@@ -421,6 +434,20 @@ export const notificationsLog = tenant.table(
     notifStatusIdx: index('idx_notif_status')
       .on(table.status)
       .where(sql`${table.status} = 'queued'`),
+    notifTypeRelatedIdx: index('idx_notifications_log_type_related').on(
+      table.type,
+      table.relatedId,
+      table.recipientPhone,
+      table.createdAt.desc()
+    ),
+    notifPhoneCreatedIdx: index('idx_notifications_log_phone_created').on(
+      table.recipientPhone,
+      table.type,
+      table.createdAt.desc()
+    ),
+    notifProviderRefIdx: index('idx_notifications_log_provider_ref')
+      .on(table.providerRef)
+      .where(sql`${table.providerRef} IS NOT NULL`),
   })
 );
 
@@ -537,6 +564,10 @@ export const salaryRecords = tenant.table(
       table.periodMonth
     ),
     salaryTeacherMonthIdx: index('idx_salary_teacher_month').on(table.teacherId, table.periodMonth),
+    salaryRecordsPeriodIdx: index('idx_salary_records_period').on(
+      table.periodMonth,
+      table.status
+    ),
   })
 );
 

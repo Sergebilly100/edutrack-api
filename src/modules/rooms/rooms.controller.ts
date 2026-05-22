@@ -63,6 +63,7 @@ export default async function roomsController(app: FastifyInstance): Promise<voi
         return buildRoomsService(tenantDb, tenantId, claims.schemaName).listActiveRooms();
       });
 
+      reply.header('Cache-Control', 'private, max-age=60');
       return reply.send(result);
     } catch (error) {
       if (error instanceof Error && error.message.includes('permission denied')) {

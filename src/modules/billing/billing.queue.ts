@@ -10,6 +10,7 @@ import type { Redis } from 'ioredis';
 
 import { db, withTenantSchema } from '../../shared/database/db.js';
 import { logger as appLogger } from '../../shared/observability/logger.js';
+import { isR2Configured, uploadBuffer } from '../../shared/storage/r2.js';
 
 import { buildBillingService } from './billing.service.js';
 
@@ -383,28 +384,67 @@ const createSimplePdfBytes = async (params: {
   return pdf.save();
 };
 
+type ExportArtifact = {
+  filePath: string;
+  fileName: string;
+  generatedAt: string;
+  r2Key?: string;
+};
+
+// R2 objects live under this prefix and survive instance restarts. Keep a flat layout —
+// jobId in the filename is unique enough to avoid collisions across tenants.
+const buildR2Key = (fileName: string): string => `billing/exports/${fileName}`;
+
 const writeSimplePdf = async (params: {
   title: string;
   subtitle: string;
   lines: string[];
   fileName: string;
   branding?: PdfBranding;
-}): Promise<{ filePath: string; fileName: string; generatedAt: string }> => {
-  await mkdir(BILLING_EXPORT_DIR, { recursive: true });
+}): Promise<ExportArtifact> => {
   const bytes = await createSimplePdfBytes(params);
+  const generatedAt = new Date().toISOString();
+
+  if (isR2Configured()) {
+    const r2Key = buildR2Key(params.fileName);
+    await uploadBuffer(r2Key, Buffer.from(bytes), 'application/pdf');
+    // filePath kept empty-ish for the legacy return type; the download endpoint
+    // checks r2Key first and only falls back to filePath when R2 is off.
+    return { filePath: '', fileName: params.fileName, generatedAt, r2Key };
+  }
+
+  await mkdir(BILLING_EXPORT_DIR, { recursive: true });
   const filePath = path.join(BILLING_EXPORT_DIR, params.fileName);
   await writeFile(filePath, bytes);
-  return {
-    filePath,
-    fileName: params.fileName,
-    generatedAt: new Date().toISOString(),
-  };
+  return { filePath, fileName: params.fileName, generatedAt };
 };
 
 const writeZipArchive = async (params: {
   fileName: string;
   entries: Array<{ fileName: string; bytes: Uint8Array }>;
-}): Promise<{ filePath: string; fileName: string; generatedAt: string }> => {
+}): Promise<ExportArtifact> => {
+  const generatedAt = new Date().toISOString();
+
+  if (isR2Configured()) {
+    // Build the archive in-memory then upload — avoids needing disk space at all.
+    const archiveBuffer = await new Promise<Buffer>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      const archive = archiver('zip', { zlib: { level: 9 } });
+      archive.on('data', (chunk: Buffer) => chunks.push(chunk));
+      archive.on('end', () => resolve(Buffer.concat(chunks)));
+      archive.on('error', (error: Error) => reject(error));
+
+      for (const entry of params.entries) {
+        archive.append(Buffer.from(entry.bytes), { name: entry.fileName });
+      }
+      void archive.finalize();
+    });
+
+    const r2Key = buildR2Key(params.fileName);
+    await uploadBuffer(r2Key, archiveBuffer, 'application/zip');
+    return { filePath: '', fileName: params.fileName, generatedAt, r2Key };
+  }
+
   await mkdir(BILLING_EXPORT_DIR, { recursive: true });
   const filePath = path.join(BILLING_EXPORT_DIR, params.fileName);
 
@@ -424,11 +464,7 @@ const writeZipArchive = async (params: {
     void archive.finalize();
   });
 
-  return {
-    filePath,
-    fileName: params.fileName,
-    generatedAt: new Date().toISOString(),
-  };
+  return { filePath, fileName: params.fileName, generatedAt };
 };
 
 export type BillingPdfJobData =
@@ -456,6 +492,9 @@ export type BillingPdfJobResult = {
   fileName: string;
   generatedAt: string;
   fileType: 'pdf' | 'zip';
+  /** Present when R2 is configured. When set, the download endpoint
+   *  redirects to a presigned URL instead of streaming from disk. */
+  r2Key?: string;
 };
 
 export const processBillingPdfJob = async (

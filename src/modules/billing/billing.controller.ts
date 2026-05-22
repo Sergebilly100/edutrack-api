@@ -7,6 +7,7 @@ import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
 import { requirePermission } from '../../shared/middleware/auth.middleware.js';
+import { presignDownload } from '../../shared/storage/r2.js';
 import { buildDashboardRepository } from '../dashboard/dashboard.repository.js';
 
 import {
@@ -601,6 +602,19 @@ export default async function billingController(
           code: 'JOB_RESULT_INVALID',
           statusCode: 500,
         });
+      }
+
+      // R2 path: redirect to a short-lived presigned URL. The signed URL stays
+      // valid for 5 min — long enough for the browser to follow the redirect but
+      // short enough that leaked Referer/log entries decay quickly.
+      if (result.r2Key) {
+        const extension = path.extname(result.fileName).toLowerCase();
+        const contentType = extension === '.zip' ? 'application/zip' : 'application/pdf';
+        const presignedUrl = await presignDownload(result.r2Key, 300, {
+          filename: result.fileName,
+          contentType,
+        });
+        return reply.redirect(presignedUrl, 302);
       }
 
       const absoluteFilePath = path.resolve(result.filePath);

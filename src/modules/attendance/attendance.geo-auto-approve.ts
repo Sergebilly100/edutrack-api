@@ -2,7 +2,10 @@ import { sql } from 'drizzle-orm';
 
 import { withTenantSchema } from '../../shared/database/db.js';
 import { logger } from '../../shared/observability/logger.js';
+import { processInBatches } from '../../shared/utils/batch-process.js';
 import type { QueryExecutor } from './attendance.repository.js';
+
+const TENANT_BATCH_SIZE = Number(process.env.GEO_AUTO_APPROVE_BATCH_SIZE ?? 10);
 
 /**
  * Auto-approve les validations géo en attente depuis plus de 7 jours
@@ -56,14 +59,15 @@ export const runGeoAutoApproveForAllTenants = async (): Promise<void> => {
   });
 
   const tenants = tenantsResult.rows;
-  // On itère sur chaque tenant actif pour exécuter la fonction d'auto-approbation des validations géo en attente depuis plus de 7 jours, 
-  // en gérant les erreurs pour chaque tenant individuellement afin de ne pas interrompre le processus global en cas de problème avec un tenant spécifique.  
-  for (const tenant of tenants) {
-    try {
+  await processInBatches(
+    tenants,
+    TENANT_BATCH_SIZE,
+    async (tenant) => {
       await withTenantSchema(tenant.schema_name, async (tenantDb) => {
-        await autoApproveOldGeoValidations(tenantDb, tenant.schema_name); // Appel de la fonction d'auto-approbation pour le tenant actuel, en passant la base de données spécifique au tenant et son nom de schéma pour les logs.
+        await autoApproveOldGeoValidations(tenantDb, tenant.schema_name);
       });
-    } catch (error) {
+    },
+    (tenant, error) => {
       logger.error(
         {
           schemaName: tenant.schema_name,
@@ -72,5 +76,5 @@ export const runGeoAutoApproveForAllTenants = async (): Promise<void> => {
         '[geo-auto-approve] failed for tenant'
       );
     }
-  }
+  );
 };
