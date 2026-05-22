@@ -11,8 +11,10 @@ import { Redis } from 'ioredis';
 import { Queue, Worker } from 'bullmq';
 
 import { assertRequiredSecrets } from './shared/utils/required-secrets.js';
+import { initSentry, captureException, isSentryEnabled } from './shared/observability/sentry.js';
 
 assertRequiredSecrets();
+initSentry();
 
 import adminController from './modules/admin/admin.controller.js';
 import attendanceController from './modules/attendance/attendance.controller.js';
@@ -53,12 +55,18 @@ import validationsController from './modules/validations/validations.controller.
 import { db } from './shared/database/db.js';
 import { registerSalaryEventListeners } from './modules/salaries/salaries.service.js';
 import { qrAlertQueue, geoAutoApproveQueue } from './shared/queue/queue.js';
+import {
+  attachFailedHandler,
+  createDeadLetterQueue,
+} from './shared/queue/dead-letter-queue.js';
 
 const app = Fastify({ logger: true, trustProxy: 1 });
 const port = Number(process.env.PORT || 3000);
 const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
 const notificationsRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
 const billingRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
+const dlqRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
+const deadLetterQueue = createDeadLetterQueue(dlqRedis);
 const billingPdfQueue = createBillingPdfQueue(billingRedis)
 const subscriptionsRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
 const notificationsQueue = createNotificationsQueue(notificationsRedis);
@@ -70,6 +78,10 @@ const notificationsWorker = createNotificationsWorker(notificationsRedis, {
   smsSender: defaultSmsSender,
   emailSender: defaultEmailSender,
 });
+
+attachFailedHandler(notificationsWorker, 'notifications-sms', { deadLetterQueue, logger: app.log });
+attachFailedHandler(billingWorker, 'billing-pdf', { deadLetterQueue, logger: app.log });
+attachFailedHandler(subscriptionsMaintenanceWorker, 'subscription-maintenance', { deadLetterQueue, logger: app.log });
 const qrAlertRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
 const qrAlertWorker = new Worker(
   'qr-alert',
@@ -79,8 +91,12 @@ const qrAlertWorker = new Worker(
       date: job.data.date,
     });
   },
-  { connection: qrAlertRedis }
+  {
+    connection: qrAlertRedis,
+    concurrency: Number(process.env.QR_WORKER_CONCURRENCY ?? 5),
+  }
 );
+attachFailedHandler(qrAlertWorker, 'qr-alert', { deadLetterQueue, logger: app.log });
 const absenceMarkingRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
 const absenceMarkingQueue = new Queue('absence-marking', { connection: absenceMarkingRedis });
 const absenceMarkingWorker = new Worker(
@@ -88,8 +104,13 @@ const absenceMarkingWorker = new Worker(
   async (job) => {
     await runAbsenceMarkingForSchema({ schemaName: job.data.schemaName });
   },
-  { connection: absenceMarkingRedis }
+  {
+    connection: absenceMarkingRedis,
+    concurrency: Number(process.env.ABSENCE_MARKING_WORKER_CONCURRENCY ?? 5),
+  }
 );
+attachFailedHandler(absenceMarkingWorker, 'absence-marking', { deadLetterQueue, logger: app.log });
+attachFailedHandler(geoAutoApproveWorker, 'geo-auto-approve', { deadLetterQueue, logger: app.log });
 const notificationsService = new NotificationsService({
   smsQueue: notificationsQueue,
 });
@@ -198,7 +219,7 @@ app.addHook('onRequest', async (request, reply) => {
 });
 
 app.register(authController);
-app.register(adminController);
+app.register(adminController, { deadLetterQueue });
 app.register(attendanceController);
 app.register(dashboardController);
 app.register(notificationsController, { smsQueue: notificationsQueue });
@@ -216,6 +237,62 @@ app.register(subscriptionsController);
 app.register(parentPortalController);
 
 app.get('/health', async () => ({ status: 'ok' }));
+
+app.get('/ready', async (_request, reply) => {
+  const checks: { db: boolean; redis: boolean } = { db: false, redis: false };
+  try {
+    await db.execute(sql`SELECT 1`);
+    checks.db = true;
+  } catch (error) {
+    app.log.warn({ err: error instanceof Error ? error.message : 'unknown' }, '[ready] db check failed');
+  }
+  try {
+    await notificationsRedis.ping();
+    checks.redis = true;
+  } catch (error) {
+    app.log.warn({ err: error instanceof Error ? error.message : 'unknown' }, '[ready] redis check failed');
+  }
+  if (!checks.db || !checks.redis) {
+    return reply.code(503).send({ status: 'not_ready', checks });
+  }
+  return reply.send({ status: 'ready', checks });
+});
+
+app.addHook('onResponse', async (request, reply) => {
+  request.log.info(
+    {
+      tenant_id: request.claims?.tenantId,
+      schema: request.claims?.schemaName,
+      user_id: request.claims?.sub,
+      role: request.claims?.role,
+      method: request.method,
+      url: request.url,
+      status: reply.statusCode,
+      duration_ms: reply.elapsedTime,
+    },
+    'http_response'
+  );
+});
+
+if (isSentryEnabled()) {
+  app.setErrorHandler((rawError, request, reply) => {
+    const error = rawError as Error & { statusCode?: number; code?: string };
+    captureException(error, {
+      schemaName: request.claims?.schemaName,
+      userId: request.claims?.sub,
+      tenantId: request.claims?.tenantId,
+      route: request.routeOptions?.url ?? request.url,
+    });
+    request.log.error({ err: error.message, url: request.url }, 'request_error');
+    if (reply.sent) return;
+    const statusCode = error.statusCode ?? 500;
+    reply.code(statusCode).send({
+      error: statusCode >= 500 ? 'Internal error' : error.message,
+      code: statusCode >= 500 ? 'INTERNAL' : (error.code ?? 'ERROR'),
+      statusCode,
+    });
+  });
+}
 
 app.addHook('onClose', async () => {
   notificationsService.stop();
@@ -236,6 +313,8 @@ app.addHook('onClose', async () => {
   await absenceMarkingRedis.quit();
   await geoAutoApproveWorker.close();
   await geoAutoApproveQueue.close();
+  await deadLetterQueue.close();
+  await dlqRedis.quit();
 });
 
 const start = async (): Promise<void> => {

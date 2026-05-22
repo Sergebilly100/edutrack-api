@@ -3,7 +3,6 @@ import { sql } from 'drizzle-orm';
 import { ZodError, z } from 'zod';
 
 import { db, withTenantSchema } from '../../shared/database/db.js';
-import { ensurePublicRealHoursInfrastructure } from '../../shared/database/real-hours-infrastructure.js';
 import { authenticateRequest, requireDirectorOrSecretary } from '../../shared/middleware/auth.middleware.js';
 
 type TenantInfoRow = {
@@ -168,8 +167,6 @@ const resolveSchemaNameFromPublicRequest = async (request: FastifyRequest): Prom
 };
 
 const fetchSchoolInfoBySchema = async (schemaName: string) => {
-  await ensurePublicRealHoursInfrastructure(db);
-
   const tenantResult = await db.execute<TenantInfoRow>(sql`
     SELECT t.id, t.name, t.subdomain, t.plan, t.city, t.teaching_type, t.max_users,
            COALESCE(t.student_label, 'Élève') AS student_label,

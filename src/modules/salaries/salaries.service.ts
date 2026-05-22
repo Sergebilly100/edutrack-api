@@ -1,7 +1,6 @@
 import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
-import { ensureTenantRealHoursInfrastructure } from '../../shared/database/real-hours-infrastructure.js';
 import { monthBoundsFromDate } from '../../shared/utils/date.js';
 import { getRowsUntyped as getRows } from '../../shared/utils/db-helpers.js';
 import { on } from '../../shared/events/event-bus.js';
@@ -37,7 +36,6 @@ export class SalariesService {
     teacherId: string;
     month: string;
   }): Promise<{ updated: boolean }> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const { monthStart, monthEnd } = monthBoundsFromDate(`${params.month}-01`);
 
@@ -119,7 +117,6 @@ export class SalariesService {
   async recalculateAllForMonth(params: {
     month: string;
   }): Promise<{ updatedCount: number }> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const { monthStart, monthEnd } = monthBoundsFromDate(`${params.month}-01`);
 

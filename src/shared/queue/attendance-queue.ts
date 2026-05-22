@@ -32,7 +32,7 @@ export const scheduleQrMissingScanCheck = async (params: {
     {
       delay,
       removeOnComplete: true,
-      removeOnFail: true,
+      removeOnFail: { count: 1000 },
       jobId: `qr-missing-${params.schemaName}-${params.scheduleId}-${params.date}`,
     }
   );

@@ -3,7 +3,6 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { QueryResult, QueryResultRow } from 'pg';
 
 import type { ActiveAttendanceItem, AttendanceScheduleContext } from './attendance.types.js';
-import { ensureTenantRealHoursInfrastructure } from '../../shared/database/real-hours-infrastructure.js';
 
 export type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
 
@@ -300,7 +299,6 @@ export class AttendanceRepository {
     scheduleId: string,
     teacherId: string
   ): Promise<AttendanceScheduleContext | null> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<ScheduleContextRow>(sql`
       SELECT
@@ -352,7 +350,6 @@ export class AttendanceRepository {
     scheduleId: string;
     date: string;
   }): Promise<ExistingTeacherAttendanceRow | null> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<ExistingTeacherAttendanceRow>(sql`
       SELECT
@@ -400,7 +397,6 @@ export class AttendanceRepository {
     geoStatus?: 'verified' | 'suspicious' | 'unavailable' | 'not_checked';
     validationStatus?: 'not_required' | 'pending' | 'approved' | 'rejected';
   }): Promise<AttendanceWriteRow> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<AttendanceWriteRow>(sql`
       INSERT INTO attendances_teacher (
@@ -563,7 +559,6 @@ export class AttendanceRepository {
     teacherId: string;
     date: string;
   }): Promise<TeacherAttendanceByDateRow[]> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<TeacherAttendanceByDateRow>(sql`
       SELECT
@@ -586,7 +581,6 @@ export class AttendanceRepository {
   }
 
   async getSchoolFeatureFlags(schemaName: string): Promise<FeatureFlagsRow> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<FeatureFlagsRow>(sql`
       SELECT
@@ -621,7 +615,6 @@ export class AttendanceRepository {
     validationStatus: 'not_required' | 'pending' | 'approved' | 'rejected';
     validatedHours?: number | null;
   }): Promise<{ actual_minutes: number; checkout_geo_status: string }> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<{ actual_minutes: number; checkout_geo_status: string }>(sql`
       UPDATE attendances_teacher
@@ -678,7 +671,6 @@ export class AttendanceRepository {
     monthEnd: string;
     teacherId?: string;
   }): Promise<TeacherComplianceRow[]> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<TeacherComplianceRow>(sql`
       SELECT
@@ -725,7 +717,6 @@ export class AttendanceRepository {
     monthStart: string;
     monthEnd: string;
   }): Promise<SuspiciousAttendanceRow[]> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<SuspiciousAttendanceRow>(sql`
       SELECT
@@ -752,7 +743,6 @@ export class AttendanceRepository {
     attendanceId: string;
     decision: 'validated' | 'rejected';
   }): Promise<void> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     await this.db.execute(sql`
       UPDATE attendances_teacher

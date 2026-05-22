@@ -2,7 +2,6 @@ import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { QueryResult, QueryResultRow } from 'pg';
 import { db as publicDb } from '../../shared/database/db.js';
-import { ensureTenantRealHoursInfrastructure } from '../../shared/database/real-hours-infrastructure.js';
 import { toNumber } from '../../shared/utils/numbers.js';
 
 export type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
@@ -130,7 +129,6 @@ export class BillingRepository {
   constructor(private readonly db: QueryExecutor) {}
 
   async listTeacherMonthlyMetrics(monthStart: string, monthEnd: string, teacherId?: string): Promise<SalaryMetricRow[]> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<SalaryMetricRow>(sql`
       -- CTE 1: Récupère le flag use_real_hours depuis public.school_sms_features
@@ -344,7 +342,6 @@ export class BillingRepository {
     monthStart: string,
     monthEnd: string
   ): Promise<TeacherDailyRow[]> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<TeacherDailyRow>(sql`
       WITH feature_flags AS (

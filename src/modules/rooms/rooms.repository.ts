@@ -3,7 +3,6 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { QueryResult, QueryResultRow } from 'pg';
 
 import type { RoomEntity, RoomEntityRow, RoomStatsRow } from './rooms.types.js';
-import { ensureTenantRealHoursInfrastructure } from '../../shared/database/real-hours-infrastructure.js';
 
 export type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
 
@@ -56,7 +55,6 @@ export class RoomsRepository {
   constructor(private readonly db: QueryExecutor) {}
 
   async listActiveRoomsWithStats(date: string): Promise<RoomStatsRow[]> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<RoomStatsRow>(sql`
       WITH active_period AS (
@@ -114,7 +112,6 @@ export class RoomsRepository {
     longitude?: number | null;
     geoRadius?: number | null;
   }): Promise<RoomEntity> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<RoomEntityRow>(sql`
       INSERT INTO rooms (name, qr_token, building, capacity, latitude, longitude, geo_radius, is_active)
@@ -150,7 +147,6 @@ export class RoomsRepository {
       geoRadius?: number | null;
     }
   ): Promise<RoomEntity | null> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<RoomEntityRow>(sql`
       UPDATE rooms
@@ -170,7 +166,6 @@ export class RoomsRepository {
   }
 
   async findRoomById(roomId: string): Promise<RoomEntity | null> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<RoomEntityRow>(sql`
       SELECT id, name, qr_token, building, capacity, latitude, longitude, geo_radius, is_active, created_at
@@ -199,7 +194,6 @@ export class RoomsRepository {
   }
 
   async softDeleteRoom(roomId: string): Promise<RoomEntity | null> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<RoomEntityRow>(sql`
       UPDATE rooms
@@ -219,7 +213,6 @@ export class RoomsRepository {
    * @returns RoomEntity si suppression OK, null si room utilisée ou inexistante
    */
   async softDeleteRoomIfUnused(roomId: string): Promise<RoomEntity | null> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<RoomEntityRow>(sql`
       UPDATE rooms
@@ -240,7 +233,6 @@ export class RoomsRepository {
   }
 
   async regenerateRoomToken(roomId: string, qrToken: string): Promise<RoomEntity | null> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<RoomEntityRow>(sql`
       UPDATE rooms
@@ -254,7 +246,6 @@ export class RoomsRepository {
   }
 
   async findRoomByToken(qrToken: string): Promise<RoomEntity | null> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<RoomEntityRow>(sql`
       SELECT id, name, qr_token, building, capacity, latitude, longitude, geo_radius, is_active, created_at

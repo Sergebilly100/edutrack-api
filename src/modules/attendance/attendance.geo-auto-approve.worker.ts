@@ -9,15 +9,16 @@ const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
 export const geoAutoApproveWorker = new Worker(
   'geo-auto-approve',
   async () => {
-    console.log('[geo-auto-approve-worker] starting auto-approve job'); // Log pour indiquer le début du job
-    await runGeoAutoApproveForAllTenants(); // Appel de la fonction qui auto-approuve les validations géo en attente depuis plus de 7 jours pour tous les tenants
-    console.log('[geo-auto-approve-worker] auto-approve job completed'); // Log pour indiquer la fin du job
+    console.log('[geo-auto-approve-worker] starting auto-approve job');
+    await runGeoAutoApproveForAllTenants();
+    console.log('[geo-auto-approve-worker] auto-approve job completed');
   },
   {
     connection: {
       url: redisUrl,
       maxRetriesPerRequest: null,
     },
+    concurrency: Number(process.env.GEO_AUTO_APPROVE_WORKER_CONCURRENCY ?? 2),
   }
 );
 

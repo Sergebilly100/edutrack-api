@@ -30,6 +30,7 @@
     "@fastify/helmet": "^13.0.2",
     "@fastify/multipart": "^9.4.0",
     "@fastify/rate-limit": "^10.3.0",
+    "@sentry/node": "^10.53.1",
     "archiver": "^7.0.1",
     "argon2": "^0.44.0",
     "bullmq": "^5.61.0",

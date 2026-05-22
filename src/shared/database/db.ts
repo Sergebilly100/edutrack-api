@@ -10,11 +10,34 @@ if (!DATABASE_URL) {
 }
 export const databaseUrl = DATABASE_URL;
 
-const pool = new Pool({ connectionString: DATABASE_URL });
+const parsePositiveInt = (raw: string | undefined, fallback: number): number => {
+  if (!raw) return fallback;
+  const value = Number.parseInt(raw, 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+};
+
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  max: parsePositiveInt(process.env.PG_POOL_MAX, 30),
+  min: parsePositiveInt(process.env.PG_POOL_MIN, 4),
+  idleTimeoutMillis: parsePositiveInt(process.env.PG_IDLE_TIMEOUT_MS, 30_000),
+  connectionTimeoutMillis: parsePositiveInt(process.env.PG_CONNECTION_TIMEOUT_MS, 5_000),
+  statement_timeout: parsePositiveInt(process.env.PG_STATEMENT_TIMEOUT_MS, 15_000),
+  query_timeout: parsePositiveInt(process.env.PG_QUERY_TIMEOUT_MS, 15_000),
+});
 
 pool.on('error', (err) => {
   console.error('[db] Unexpected PostgreSQL pool error:', err);
-  process.exit(1);
+});
+
+export const getPoolStats = (): {
+  totalCount: number;
+  idleCount: number;
+  waitingCount: number;
+} => ({
+  totalCount: pool.totalCount,
+  idleCount: pool.idleCount,
+  waitingCount: pool.waitingCount,
 });
 
 export const db = drizzle(pool);

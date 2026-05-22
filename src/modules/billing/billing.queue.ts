@@ -617,5 +617,6 @@ export const createBillingPdfWorker = (
     async (job) => processBillingPdfJob(job),
     {
       connection,
+      concurrency: Number(process.env.BILLING_WORKER_CONCURRENCY ?? 2),
     }
   );

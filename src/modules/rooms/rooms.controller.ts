@@ -65,7 +65,6 @@ export default async function roomsController(app: FastifyInstance): Promise<voi
 
       return reply.send(result);
     } catch (error) {
-      // Capture erreurs infrastructure (ensureTenantRealHoursInfrastructure)
       if (error instanceof Error && error.message.includes('permission denied')) {
         request.log.error({ err: error, schemaName: request.claims?.schemaName }, '[rooms] DB permission error');
       }

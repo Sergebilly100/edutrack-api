@@ -2,7 +2,6 @@ import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { QueryResult, QueryResultRow } from 'pg';
 
-import { ensureTenantRealHoursInfrastructure } from '../../shared/database/real-hours-infrastructure.js';
 import type {
   EndScanAction,
   MissingEndScanTeacher,
@@ -96,7 +95,6 @@ export class ValidationsRepository {
   }
 
   async listPending(): Promise<PendingValidationGroups> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const result = await this.db.execute<PendingValidationRow>(sql`
       WITH feature_flags AS (
@@ -158,7 +156,6 @@ export class ValidationsRepository {
   }
 
   async countPending(): Promise<PendingValidationCount> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     type CountRow = { kind: ValidationKind | 'missing_end_scan'; cnt: string };
     const result = await this.db.execute<CountRow>(sql`
@@ -215,7 +212,6 @@ export class ValidationsRepository {
 
   async findValidationContext(attendanceId: string, tx?: QueryExecutor): Promise<AttendanceValidationContextRow | null> {
     const db = tx ?? this.db;
-    await ensureTenantRealHoursInfrastructure(db);
 
     const result = await db.execute<AttendanceValidationContextRow>(sql`
       SELECT
@@ -425,7 +421,6 @@ export class ValidationsRepository {
     monthStart: string;
     monthEnd: string;
   }): Promise<void> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     await this.db.execute(sql`
       WITH feature_flags AS (
@@ -484,7 +479,6 @@ export class ValidationsRepository {
   // ── Missing end-scan queries ────────────────────────────────────────────────
 
   async listMissingEndScans(month: string): Promise<MissingEndScanTeacher[]> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const monthStart = `${month}-01`;
     const { monthEnd } = monthBoundsFromDate(monthStart);
@@ -910,7 +904,6 @@ export class ValidationsRepository {
     page: number;
     limit: number;
   }): Promise<ValidationHistoryPage> {
-    await ensureTenantRealHoursInfrastructure(this.db);
 
     const offset = (params.page - 1) * params.limit;
 

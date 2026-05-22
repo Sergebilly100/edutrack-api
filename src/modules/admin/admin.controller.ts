@@ -71,6 +71,13 @@ import {
   attachPublicDb,
   releaseTenantDb,
 } from '../../shared/middleware/tenant.middleware.js';
+import { getPoolStats } from '../../shared/database/db.js';
+import type { Queue } from 'bullmq';
+import type { DeadLetterPayload } from '../../shared/queue/dead-letter-queue.js';
+
+type AdminControllerOptions = {
+  deadLetterQueue?: Queue<DeadLetterPayload>;
+};
 
 const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
   if (error instanceof ZodError) {
@@ -128,7 +135,11 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
   });
 };
 
-export default async function adminController(app: FastifyInstance): Promise<void> {
+export default async function adminController(
+  app: FastifyInstance,
+  options: AdminControllerOptions = {}
+): Promise<void> {
+  const { deadLetterQueue } = options;
   app.addHook('onSend', adminAuditOnSend);
   app.addHook('onResponse', async (request) => {
     await releaseTenantDb(request);
@@ -166,6 +177,56 @@ export default async function adminController(app: FastifyInstance): Promise<voi
       return handleError(reply, error);
     }
   });
+
+  app.get(
+    '/api/v1/admin/internal/pool-stats',
+    { preHandler: preHandlers },
+    async (_request, reply) => {
+      return reply.send(getPoolStats());
+    }
+  );
+
+  app.get(
+    '/api/v1/admin/internal/dlq',
+    { preHandler: preHandlers },
+    async (_request, reply) => {
+      if (!deadLetterQueue) {
+        return reply.send({ jobs: [], counts: {} });
+      }
+      const [counts, jobs] = await Promise.all([
+        deadLetterQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
+        deadLetterQueue.getJobs(['waiting', 'delayed', 'active', 'failed'], 0, 49, false),
+      ]);
+      return reply.send({
+        counts,
+        jobs: jobs.map((j) => ({
+          id: j.id,
+          name: j.name,
+          data: j.data,
+          attemptsMade: j.attemptsMade,
+          timestamp: j.timestamp,
+          failedReason: j.failedReason,
+        })),
+      });
+    }
+  );
+
+  app.post(
+    '/api/v1/admin/internal/dlq/:jobId/replay',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      if (!deadLetterQueue) {
+        return reply.code(503).send({ error: 'DLQ unavailable', code: 'DLQ_UNAVAILABLE' });
+      }
+      const { jobId } = z.object({ jobId: z.string().min(1) }).parse(request.params);
+      const job = await deadLetterQueue.getJob(jobId);
+      if (!job) {
+        return reply.code(404).send({ error: 'Job not found', code: 'NOT_FOUND' });
+      }
+      await job.remove();
+      return reply.send({ success: true, replayed: jobId, originalQueue: job.data?.originalQueue });
+    }
+  );
 
   app.post('/api/v1/admin/schools', { preHandler: preHandlers }, async (request, reply) => {
     try {

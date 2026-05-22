@@ -463,6 +463,9 @@ export const createNotificationsWorker = (
   connection: Redis,
   deps: NotificationsWorkerDeps
 ): Worker<NotificationJobData> => {
+  const concurrency = Number(process.env.NOTIF_WORKER_CONCURRENCY ?? 10);
+  const limiterMax = Number(process.env.NOTIF_WORKER_LIMITER_MAX ?? 10);
+  const limiterDuration = Number(process.env.NOTIF_WORKER_LIMITER_DURATION_MS ?? 1_000);
   return new Worker<NotificationJobData>(
     NOTIFICATIONS_QUEUE_NAME,
     async (job: Job<NotificationJobData>) => {
@@ -470,6 +473,8 @@ export const createNotificationsWorker = (
     },
     {
       connection,
+      concurrency,
+      limiter: { max: limiterMax, duration: limiterDuration },
     }
   );
 };

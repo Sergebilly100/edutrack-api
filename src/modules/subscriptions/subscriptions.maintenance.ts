@@ -20,6 +20,7 @@ export const createSubscriptionMaintenanceWorker = (
   new BullWorker<MaintenanceJobData>(
     SUBSCRIPTION_MAINTENANCE_QUEUE,
     async () => {
+
       await db.execute(sql`
         WITH expired_trials AS (
           UPDATE public.tenants

@@ -749,7 +749,7 @@ export class NotificationsService {
           attempts: 3,
           backoff: { type: 'exponential', delay: 5_000 },
           removeOnComplete: true,
-          removeOnFail: true,
+          removeOnFail: { count: 1000 },
         }
       );
     });
@@ -843,7 +843,7 @@ export class NotificationsService {
               attempts: 3,
               backoff: { type: 'exponential', delay: 5_000 },
               removeOnComplete: true,
-              removeOnFail: true,
+              removeOnFail: { count: 1000 },
             }
           ).then(() => undefined)
         );
@@ -880,7 +880,7 @@ export class NotificationsService {
               attempts: 3,
               backoff: { type: 'exponential', delay: 5_000 },
               removeOnComplete: true,
-              removeOnFail: true,
+              removeOnFail: { count: 1000 },
             }
           ).then(() => undefined)
         );
@@ -933,7 +933,7 @@ export class NotificationsService {
           attempts: 3,
           backoff: { type: 'exponential', delay: 5_000 },
           removeOnComplete: true,
-          removeOnFail: true,
+          removeOnFail: { count: 1000 },
         }
       );
     });
@@ -983,7 +983,7 @@ export class NotificationsService {
               attempts: 3,
               backoff: { type: 'exponential', delay: 5_000 },
               removeOnComplete: true,
-              removeOnFail: true,
+              removeOnFail: { count: 1000 },
             }
           ).then(() => undefined)
         );
@@ -1023,7 +1023,7 @@ export class NotificationsService {
               attempts: 3,
               backoff: { type: 'exponential', delay: 5_000 },
               removeOnComplete: true,
-              removeOnFail: true,
+              removeOnFail: { count: 1000 },
             }
           ).then(() => undefined)
         );
@@ -1074,7 +1074,7 @@ export class NotificationsService {
               schemaName: payload.schemaName,
               relatedId: payload.attendanceId,
             }),
-            { jobId: smsQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: true }
+            { jobId: smsQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: { count: 1000 } }
           ).then(() => undefined)
         );
       }
@@ -1107,7 +1107,7 @@ export class NotificationsService {
               schemaName: payload.schemaName,
               relatedId: payload.attendanceId,
             }),
-            { jobId: emailQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: true }
+            { jobId: emailQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: { count: 1000 } }
           ).then(() => undefined)
         );
       }
@@ -1146,7 +1146,7 @@ export class NotificationsService {
               schemaName: payload.schemaName,
               relatedId: payload.attendanceId,
             }),
-            { jobId: smsQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: true }
+            { jobId: smsQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: { count: 1000 } }
           ).then(() => undefined)
         );
       }
@@ -1177,7 +1177,7 @@ export class NotificationsService {
               schemaName: payload.schemaName,
               relatedId: payload.attendanceId,
             }),
-            { jobId: emailQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: true }
+            { jobId: emailQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: { count: 1000 } }
           ).then(() => undefined)
         );
       }
@@ -1214,7 +1214,7 @@ export class NotificationsService {
               notificationType: 'scan_end_warning',
               schemaName: payload.schemaName,
             }),
-            { jobId: smsQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: true }
+            { jobId: smsQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: { count: 1000 } }
           ).then(() => undefined)
         );
       }
@@ -1243,7 +1243,7 @@ export class NotificationsService {
               notificationType: 'scan_end_warning',
               schemaName: payload.schemaName,
             }),
-            { jobId: emailQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: true }
+            { jobId: emailQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: { count: 1000 } }
           ).then(() => undefined)
         );
       }
@@ -1329,7 +1329,7 @@ export class NotificationsService {
         attempts: 3,
         backoff: { type: 'exponential', delay: 5_000 },
         removeOnComplete: true,
-        removeOnFail: true,
+        removeOnFail: { count: 1000 },
       }
     );
     if (canSend.subscriptionId) {
@@ -1417,7 +1417,7 @@ export class NotificationsService {
         attempts: 3,
         backoff: { type: 'exponential', delay: 5_000 },
         removeOnComplete: true,
-        removeOnFail: true,
+        removeOnFail: { count: 1000 },
       }
     );
     if (canSendEmail.subscriptionId) {
@@ -1581,7 +1581,7 @@ export class NotificationsService {
             attempts: 3,
             backoff: { type: 'exponential', delay: 5_000 },
             removeOnComplete: true,
-            removeOnFail: true,
+            removeOnFail: { count: 1000 },
           }
         );
 
@@ -1635,7 +1635,7 @@ export class NotificationsService {
             attempts: 3,
             backoff: { type: 'exponential', delay: 5_000 },
             removeOnComplete: true,
-            removeOnFail: true,
+            removeOnFail: { count: 1000 },
           }
         );
 
@@ -1697,7 +1697,7 @@ export class NotificationsService {
           attempts: 3,
           backoff: { type: 'exponential', delay: 5_000 },
           removeOnComplete: true,
-          removeOnFail: true,
+          removeOnFail: { count: 1000 },
         }
       );
 
@@ -1746,7 +1746,7 @@ export class NotificationsService {
           attempts: 3,
           backoff: { type: 'exponential', delay: 5_000 },
           removeOnComplete: true,
-          removeOnFail: true,
+          removeOnFail: { count: 1000 },
         }
       );
     });
