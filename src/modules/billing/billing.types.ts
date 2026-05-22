@@ -48,6 +48,7 @@ export const salaryBulkExportBodySchema = z
 export const jobDownloadQuerySchema = z.object({
   expires: z.coerce.number().int().positive(),
   signature: z.string().trim().min(32).max(256),
+  uid: z.string().trim().uuid(),
 });
 
 export type SalaryMonthQuery = z.infer<typeof monthQuerySchema>;

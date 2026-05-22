@@ -1,6 +1,7 @@
 import 'dotenv/config';
 
 import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import multipart from '@fastify/multipart';
 import { sql } from 'drizzle-orm';
@@ -8,6 +9,10 @@ import Fastify from 'fastify';
 import { Redis } from 'ioredis';
 
 import { Queue, Worker } from 'bullmq';
+
+import { assertRequiredSecrets } from './shared/utils/required-secrets.js';
+
+assertRequiredSecrets();
 
 import adminController from './modules/admin/admin.controller.js';
 import attendanceController from './modules/attendance/attendance.controller.js';
@@ -49,7 +54,7 @@ import { db } from './shared/database/db.js';
 import { registerSalaryEventListeners } from './modules/salaries/salaries.service.js';
 import { qrAlertQueue, geoAutoApproveQueue } from './shared/queue/queue.js';
 
-const app = Fastify({ logger: true });
+const app = Fastify({ logger: true, trustProxy: 1 });
 const port = Number(process.env.PORT || 3000);
 const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
 const notificationsRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
@@ -139,10 +144,26 @@ const loadMaintenanceState = async (): Promise<{ mode: boolean; message: string 
 notificationsService.start();
 registerSalaryEventListeners();
 
+const corsOrigins = process.env.CORS_ORIGINS
+  ?.split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+if (process.env.NODE_ENV === 'production' && (!corsOrigins || corsOrigins.length === 0)) {
+  throw new Error('CORS_ORIGINS environment variable is required in production');
+}
+
 app.register(cors, {
-  origin: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : true,
+  origin: corsOrigins && corsOrigins.length > 0 ? corsOrigins : true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+});
+app.register(helmet, {
+  contentSecurityPolicy: false,
+  hsts: { maxAge: 31_536_000, includeSubDomains: true, preload: true },
+  crossOriginResourcePolicy: { policy: 'same-site' },
+  crossOriginOpenerPolicy: { policy: 'same-origin' },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
 });
 app.register(rateLimit, {
   global: false,
@@ -225,13 +246,38 @@ const start = async (): Promise<void> => {
     // Schedule geo auto-approve job (daily at 3 AM)
     await scheduleGeoAutoApprove();
 
-    const absenceMarkingSchemaName =
-      process.env.ABSENCE_MARKING_SCHEMA ?? process.env.SUBSCRIPTION_MAINTENANCE_SCHEMA ?? 'school_sainte_marie';
-    await absenceMarkingQueue.upsertJobScheduler(
-      'absence-marking-every-15min',
-      { pattern: '*/15 6-18 * * 1-6', tz: 'Africa/Abidjan' },
-      { name: 'mark-absences', data: { schemaName: absenceMarkingSchemaName } }
-    );
+    const activeTenantsResult = await db.execute<{ id: string; schema_name: string }>(sql`
+      SELECT id::text AS id, schema_name
+      FROM public.tenants
+      WHERE status IN ('trial', 'active')
+      ORDER BY created_at ASC
+    `);
+    const activeTenants = activeTenantsResult.rows ?? [];
+    if (activeTenants.length === 0) {
+      const fallbackSchema =
+        process.env.ABSENCE_MARKING_SCHEMA ?? process.env.SUBSCRIPTION_MAINTENANCE_SCHEMA ?? 'school_sainte_marie';
+      await absenceMarkingQueue.upsertJobScheduler(
+        `absence-marking-${fallbackSchema}`,
+        { pattern: '*/15 6-18 * * 1-6', tz: 'Africa/Abidjan' },
+        { name: 'mark-absences', data: { schemaName: fallbackSchema } }
+      );
+      app.log.warn(
+        { fallbackSchema },
+        '[absence-marking] no active/trial tenants found — registered fallback scheduler only'
+      );
+    } else {
+      for (const tenant of activeTenants) {
+        await absenceMarkingQueue.upsertJobScheduler(
+          `absence-marking-${tenant.id}`,
+          { pattern: '*/15 6-18 * * 1-6', tz: 'Africa/Abidjan' },
+          { name: 'mark-absences', data: { schemaName: tenant.schema_name } }
+        );
+      }
+      app.log.info(
+        { count: activeTenants.length },
+        `[absence-marking] registered schedulers for ${activeTenants.length} active tenants`
+      );
+    }
 
     await subscriptionsMaintenanceQueue.upsertJobScheduler(
       'subscription-maintenance-daily',

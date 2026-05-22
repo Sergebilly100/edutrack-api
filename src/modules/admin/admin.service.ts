@@ -433,9 +433,10 @@ const ensureAdminPublicInfrastructure = async (publicDb: TenantDb): Promise<void
   await publicDb.execute(sql.raw(`
     ALTER TABLE public.app_settings
       DROP CONSTRAINT IF EXISTS app_settings_sms_provider_check;
+    UPDATE public.app_settings SET sms_provider = 'smsmode' WHERE sms_provider = 'orange_api';
     ALTER TABLE public.app_settings
       ADD CONSTRAINT app_settings_sms_provider_check
-      CHECK (sms_provider IN ('mock', 'infobip', 'africas_talking', 'twilio', 'orange_api', 'custom'));
+      CHECK (sms_provider IN ('mock', 'infobip', 'africas_talking', 'twilio', 'smsmode', 'custom'));
   `));
 
   await publicDb.execute(sql.raw(`

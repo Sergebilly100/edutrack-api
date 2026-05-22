@@ -35,16 +35,13 @@ const exportDirRoot = path.resolve(BILLING_EXPORT_DIR);
 
 const buildSigningSecret = (): string => {
   const configured = process.env.SALARY_EXPORT_SIGNING_SECRET?.trim();
-  if (configured) {
-    return configured;
+  if (!configured || configured.length < 32) {
+    throw new Error(
+      'SALARY_EXPORT_SIGNING_SECRET must be defined with at least 32 characters. ' +
+        'Generate one with: openssl rand -hex 32'
+    );
   }
-
-  const jwtKey = process.env.JWT_PRIVATE_KEY?.trim();
-  if (jwtKey) {
-    return jwtKey;
-  }
-
-  return 'edutrack-salary-export-dev-secret';
+  return configured;
 };
 
 const SIGNING_SECRET = buildSigningSecret();
@@ -72,12 +69,19 @@ const resolveBaseUrl = (request: FastifyRequest): string => {
   return `${request.protocol}://${host}`;
 };
 
-const signDownload = (jobId: string, expires: number): string => {
-  return createHmac('sha256', SIGNING_SECRET).update(`${jobId}.${expires}`).digest('hex');
+const signDownload = (jobId: string, expires: number, userId: string): string => {
+  return createHmac('sha256', SIGNING_SECRET)
+    .update(`${jobId}.${expires}.${userId}`)
+    .digest('hex');
 };
 
-const verifyDownloadSignature = (jobId: string, expires: number, signature: string): boolean => {
-  const expected = signDownload(jobId, expires);
+const verifyDownloadSignature = (
+  jobId: string,
+  expires: number,
+  userId: string,
+  signature: string
+): boolean => {
+  const expected = signDownload(jobId, expires, userId);
   const expectedBuffer = Buffer.from(expected, 'hex');
   const signatureBuffer = Buffer.from(signature, 'hex');
   if (expectedBuffer.length !== signatureBuffer.length) {
@@ -87,12 +91,17 @@ const verifyDownloadSignature = (jobId: string, expires: number, signature: stri
   return timingSafeEqual(expectedBuffer, signatureBuffer);
 };
 
-const buildSignedDownloadUrl = (request: FastifyRequest, jobId: string): string => {
+const buildSignedDownloadUrl = (
+  request: FastifyRequest,
+  jobId: string,
+  userId: string
+): string => {
   const expires = Date.now() + EXPORT_SIGNING_WINDOW_MS;
-  const signature = signDownload(jobId, expires);
+  const signature = signDownload(jobId, expires, userId);
   const query = new URLSearchParams({
     expires: String(expires),
     signature,
+    uid: userId,
   });
   return `${resolveBaseUrl(request)}/api/v1/jobs/${encodeURIComponent(jobId)}/download?${query.toString()}`;
 };
@@ -489,7 +498,7 @@ export default async function billingController(
       };
 
       if (state === 'completed') {
-        const resultUrl = buildSignedDownloadUrl(request, String(job.id));
+        const resultUrl = buildSignedDownloadUrl(request, String(job.id), request.claims!.sub);
         const jobResult = resolveJobFileResult(job.returnvalue);
         response.resultUrl = resultUrl;
         response.result = {
@@ -533,7 +542,7 @@ export default async function billingController(
       };
 
       if (status === 'done' && resolveJobFileResult(job.returnvalue)) {
-        response.resultUrl = buildSignedDownloadUrl(request, String(job.id));
+        response.resultUrl = buildSignedDownloadUrl(request, String(job.id), request.claims!.sub);
       }
 
       if (status === 'failed') {
@@ -559,7 +568,7 @@ export default async function billingController(
         });
       }
 
-      if (!verifyDownloadSignature(params.jobId, query.expires, query.signature)) {
+      if (!verifyDownloadSignature(params.jobId, query.expires, query.uid, query.signature)) {
         return reply.code(401).send({
           error: 'Invalid download signature',
           code: 'INVALID_DOWNLOAD_SIGNATURE',

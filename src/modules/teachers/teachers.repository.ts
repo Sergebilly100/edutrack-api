@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 
 import { toNumber } from '../../shared/utils/numbers.js';
 import { generateUsername } from '../../shared/utils/username.js';
+import { generateInitialPassword } from '../../shared/utils/password-generator.js';
 
 import type {
   CreateTeacherInput,
@@ -200,7 +201,15 @@ export class TeachersRepository {
     );
 
     const username = generateUsername(input.last_name, input.first_name, existingUsernames);
-    const password = process.env.IMPORT_TEACHER_DEFAULT_PASSWORD ?? 'Test1234!';
+    const configuredPassword = process.env.IMPORT_TEACHER_DEFAULT_PASSWORD?.trim();
+    const password = configuredPassword && configuredPassword.length >= 8
+      ? configuredPassword
+      : generateInitialPassword(10);
+    if (!configuredPassword || configuredPassword.length < 8) {
+      console.warn(
+        '[teachers] IMPORT_TEACHER_DEFAULT_PASSWORD is missing or too short — generated a random 10-char password for teacher creation'
+      );
+    }
     const passwordHash = await argon2.hash(password);
 
     const userResult = await this.db.execute(sql`

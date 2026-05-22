@@ -21,6 +21,11 @@ const MAX_USERS_BY_PLAN = {
   establishment: 50,
 } as const;
 
+if (process.env.NODE_ENV === 'production' && process.env.ALLOW_PROD_SEED !== 'true') {
+  console.error('[seed] Refusing to run in production without ALLOW_PROD_SEED=true');
+  process.exit(1);
+}
+
 const DIRECTOR_EMAIL = 'directeur@sainte-marie.ci';
 const SUPER_ADMIN_EMAIL = 'admin@edutrack.ci';
 const DEFAULT_PASSWORD = 'Test1234!';

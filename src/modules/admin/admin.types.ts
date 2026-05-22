@@ -3,7 +3,7 @@ import { z } from 'zod';
 const TENANT_PLAN_VALUES = ['essential', 'pro', 'establishment'] as const;
 const TENANT_STATUS_VALUES = ['trial', 'active', 'suspended', 'cancelled'] as const;
 const TEACHING_TYPE_VALUES = ['primaire', 'secondaire', 'superieur', 'mixte'] as const;
-const SMS_PROVIDER_VALUES = ['mock', 'infobip', 'africas_talking', 'twilio', 'orange_api', 'custom'] as const;
+const SMS_PROVIDER_VALUES = ['mock', 'infobip', 'africas_talking', 'twilio', 'smsmode', 'custom'] as const;
 
 export type TenantPlan = (typeof TENANT_PLAN_VALUES)[number];
 export type TenantStatus = (typeof TENANT_STATUS_VALUES)[number];

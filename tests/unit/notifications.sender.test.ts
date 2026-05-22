@@ -169,80 +169,49 @@ describe('defaultSmsSender', () => {
     });
   });
 
-  it("envoie via Orange API quand le provider orange_api est configuré", async () => {
+  it('envoie via smsmode quand le provider smsmode est configuré', async () => {
     dbExecute.mockResolvedValueOnce({
       rows: [
         {
-          sms_provider: 'orange_api',
-          sms_api_base_url: 'https://api.orange.com/smsmessaging/v1/outbound',
-          sms_api_key: 'orange-client:orange-secret',
-          sms_sender_id: '+2250000',
-          sms_fallback_sender_id: 'EduTrack',
+          sms_provider: 'smsmode',
+          sms_api_base_url: 'https://rest.smsmode.com/sms/v1',
+          sms_api_key: 'smsmode-secret',
+          sms_sender_id: 'EduTrack',
+          sms_fallback_sender_id: null,
           sms_maintenance_mode: false,
           sms_maintenance_message: null,
         },
       ],
     });
 
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ access_token: 'orange-token', expires_in: 3600 }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        text: async () =>
-          JSON.stringify({
-            outboundSMSMessageRequest: {
-              resourceURL: 'https://api.orange.com/smsmessaging/v1/outbound/tel%3A%2B2250000/requests/ref-1',
-            },
-          }),
-      });
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({ messageId: 'smsmode-ref-1' }),
+    });
     vi.stubGlobal('fetch', fetchMock);
 
     const { defaultSmsSender } = await import('../../src/modules/notifications/notifications.service.js');
     const result = await defaultSmsSender({
       to: '+2250787380274',
-      message: 'Test EduTrack Orange',
+      message: 'Test EduTrack smsmode',
       type: 'student_absent_parent',
       schemaName: 'school_demo',
     });
 
-    expect(result).toEqual({
-      status: 'sent',
-      providerRef:
-        'https://api.orange.com/smsmessaging/v1/outbound/tel%3A%2B2250000/requests/ref-1',
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ status: 'sent', providerRef: 'smsmode-ref-1' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    const [tokenUrl, tokenInit] = fetchMock.mock.calls[0]!;
-    expect(tokenUrl).toBe('https://api.orange.com/oauth/v3/token');
-    expect(tokenInit.headers).toMatchObject({
-      Authorization: `Basic ${Buffer.from('orange-client:orange-secret').toString('base64')}`,
-      Accept: 'application/json',
-      'Content-Type': 'application/x-www-form-urlencoded',
-    });
-    expect(tokenInit.body).toBe('grant_type=client_credentials');
-
-    const [smsUrl, smsInit] = fetchMock.mock.calls[1]!;
-    expect(smsUrl).toBe(
-      'https://api.orange.com/smsmessaging/v1/outbound/tel%3A%2B2250000/requests'
-    );
-    expect(smsInit.headers).toMatchObject({
-      Authorization: 'Bearer orange-token',
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('https://rest.smsmode.com/sms/v1/messages');
+    expect(init.headers).toMatchObject({
+      'X-Api-Key': 'smsmode-secret',
       Accept: 'application/json',
       'Content-Type': 'application/json',
     });
-    expect(JSON.parse(smsInit.body as string)).toEqual({
-      outboundSMSMessageRequest: {
-        address: 'tel:+2250787380274',
-        senderAddress: 'tel:+2250000',
-        outboundSMSTextMessage: {
-          message: 'Test EduTrack Orange',
-        },
-        senderName: 'EduTrack',
-      },
+    expect(JSON.parse(init.body as string)).toEqual({
+      recipient: { to: '+2250787380274' },
+      body: { text: 'Test EduTrack smsmode' },
+      from: 'EduTrack',
     });
   });
 });

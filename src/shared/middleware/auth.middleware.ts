@@ -8,7 +8,7 @@ import {
 } from '../../modules/permissions/permissions.repository.js';
 import { resolveEffectivePermissions } from '../../modules/permissions/permissions.service.js';
 import { verifyAccessToken, type AccessTokenClaims } from '../../modules/auth/auth.service.js';
-import { getRevokeAt } from '../auth/token-version.js';
+import { getRevokeAt, TokenRevocationUnavailableError } from '../auth/token-version.js';
 
 const DIRECTOR_STAFF_ROLES = new Set(['director', 'staff']);
 const TEACHER_DIRECTOR_STAFF_ROLES = new Set(['teacher', 'director', 'staff']);
@@ -90,10 +90,29 @@ export const authenticateRequest = async (
   }
 
   // Reject tokens issued before the last password reset for this user.
+  // Fail-closed: if Redis is unreachable we'd rather return 503 than honor a
+  // potentially-revoked token (a stolen access token must not survive a Redis outage).
   const iat = typeof (claims as Record<string, unknown>).iat === 'number'
     ? (claims as Record<string, unknown>).iat as number
     : 0;
-  const revokeAt = await getRevokeAt(claims.schemaName, claims.sub);
+  let revokeAt = 0;
+  try {
+    revokeAt = await getRevokeAt(claims.schemaName, claims.sub);
+  } catch (error) {
+    if (error instanceof TokenRevocationUnavailableError) {
+      request.log.error(
+        { schema: claims.schemaName, userId: claims.sub },
+        '[auth] redis_revocation_unavailable'
+      );
+      reply.code(503).send({
+        error: 'Authentication temporarily unavailable',
+        code: 'AUTH_TEMPORARILY_UNAVAILABLE',
+        statusCode: 503,
+      });
+      return;
+    }
+    throw error;
+  }
   if (revokeAt > 0 && iat < revokeAt) {
     unauthorized(reply, 'Session invalidée, veuillez vous reconnecter');
     return;

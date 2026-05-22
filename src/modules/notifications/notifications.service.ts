@@ -75,7 +75,7 @@ const defaultDeps = {
 };
 
 type SmsPlatformRuntimeConfig = {
-  provider: 'mock' | 'infobip' | 'africas_talking' | 'twilio' | 'orange_api' | 'custom';
+  provider: 'mock' | 'infobip' | 'africas_talking' | 'twilio' | 'smsmode' | 'custom';
   apiBaseUrl: string | null;
   apiKey: string | null;
   senderId: string;
@@ -85,7 +85,6 @@ type SmsPlatformRuntimeConfig = {
 };
 
 let smsConfigCache: { fetchedAt: number; value: SmsPlatformRuntimeConfig } | null = null;
-let orangeTokenCache: { cacheKey: string; value: string; expiresAt: number } | null = null;
 
 const SMS_TEMPLATE_STUDENT_ABSENT_TYPE = 'student_absent_parent';
 const SMS_TEMPLATE_PAYMENT_REMINDER_TYPE = 'payment_reminder';
@@ -320,157 +319,64 @@ const sendAfricasTalkingSms = async (params: {
   return { status: 'sent', providerRef };
 };
 
-const resolveOrangeCredentials = (config: SmsPlatformRuntimeConfig): {
-  clientId: string;
-  clientSecret: string;
-  senderAddress: string;
-  senderName: string;
-  smsBaseUrl: string;
-  tokenUrl: string;
+const resolveSmsmodeCredentials = (
+  config: SmsPlatformRuntimeConfig
+): {
+  apiKey: string;
+  sender: string;
+  baseUrl: string;
 } | null => {
-  const configuredKey = config.apiKey?.trim();
-  const separatorIndex = configuredKey?.indexOf(':') ?? -1;
-  const clientId =
-    (separatorIndex > 0 ? configuredKey?.slice(0, separatorIndex).trim() : '') ||
-    process.env.ORANGE_CLIENT_ID?.trim() ||
-    '';
-  const clientSecret =
-    (separatorIndex > 0 ? configuredKey?.slice(separatorIndex + 1).trim() : configuredKey ?? '') ||
-    process.env.ORANGE_CLIENT_SECRET?.trim() ||
-    '';
-  const configuredSenderAddress =
-    config.senderId.trim() && config.senderId.trim() !== 'EduTrack'
-      ? config.senderId.trim()
-      : '';
-  const senderAddress = normalizeSmsRecipient(
-    configuredSenderAddress || process.env.ORANGE_SENDER_ADDRESS?.trim() || ''
-  );
-  const senderName =
-    config.fallbackSenderId !== null
-      ? config.fallbackSenderId.trim()
-      : process.env.ORANGE_SENDER_NAME?.trim() || '';
-  const smsBaseUrl =
-    config.apiBaseUrl?.trim() ||
-    process.env.ORANGE_SMS_BASE_URL?.trim() ||
-    'https://api.orange.com/smsmessaging/v1/outbound';
-  const tokenUrl =
-    process.env.ORANGE_TOKEN_URL?.trim() || 'https://api.orange.com/oauth/v3/token';
-
-  if (!clientId || !clientSecret || !senderAddress) {
+  const apiKey = (config.apiKey?.trim() || process.env.SMSMODE_API_KEY?.trim()) ?? '';
+  if (!apiKey) {
     return null;
   }
-
-  return {
-    clientId,
-    clientSecret,
-    senderAddress,
-    senderName,
-    smsBaseUrl,
-    tokenUrl,
-  };
+  const baseUrl =
+    config.apiBaseUrl?.trim() ||
+    process.env.SMSMODE_BASE_URL?.trim() ||
+    'https://rest.smsmode.com/sms/v1';
+  const configuredSender = config.senderId.trim();
+  const sender =
+    configuredSender && configuredSender !== 'EduTrack'
+      ? configuredSender
+      : process.env.SMSMODE_SENDER?.trim() || configuredSender || 'EduTrack';
+  return { apiKey, sender, baseUrl };
 };
 
-const getOrangeAccessToken = async (credentials: {
-  clientId: string;
-  clientSecret: string;
-  tokenUrl: string;
-}): Promise<string> => {
-  const now = Date.now();
-  const cacheKey = `${credentials.tokenUrl}:${credentials.clientId}`;
-  if (orangeTokenCache?.cacheKey === cacheKey && orangeTokenCache.expiresAt > now) {
-    return orangeTokenCache.value;
-  }
-
-  const basicCredentials = Buffer.from(
-    `${credentials.clientId}:${credentials.clientSecret}`
-  ).toString('base64');
-  const response = await fetch(credentials.tokenUrl, {
-    method: 'POST',
-    headers: {
-      Authorization: `Basic ${basicCredentials}`,
-      Accept: 'application/json',
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: 'grant_type=client_credentials',
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => '');
-    return Promise.reject(
-      new Error(`Orange OAuth2 error (${response.status})${errorText ? `: ${errorText}` : ''}`)
-    );
-  }
-
-  const payload = (await response.json().catch(() => ({} as Record<string, unknown>))) as {
-    access_token?: string;
-    expires_in?: number;
-  };
-  if (!payload.access_token) {
-    return Promise.reject(new Error('Orange OAuth2 response missing access_token'));
-  }
-
-  const expiresInSeconds = Math.max((payload.expires_in ?? 3600) - 300, 60);
-  orangeTokenCache = {
-    cacheKey,
-    value: payload.access_token,
-    expiresAt: now + expiresInSeconds * 1000,
-  };
-  return payload.access_token;
-};
-
-const sendOrangeSms = async (params: {
+const sendSmsmodeSms = async (params: {
   to: string;
   message: string;
   config: SmsPlatformRuntimeConfig;
 }): Promise<{ status: 'sent' | 'failed'; providerRef?: string; errorMessage?: string }> => {
-  const credentials = resolveOrangeCredentials(params.config);
+  const credentials = resolveSmsmodeCredentials(params.config);
   if (!credentials) {
-    return {
-      status: 'failed',
-      errorMessage:
-        'Missing Orange SMS client credentials or sender address',
-    };
+    return { status: 'failed', errorMessage: 'Missing smsmode API key' };
   }
 
   const recipient = normalizeSmsRecipient(params.to);
   if (!recipient) {
-    return { status: 'failed', errorMessage: 'Missing Orange SMS recipient' };
+    return { status: 'failed', errorMessage: 'Missing smsmode recipient' };
   }
 
+  const endpoint = `${credentials.baseUrl.replace(/\/+$/, '')}/messages`;
   try {
-    const accessToken = await getOrangeAccessToken(credentials);
-    const senderAddress = `tel:${credentials.senderAddress}`;
-    const smsBaseUrl = credentials.smsBaseUrl.replace(/\/+$/, '');
-    const outboundBaseUrl = /\/outbound$/.test(smsBaseUrl)
-      ? smsBaseUrl
-      : `${smsBaseUrl}/outbound`;
-    const endpoint = `${outboundBaseUrl}/${encodeURIComponent(
-      senderAddress
-    )}/requests`;
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        'X-Api-Key': credentials.apiKey,
         Accept: 'application/json',
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        outboundSMSMessageRequest: {
-          address: `tel:${recipient}`,
-          senderAddress,
-          outboundSMSTextMessage: {
-            message: params.message,
-          },
-          ...(credentials.senderName ? { senderName: credentials.senderName } : {}),
-        },
+        recipient: { to: recipient },
+        body: { text: params.message },
+        from: credentials.sender,
       }),
     });
 
     const payloadText = await response.text().catch(() => '');
     let payload: {
-      outboundSMSMessageRequest?: { resourceURL?: string };
-      resourceURL?: string;
-      status?: string;
+      messageId?: string;
+      id?: string;
       message?: string;
     } = {};
     if (payloadText) {
@@ -482,26 +388,20 @@ const sendOrangeSms = async (params: {
     }
 
     if (!response.ok) {
-      if (response.status === 401) {
-        orangeTokenCache = null;
-      }
       return {
         status: 'failed',
-        errorMessage: `Orange SMS error (${response.status})${payloadText ? `: ${payloadText}` : ''}`,
+        errorMessage: `smsmode error (${response.status})${payloadText ? `: ${payloadText}` : ''}`,
       };
     }
 
     return {
       status: 'sent',
-      providerRef:
-        payload.outboundSMSMessageRequest?.resourceURL ??
-        payload.resourceURL ??
-        randomUUID(),
+      providerRef: payload.messageId ?? payload.id ?? randomUUID(),
     };
   } catch (error) {
     return {
       status: 'failed',
-      errorMessage: error instanceof Error ? error.message : 'Orange SMS error',
+      errorMessage: error instanceof Error ? error.message : 'smsmode error',
     };
   }
 };
@@ -542,8 +442,8 @@ export const defaultSmsSender: SmsSender = async ({ to, message, type, schemaNam
     });
   }
 
-  if (config.provider === 'orange_api') {
-    return sendOrangeSms({
+  if (config.provider === 'smsmode') {
+    return sendSmsmodeSms({
       to,
       message,
       config,

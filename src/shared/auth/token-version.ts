@@ -12,6 +12,21 @@ const getRedis = (): Redis => {
 };
 
 /**
+ * Thrown when the Redis-backed revocation check cannot complete.
+ * Callers (the auth middleware) translate this into a 503 to fail closed —
+ * we'd rather lock users out briefly than honor a token that may have been revoked.
+ */
+export class TokenRevocationUnavailableError extends Error {
+  constructor(cause?: unknown) {
+    super('Token revocation check unavailable');
+    this.name = 'TokenRevocationUnavailableError';
+    if (cause instanceof Error) {
+      this.cause = cause;
+    }
+  }
+}
+
+/**
  * Redis key that stores the Unix timestamp (seconds) of the last password reset
  * for this user. Any JWT issued before this timestamp is considered invalid.
  */
@@ -21,6 +36,9 @@ const revokeAtKey = (schemaName: string, userId: string): string =>
 /**
  * Returns the revocation timestamp for this user (0 if none recorded).
  * JWT tokens with iat < this value must be rejected.
+ *
+ * Throws TokenRevocationUnavailableError if Redis is unreachable — the caller
+ * must convert that into a 503 so a stolen token cannot survive a Redis outage.
  */
 export const getRevokeAt = async (schemaName: string, userId: string): Promise<number> => {
   try {
@@ -30,9 +48,8 @@ export const getRevokeAt = async (schemaName: string, userId: string): Promise<n
     }
     const parsed = Number.parseInt(value, 10);
     return Number.isFinite(parsed) ? parsed : 0;
-  } catch {
-    // Redis unavailable — fail open to avoid blocking the service.
-    return 0;
+  } catch (error) {
+    throw new TokenRevocationUnavailableError(error);
   }
 };
 

@@ -1,5 +1,3 @@
-import { randomInt } from 'node:crypto';
-
 import argon2 from 'argon2';
 
 import { SubscriptionsRepository } from './subscriptions.repository.js';
@@ -8,6 +6,7 @@ import {
   monthKeyInBusinessTimezone,
   todayInBusinessTimezone,
 } from '../../shared/utils/business-time.js';
+import { generateInitialPassword } from '../../shared/utils/password-generator.js';
 import type {
   CanSendResult,
   CreateParentSubscriptionBody,
@@ -27,8 +26,6 @@ export class SubscriptionsModuleError extends Error {
     this.name = 'SubscriptionsModuleError';
   }
 }
-
-const randomFourDigits = (): string => String(randomInt(0, 10_000)).padStart(4, '0');
 const EDUTRACK_COMMISSION_PCT = 15;
 
 export class SubscriptionsService {
@@ -212,7 +209,7 @@ export class SubscriptionsService {
       throw new SubscriptionsModuleError('Parent already exists', 409, 'PARENT_ALREADY_EXISTS');
     }
 
-    const tempPassword = randomFourDigits();
+    const tempPassword = generateInitialPassword(10);
     const passwordHash = await argon2.hash(tempPassword);
     const actorUserId = await this.resolveActorUserId(input.actorUserId);
 
@@ -449,7 +446,7 @@ export class SubscriptionsService {
     if (!parent) {
       throw new SubscriptionsModuleError('Parent not found', 404, 'PARENT_NOT_FOUND');
     }
-    const temp = randomFourDigits();
+    const temp = generateInitialPassword(10);
     const hash = await argon2.hash(temp);
     await this.repository.updateParentPassword(parentId, hash);
     return { phone: parent.phone, new_temp_password: temp };

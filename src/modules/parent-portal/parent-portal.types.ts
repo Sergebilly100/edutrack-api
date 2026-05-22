@@ -19,7 +19,11 @@ export const parentAbsencesQuerySchema = z.object({
 
 export const parentChangePasswordSchema = z.object({
   current_password: z.string().min(1),
-  new_password: z.string().min(6),
+  new_password: z
+    .string()
+    .min(8, 'Le mot de passe doit contenir au moins 8 caractères')
+    .regex(/[A-Z]/, 'Le mot de passe doit contenir au moins une majuscule')
+    .regex(/[0-9]/, 'Le mot de passe doit contenir au moins un chiffre'),
 });
 
 export type ParentStudentSummary = {
