@@ -210,7 +210,7 @@ describe('handleTeacherLate', () => {
         notificationType: 'teacher_late_director',
       }),
       expect.objectContaining({
-        jobId: expect.stringContaining('notif:school_sainte_marie:teacher_late_director:'),
+        jobId: expect.stringContaining('notif-school_sainte_marie-teacher_late_director-'),
       })
     );
     expect(smsData?.message).toContain('Kouassi Awa');
@@ -371,7 +371,7 @@ describe('handleStudentAbsent — feature activée, non-monétisée', () => {
         relatedId: 'schedule-1',
       }),
       expect.objectContaining({
-        jobId: expect.stringContaining('notif:school_sainte_marie:student_absent_parent:'),
+        jobId: expect.stringContaining('notif-school_sainte_marie-student_absent_parent-'),
       })
     );
     expect(repository.insertNotificationLog).toHaveBeenCalledWith(

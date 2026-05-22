@@ -504,7 +504,8 @@ export const defaultEmailSender: EmailSender = async ({ to, subject, text }) => 
 };
 
 const buildQueueRef = (schemaName: string, notificationType: NotificationType): string => {
-  return `notif:${schemaName}:${notificationType}:${randomUUID()}`;
+  // BullMQ rejects custom job IDs containing `:` — use `-` as separator.
+  return `notif-${schemaName}-${notificationType}-${randomUUID()}`;
 };
 
 const toSmsJobData = (params: {
