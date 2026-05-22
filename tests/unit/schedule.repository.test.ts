@@ -73,7 +73,9 @@ describe('Schedule Repository', () => {
       });
 
       const query = mockDb.execute.mock.calls[0][0];
-      const queryStr = query.queryChunks.join('');
+      const queryStr = query.queryChunks
+        .flatMap((c: { value?: string[] }) => (Array.isArray(c.value) ? c.value : []))
+        .join('');
 
       expect(queryStr).toContain('ON CONFLICT');
     });

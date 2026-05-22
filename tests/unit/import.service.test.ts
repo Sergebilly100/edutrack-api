@@ -86,7 +86,7 @@ beforeEach(() => {
   repository.deactivateTeachersByIds.mockResolvedValue(0);
   repository.upsertStudent.mockResolvedValue('inserted');
   repository.upsertTeacher.mockResolvedValue('inserted');
-  repository.upsertSchedule.mockResolvedValue('inserted');
+  repository.upsertSchedule.mockResolvedValue({ result: 'inserted', id: 'schedule-new' });
   repository.deactivateSchedulesByPeriodExcluding.mockResolvedValue(0);
   repository.createImportHistory.mockResolvedValue(undefined);
   repository.listImportHistory.mockResolvedValue([]);

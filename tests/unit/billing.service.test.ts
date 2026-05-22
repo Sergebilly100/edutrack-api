@@ -77,6 +77,8 @@ const repository = {
   updateSalaryStatus: vi.fn(),
   updateSalaryRecordAfterPayment: vi.fn(),
   createSalaryPayment: vi.fn(),
+  createVacatairePartialPaymentAtomic: vi.fn(),
+  auditSalaryAction: vi.fn(),
   listTeacherPaymentHistory: vi.fn(),
   listTeacherSalaryRecordsInRange: vi.fn(),
   listPastUnpaidSalaryAlerts: vi.fn(),
@@ -343,7 +345,7 @@ describe('BillingService', () => {
   // ── updateSalaryRecordStatus — vacataire ──────────────────────────────────
 
   describe('updateSalaryRecordStatus — vacataire', () => {
-    const actor = { userId: 'director-1', role: 'director' as const };
+    const actor = { userId: 'director-1', role: 'director' as const, schemaName: 'school_test' };
 
     it('rejette si hoursToPay manquant pour vacataire', async () => {
       repository.getSalaryRecordById.mockResolvedValue(makeSalaryRecord());
@@ -359,6 +361,9 @@ describe('BillingService', () => {
         makeSalaryRecord({ hours_done: '10', hourly_rate: 5000, total_fcfa: 50000 })
       );
       repository.getSalaryPaymentsSummary.mockResolvedValue(makePaymentSummary({ paid_hours: '8' }));
+      repository.createVacatairePartialPaymentAtomic.mockRejectedValue(
+        new Error('insufficient remaining hours')
+      );
 
       await expect(
         service.updateSalaryRecordStatus({
@@ -371,14 +376,13 @@ describe('BillingService', () => {
     });
 
     it('enregistre un paiement partiel et status reste pending', async () => {
+      const partialRecord = makeSalaryRecord({ status: 'pending', hours_done: '10', hourly_rate: 5000, total_fcfa: 50000 });
       repository.getSalaryRecordById.mockResolvedValue(
         makeSalaryRecord({ hours_done: '10', hourly_rate: 5000, total_fcfa: 50000 })
       );
       repository.getSalaryPaymentsSummary.mockResolvedValue(makePaymentSummary());
-      repository.createSalaryPayment.mockResolvedValue({ id: 'pay-1' });
-      repository.updateSalaryRecordAfterPayment.mockResolvedValue(
-        makeSalaryRecord({ status: 'pending', hours_done: '10', hourly_rate: 5000, total_fcfa: 50000 })
-      );
+      repository.createVacatairePartialPaymentAtomic.mockResolvedValue({ record: partialRecord });
+      repository.auditSalaryAction.mockResolvedValue(undefined);
 
       const result = await service.updateSalaryRecordStatus({
         recordId: 'record-1',
@@ -387,21 +391,20 @@ describe('BillingService', () => {
         hoursToPay: 5,
       });
 
-      expect(repository.createSalaryPayment).toHaveBeenCalledWith(
-        expect.objectContaining({ hoursPaid: 5, amountFcfa: 25000 })
+      expect(repository.createVacatairePartialPaymentAtomic).toHaveBeenCalledWith(
+        expect.objectContaining({ requestedHours: 5, hourlyRate: 5000 })
       );
       expect(result.record.status).toBe('pending');
     });
 
     it('enregistre un paiement complet et status passe à paid', async () => {
+      const paidRecord = makeSalaryRecord({ status: 'paid', hours_done: '10', hourly_rate: 5000, total_fcfa: 50000 });
       repository.getSalaryRecordById.mockResolvedValue(
         makeSalaryRecord({ hours_done: '10', hourly_rate: 5000, total_fcfa: 50000 })
       );
       repository.getSalaryPaymentsSummary.mockResolvedValue(makePaymentSummary());
-      repository.createSalaryPayment.mockResolvedValue({ id: 'pay-1' });
-      repository.updateSalaryRecordAfterPayment.mockResolvedValue(
-        makeSalaryRecord({ status: 'paid', hours_done: '10', hourly_rate: 5000, total_fcfa: 50000 })
-      );
+      repository.createVacatairePartialPaymentAtomic.mockResolvedValue({ record: paidRecord });
+      repository.auditSalaryAction.mockResolvedValue(undefined);
 
       const result = await service.updateSalaryRecordStatus({
         recordId: 'record-1',
@@ -411,9 +414,6 @@ describe('BillingService', () => {
       });
 
       expect(result.record.status).toBe('paid');
-      expect(repository.updateSalaryRecordAfterPayment).toHaveBeenCalledWith(
-        expect.objectContaining({ status: 'paid', touchPaidAt: true })
-      );
     });
 
     it('rejette le doublon (toutes les heures déjà payées)', async () => {
@@ -421,6 +421,9 @@ describe('BillingService', () => {
         makeSalaryRecord({ hours_done: '10', hourly_rate: 5000, total_fcfa: 50000 })
       );
       repository.getSalaryPaymentsSummary.mockResolvedValue(makePaymentSummary({ paid_hours: '10' }));
+      repository.createVacatairePartialPaymentAtomic.mockRejectedValue(
+        new Error('insufficient remaining hours')
+      );
 
       await expect(
         service.updateSalaryRecordStatus({
@@ -429,7 +432,7 @@ describe('BillingService', () => {
           actor,
           hoursToPay: 1,
         })
-      ).rejects.toMatchObject({ code: 'SALARY_ALREADY_PAID_FOR_MONTH', statusCode: 409 });
+      ).rejects.toMatchObject({ code: 'HOURS_TO_PAY_EXCEEDS_REMAINING', statusCode: 400 });
     });
   });
 

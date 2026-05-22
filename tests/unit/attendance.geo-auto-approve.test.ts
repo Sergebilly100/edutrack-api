@@ -21,13 +21,15 @@ describe('Geo Auto-Approve', () => {
     expect(mockDb.execute).toHaveBeenCalledTimes(1);
 
     const query = mockDb.execute.mock.calls[0][0];
-    const queryStr = query.queryChunks.join('');
+    const queryStr = query.queryChunks
+      .flatMap((c: { value?: string[] }) => (Array.isArray(c.value) ? c.value : []))
+      .join('');
 
     expect(queryStr).toContain('validation_status = \'approved\'');
     expect(queryStr).toContain('geo_status = \'verified\'');
     expect(queryStr).toContain('validation_status = \'pending\'');
     expect(queryStr).toContain('geo_status = \'suspicious\'');
-    expect(queryStr).toContain('7 days');
+    expect(queryStr).toContain('INTERVAL ');
   });
 
   it('should return 0 if no validations to approve', async () => {

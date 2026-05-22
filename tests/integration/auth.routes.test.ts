@@ -16,6 +16,9 @@ const mocks = vi.hoisted(() => ({
   listUserSessions: vi.fn(),
   revokeUserSession: vi.fn(),
   buildParentPortalService: vi.fn(),
+  assertSuperAdminDomain: vi.fn(),
+  assertParentPortalEnabled: vi.fn(),
+  updateMe: vi.fn(),
 }));
 
 vi.mock('../../src/shared/database/db.js', () => ({
@@ -35,6 +38,9 @@ vi.mock('../../src/modules/auth/auth.service.js', () => ({
   changePassword: mocks.changePassword,
   listUserSessions: mocks.listUserSessions,
   revokeUserSession: mocks.revokeUserSession,
+  assertSuperAdminDomain: mocks.assertSuperAdminDomain,
+  assertParentPortalEnabled: mocks.assertParentPortalEnabled,
+  updateMe: mocks.updateMe,
 }));
 
 vi.mock('../../src/modules/parent-portal/parent-portal.service.js', () => ({
@@ -164,6 +170,7 @@ describe('auth routes', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/v1/auth/login/teacher',
+      headers: { host: 'localhost' },
       payload: { identifier: 'diallo.ibra', password: 'edutrack2024' },
     });
 

@@ -221,8 +221,7 @@ describe('admin V3 routes', () => {
         director_name: 'Directeur Test',
         director_phone: '2250700000001',
         director_email: 'directeur@test.ci',
-        max_admin_positions: 7,
-        active_school_year: '2025-2026',
+        active_school_year: '09/2025 - 06/2026',
         plan: 'pro',
       },
     });

@@ -50,6 +50,7 @@ const repository = {
   approve: vi.fn(),
   reject: vi.fn(),
   insertRejectedTeacherNotification: vi.fn(),
+  insertApprovedTeacherNotification: vi.fn(),
   recomputeForAttendanceDate: vi.fn(),
   auditValidation: vi.fn(),
   listPending: vi.fn(),

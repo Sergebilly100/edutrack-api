@@ -212,8 +212,16 @@ describe('permissions routes', () => {
     expect(response.statusCode).toBe(200);
     const body = JSON.parse(response.body) as { role: string; permissions: string[] };
     expect(body.role).toBe('director');
+    const EXCLUDED_WHEN_NO_MONETIZE = new Set([
+      'settings.sms_templates',
+      'subscriptions.view',
+      'subscriptions.create',
+      'subscriptions.renew',
+      'subscriptions.cancel',
+      'subscriptions.revenue',
+    ]);
     expect(new Set(body.permissions)).toEqual(
-      new Set(PERMISSION_KEYS.filter((permission) => permission !== 'settings.sms_templates'))
+      new Set(PERMISSION_KEYS.filter((permission) => !EXCLUDED_WHEN_NO_MONETIZE.has(permission)))
     );
 
     await app.close();
