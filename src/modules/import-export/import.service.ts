@@ -1,6 +1,6 @@
 import argon2 from 'argon2';
 import { randomBytes } from 'node:crypto';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 
 import { emit } from '../../shared/events/event-bus.js';
 import { generateUsername } from '../../shared/utils/username.js';
@@ -156,17 +156,66 @@ const assertFileSizeWithinLimit = (fileBuffer: Buffer): void => {
   }
 };
 
-const parseWorkbook = (
+const extractCellValue = (value: ExcelJS.CellValue): string => {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (value instanceof Date) {
+    const isoDate = value.toISOString().slice(0, 10);
+    return isoDate;
+  }
+  if (typeof value === 'object') {
+    // Hyperlink: { text, hyperlink }
+    if ('text' in value && typeof (value as { text?: unknown }).text === 'string') {
+      return (value as { text: string }).text;
+    }
+    // Formula: { result, formula }
+    if ('result' in value) {
+      const result = (value as { result?: ExcelJS.CellValue }).result;
+      if (result !== undefined) {
+        return extractCellValue(result);
+      }
+    }
+    // RichText: { richText: [{ text }] }
+    if ('richText' in value && Array.isArray((value as { richText?: unknown }).richText)) {
+      const parts = (value as { richText: Array<{ text?: string }> }).richText;
+      return parts.map((part) => part?.text ?? '').join('');
+    }
+    // Error cell: { error }
+    if ('error' in value) {
+      return '';
+    }
+  }
+  return String(value);
+};
+
+const parseWorkbook = async (
   fileBuffer: Buffer,
   params?: {
     mode?: 'single-sheet' | 'multi-sheet';
     ignoreSheets?: string[];
   }
-): ParsedWorkbook => {
+): Promise<ParsedWorkbook> => {
   assertFileSizeWithinLimit(fileBuffer);
-  const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
 
-  if (workbook.SheetNames.length === 0) {
+  const workbook = new ExcelJS.Workbook();
+  try {
+    await workbook.xlsx.load(fileBuffer as unknown as ArrayBuffer);
+  } catch {
+    throw new ImportModuleError(
+      'Le fichier Excel est invalide ou corrompu.',
+      400,
+      'IMPORT_INVALID_FILE'
+    );
+  }
+
+  const allSheets: ExcelJS.Worksheet[] = [];
+  workbook.eachSheet((sheet) => {
+    allSheets.push(sheet);
+  });
+
+  if (allSheets.length === 0) {
     throw new ImportModuleError('Le fichier Excel est vide', 400, 'IMPORT_EMPTY_FILE');
   }
 
@@ -174,8 +223,8 @@ const parseWorkbook = (
   const ignoreSet = new Set((params?.ignoreSheets ?? []).map((value) => value.toLowerCase()));
   const selectedSheets =
     mode === 'single-sheet'
-      ? workbook.SheetNames.slice(0, 1)
-      : workbook.SheetNames.filter((name) => !ignoreSet.has(name.toLowerCase()));
+      ? allSheets.slice(0, 1)
+      : allSheets.filter((sheet) => !ignoreSet.has(sheet.name.toLowerCase()));
 
   if (selectedSheets.length === 0) {
     throw new ImportModuleError(
@@ -186,33 +235,34 @@ const parseWorkbook = (
   }
 
   const rows: ParsedWorkbookRow[] = [];
-  for (const sheetName of selectedSheets) {
-    const sheet = workbook.Sheets[sheetName];
-    if (!sheet) {
-      continue;
-    }
-
-    const parsedRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
-      defval: '',
-      raw: false,
+  for (const sheet of selectedSheets) {
+    const headerRow = sheet.getRow(1);
+    const headers: string[] = [];
+    headerRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+      headers[colNumber - 1] = extractCellValue(cell.value).trim();
     });
 
-    parsedRows.forEach((row, index) => {
+    const lastRow = sheet.actualRowCount > 0 ? sheet.actualRowCount : sheet.rowCount;
+    for (let rowIndex = 2; rowIndex <= lastRow; rowIndex++) {
+      const row = sheet.getRow(rowIndex);
       const mapped: Record<string, string> = {};
-      for (const [key, value] of Object.entries(row)) {
-        mapped[String(key).trim()] = normalizeCell(value);
+      for (let colIndex = 0; colIndex < headers.length; colIndex++) {
+        const headerKey = headers[colIndex];
+        if (!headerKey) continue;
+        const cell = row.getCell(colIndex + 1);
+        mapped[headerKey] = normalizeCell(extractCellValue(cell.value));
       }
 
       if (Object.values(mapped).every((value) => value.length === 0)) {
-        return;
+        continue;
       }
 
       rows.push({
-        sheetName,
-        line: index + 2,
+        sheetName: sheet.name,
+        line: rowIndex,
         values: mapped,
       });
-    });
+    }
   }
 
   return { rows };
@@ -684,7 +734,7 @@ export class ImportService {
     db: QueryExecutor,
     importMode: ImportMode
   ): Promise<StudentValidation> {
-    const parsed = parseWorkbook(fileBuffer, {
+    const parsed = await parseWorkbook(fileBuffer, {
       mode: 'multi-sheet',
       ignoreSheets: STUDENT_IGNORE_SHEETS,
     });
@@ -804,7 +854,7 @@ export class ImportService {
     db: QueryExecutor,
     importMode: ImportMode
   ): Promise<TeacherValidation> {
-    const parsed = parseWorkbook(fileBuffer);
+    const parsed = await parseWorkbook(fileBuffer);
     ensureRequiredHeaders(parsed.rows, TEACHERS_REQUIRED_HEADERS);
 
     const directory = await this.repository.listTeacherDirectory(db);
@@ -1068,7 +1118,7 @@ export class ImportService {
     db: QueryExecutor,
     schedulePeriod?: SchedulePeriodInput
   ): Promise<ScheduleValidation> {
-    const parsed = parseWorkbook(fileBuffer);
+    const parsed = await parseWorkbook(fileBuffer);
     ensureRequiredHeaders(parsed.rows, SCHEDULE_HEADERS);
 
     const period = validateSchedulePeriodInput(schedulePeriod);

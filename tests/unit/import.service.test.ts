@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 
 import { ImportModuleError, ImportService } from '../../src/modules/import-export/import.service.js';
 
@@ -29,24 +29,45 @@ const db = {
   transaction: vi.fn(<T>(fn: (tx: typeof db) => Promise<T>) => fn(db)),
 };
 
-const toWorkbookBuffer = (rows: Record<string, string>[], sheetName = 'Sheet1'): Buffer => {
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.json_to_sheet(rows);
-  XLSX.utils.book_append_sheet(wb, ws, sheetName);
-  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+const fillSheet = (sheet: ExcelJS.Worksheet, rows: Record<string, string>[]): void => {
+  if (rows.length === 0) return;
+  const headers = Array.from(
+    rows.reduce<Set<string>>((acc, row) => {
+      for (const key of Object.keys(row)) acc.add(key);
+      return acc;
+    }, new Set<string>())
+  );
+  sheet.columns = headers.map((header) => ({ header, key: header }));
+  for (const row of rows) {
+    sheet.addRow(row);
+  }
 };
 
-const toMultiSheetBuffer = (sheets: { name: string; rows: Record<string, string>[] }[]): Buffer => {
-  const wb = XLSX.utils.book_new();
+const toWorkbookBuffer = async (rows: Record<string, string>[], sheetName = 'Sheet1'): Promise<Buffer> => {
+  const wb = new ExcelJS.Workbook();
+  const sheet = wb.addWorksheet(sheetName);
+  fillSheet(sheet, rows);
+  const buf = await wb.xlsx.writeBuffer();
+  return Buffer.from(buf);
+};
+
+const toMultiSheetBuffer = async (
+  sheets: { name: string; rows: Record<string, string>[] }[]
+): Promise<Buffer> => {
+  const wb = new ExcelJS.Workbook();
   for (const { name, rows } of sheets) {
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), name);
+    const sheet = wb.addWorksheet(name);
+    fillSheet(sheet, rows);
   }
-  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+  const buf = await wb.xlsx.writeBuffer();
+  return Buffer.from(buf);
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.useFakeTimers();
+  // shouldAdvanceTime=true permet à exceljs (qui utilise setImmediate) de continuer
+  // à tourner pendant que setSystemTime fige uniquement les wall-clock checks.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.setSystemTime(new Date('2026-04-01T08:00:00.000Z'));
   process.env.IMPORT_TEACHER_DEFAULT_PASSWORD = 'edutrack2024';
 
@@ -110,7 +131,7 @@ describe('import.service — students dry-run', () => {
       'Téléphone parent': `2250700000${String(i + 1).padStart(3, '0')}`,
     }));
 
-    const report = await service.dryRun('students', toWorkbookBuffer(rows), db);
+    const report = await service.dryRun('students', await toWorkbookBuffer(rows), db);
 
     expect(report.valid).toBe(20);
     expect(report.errors).toHaveLength(0);
@@ -121,7 +142,7 @@ describe('import.service — students dry-run', () => {
     const service = new ImportService(repository);
     const rows = [{ Prenom: 'Awa', Nom: 'Kouassi', Classe: '3ème A' }];
 
-    await expect(service.dryRun('students', toWorkbookBuffer(rows), db)).rejects.toMatchObject<
+    await expect(service.dryRun('students', await toWorkbookBuffer(rows), db)).rejects.toMatchObject<
       Partial<ImportModuleError>
     >({
       code: 'IMPORT_MISSING_HEADERS',
@@ -137,7 +158,7 @@ describe('import.service — students dry-run', () => {
       { 'Prénom*': 'Yao', 'Nom*': 'Nom3', 'Classe*': '3ème A', 'Téléphone parent': '0700000000' },
     ];
 
-    const report = await service.dryRun('students', toWorkbookBuffer(rows), db);
+    const report = await service.dryRun('students', await toWorkbookBuffer(rows), db);
 
     expect(report.valid).toBe(0);
     expect(report.errors).toHaveLength(3);
@@ -152,7 +173,7 @@ describe('import.service — students dry-run', () => {
 
   it('feuilles ignorées (README, Salles référence) ne génèrent pas d\'erreurs de headers', async () => {
     const service = new ImportService(repository);
-    const buf = toMultiSheetBuffer([
+    const buf = await toMultiSheetBuffer([
       { name: 'README', rows: [{ Note: 'Documentation' }] },
       { name: 'Salles (référence)', rows: [{ Salle: 'A1' }] },
       { name: '3ème A', rows: [{ 'Prénom*': 'Awa', 'Nom*': 'Bah', 'Classe*': '3ème A' }] },
@@ -196,7 +217,7 @@ describe('import.service — students dry-run', () => {
     const service = new ImportService(repository);
     const rows = [{ 'Prénom*': 'Awa', 'Nom*': 'Bah', 'Classe*': '3ème A' }];
 
-    const report = await service.dryRun('students', toWorkbookBuffer(rows), db, { mode: 'replace' });
+    const report = await service.dryRun('students', await toWorkbookBuffer(rows), db, { mode: 'replace' });
 
     expect(report.toDelete).toHaveLength(1);
     expect(report.toDelete?.[0]?.displayName).toContain('Ancien');
@@ -217,7 +238,7 @@ describe('import.service — students confirm', () => {
       'Téléphone parent': '',
     }));
 
-    const report = await service.confirm('students', toWorkbookBuffer(rows), db);
+    const report = await service.confirm('students', await toWorkbookBuffer(rows), db);
 
     expect(report.imported).toBe(20);
     expect(report.updated).toBe(0);
@@ -229,7 +250,7 @@ describe('import.service — students confirm', () => {
     const service = new ImportService(repository);
     const rows = [{ 'Prénom*': '', 'Nom*': 'Nom1', 'Classe*': '3ème A', 'Téléphone parent': '' }];
 
-    await expect(service.confirm('students', toWorkbookBuffer(rows), db)).rejects.toMatchObject<
+    await expect(service.confirm('students', await toWorkbookBuffer(rows), db)).rejects.toMatchObject<
       Partial<ImportModuleError>
     >({
       code: 'IMPORT_VALIDATION_FAILED',
@@ -262,7 +283,7 @@ describe('import.service — students confirm', () => {
     const service = new ImportService(repository);
     const rows = [{ 'Prénom*': 'Nouveau', 'Nom*': 'Eleve', 'Classe*': '3ème A' }];
 
-    const report = await service.confirm('students', toWorkbookBuffer(rows), db, { mode: 'replace' });
+    const report = await service.confirm('students', await toWorkbookBuffer(rows), db, { mode: 'replace' });
 
     expect(report.imported).toBe(1);
     expect(repository.deactivateStudentsByIds).toHaveBeenCalledWith(
@@ -289,7 +310,7 @@ describe('import.service — teachers dry-run', () => {
       'Taux horaire FCFA': '5000',
     }));
 
-    const report = await service.dryRun('teachers', toWorkbookBuffer(rows), db);
+    const report = await service.dryRun('teachers', await toWorkbookBuffer(rows), db);
 
     expect(report.valid).toBe(5);
     expect(report.errors).toHaveLength(0);
@@ -305,7 +326,7 @@ describe('import.service — teachers dry-run', () => {
       { 'Nom*': 'Diallo', 'Prénom*': 'Ibrahim', 'Type*': 'vacataire', 'Matières*': 'Physique', 'Taux horaire FCFA': '4500' },
     ];
 
-    const dryRun = await service.dryRun('teachers', toWorkbookBuffer(rows), db);
+    const dryRun = await service.dryRun('teachers', await toWorkbookBuffer(rows), db);
     expect(dryRun.valid).toBe(2);
     expect(dryRun.errors).toHaveLength(0);
   });
@@ -322,7 +343,7 @@ describe('import.service — teachers dry-run', () => {
       { 'Nom*': 'Diallo', 'Prénom*': 'Ibrahim', 'Type*': 'vacataire', 'Matières*': 'Mathématiques', 'Taux horaire FCFA': '5000' },
     ];
 
-    const report = await service.dryRun('teachers', toWorkbookBuffer(rows), db);
+    const report = await service.dryRun('teachers', await toWorkbookBuffer(rows), db);
     expect(report.errors).toEqual(
       expect.arrayContaining([expect.objectContaining({ column: 'Nom*', message: expect.stringContaining('ambigu') })])
     );
@@ -336,7 +357,7 @@ describe('import.service — teachers dry-run', () => {
       { 'Nom*': 'Bah', 'Prénom*': 'Mamadou', 'Type*': 'permanent', 'Matières*': 'Histoire', 'Taux horaire FCFA': '' },
     ];
 
-    const report = await service.dryRun('teachers', toWorkbookBuffer(rows), db);
+    const report = await service.dryRun('teachers', await toWorkbookBuffer(rows), db);
     expect(report.errors).toEqual(
       expect.arrayContaining([expect.objectContaining({ column: 'Salaire mensuel FCFA' })])
     );
@@ -357,7 +378,7 @@ describe('import.service — teachers confirm', () => {
       { 'Nom*': 'Diallo', 'Prénom*': 'Ibrahim', 'Type*': 'vacataire', 'Matières*': 'Physique', 'Taux horaire FCFA': '4500' },
     ];
 
-    await service.confirm('teachers', toWorkbookBuffer(rows), db);
+    await service.confirm('teachers', await toWorkbookBuffer(rows), db);
 
     expect(repository.upsertTeacher).toHaveBeenCalledTimes(2);
     expect(repository.upsertTeacher.mock.calls[0][1]).toMatchObject({ username: 'diallo.ibra' });
@@ -389,7 +410,7 @@ describe('import.service — teachers confirm', () => {
       { 'Nom*': 'Diallo', 'Prénom*': 'Ibrahim', 'Type*': 'vacataire', 'Matières*': 'Mathématiques', 'Taux horaire FCFA': '5000' },
     ];
 
-    await service.confirm('teachers', toWorkbookBuffer(rows), db, { mode: 'replace' });
+    await service.confirm('teachers', await toWorkbookBuffer(rows), db, { mode: 'replace' });
 
     expect(repository.deactivateTeachersByIds).toHaveBeenCalledWith(
       expect.anything(),
@@ -404,7 +425,7 @@ describe('import.service — teachers confirm', () => {
       { 'Nom*': 'Bah', 'Prénom*': '', 'Type*': 'vacataire', 'Matières*': 'Histoire', 'Taux horaire FCFA': '3000' },
     ];
 
-    await expect(service.confirm('teachers', toWorkbookBuffer(rows), db)).rejects.toMatchObject<
+    await expect(service.confirm('teachers', await toWorkbookBuffer(rows), db)).rejects.toMatchObject<
       Partial<ImportModuleError>
     >({
       code: 'IMPORT_VALIDATION_FAILED',
@@ -428,7 +449,7 @@ describe('import.service — schedule dry-run', () => {
       { 'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': 'Mathématiques', 'Jour*': 'Lundi', 'Créneau*': '7h30 - 9h00', Salle: 'Salle A1' },
     ];
 
-    await expect(service.dryRun('schedule', toWorkbookBuffer(rows), db)).rejects.toMatchObject<
+    await expect(service.dryRun('schedule', await toWorkbookBuffer(rows), db)).rejects.toMatchObject<
       Partial<ImportModuleError>
     >({
       code: 'IMPORT_NO_ACTIVE_PERIOD',
@@ -455,7 +476,7 @@ describe('import.service — schedule dry-run', () => {
     });
     repository.findActiveSchedulePeriodId.mockResolvedValueOnce('period-1');
 
-    const report = await service.dryRun('schedule', toWorkbookBuffer(rows), db);
+    const report = await service.dryRun('schedule', await toWorkbookBuffer(rows), db);
     expect(report.errors).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ column: 'Jour*', message: expect.stringContaining('passée') }),
@@ -474,7 +495,7 @@ describe('import.service — schedule dry-run', () => {
       { 'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': 'Mathématiques', 'Jour*': 'Lundi', 'Créneau*': '7h30 - 9h00', Salle: 'Salle A1' },
     ];
 
-    const report = await service.dryRun('schedule', toWorkbookBuffer(rows), db);
+    const report = await service.dryRun('schedule', await toWorkbookBuffer(rows), db);
     expect(report.errors).toEqual(
       expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining('ambigu') })])
     );
@@ -487,7 +508,7 @@ describe('import.service — schedule dry-run', () => {
     ];
 
     await expect(
-      service.dryRun('schedule', toWorkbookBuffer(rows), db, {
+      service.dryRun('schedule', await toWorkbookBuffer(rows), db, {
         schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-04-27' },
       })
     ).rejects.toMatchObject<Partial<ImportModuleError>>({
@@ -510,7 +531,7 @@ describe('import.service — schedule confirm', () => {
       { 'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': 'SVT', 'Jour*': 'Mercredi', 'Créneau*': '7h30 - 9h00', Salle: 'Salle A1' },
     ];
 
-    const workbook = toWorkbookBuffer(rows);
+    const workbook = await toWorkbookBuffer(rows);
     const dryRun = await service.dryRun('schedule', workbook, db, {
       schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-04' },
     });
@@ -531,7 +552,7 @@ describe('import.service — schedule confirm', () => {
       { 'Nom professeur*': 'Prof Inconnu', 'Classe*': '3ème A', 'Matière*': 'Mathématiques', 'Jour*': 'Lundi', 'Créneau*': '7h30 - 9h00', Salle: 'Salle A1' },
     ];
 
-    await expect(service.confirm('schedule', toWorkbookBuffer(rows), db)).rejects.toMatchObject<
+    await expect(service.confirm('schedule', await toWorkbookBuffer(rows), db)).rejects.toMatchObject<
       Partial<ImportModuleError>
     >({
       code: 'IMPORT_VALIDATION_FAILED',
@@ -549,7 +570,7 @@ describe('import.service — schedule confirm', () => {
     ];
 
     await expect(
-      service.confirm('schedule', toWorkbookBuffer(rows), db, {
+      service.confirm('schedule', await toWorkbookBuffer(rows), db, {
         schedulePeriod: { weekStart: '2026-04-13', weekEnd: '2026-04-20' },
         conflictAcknowledged: false,
       })
@@ -568,7 +589,7 @@ describe('import.service — schedule confirm', () => {
       { 'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': 'Mathématiques', 'Jour*': 'Lundi', 'Créneau*': '7h30 - 9h00', Salle: 'Salle A1' },
     ];
 
-    const report = await service.confirm('schedule', toWorkbookBuffer(rows), db, {
+    const report = await service.confirm('schedule', await toWorkbookBuffer(rows), db, {
       schedulePeriod: { weekStart: '2026-04-13', weekEnd: '2026-04-20' },
       conflictAcknowledged: true,
     });
@@ -582,7 +603,7 @@ describe('import.service — schedule confirm', () => {
       { 'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': 'Mathématiques', 'Jour*': 'Lundi', 'Créneau*': '7h30 - 9h00', Salle: 'Salle A1' },
     ];
 
-    await service.confirm('schedule', toWorkbookBuffer(rows), db, {
+    await service.confirm('schedule', await toWorkbookBuffer(rows), db, {
       schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-04' },
       mode: 'replace',
     });
@@ -602,7 +623,7 @@ describe('import.service — schedule confirm', () => {
       { 'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': 'Mathématiques', 'Jour*': 'Lundi', 'Créneau*': '7h30 - 9h00', Salle: 'Salle A1' },
     ];
 
-    await expect(service.confirm('schedule', toWorkbookBuffer(rows), db)).rejects.toMatchObject<
+    await expect(service.confirm('schedule', await toWorkbookBuffer(rows), db)).rejects.toMatchObject<
       Partial<ImportModuleError>
     >({
       code: 'IMPORT_NO_ACTIVE_PERIOD',
@@ -621,7 +642,7 @@ describe('import.service — parseDateToIso (via dry-run students)', () => {
       { 'Prénom*': 'Awa', 'Nom*': 'Bah', 'Classe*': '3ème A', 'Date de naissance': '15/03/2010' },
     ];
 
-    const report = await service.dryRun('students', toWorkbookBuffer(rows), db);
+    const report = await service.dryRun('students', await toWorkbookBuffer(rows), db);
     expect(report.errors).toHaveLength(0);
   });
 
@@ -631,7 +652,7 @@ describe('import.service — parseDateToIso (via dry-run students)', () => {
       { 'Prénom*': 'Awa', 'Nom*': 'Bah', 'Classe*': '3ème A', 'Date de naissance': '15-03-2010' },
     ];
 
-    const report = await service.dryRun('students', toWorkbookBuffer(rows), db);
+    const report = await service.dryRun('students', await toWorkbookBuffer(rows), db);
     expect(report.errors).toHaveLength(0);
   });
 
@@ -641,7 +662,7 @@ describe('import.service — parseDateToIso (via dry-run students)', () => {
       { 'Prénom*': 'Awa', 'Nom*': 'Bah', 'Classe*': '3ème A', 'Date de naissance': 'not-a-date' },
     ];
 
-    const report = await service.dryRun('students', toWorkbookBuffer(rows), db);
+    const report = await service.dryRun('students', await toWorkbookBuffer(rows), db);
     expect(report.errors).toEqual(
       expect.arrayContaining([expect.objectContaining({ column: 'Date de naissance' })])
     );

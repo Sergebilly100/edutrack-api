@@ -6,6 +6,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import { db, withTenantSchema } from '../../shared/database/db.js';
 import { off as defaultOff, on as defaultOn } from '../../shared/events/event-bus.js';
+import { logger } from '../../shared/observability/logger.js';
 import {
   monthKeyInBusinessTimezone,
   todayInBusinessTimezone,
@@ -136,7 +137,7 @@ const loadSmsPlatformConfig = async (): Promise<SmsPlatformRuntimeConfig> => {
     smsMaintenanceMessage: row?.sms_maintenance_message ?? 'Service SMS en maintenance',
   };
   if (value.provider === 'mock' && process.env.NODE_ENV === 'production') {
-    console.warn('[notifications] SMS provider is mock in production — vérifier app_settings.sms_provider');
+    logger.warn('[notifications] SMS provider is mock in production — vérifier app_settings.sms_provider');
   }
   smsConfigCache = { fetchedAt: now, value };
   return value;
@@ -419,7 +420,7 @@ export const defaultSmsSender: SmsSender = async ({ to, message, type, schemaNam
   const isMock = config.provider === 'mock' || (process.env.SMS_MOCK ?? 'false').toLowerCase() === 'true';
 
   if (isMock) {
-    console.info(`[sms][mock] schema=${schemaName} type=${type} ref=mock`);
+    logger.info({ schemaName, type, ref: 'mock' }, '[sms][mock] message captured');
     return {
       status: 'sent',
       providerRef: 'mock',
@@ -450,7 +451,7 @@ export const defaultSmsSender: SmsSender = async ({ to, message, type, schemaNam
     });
   }
 
-  console.error(`[notifications] SMS provider not implemented: ${config.provider}`);
+  logger.error({ provider: config.provider }, '[notifications] SMS provider not implemented');
   return { status: 'failed', errorMessage: `SMS provider not implemented: ${config.provider}` };
 };
 
@@ -491,10 +492,10 @@ export const defaultEmailSender: EmailSender = async ({ to, subject, text }) => 
   const provider = (process.env.EMAIL_PROVIDER ?? 'mock').trim().toLowerCase();
   const mockEnabled = (process.env.EMAIL_MOCK ?? 'false').toLowerCase() === 'true';
   if ((provider === 'mock' || mockEnabled) && process.env.NODE_ENV === 'production') {
-    console.warn('[notifications] Email provider is mock in production — set EMAIL_PROVIDER env var');
+    logger.warn('[notifications] Email provider is mock in production — set EMAIL_PROVIDER env var');
   }
   if (provider === 'mock' || mockEnabled) {
-    console.info(`[email][mock] to=${to}`);
+    logger.info({ to }, '[email][mock] message captured');
     return { status: 'sent', providerRef: 'mock-email' };
   }
   if (provider === 'brevo') {
@@ -563,7 +564,7 @@ const toQrNotificationType = (alertType: TeacherQrAlertPayload['alertType']): No
   if (alertType === 'teacher_qr_missing_scan') return 'teacher_qr_missing_scan';
   if (alertType === 'teacher_qr_scan_out_of_time') return 'teacher_qr_scan_out_of_time';
   // alertType exhaustif selon le type union — ce cas ne devrait jamais arriver.
-  console.warn(`[notifications] alertType inattendu: ${String(alertType)}`);
+  logger.warn({ alertType: String(alertType) }, '[notifications] alertType inattendu');
   return 'teacher_qr_scan_out_of_time';
 };
 
@@ -589,24 +590,32 @@ export class NotificationsService {
     };
   }
 
-  // ici teacherLateListener écoute les événements de type 'teacher.late' émis sur le bus d'événements, et pour chaque événement reçu, 
-  // il appelle la méthode handleTeacherLate pour traiter l'événement. 
-  // Si une erreur survient lors du traitement de l'événement, elle est capturée et un message d'erreur est affiché dans la console.
+  // teacherLateListener écoute les événements de type 'teacher.late' émis sur le bus d'événements.
+  // Si une erreur survient lors du traitement, elle est capturée et journalisée via le logger applicatif.
   private readonly teacherLateListener = (payload: EventMap['teacher.late']): void => {
-    void this.handleTeacherLate(payload).catch((error) => { // Gestion des erreurs pour éviter que des exceptions non gérées ne fassent planter le service de notifications
-      console.error('[notifications] failed to process teacher.late', error); // Affiche une erreur dans la console si le traitement de l'événement 'teacher.late' échoue, avec des détails sur l'erreur
+    void this.handleTeacherLate(payload).catch((error) => {
+      logger.error(
+        { err: error instanceof Error ? error.message : String(error) },
+        '[notifications] failed to process teacher.late'
+      );
     });
   };
 
   private readonly teacherQrAlertListener = (payload: EventMap['teacher.qr_alert']): void => {
     void this.handleTeacherQrAlert(payload).catch((error) => {
-      console.error('[notifications] failed to process teacher.qr_alert', error);
+      logger.error(
+        { err: error instanceof Error ? error.message : String(error) },
+        '[notifications] failed to process teacher.qr_alert'
+      );
     });
   };
 
   private readonly teacherQrInvalidListener = (payload: EventMap['teacher.qr_invalid']): void => {
     void this.handleTeacherQrInvalid(payload).catch((error) => {
-      console.error('[notifications] failed to process teacher.qr_invalid', error);
+      logger.error(
+        { err: error instanceof Error ? error.message : String(error) },
+        '[notifications] failed to process teacher.qr_invalid'
+      );
     });
   };
 
@@ -614,7 +623,10 @@ export class NotificationsService {
     payload: EventMap['teacher.attendance_rejected']
   ): void => {
     void this.handleTeacherAttendanceRejected(payload).catch((error) => {
-      console.error('[notifications] failed to process teacher.attendance_rejected', error);
+      logger.error(
+        { err: error instanceof Error ? error.message : String(error) },
+        '[notifications] failed to process teacher.attendance_rejected'
+      );
     });
   };
 
@@ -622,13 +634,19 @@ export class NotificationsService {
     payload: EventMap['teacher.attendance_approved']
   ): void => {
     void this.handleTeacherAttendanceApproved(payload).catch((error) => {
-      console.error('[notifications] failed to process teacher.attendance_approved', error);
+      logger.error(
+        { err: error instanceof Error ? error.message : String(error) },
+        '[notifications] failed to process teacher.attendance_approved'
+      );
     });
   };
 
   private readonly studentAbsentListener = (payload: EventMap['student.absent']): void => {
     void this.handleStudentAbsent(payload).catch((error) => {
-      console.error('[notifications] failed to process student.absent', error);
+      logger.error(
+        { err: error instanceof Error ? error.message : String(error) },
+        '[notifications] failed to process student.absent'
+      );
     });
   };
 
@@ -636,7 +654,10 @@ export class NotificationsService {
     payload: EventMap['subscription.expired']
   ): void => {
     void this.handleSubscriptionExpired(payload).catch((error) => {
-      console.error('[notifications] failed to process subscription.expired', error);
+      logger.error(
+        { err: error instanceof Error ? error.message : String(error) },
+        '[notifications] failed to process subscription.expired'
+      );
     });
   };
 
@@ -644,7 +665,10 @@ export class NotificationsService {
     payload: EventMap['teacher.end_scan_action']
   ): void => {
     void this.handleTeacherEndScanAction(payload).catch((error) => {
-      console.error('[notifications] failed to process teacher.end_scan_action', error);
+      logger.error(
+        { err: error instanceof Error ? error.message : String(error) },
+        '[notifications] failed to process teacher.end_scan_action'
+      );
     });
   };
 
@@ -652,7 +676,10 @@ export class NotificationsService {
     payload: EventMap['teacher.sanction_cancelled']
   ): void => {
     void this.handleTeacherSanctionCancelled(payload).catch((error) => {
-      console.error('[notifications] failed to process teacher.sanction_cancelled', error);
+      logger.error(
+        { err: error instanceof Error ? error.message : String(error) },
+        '[notifications] failed to process teacher.sanction_cancelled'
+      );
     });
   };
 
@@ -660,7 +687,10 @@ export class NotificationsService {
     payload: EventMap['teacher.end_scan_warning']
   ): void => {
     void this.handleTeacherEndScanWarning(payload).catch((error) => {
-      console.error('[notifications] failed to process teacher.end_scan_warning', error);
+      logger.error(
+        { err: error instanceof Error ? error.message : String(error) },
+        '[notifications] failed to process teacher.end_scan_warning'
+      );
     });
   };
 

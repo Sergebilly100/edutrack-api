@@ -1311,6 +1311,78 @@ export class AttendanceRepository {
     return getRows(result);
   }
 
+  async listHistoryForTeacher(params: {
+    teacherId: string;
+    from: string;
+    to: string;
+  }): Promise<DirectorHistoryDetailRow[]> {
+    const result = await this.db.execute<DirectorHistoryDetailRow>(sql`
+      WITH active_period AS (
+        SELECT id
+        FROM schedule_periods
+        WHERE is_active = true
+          AND valid_from <= ${params.to}::date
+          AND valid_to   >= ${params.from}::date
+        ORDER BY created_at DESC
+        LIMIT 1
+      ),
+      dates AS (
+        SELECT generate_series(
+          ${params.from}::date,
+          ${params.to}::date,
+          INTERVAL '1 day'
+        )::date AS date
+      )
+      SELECT
+        d.date::text,
+        s.id::text AS schedule_id,
+        u.name AS teacher_name,
+        s.subject,
+        c.name AS class_name,
+        r.name AS room_name,
+        ts.start_time::text,
+        ts.end_time::text,
+        at.status::text AS attendance_status,
+        at.late_minutes,
+        at.checked_in_at::text,
+        COALESCE(at.room_mismatch, false) AS room_mismatch,
+        scanned_room.name AS room_scanned_name,
+        at.room_scan_start_at::text AS room_scanned_at,
+        at.room_scan_end_at::text AS room_scan_end_at,
+        CASE WHEN COUNT(ast.id) > 0 THEN true ELSE false END AS student_rollcall_done,
+        COUNT(CASE WHEN ast.status = 'present' THEN 1 END)::int AS student_present_count,
+        COUNT(CASE WHEN ast.status = 'absent'  THEN 1 END)::int AS student_absent_count,
+        COUNT(ast.id)::int AS student_total_count
+      FROM dates d
+      INNER JOIN active_period ap ON true
+      INNER JOIN schedules s
+        ON s.schedule_period_id = ap.id
+       AND s.day_of_week = EXTRACT(ISODOW FROM d.date)::int
+       AND s.is_active = true
+       AND s.teacher_id = ${params.teacherId}
+       AND (s.start_date IS NULL OR s.start_date <= d.date)
+       AND (s.end_date IS NULL OR s.end_date > d.date)
+      INNER JOIN teachers t    ON t.id = s.teacher_id
+      INNER JOIN users u       ON u.id = t.user_id
+      INNER JOIN classes c     ON c.id = s.class_id
+      INNER JOIN rooms r       ON r.id = s.room_id
+      INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+      LEFT JOIN attendances_teacher at
+        ON at.schedule_id = s.id AND at.date = d.date
+      LEFT JOIN rooms scanned_room ON scanned_room.id = at.room_scanned_id
+      LEFT JOIN attendances_student ast
+        ON ast.schedule_id = s.id AND ast.date = d.date
+      GROUP BY
+        d.date, s.id, u.name, s.subject, c.name, r.name,
+        ts.start_time, ts.end_time,
+        at.status, at.late_minutes, at.checked_in_at,
+        at.room_mismatch, scanned_room.name, at.room_scan_start_at, at.room_scan_end_at
+      ORDER BY d.date DESC, ts.start_time ASC
+    `);
+
+    return getRows(result);
+  }
+
   async listHistoryDetailForDirector(params: {
     from: string;
     to: string;

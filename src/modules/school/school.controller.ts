@@ -4,6 +4,7 @@ import { ZodError, z } from 'zod';
 
 import { db, withTenantSchema } from '../../shared/database/db.js';
 import { authenticateRequest, requireDirectorOrSecretary } from '../../shared/middleware/auth.middleware.js';
+import { logger } from '../../shared/observability/logger.js';
 
 type TenantInfoRow = {
   id: string;
@@ -74,7 +75,10 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
     }
   }
 
-  console.error('[school] unhandled error', error);
+  logger.error(
+    { err: error instanceof Error ? error.message : String(error) },
+    '[school] unhandled error'
+  );
 
   return reply.code(500).send({
     error: 'Internal server error',

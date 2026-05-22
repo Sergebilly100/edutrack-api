@@ -23,6 +23,11 @@ import {
 } from './auth.service.js';
 import { buildParentPortalService, ParentPortalError } from '../parent-portal/parent-portal.service.js';
 import { parentLoginSchema } from '../parent-portal/parent-portal.types.js';
+import {
+  clearFailedLogins,
+  isLoginLocked,
+  recordFailedLogin,
+} from '../../shared/auth/login-lockout.js';
 
 const loginSchema = z.object({
   identifier: z.string().trim().min(4).max(255),
@@ -171,6 +176,28 @@ const resolveTenantBySchema = async (
   `);
 
   return getRows<{ id: string; schema_name: string }>(result)[0] ?? null;
+};
+
+type TenantStatusRow = {
+  id: string;
+  status: string;
+  trial_ends_at: string | null;
+};
+
+const resolveTenantStatusBySchema = async (
+  schemaName: string
+): Promise<TenantStatusRow | null> => {
+  try {
+    const result = await db.execute<TenantStatusRow>(sql`
+      SELECT id::text, status::text, trial_ends_at::text
+      FROM public.tenants
+      WHERE schema_name = ${schemaName}
+      LIMIT 1
+    `);
+    return getRows<TenantStatusRow>(result)[0] ?? null;
+  } catch {
+    return null;
+  }
 };
 
 const getSchemaName = async (request: FastifyRequest): Promise<string> => {
@@ -373,14 +400,40 @@ export default async function authController(app: FastifyInstance): Promise<void
         const body = loginSchema.parse(request.body);
         const schemaName = await getSchemaName(request);
 
-        const result = await withTenantSchema(schemaName, (tenantDb) =>
-          login(tenantDb, {
-            identifier: body.identifier,
-            password: body.password,
-            schemaName,
-          })
-        );
+        const lockState = await isLoginLocked(schemaName, body.identifier);
+        if (lockState.locked) {
+          return reply.code(429).send({
+            error: 'Trop de tentatives échouées. Réessayez plus tard.',
+            code: 'ACCOUNT_LOCKED',
+            statusCode: 429,
+            retryAfterSeconds: lockState.remainingSeconds,
+          });
+        }
+
+        let result;
+        try {
+          result = await withTenantSchema(schemaName, (tenantDb) =>
+            login(tenantDb, {
+              identifier: body.identifier,
+              password: body.password,
+              schemaName,
+            })
+          );
+        } catch (loginErr) {
+          const { lockedSeconds } = await recordFailedLogin(schemaName, body.identifier);
+          if (lockedSeconds > 0) {
+            return reply.code(429).send({
+              error: 'Trop de tentatives échouées. Réessayez plus tard.',
+              code: 'ACCOUNT_LOCKED',
+              statusCode: 429,
+              retryAfterSeconds: lockedSeconds,
+            });
+          }
+          throw loginErr;
+        }
+
         assertSuperAdminDomain(result.user, shouldRestrictToSuperAdmin(request));
+        await clearFailedLogins(schemaName, body.identifier);
 
         const refreshToken = await signRefreshToken(result.user.id, schemaName);
         try {
@@ -425,10 +478,36 @@ export default async function authController(app: FastifyInstance): Promise<void
 
         await assertParentPortalEnabled(db, tenant.id);
 
-        const auth = await withTenantSchema(schemaName, async (tenantDb) => {
-          const service = buildParentPortalService(tenantDb);
-          return service.loginParent({ phone: body.phone, password: body.password });
-        });
+        const lockState = await isLoginLocked(schemaName, body.phone);
+        if (lockState.locked) {
+          return reply.code(429).send({
+            error: 'Trop de tentatives échouées. Réessayez plus tard.',
+            code: 'ACCOUNT_LOCKED',
+            statusCode: 429,
+            retryAfterSeconds: lockState.remainingSeconds,
+          });
+        }
+
+        let auth;
+        try {
+          auth = await withTenantSchema(schemaName, async (tenantDb) => {
+            const service = buildParentPortalService(tenantDb);
+            return service.loginParent({ phone: body.phone, password: body.password });
+          });
+        } catch (loginErr) {
+          const { lockedSeconds } = await recordFailedLogin(schemaName, body.phone);
+          if (lockedSeconds > 0) {
+            return reply.code(429).send({
+              error: 'Trop de tentatives échouées. Réessayez plus tard.',
+              code: 'ACCOUNT_LOCKED',
+              statusCode: 429,
+              retryAfterSeconds: lockedSeconds,
+            });
+          }
+          throw loginErr;
+        }
+
+        await clearFailedLogins(schemaName, body.phone);
 
         const claims = {
           sub: auth.parentId,
@@ -485,11 +564,21 @@ export default async function authController(app: FastifyInstance): Promise<void
       const token = extractBearerToken(request);
       const claims = await verifyAccessToken(token);
 
-      const result = await withTenantSchema(claims.schemaName, (tenantDb) =>
-        getMe(tenantDb, claims.sub)
-      );
+      const [result, tenant] = await Promise.all([
+        withTenantSchema(claims.schemaName, (tenantDb) => getMe(tenantDb, claims.sub)),
+        resolveTenantStatusBySchema(claims.schemaName),
+      ]);
 
-      return reply.send(result);
+      return reply.send({
+        ...result,
+        tenant: tenant
+          ? {
+              id: tenant.id,
+              status: tenant.status,
+              trialEndsAt: tenant.trial_ends_at,
+            }
+          : null,
+      });
     } catch (error) {
       return handleError(reply, error);
     }

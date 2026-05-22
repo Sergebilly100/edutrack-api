@@ -1,6 +1,7 @@
 import argon2 from 'argon2';
 import { sql } from 'drizzle-orm';
 
+import { logger } from '../../shared/observability/logger.js';
 import { toNumber } from '../../shared/utils/numbers.js';
 import { generateUsername } from '../../shared/utils/username.js';
 import { generateInitialPassword } from '../../shared/utils/password-generator.js';
@@ -206,7 +207,7 @@ export class TeachersRepository {
       ? configuredPassword
       : generateInitialPassword(10);
     if (!configuredPassword || configuredPassword.length < 8) {
-      console.warn(
+      logger.warn(
         '[teachers] IMPORT_TEACHER_DEFAULT_PASSWORD is missing or too short — generated a random 10-char password for teacher creation'
       );
     }

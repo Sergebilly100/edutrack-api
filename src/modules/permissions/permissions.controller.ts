@@ -118,10 +118,10 @@ export default async function permissionsController(app: FastifyInstance): Promi
           throw new PermissionsModuleError('No file provided', 400, 'BAD_REQUEST');
         }
 
-        const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml']);
+        const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/webp']);
         if (!ALLOWED_MIME.has(data.mimetype)) {
           throw new PermissionsModuleError(
-            'Type de fichier non supporté. Utilisez PNG, JPEG, WEBP ou SVG.',
+            'Type de fichier non supporté. Utilisez PNG, JPEG ou WEBP.',
             400,
             'INVALID_FILE_TYPE'
           );
@@ -142,6 +142,27 @@ export default async function permissionsController(app: FastifyInstance): Promi
           chunks.push(chunk);
         }
         const buffer = Buffer.concat(chunks);
+
+        // Magic byte verification to block files with spoofed MIME type
+        const detectMagicBytes = (b: Buffer): string | null => {
+          if (b.length < 4) return null;
+          if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
+          if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+          if (
+            b.length >= 12 &&
+            b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+            b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50
+          ) return 'image/webp';
+          return null;
+        };
+        const detectedMime = detectMagicBytes(buffer);
+        if (!detectedMime || detectedMime !== data.mimetype) {
+          throw new PermissionsModuleError(
+            'Le contenu du fichier ne correspond pas à son type déclaré.',
+            400,
+            'INVALID_FILE_CONTENT'
+          );
+        }
 
         const ext = data.mimetype.split('/')[1]?.replace('jpeg', 'jpg') ?? 'png';
         const key = `logos/${claims.schemaName}/${randomUUID()}.${ext}`;

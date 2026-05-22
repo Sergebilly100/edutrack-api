@@ -13,6 +13,38 @@ const MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024;
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+const ALLOWED_DOCUMENT_MIME = new Set<string>([
+  'application/pdf',
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+]);
+
+const detectMimeFromMagicBytes = (buffer: Buffer): string | null => {
+  if (buffer.length < 4) return null;
+  // PDF: %PDF
+  if (buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46) {
+    return 'application/pdf';
+  }
+  // PNG: 89 50 4E 47
+  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+    return 'image/png';
+  }
+  // JPEG: FF D8 FF
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  // WEBP: RIFF....WEBP
+  if (
+    buffer.length >= 12 &&
+    buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+    buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50
+  ) {
+    return 'image/webp';
+  }
+  return null;
+};
+
 const entityParamsSchema = z.object({
   entityType: z.enum(['teacher', 'student']),
   entityId: z.string().regex(UUID_REGEX),
@@ -141,6 +173,23 @@ const readUpload = async (request: FastifyRequest): Promise<UploadPayload> => {
 
   if (fileBuffer.length === 0) {
     throw new DocumentsModuleError('File is empty', 400, 'DOCUMENT_FILE_EMPTY');
+  }
+
+  if (!ALLOWED_DOCUMENT_MIME.has(contentType)) {
+    throw new DocumentsModuleError(
+      'Type de fichier non autorisé. Formats acceptés: PDF, PNG, JPEG, WEBP.',
+      400,
+      'DOCUMENT_INVALID_MIME'
+    );
+  }
+
+  const detectedMime = detectMimeFromMagicBytes(fileBuffer);
+  if (!detectedMime || detectedMime !== contentType) {
+    throw new DocumentsModuleError(
+      "Le contenu du fichier ne correspond pas à son type déclaré.",
+      400,
+      'DOCUMENT_MIME_MISMATCH'
+    );
   }
 
   if (!type) {

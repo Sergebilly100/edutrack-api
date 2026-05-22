@@ -1,5 +1,6 @@
 import { Worker } from 'bullmq';
 
+import { logger } from '../../shared/observability/logger.js';
 import { runGeoAutoApproveForAllTenants } from './attendance.geo-auto-approve.js';
 
 const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
@@ -9,9 +10,9 @@ const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
 export const geoAutoApproveWorker = new Worker(
   'geo-auto-approve',
   async () => {
-    console.log('[geo-auto-approve-worker] starting auto-approve job');
+    logger.info('[geo-auto-approve-worker] starting auto-approve job');
     await runGeoAutoApproveForAllTenants();
-    console.log('[geo-auto-approve-worker] auto-approve job completed');
+    logger.info('[geo-auto-approve-worker] auto-approve job completed');
   },
   {
     connection: {
@@ -24,11 +25,14 @@ export const geoAutoApproveWorker = new Worker(
 
 // Gestion des événements du worker pour le suivi de l'exécution des jobs
 geoAutoApproveWorker.on('completed', (job) => {
-  console.log(`[geo-auto-approve-worker] job ${job.id} completed`); // Log pour indiquer la complétion d'un job spécifique
+  logger.info({ jobId: job.id }, '[geo-auto-approve-worker] job completed');
 });
 
 geoAutoApproveWorker.on('failed', (job, error) => {
-  console.error(`[geo-auto-approve-worker] job ${job?.id} failed:`, error); // Log pour indiquer l'échec d'un job spécifique
+  logger.error(
+    { jobId: job?.id, err: error instanceof Error ? error.message : String(error) },
+    '[geo-auto-approve-worker] job failed'
+  );
 });
 
 // Schedule job quotidien à 3h du matin
@@ -49,5 +53,5 @@ export const scheduleGeoAutoApprove = async () => {
     }
   );
 
-  console.log('[geo-auto-approve] scheduled daily job at 3:00 AM');
+  logger.info('[geo-auto-approve] scheduled daily job at 3:00 AM');
 };

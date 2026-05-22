@@ -1,6 +1,8 @@
 import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
+import { logger } from '../observability/logger.js';
+
 type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
 
 const tenantSchemasReady = new Set<string>();
@@ -327,7 +329,10 @@ export const ensureTenantRealHoursInfrastructure = async (
     GROUP BY t.id, u.name, DATE_TRUNC('month', at.date)
       `);
     } catch (viewError) {
-      console.error('[real-hours-infrastructure] Failed to create teacher_scan_compliance view:', viewError);
+      logger.error(
+        { err: viewError instanceof Error ? viewError.message : String(viewError) },
+        '[real-hours-infrastructure] Failed to create teacher_scan_compliance view'
+      );
       // Continue without the view - it will be retried next time
     }
 

@@ -9,6 +9,7 @@ import { Queue, Worker, type Job } from 'bullmq';
 import type { Redis } from 'ioredis';
 
 import { db, withTenantSchema } from '../../shared/database/db.js';
+import { logger as appLogger } from '../../shared/observability/logger.js';
 
 import { buildBillingService } from './billing.service.js';
 
@@ -462,10 +463,10 @@ export const processBillingPdfJob = async (
 ): Promise<BillingPdfJobResult> => {
   const schoolBranding = await fetchSchoolBranding(job.data.schemaName);
 
-  // Logger simple pour le contexte du job (console.warn sera capturé par le runtime)
+  // Logger contextualisé pour le job courant
   const logger = {
     warn: (msg: string, meta?: Record<string, unknown>) => {
-      console.warn(`[Job ${job.id}] ${msg}`, meta ? JSON.stringify(meta) : '');
+      appLogger.warn({ jobId: job.id, ...(meta ?? {}) }, msg);
     },
   };
 

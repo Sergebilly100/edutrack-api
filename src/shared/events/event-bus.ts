@@ -4,6 +4,7 @@ import type {
   EventEmitter2 as EventEmitter2Type,
 } from 'eventemitter2';
 
+import { logger } from '../observability/logger.js';
 import type { EmittableEventMap, EventMap } from './events.types.js';
 
 type EventName = keyof EventMap;
@@ -30,11 +31,9 @@ class EventBus {
     payload: EmittableEventMap[K]
   ): void {
     if (process.env.NODE_ENV !== 'production') {
-      console.debug(
-        '[EventBus]',
-        event,
-        '— tenantId:',
-        (payload as { tenantId: string }).tenantId
+      logger.debug(
+        { event, tenantId: (payload as { tenantId: string }).tenantId },
+        '[EventBus] emit'
       );
     }
 

@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import type { Test } from 'supertest';
@@ -16,11 +16,26 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const toWorkbookBuffer = (rows: Record<string, string>[], sheetName = 'Sheet1'): Buffer => {
-  const workbook = XLSX.utils.book_new();
-  const sheet = XLSX.utils.json_to_sheet(rows);
-  XLSX.utils.book_append_sheet(workbook, sheet, sheetName);
-  return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+const toWorkbookBuffer = async (
+  rows: Record<string, string>[],
+  sheetName = 'Sheet1'
+): Promise<Buffer> => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet(sheetName);
+  if (rows.length > 0) {
+    const headers = Array.from(
+      rows.reduce<Set<string>>((acc, row) => {
+        for (const key of Object.keys(row)) acc.add(key);
+        return acc;
+      }, new Set<string>())
+    );
+    sheet.columns = headers.map((header) => ({ header, key: header }));
+    for (const row of rows) {
+      sheet.addRow(row);
+    }
+  }
+  const buf = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buf);
 };
 
 const attachFile = (req: Test, buf: Buffer, filename = 'import.xlsx') =>
@@ -29,14 +44,14 @@ const attachFile = (req: Test, buf: Buffer, filename = 'import.xlsx') =>
     contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });
 
-const attachStudents = (req: Test, rows: Record<string, string>[]) =>
-  attachFile(req, toWorkbookBuffer(rows), 'students.xlsx');
+const attachStudents = async (req: Test, rows: Record<string, string>[]) =>
+  attachFile(req, await toWorkbookBuffer(rows), 'students.xlsx');
 
-const attachTeachers = (req: Test, rows: Record<string, string>[]) =>
-  attachFile(req, toWorkbookBuffer(rows), 'teachers.xlsx');
+const attachTeachers = async (req: Test, rows: Record<string, string>[]) =>
+  attachFile(req, await toWorkbookBuffer(rows), 'teachers.xlsx');
 
-const attachSchedule = (req: Test, rows: Record<string, string>[]) =>
-  attachFile(req, toWorkbookBuffer(rows), 'schedule.xlsx');
+const attachSchedule = async (req: Test, rows: Record<string, string>[]) =>
+  attachFile(req, await toWorkbookBuffer(rows), 'schedule.xlsx');
 
 const uniquePrefix = () => `int_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 

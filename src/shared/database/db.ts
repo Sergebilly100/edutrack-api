@@ -4,6 +4,8 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 
+import { logger } from '../observability/logger.js';
+
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
   throw new Error('[db] DATABASE_URL environment variable is required');
@@ -27,7 +29,7 @@ const pool = new Pool({
 });
 
 pool.on('error', (err) => {
-  console.error('[db] Unexpected PostgreSQL pool error:', err);
+  logger.error({ err: err instanceof Error ? err.message : String(err) }, '[db] Unexpected PostgreSQL pool error');
 });
 
 export const getPoolStats = (): {

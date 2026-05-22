@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 
 import { withTenantSchema } from '../../shared/database/db.js';
+import { logger } from '../../shared/observability/logger.js';
 import type { QueryExecutor } from './attendance.repository.js';
 
 /**
@@ -36,7 +37,7 @@ export const autoApproveOldGeoValidations = async (
   const count = Number(result.rows[0]?.count ?? 0);
 
   if (count > 0) {
-    console.log(`[geo-auto-approve] approved ${count} validations for schema ${schemaName}`);
+    logger.info({ count, schemaName }, '[geo-auto-approve] approved pending validations');
   }
 
   return count;
@@ -63,9 +64,12 @@ export const runGeoAutoApproveForAllTenants = async (): Promise<void> => {
         await autoApproveOldGeoValidations(tenantDb, tenant.schema_name); // Appel de la fonction d'auto-approbation pour le tenant actuel, en passant la base de données spécifique au tenant et son nom de schéma pour les logs.
       });
     } catch (error) {
-      console.error(
-        `[geo-auto-approve] failed for tenant ${tenant.schema_name}`,
-        error
+      logger.error(
+        {
+          schemaName: tenant.schema_name,
+          err: error instanceof Error ? error.message : String(error),
+        },
+        '[geo-auto-approve] failed for tenant'
       );
     }
   }

@@ -7,7 +7,6 @@ import {
   requirePermission,
 } from '../../shared/middleware/auth.middleware.js';
 import { SubscriptionsRepository } from './subscriptions.repository.js';
-import { buildSubscriptionsRevenueRepository } from './subscriptions.revenue.repository.js';
 import { SubscriptionsModuleError, SubscriptionsService } from './subscriptions.service.js';
 import {
   cancelSubscriptionBodySchema,
@@ -376,40 +375,4 @@ export default async function subscriptionsController(app: FastifyInstance): Pro
     }
   );
 
-  app.get(
-    '/api/v1/subscriptions/revenue-summary',
-    { preHandler: requirePermission('subscriptions.view') },
-    async (request, reply) => {
-      try {
-        const claims = request.claims!;
-        const query = revenueSummaryQuerySchema.parse(request.query ?? {});
-        const month = query.month ?? new Date().toISOString().slice(0, 7);
-
-        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-          const repository = buildSubscriptionsRevenueRepository(tenantDb);
-          const [stats, overdueMonths] = await Promise.all([
-            repository.getRevenueStatsForMonth(month, claims.schemaName),
-            repository.getOverdueReversals(claims.schemaName),
-          ]);
-
-          // TODO: Queue SMS notification for director if overdue and not yet notified
-          // This would be implemented by:
-          // 1. Check if notification_sent_at is null for each overdue month
-          // 2. Queue SMS via notificationsQueue
-          // 3. Mark notification_sent_at with current timestamp
-          // For now, the frontend banner provides the notification
-
-          return {
-            ...stats,
-            isReverseOverdue: overdueMonths.length > 0,
-            overdueMonths,
-          };
-        });
-
-        return reply.send(result);
-      } catch (error) {
-        return handleError(request, reply, error);
-      }
-    }
-  );
 }

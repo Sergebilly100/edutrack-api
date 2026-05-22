@@ -5,6 +5,7 @@ import path from 'node:path';
 import { sql } from 'drizzle-orm';
 import { Pool } from 'pg';
 
+import { logger } from '../observability/logger.js';
 import { databaseUrl, db } from './db.js';
 
 const DEFAULT_ROOMS = ['Salle A1', 'Salle A2', 'Labo Sciences', 'Salle Langues'] as const;
@@ -34,7 +35,7 @@ const runTenantMigrations = async (
   const client = await migrationPool.connect();
 
   try {
-    console.info('[tenant-init] Running tenant migrations', { schemaName });
+    logger.info({ schemaName }, '[tenant-init] Running tenant migrations');
     const migrationsFolder = path.resolve(process.cwd(), 'src/shared/database/migrations');
     const migrationFiles = (await readdir(migrationsFolder))
       .filter((file) => /^(000[1-9]\d*|00[1-9]\d*|0[1-9]\d*|[1-9]\d*)_.*\.sql$/.test(file))
@@ -69,7 +70,7 @@ const runTenantMigrations = async (
       }
     }
 
-    console.info('[tenant-init] Tenant migrations completed', { schemaName });
+    logger.info({ schemaName }, '[tenant-init] Tenant migrations completed');
   } finally {
     client.release();
     await migrationPool.end();
