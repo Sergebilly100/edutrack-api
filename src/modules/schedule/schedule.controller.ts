@@ -11,12 +11,14 @@ import {
   releaseTenantDb,
 } from '../../shared/middleware/tenant.middleware.js';
 import {
+  addScheduleException,
   closeScheduleAtDate,
   createSchedule,
   deleteScheduleById,
   ensureScheduleTemporalColumns,
   findScheduleConflicts,
   findSchedulePeriodById,
+  hasAnyAttendanceForSchedule,
   hasScheduleOccurrenceBeforeDate,
   findTimeSlotById,
   findTeacherIdByUserId,
@@ -57,6 +59,7 @@ const dateQuerySchema = z.object({
 });
 const effectiveFromQuerySchema = z.object({
   effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  delete_scope: z.enum(['this', 'this_and_following']).optional(),
 });
 
 const periodsListQuerySchema = z.object({
@@ -532,6 +535,69 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           throw new Error('Class already has a course at the same time');
         }
 
+        const updateScope = body.update_scope ?? 'this_and_following';
+
+        if (updateScope === 'this') {
+          // Modifier uniquement cette occurrence : créer un schedule one-shot
+          // sur la date concernée + masquer le récurrent original ce jour-là.
+          const oneShotEndDate = computeOneShotEndDate(effectiveFrom);
+
+          const result = await db.transaction(async (tx) => {
+            await addScheduleException(tx, id, effectiveFrom);
+            const created = await createSchedule(tx, {
+              schedulePeriodId: body.schedule_period_id,
+              teacherId: body.teacher_id,
+              classId: body.class_id,
+              roomId: body.room_id,
+              timeSlotId,
+              dayOfWeek: body.day_of_week,
+              subject: canonicalSubject,
+              startDate: effectiveFrom,
+              endDate: oneShotEndDate,
+              isActive: body.is_active,
+            });
+            return { created };
+          });
+
+          return reply.send({
+            schedule: result.created,
+            original_schedule_id: id,
+            occurrence_date: effectiveFrom,
+          });
+        }
+
+        if (updateScope === 'all') {
+          // Modifier toutes les occurrences (passé + futur) : UPDATE direct.
+          // Verrouillage : interdire si des présences ont été enregistrées
+          // (préserver l'intégrité de l'historique d'attendance).
+          const hasAttendance = await hasAnyAttendanceForSchedule(db, id);
+          if (hasAttendance) {
+            throw new Error('Schedule has past occurrences and cannot be edited or deleted');
+          }
+
+          const updated = await updateSchedule(db, id, {
+            schedulePeriodId: body.schedule_period_id,
+            teacherId: body.teacher_id,
+            classId: body.class_id,
+            roomId: body.room_id,
+            timeSlotId,
+            dayOfWeek: body.day_of_week,
+            subject: canonicalSubject,
+            isActive: body.is_active,
+          });
+
+          if (!updated) {
+            return reply.code(404).send({
+              error: 'Schedule not found',
+              code: 'NOT_FOUND',
+              statusCode: 404,
+            });
+          }
+
+          return reply.send({ schedule: updated });
+        }
+
+        // Défaut : 'this_and_following' — comportement historique.
         const hasPastOccurrences = await hasScheduleOccurrenceBeforeDate(db, id, effectiveFrom);
 
         if (hasPastOccurrences) {
@@ -609,9 +675,17 @@ export default async function scheduleController(app: FastifyInstance): Promise<
         const today = getTodayIso();
         const query = effectiveFromQuerySchema.parse(request.query ?? {});
         const effectiveFrom = query.effective_from ?? today;
+        const deleteScope = query.delete_scope ?? 'this_and_following';
 
         if (isIsoDateBefore(effectiveFrom, today)) {
           throw new Error('Cannot apply schedule changes to a past date');
+        }
+
+        if (deleteScope === 'this') {
+          // Supprimer uniquement cette occurrence : créer une exception.
+          // L'historique d'attendance reste intact, le récurrent continue ensuite.
+          await addScheduleException(db, id, effectiveFrom);
+          return reply.code(204).send();
         }
 
         const hasPastOccurrences = await hasScheduleOccurrenceBeforeDate(db, id, effectiveFrom);

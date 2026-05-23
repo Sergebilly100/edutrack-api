@@ -288,6 +288,25 @@ export const schedules = tenant.table(
   })
 );
 
+export const scheduleExceptions = tenant.table(
+  'schedule_exceptions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    scheduleId: uuid('schedule_id')
+      .notNull()
+      .references(() => schedules.id, { onDelete: 'cascade' }),
+    exceptionDate: date('exception_date', { mode: 'string' }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    scheduleExceptionUnique: uniqueIndex('schedule_exceptions_schedule_date_unique')
+      .on(table.scheduleId, table.exceptionDate),
+    scheduleExceptionScheduleIdx: index('idx_schedule_exceptions_schedule').on(table.scheduleId),
+  })
+);
+
 export const attendancesTeacher = tenant.table(
   'attendances_teacher',
   {

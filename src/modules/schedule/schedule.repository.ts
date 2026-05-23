@@ -34,6 +34,8 @@ type ActiveScheduleRow = {
   sort_order: number;
   day_of_week: number;
   subject: string;
+  start_date: string | null;
+  end_date: string | null;
   attendance_status: 'present' | 'absent' | 'late' | null;
   attendance_checked_in_at: string | null;
   attendance_late_minutes: number | null;
@@ -45,6 +47,8 @@ export type ActiveSchedule = {
   schedulePeriodId: string;
   dayOfWeek: number;
   subject: string;
+  startDate: string | null;
+  endDate: string | null;
   teacher: {
     id: string;
     name: string;
@@ -242,6 +246,8 @@ const mapActiveSchedule = (row: ActiveScheduleRow): ActiveSchedule => ({
   schedulePeriodId: row.schedule_period_id,
   dayOfWeek: row.day_of_week,
   subject: row.subject,
+  startDate: row.start_date,
+  endDate: row.end_date,
   teacher: {
     id: row.teacher_id,
     name: row.teacher_name,
@@ -294,6 +300,37 @@ export const ensureScheduleTemporalColumns = async (db: QueryExecutor): Promise<
   await db.execute(sql`
     ALTER TABLE schedules
     ADD COLUMN IF NOT EXISTS start_date date
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS schedule_exceptions (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      schedule_id uuid NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+      exception_date date NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS schedule_exceptions_schedule_date_unique
+      ON schedule_exceptions (schedule_id, exception_date)
+  `);
+
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_schedule_exceptions_schedule
+      ON schedule_exceptions (schedule_id)
+  `);
+};
+
+export const addScheduleException = async (
+  db: QueryExecutor,
+  scheduleId: string,
+  exceptionDate: string
+): Promise<void> => {
+  await db.execute(sql`
+    INSERT INTO schedule_exceptions (schedule_id, exception_date)
+    VALUES (${scheduleId}, ${exceptionDate}::date)
+    ON CONFLICT (schedule_id, exception_date) DO NOTHING
   `);
 };
 
@@ -517,6 +554,8 @@ export const listSchedulesForPeriodAndDay = async (
       ts.sort_order,
       s.day_of_week,
       s.subject,
+      s.start_date::text AS start_date,
+      s.end_date::text AS end_date,
       at.status::text AS attendance_status,
       at.checked_in_at::text AS attendance_checked_in_at,
       at.late_minutes AS attendance_late_minutes,
@@ -537,6 +576,10 @@ export const listSchedulesForPeriodAndDay = async (
     WHERE s.schedule_period_id = ${params.periodId}
       AND s.day_of_week = ${params.dayOfWeek}
       AND ${buildActiveScheduleClause({ date: params.date })}
+      AND NOT EXISTS (
+        SELECT 1 FROM schedule_exceptions se
+        WHERE se.schedule_id = s.id AND se.exception_date = ${params.date}::date
+      )
       ${teacherFilter}
     ORDER BY ts.sort_order ASC, ts.start_time ASC, u.name ASC
   `);
@@ -579,6 +622,21 @@ export const listSchedulesForPeriod = async (
     `
     : buildActiveScheduleClause({ date: params.date });
 
+  const exceptionFilter = params.weekStart
+    ? sql`
+      AND NOT EXISTS (
+        SELECT 1 FROM schedule_exceptions se
+        WHERE se.schedule_id = s.id
+          AND se.exception_date = (${params.weekStart}::date + ((s.day_of_week - 1) * INTERVAL '1 day'))::date
+      )
+    `
+    : sql`
+      AND NOT EXISTS (
+        SELECT 1 FROM schedule_exceptions se
+        WHERE se.schedule_id = s.id AND se.exception_date = ${params.date}::date
+      )
+    `;
+
   const result = await db.execute<ActiveScheduleRow>(sql`
     SELECT
       s.id,
@@ -598,6 +656,8 @@ export const listSchedulesForPeriod = async (
       ts.sort_order,
       s.day_of_week,
       s.subject,
+      s.start_date::text AS start_date,
+      s.end_date::text AS end_date,
       at.status::text AS attendance_status,
       at.checked_in_at::text AS attendance_checked_in_at,
       at.late_minutes AS attendance_late_minutes,
@@ -619,6 +679,7 @@ export const listSchedulesForPeriod = async (
     WHERE s.schedule_period_id = ${params.periodId}
       AND s.day_of_week BETWEEN 1 AND 6
       AND ${temporalFilter}
+      ${exceptionFilter}
       ${dayFilter}
     ORDER BY s.day_of_week ASC, ts.sort_order ASC, ts.start_time ASC, u.name ASC
   `);
@@ -909,6 +970,19 @@ export const countPastTeacherAttendancesForSchedule = async (
   const [row] = getRows(result);
   const value = Number(row?.count ?? 0);
   return Number.isFinite(value) ? value : 0;
+};
+
+export const hasAnyAttendanceForSchedule = async (
+  db: QueryExecutor,
+  scheduleId: string
+): Promise<boolean> => {
+  const result = await db.execute<{ exists: boolean }>(sql`
+    SELECT EXISTS (
+      SELECT 1 FROM attendances_teacher WHERE schedule_id = ${scheduleId}
+    ) AS exists
+  `);
+  const [row] = getRows<{ exists: boolean }>(result);
+  return !!row?.exists;
 };
 
 export const hasScheduleOccurrenceBeforeDate = async (

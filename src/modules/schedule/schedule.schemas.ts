@@ -77,6 +77,11 @@ export const schedulePayloadSchema = z
     // Type de récurrence : 'recurring' (toutes les semaines de la période)
     // ou 'one_shot' (uniquement la date effective_from, ex: rattrapage)
     recurrence: z.enum(['recurring', 'one_shot']).optional(),
+    // Portée de la modification (PUT uniquement) :
+    // - 'this' : uniquement cette occurrence (exception + one-shot)
+    // - 'this_and_following' : à partir de cette date (clôture + nouvelle version)
+    // - 'all' : toutes les occurrences (UPDATE direct)
+    update_scope: z.enum(['this', 'this_and_following', 'all']).optional(),
     is_active: z.boolean().optional(),
   })
   .refine(
