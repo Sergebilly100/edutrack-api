@@ -239,7 +239,7 @@ export const defaultRepository: NotificationsRepository = {
     };
   },
 
-  async getQrInvalidAlertContext(tenantDb, _payload) {
+  async getQrInvalidAlertContext(tenantDb) {
     const result = await asExecutor(tenantDb).execute<{
       director_phone: string | null;
       director_email: string | null;

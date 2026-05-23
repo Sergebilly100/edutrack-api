@@ -123,7 +123,7 @@ export function buildSubscriptionsRevenueRepository(db: TenantDb) {
         )
       );
 
-    return overdueReversals.map((rev: any) => {
+    return overdueReversals.map((rev) => {
       const dueDate = new Date(rev.month + '-15'); // Exemple : le 15 du mois
       const daysPastDue = Math.floor((now.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
 
