@@ -94,7 +94,14 @@ const geoReviewBodySchema = z.object({
 
 
 export default async function attendanceController(app: FastifyInstance): Promise<void> {
-  app.post('/api/v1/attendance/check-in', { preHandler: requireTeacher }, async (request, reply) => {
+  app.post('/api/v1/attendance/check-in', {
+    preHandler: requireTeacher,
+    schema: {
+      tags: ['attendance'],
+      summary: 'Teacher check-in for a scheduled course',
+      description: 'Records the teacher arrival time for the given schedule_id. Returns the computed status (present / late / absent) and the late minutes.',
+    },
+  }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const body = checkInBodySchema.parse(request.body ?? {});
@@ -122,7 +129,13 @@ export default async function attendanceController(app: FastifyInstance): Promis
     }
   });
 
-  app.post('/api/v1/attendance/check-out', { preHandler: requireTeacher }, async (request, reply) => {
+  app.post('/api/v1/attendance/check-out', {
+    preHandler: requireTeacher,
+    schema: {
+      tags: ['attendance'],
+      summary: 'Teacher check-out (end of course)',
+    },
+  }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const body = checkOutBodySchema.parse(request.body ?? {});
@@ -150,7 +163,13 @@ export default async function attendanceController(app: FastifyInstance): Promis
     }
   });
 
-  app.post('/api/v1/attendance/qr-scan', { preHandler: requireTeacher }, async (request, reply) => {
+  app.post('/api/v1/attendance/qr-scan', {
+    preHandler: requireTeacher,
+    schema: {
+      tags: ['attendance'],
+      summary: 'Validate a room QR scan (start or end)',
+    },
+  }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const body = qrScanBodySchema.parse(request.body ?? {});
@@ -177,7 +196,13 @@ export default async function attendanceController(app: FastifyInstance): Promis
     }
   });
 
-  app.post('/api/v1/attendance/qr-skip', { preHandler: requireTeacher }, async (request, reply) => {
+  app.post('/api/v1/attendance/qr-skip', {
+    preHandler: requireTeacher,
+    schema: {
+      tags: ['attendance'],
+      summary: 'Skip the QR step (camera unavailable)',
+    },
+  }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const body = qrSkipBodySchema.parse(request.body ?? {});
@@ -203,7 +228,13 @@ export default async function attendanceController(app: FastifyInstance): Promis
     }
   });
 
-  app.get('/api/v1/attendance/active', { preHandler: requireTeacher }, async (request, reply) => {
+  app.get('/api/v1/attendance/active', {
+    preHandler: requireTeacher,
+    schema: {
+      tags: ['attendance'],
+      summary: 'List the currently active courses for the teacher',
+    },
+  }, async (request, reply) => {
     try {
       const claims = request.claims!;
 

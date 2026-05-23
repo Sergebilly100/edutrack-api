@@ -10,6 +10,7 @@ import { AttendanceRepository } from './attendance.repository.js';
 import type { ActiveAttendanceItem, CheckInResult } from './attendance.types.js';
 import { logger } from '../../shared/observability/logger.js';
 import { calculateAttendanceStatus, validateRoomScan } from '../../shared/utils/attendance.js';
+import { ATTENDANCE_STATUS, CHECKED_IN_VIA } from '../../shared/constants/index.js';
 import { haversineDistance, type GeoStatus } from '../../shared/utils/geo.js';
 import { scheduleQrMissingScanCheck } from '../../shared/queue/attendance-queue.js';
 import {
@@ -137,7 +138,7 @@ export class AttendanceService {
       validationStatus,
     });
 
-    if (status.status !== 'absent') {
+    if (status.status !== ATTENDANCE_STATUS.ABSENT) {
       try {
         // CRITIQUE FIX : Timeout de 5s pour éviter blocage si Redis down
         await Promise.race([
@@ -167,15 +168,15 @@ export class AttendanceService {
       scheduleId: schedule.scheduleId,
       date,
       checkedInAt: toIso(checkedInAt),
-      checkedInVia: 'app' as const,
-    };
+      checkedInVia: CHECKED_IN_VIA.APP,
+    } as const;
 
-    if (status.status === 'late') {
+    if (status.status === ATTENDANCE_STATUS.LATE) {
       emitTeacherLate({
         ...commonPayload,
         lateMinutes: status.lateMinutes ?? 0,
       });
-    } else if (status.status === 'present') {
+    } else if (status.status === ATTENDANCE_STATUS.PRESENT) {
       emitTeacherCheckedIn(commonPayload);
     }
 

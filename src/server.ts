@@ -7,12 +7,13 @@ import rateLimit from '@fastify/rate-limit';
 import multipart from '@fastify/multipart';
 import { sql } from 'drizzle-orm';
 import Fastify from 'fastify';
-import { Redis } from 'ioredis';
 
 import { Queue, Worker } from 'bullmq';
+import { closeSharedRedis, getSharedRedis } from './shared/queue/shared-redis.js';
 
 import { assertRequiredSecrets } from './shared/utils/required-secrets.js';
 import { initSentry, captureException, isSentryEnabled } from './shared/observability/sentry.js';
+import { registerSwagger } from './shared/observability/swagger.js';
 
 assertRequiredSecrets();
 initSentry();
@@ -63,18 +64,14 @@ import {
 
 const app = Fastify({ logger: true, trustProxy: 1 });
 const port = Number(process.env.PORT || 3000);
-const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
-const notificationsRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
-const billingRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
-const dlqRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
-const deadLetterQueue = createDeadLetterQueue(dlqRedis);
-const billingPdfQueue = createBillingPdfQueue(billingRedis)
-const subscriptionsRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
-const notificationsQueue = createNotificationsQueue(notificationsRedis);
-const billingWorker = createBillingPdfWorker(billingRedis);
-const subscriptionsMaintenanceQueue = createSubscriptionMaintenanceQueue(subscriptionsRedis);
-const subscriptionsMaintenanceWorker = createSubscriptionMaintenanceWorker(subscriptionsRedis);
-const notificationsWorker = createNotificationsWorker(notificationsRedis, {
+const sharedRedis = getSharedRedis();
+const deadLetterQueue = createDeadLetterQueue(sharedRedis);
+const billingPdfQueue = createBillingPdfQueue(sharedRedis)
+const notificationsQueue = createNotificationsQueue(sharedRedis);
+const billingWorker = createBillingPdfWorker(sharedRedis);
+const subscriptionsMaintenanceQueue = createSubscriptionMaintenanceQueue(sharedRedis);
+const subscriptionsMaintenanceWorker = createSubscriptionMaintenanceWorker(sharedRedis);
+const notificationsWorker = createNotificationsWorker(sharedRedis, {
   repository: defaultRepository,
   smsSender: defaultSmsSender,
   emailSender: defaultEmailSender,
@@ -83,7 +80,6 @@ const notificationsWorker = createNotificationsWorker(notificationsRedis, {
 attachFailedHandler(notificationsWorker, 'notifications-sms', { deadLetterQueue, logger: app.log });
 attachFailedHandler(billingWorker, 'billing-pdf', { deadLetterQueue, logger: app.log });
 attachFailedHandler(subscriptionsMaintenanceWorker, 'subscription-maintenance', { deadLetterQueue, logger: app.log });
-const qrAlertRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
 const qrAlertWorker = new Worker(
   'qr-alert',
   async (job) => {
@@ -93,20 +89,19 @@ const qrAlertWorker = new Worker(
     });
   },
   {
-    connection: qrAlertRedis,
+    connection: sharedRedis,
     concurrency: Number(process.env.QR_WORKER_CONCURRENCY ?? 5),
   }
 );
 attachFailedHandler(qrAlertWorker, 'qr-alert', { deadLetterQueue, logger: app.log });
-const absenceMarkingRedis = new Redis(redisUrl, { maxRetriesPerRequest: null });
-const absenceMarkingQueue = new Queue('absence-marking', { connection: absenceMarkingRedis });
+const absenceMarkingQueue = new Queue('absence-marking', { connection: sharedRedis });
 const absenceMarkingWorker = new Worker(
   'absence-marking',
   async (job) => {
     await runAbsenceMarkingForSchema({ schemaName: job.data.schemaName });
   },
   {
-    connection: absenceMarkingRedis,
+    connection: sharedRedis,
     concurrency: Number(process.env.ABSENCE_MARKING_WORKER_CONCURRENCY ?? 5),
   }
 );
@@ -198,6 +193,10 @@ app.register(multipart, {
   },
 });
 
+if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_SWAGGER === 'true') {
+  void registerSwagger(app);
+}
+
 app.addHook('onRequest', async (request, reply) => {
   const path = request.url.split('?')[0] ?? '';
   if (
@@ -249,7 +248,7 @@ app.get('/ready', async (_request, reply) => {
     app.log.warn({ err: error instanceof Error ? error.message : 'unknown' }, '[ready] db check failed');
   }
   try {
-    await notificationsRedis.ping();
+    await sharedRedis.ping();
     checks.redis = true;
   } catch (error) {
     app.log.warn({ err: error instanceof Error ? error.message : 'unknown' }, '[ready] redis check failed');
@@ -300,23 +299,18 @@ app.addHook('onClose', async () => {
   notificationsService.stop();
   await billingWorker.close();
   await billingPdfQueue.close();
-  await billingRedis.quit();
   await notificationsWorker.close();
   await notificationsQueue.close();
   await subscriptionsMaintenanceWorker.close();
   await subscriptionsMaintenanceQueue.close();
-  await notificationsRedis.quit();
-  await subscriptionsRedis.quit();
   await qrAlertWorker.close();
   await qrAlertQueue.close();
-  await qrAlertRedis.quit();
   await absenceMarkingWorker.close();
   await absenceMarkingQueue.close();
-  await absenceMarkingRedis.quit();
   await geoAutoApproveWorker.close();
   await geoAutoApproveQueue.close();
   await deadLetterQueue.close();
-  await dlqRedis.quit();
+  await closeSharedRedis();
 });
 
 const start = async (): Promise<void> => {

@@ -3,6 +3,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { QueryResult, QueryResultRow } from 'pg';
 
 import type { ActiveAttendanceItem, AttendanceScheduleContext } from './attendance.types.js';
+import { ATTENDANCE_STATUS } from '../../shared/constants/index.js';
 
 export type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
 
@@ -832,7 +833,9 @@ export class AttendanceRepository {
 
     const absentSet = new Set(params.absentStudentIds);
     const studentIds = params.allStudentIds;
-    const statuses = studentIds.map((id) => (absentSet.has(id) ? 'absent' : 'present'));
+    const statuses = studentIds.map((id) =>
+      absentSet.has(id) ? ATTENDANCE_STATUS.ABSENT : ATTENDANCE_STATUS.PRESENT
+    );
 
     // Single bulk INSERT with unnest — O(1) RTT instead of O(N)
     const result = await this.db.execute<{ id: string }>(sql`
@@ -1215,15 +1218,15 @@ export class AttendanceRepository {
     let unmarkedCount = 0;
     for (const course of courses) {
       if (
-        course.attendance_status === 'present' ||
-        course.attendance_status === 'late' ||
-        course.attendance_status === 'excused'
+        course.attendance_status === ATTENDANCE_STATUS.PRESENT ||
+        course.attendance_status === ATTENDANCE_STATUS.LATE ||
+        course.attendance_status === ATTENDANCE_STATUS.EXCUSED
       ) {
         presentCount += 1;
         continue;
       }
 
-      if (course.attendance_status === 'absent') {
+      if (course.attendance_status === ATTENDANCE_STATUS.ABSENT) {
         absentCount += 1;
         continue;
       }

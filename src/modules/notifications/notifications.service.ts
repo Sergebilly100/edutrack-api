@@ -950,7 +950,6 @@ export class NotificationsService {
       const queueRef = buildQueueRef(payload.schemaName, 'attendance_rejected');
       const text = `Votre présence pour le cours ${payload.courseName} du ${payload.date} n'a pas pu être validée.\nMotif : ${payload.reason}.\nContactez votre direction pour plus d'informations.`;
 
-      // FIXME: removed recipient_id reference — column does not exist in schema
       await this.deps.repository.insertNotificationLog(tenantDb, {
         type: 'attendance_rejected',
         channel: 'email',
@@ -1002,7 +1001,6 @@ export class NotificationsService {
         const smsMessage = `[EduTrack] Présence validée — ${payload.courseName} du ${payload.date}. ${validatedHoursLabel}. Consultez l'app pour le détail.`;
         const smsQueueRef = buildQueueRef(payload.schemaName, 'attendance_approved');
 
-        // FIXME: removed recipient_id reference — column does not exist in schema
         await this.deps.repository.insertNotificationLog(tenantDb, {
           type: 'attendance_approved',
           channel: 'sms',
@@ -1039,7 +1037,6 @@ export class NotificationsService {
         const emailText = `Votre présence pour le cours ${payload.courseName} du ${payload.date} a été validée.\n${validatedHoursLabel}.\nConsultez votre espace EduTrack pour le récapitulatif.`;
         const emailQueueRef = buildQueueRef(payload.schemaName, 'attendance_approved');
 
-        // FIXME: removed recipient_id reference — column does not exist in schema
         await this.deps.repository.insertNotificationLog(tenantDb, {
           type: 'attendance_approved',
           channel: 'email',

@@ -1,4 +1,5 @@
 import type { AttendanceStatus } from '../types/index.js';
+import { ATTENDANCE_STATUS, NOTIFICATION_TYPE } from '../constants/index.js';
 
 export type AttendanceStatusResult = {
   status: AttendanceStatus;
@@ -14,9 +15,13 @@ export type RoomScanValidationInput = {
   scanTime: Date;
 };
 
+export type RoomScanAlertType =
+  | typeof NOTIFICATION_TYPE.TEACHER_QR_MISMATCH
+  | typeof NOTIFICATION_TYPE.TEACHER_QR_SCAN_OUT_OF_TIME;
+
 export type RoomScanValidationResult = {
   valid: boolean;
-  alertType: 'teacher_qr_mismatch' | 'teacher_qr_scan_out_of_time' | null;
+  alertType: RoomScanAlertType | null;
 };
 
 // Africa/Abidjan is UTC+0 year-round (no DST), so storing/comparing timestamps as UTC
@@ -32,16 +37,16 @@ export const calculateAttendanceStatus = (
   slotEnd: Date
 ): AttendanceStatusResult => {
   if (!checkedInAt || checkedInAt > slotEnd) {
-    return { status: 'absent', lateMinutes: null };
+    return { status: ATTENDANCE_STATUS.ABSENT, lateMinutes: null };
   }
 
   const diffMinutes = Math.floor((checkedInAt.getTime() - slotStart.getTime()) / 60000);
 
   if (diffMinutes <= 15) {
-    return { status: 'present', lateMinutes: Math.max(0, diffMinutes) };
+    return { status: ATTENDANCE_STATUS.PRESENT, lateMinutes: Math.max(0, diffMinutes) };
   }
 
-  return { status: 'late', lateMinutes: diffMinutes };
+  return { status: ATTENDANCE_STATUS.LATE, lateMinutes: diffMinutes };
 };
 
 export const validateRoomScan = (
@@ -52,11 +57,11 @@ export const validateRoomScan = (
   const windowOpen = new Date(slotStart.getTime() - 10 * 60000);
 
   if (input.scanTime < windowOpen || input.scanTime > slotEnd) {
-    return { valid: false, alertType: 'teacher_qr_scan_out_of_time' };
+    return { valid: false, alertType: NOTIFICATION_TYPE.TEACHER_QR_SCAN_OUT_OF_TIME };
   }
 
   if (input.scannedRoomToken !== input.expectedRoomToken) {
-    return { valid: false, alertType: 'teacher_qr_mismatch' };
+    return { valid: false, alertType: NOTIFICATION_TYPE.TEACHER_QR_MISMATCH };
   }
 
   return { valid: true, alertType: null };

@@ -2,7 +2,6 @@ import { randomBytes } from 'node:crypto';
 
 import argon2 from 'argon2';
 import { sql } from 'drizzle-orm';
-import { Redis } from 'ioredis';
 
 import {
   type AdminMetricsResult,
@@ -39,6 +38,7 @@ import { signJwtRs256 } from '../../shared/auth/jwt.js';
 import { emit } from '../../shared/events/event-bus.js';
 import { SubscriptionsRepository } from '../subscriptions/subscriptions.repository.js';
 import { invalidateTenantCache } from '../../shared/cache/tenant-cache.js';
+import { invalidateTenantStatusCache } from '../../shared/cache/tenant-status.js';
 import { processInBatches } from '../../shared/utils/batch-process.js';
 
 type TenantRow = {
@@ -583,6 +583,10 @@ const getTenantOverviewMetrics = async (
   };
 };
 
+// ────────────────────────────────────────────────────────────────────────
+// SECTION — TENANTS (CRUD, stats)
+// ────────────────────────────────────────────────────────────────────────
+
 export const listTenants = async (
   publicDb: TenantDb,
   query: ListTenantsQuery
@@ -853,6 +857,14 @@ export const updateTenant = async (
     if (!getRows<TenantUpdateRow>(result)[0]) {
       throw new Error('Tenant not found');
     }
+  }
+
+  if (status) {
+    const tenantRow = await publicDb.execute<{ schema_name: string }>(sql`
+      SELECT schema_name FROM public.tenants WHERE id = ${tenantId} LIMIT 1
+    `);
+    const schemaName = tenantRow.rows[0]?.schema_name;
+    if (schemaName) await invalidateTenantStatusCache(schemaName);
   }
 };
 
@@ -1192,6 +1204,10 @@ const getSchoolSubscriptionSnapshot = async (
     nextDueDate: row?.next_due_date ?? null,
   };
 };
+
+// ────────────────────────────────────────────────────────────────────────
+// SECTION — SCHOOLS (CRUD, users, config)
+// ────────────────────────────────────────────────────────────────────────
 
 export const createSchool = async (
   publicDb: TenantDb,
@@ -1640,7 +1656,19 @@ export const updateSchoolConfig = async (
   if (!getRows<{ id: string }>(result)[0]) {
     throw new Error('Tenant not found');
   }
+
+  if (payload.status !== undefined) {
+    const tenantRow = await publicDb.execute<{ schema_name: string }>(sql`
+      SELECT schema_name FROM public.tenants WHERE id = ${tenantId} LIMIT 1
+    `);
+    const schemaName = tenantRow.rows[0]?.schema_name;
+    if (schemaName) await invalidateTenantStatusCache(schemaName);
+  }
 };
+
+// ────────────────────────────────────────────────────────────────────────
+// SECTION — METRICS & REVENUE
+// ────────────────────────────────────────────────────────────────────────
 
 export const getAdminMetrics = async (publicDb: TenantDb): Promise<AdminMetricsResult> => {
   const tenantsResult = await publicDb.execute<SchoolLookupRow>(sql`
@@ -1856,6 +1884,10 @@ export const getRevenueSummary = async (publicDb: TenantDb): Promise<RevenueSumm
   };
 };
 
+// ────────────────────────────────────────────────────────────────────────
+// SECTION — PLANS CATALOG
+// ────────────────────────────────────────────────────────────────────────
+
 export const listPlanCatalog = async (publicDb: TenantDb): Promise<PlanCatalogItem[]> => {
   await ensureAdminPublicInfrastructure(publicDb);
   const result = await publicDb.execute<PlanCatalogRow>(sql`
@@ -1907,6 +1939,10 @@ export const updatePlanCatalog = async (
       updated_at = NOW()
   `);
 };
+
+// ────────────────────────────────────────────────────────────────────────
+// SECTION — PAYMENTS
+// ────────────────────────────────────────────────────────────────────────
 
 export const listSchoolPayments = async (
   publicDb: TenantDb,
@@ -2152,6 +2188,10 @@ export const sendSchoolPaymentReminder = async (
     recipientPhone: contact.phone,
   };
 };
+
+// ────────────────────────────────────────────────────────────────────────
+// SECTION — SMS DASHBOARD, TEMPLATES, PROVIDER CONFIG
+// ────────────────────────────────────────────────────────────────────────
 
 export const getSmsDashboard = async (publicDb: TenantDb): Promise<SmsDashboardResult> => {
   await ensureAdminPublicInfrastructure(publicDb);
@@ -2539,6 +2579,10 @@ const ensureSchoolSmsFeatureMonetizationColumn = async (publicDb: TenantDb): Pro
     ADD COLUMN IF NOT EXISTS geo_check_enabled boolean NOT NULL DEFAULT false
   `);
 };
+
+// ────────────────────────────────────────────────────────────────────────
+// SECTION — SCHOOL-LEVEL SMS FEATURE + COMMISSIONS
+// ────────────────────────────────────────────────────────────────────────
 
 export const activateSchoolSmsFeature = async (
   publicDb: TenantDb,
@@ -3248,55 +3292,16 @@ export const getSmsFeatureGlobalStats = async (
     .sort((a, b) => b.commission_remaining_fcfa - a.commission_remaining_fcfa);
 };
 
-export const getMaintenanceConfig = async (
-  publicDb: TenantDb
-): Promise<{ maintenanceMode: boolean; maintenanceMessage: string; updatedAt: string }> => {
-  await ensureAdminPublicInfrastructure(publicDb);
-  const result = await publicDb.execute<{
-    maintenance_mode: boolean;
-    maintenance_message: string;
-    updated_at: string;
-  }>(sql`
-    SELECT maintenance_mode, maintenance_message, updated_at::text
-    FROM public.app_settings
-    ORDER BY updated_at DESC
-    LIMIT 1
-  `);
-  const row = getRows<{
-    maintenance_mode: boolean;
-    maintenance_message: string;
-    updated_at: string;
-  }>(result)[0];
-  return {
-    maintenanceMode: row?.maintenance_mode ?? false,
-    maintenanceMessage: row?.maintenance_message ?? 'Mise à jour en cours',
-    updatedAt: row?.updated_at ?? new Date().toISOString(),
-  };
-};
+// Maintenance + admin cache utilities are now in admin.maintenance.service.ts.
+export {
+  getMaintenanceConfig,
+  updateMaintenanceConfig,
+  clearAdminCache,
+} from './admin.maintenance.service.js';
 
-export const updateMaintenanceConfig = async (
-  publicDb: TenantDb,
-  payload: { maintenance_mode: boolean; maintenance_message: string }
-): Promise<void> => {
-  await ensureAdminPublicInfrastructure(publicDb);
-  await publicDb.execute(sql`
-    UPDATE public.app_settings
-    SET maintenance_mode = ${payload.maintenance_mode},
-        maintenance_message = ${payload.maintenance_message},
-        updated_at = NOW()
-  `);
-};
-
-export const clearAdminCache = async (): Promise<void> => {
-  const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
-  const redis = new Redis(redisUrl, { maxRetriesPerRequest: null });
-
-  try {
-    await redis.flushdb('ASYNC');
-  } finally {
-    await redis.quit();
-  }
-};
+// ────────────────────────────────────────────────────────────────────────
+// SECTION — IMPERSONATION
+// ────────────────────────────────────────────────────────────────────────
 
 export const createImpersonationToken = async (
   publicDb: TenantDb,

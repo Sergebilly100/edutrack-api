@@ -1,17 +1,11 @@
 import { Queue } from 'bullmq';
 
-const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
+import { getSharedRedis } from './shared-redis.js';
 
 export const qrAlertQueue = new Queue('qr-alert', {
-  connection: {
-    url: redisUrl,
-    maxRetriesPerRequest: null,
-  },
+  connection: getSharedRedis(),
 });
 
 export const geoAutoApproveQueue = new Queue('geo-auto-approve', {
-  connection: {
-    url: redisUrl,
-    maxRetriesPerRequest: null,
-  },
+  connection: getSharedRedis(),
 });
