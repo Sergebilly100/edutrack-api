@@ -94,7 +94,8 @@ const DEFAULT_STUDENT_ABSENT_TEMPLATE =
   'EduTrack: {studentFirstName} absent(e) en {subject} le {date}. Contact école: {schoolPhone}';
 const DEFAULT_PAYMENT_REMINDER_TEMPLATE =
   'EduTrack: relance paiement {schoolName}. Échéance {dueDate}, période {periodLabel}, reste {remainingAmountFcfa} FCFA.';
-const DEFAULT_STUDENT_ABSENT_EMAIL_SUBJECT = 'Absence élève — EduTrack';
+const DEFAULT_STUDENT_ABSENT_EMAIL_SUBJECT = 'Absence {studentLabel} — EduTrack';
+const DEFAULT_STUDENT_LABEL = 'élève';
 const DEFAULT_STUDENT_ABSENT_EMAIL_TEMPLATE =
   '{studentFirstName} est absent(e) en {subject} le {date}. Contact école: {schoolPhone}.';
 
@@ -174,6 +175,21 @@ const resolveSmsTemplateMessage = async (
     return templateResult.rows?.[0]?.message_template ?? fallbackTemplate;
   } catch {
     return fallbackTemplate;
+  }
+};
+
+const resolveTenantStudentLabel = async (schemaName: string): Promise<string> => {
+  try {
+    const result = await db.execute<{ student_label: string | null }>(sql`
+      SELECT student_label
+      FROM public.tenants
+      WHERE schema_name = ${schemaName}
+      LIMIT 1
+    `);
+    const label = result.rows?.[0]?.student_label;
+    return label && label.trim().length > 0 ? label : DEFAULT_STUDENT_LABEL;
+  } catch {
+    return DEFAULT_STUDENT_LABEL;
   }
 };
 
@@ -1320,16 +1336,20 @@ export class NotificationsService {
       return;
     }
 
-    const template = await resolveSmsTemplateMessage(
-      payload.schemaName,
-      SMS_TEMPLATE_STUDENT_ABSENT_TYPE,
-      DEFAULT_STUDENT_ABSENT_TEMPLATE
-    );
+    const [template, studentLabel] = await Promise.all([
+      resolveSmsTemplateMessage(
+        payload.schemaName,
+        SMS_TEMPLATE_STUDENT_ABSENT_TYPE,
+        DEFAULT_STUDENT_ABSENT_TEMPLATE
+      ),
+      resolveTenantStudentLabel(payload.schemaName),
+    ]);
     const message = renderSmsTemplate(template, {
       studentFirstName: payload.studentFirstName,
       subject: payload.subject,
       date: payload.date,
       schoolPhone: payload.schoolPhone,
+      studentLabel,
     });
     const queueRef = buildQueueRef(payload.schemaName, 'student_absent_parent');
     const recipientPhone = canSend.parentPhone ?? payload.parentPhone;
@@ -1417,6 +1437,10 @@ export class NotificationsService {
       subject: payload.subject,
       date: payload.date,
       schoolPhone: payload.schoolPhone,
+      studentLabel,
+    });
+    const emailSubject = renderSmsTemplate(DEFAULT_STUDENT_ABSENT_EMAIL_SUBJECT, {
+      studentLabel,
     });
     const emailQueueRef = buildQueueRef(payload.schemaName, 'student_absent_parent');
     await this.deps.repository.insertNotificationLog(tenantDb, {
@@ -1435,7 +1459,7 @@ export class NotificationsService {
       toEmailJobData({
         queueRef: emailQueueRef,
         to: emailAddress,
-        subject: DEFAULT_STUDENT_ABSENT_EMAIL_SUBJECT,
+        subject: emailSubject,
         text: emailText,
         recipientPhone,
         notificationType: 'student_absent_parent',
@@ -1505,16 +1529,20 @@ export class NotificationsService {
         return;
       }
 
-      const template = await resolveSmsTemplateMessage(
-        payload.schemaName,
-        SMS_TEMPLATE_STUDENT_ABSENT_TYPE,
-        DEFAULT_STUDENT_ABSENT_TEMPLATE
-      );
+      const [template, studentLabel] = await Promise.all([
+        resolveSmsTemplateMessage(
+          payload.schemaName,
+          SMS_TEMPLATE_STUDENT_ABSENT_TYPE,
+          DEFAULT_STUDENT_ABSENT_TEMPLATE
+        ),
+        resolveTenantStudentLabel(payload.schemaName),
+      ]);
       const message = renderSmsTemplate(template, {
         studentFirstName: payload.studentFirstName,
         subject: payload.subject,
         date: payload.date,
         schoolPhone: payload.schoolPhone,
+        studentLabel,
       });
 
       const emailText = renderSmsTemplate(DEFAULT_STUDENT_ABSENT_EMAIL_TEMPLATE, {
@@ -1522,6 +1550,10 @@ export class NotificationsService {
         subject: payload.subject,
         date: payload.date,
         schoolPhone: payload.schoolPhone,
+        studentLabel,
+      });
+      const emailSubject = renderSmsTemplate(DEFAULT_STUDENT_ABSENT_EMAIL_SUBJECT, {
+        studentLabel,
       });
 
       const contactsFromDb = await subscriptionsRepository.listParentAlertContactsByStudent(payload.studentId);
@@ -1653,7 +1685,7 @@ export class NotificationsService {
           toEmailJobData({
             queueRef: emailQueueRef,
             to: contact.parent_email,
-            subject: DEFAULT_STUDENT_ABSENT_EMAIL_SUBJECT,
+            subject: emailSubject,
             text: emailText,
             recipientPhone: contact.parent_phone,
             notificationType: 'student_absent_parent',

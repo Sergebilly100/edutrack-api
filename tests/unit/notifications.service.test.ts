@@ -1,5 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const dbMocks = vi.hoisted(() => ({
+  dbExecute: vi.fn(),
+  withTenantSchema: vi.fn(),
+}));
+
+vi.mock('../../src/shared/database/db.js', () => ({
+  db: { execute: dbMocks.dbExecute },
+  withTenantSchema: dbMocks.withTenantSchema,
+}));
+
 import { SMS_MAX_LENGTH } from '../../src/modules/notifications/notifications.sms.js';
 import { NotificationsService } from '../../src/modules/notifications/notifications.service.js';
 import { SubscriptionsRepository } from '../../src/modules/subscriptions/subscriptions.repository.js';
@@ -130,6 +140,7 @@ beforeEach(() => {
     delete eventBusHandlers[event];
   }
 
+  dbMocks.dbExecute.mockResolvedValue({ rows: [] });
   withTenantSchema.mockImplementation(async (_schemaName, callback) => callback(tenantDb));
   smsQueue.add.mockResolvedValue({ id: 'job-1' });
   repository.getLateAlertContext.mockResolvedValue(baseContext);
@@ -696,6 +707,93 @@ describe('handleSubscriptionExpired', () => {
     expect(repository.insertNotificationLog).toHaveBeenCalledWith(
       tenantDb,
       expect.objectContaining({ channel: 'email', status: 'skipped_unknown' })
+    );
+  });
+});
+
+// =====================================================================
+//  handleStudentAbsent — propagation tenant.student_label (P2-05 palier D)
+// =====================================================================
+
+describe('handleStudentAbsent — student_label propagation', () => {
+  const tenantLabelRow = (label: string | null) => ({ rows: [{ student_label: label }] });
+  const customSmsTemplateRow = (template: string) => ({ rows: [{ message_template: template }] });
+  const tenantIdRow = { rows: [{ id: 'tenant-1' }] };
+
+  it("injecte le label custom du tenant ('Étudiant(e)') dans le subject email et dans un template SMS contenant {studentLabel}", async () => {
+    // tenantDb.execute → utilisé seulement par resolveSmsTemplateMessage indirectement ? Non:
+    // resolveSmsTemplateMessage et resolveTenantStudentLabel utilisent tous deux le `db` public,
+    // qui est notre dbMocks.dbExecute. On distingue les requêtes via leur SQL.
+    dbMocks.dbExecute.mockImplementation(async (query: unknown) => {
+      const text = (query as { queryChunks?: Array<{ value?: string[] } | string> }).queryChunks
+        ?.map((chunk) => (typeof chunk === 'string' ? chunk : chunk?.value?.[0] ?? ''))
+        .join('') ?? '';
+      if (text.includes('FROM public.sms_templates')) {
+        return customSmsTemplateRow(
+          'EduTrack: {studentLabel} {studentFirstName} absent(e) en {subject} le {date}.'
+        );
+      }
+      if (text.includes('FROM public.tenants') && text.includes('student_label')) {
+        return tenantLabelRow('Étudiant(e)');
+      }
+      if (text.includes('FROM public.tenants')) {
+        return tenantIdRow;
+      }
+      return { rows: [] };
+    });
+
+    vi.spyOn(SubscriptionsRepository.prototype, 'listParentAlertContactsByStudent').mockResolvedValue([
+      makeActiveContact({ parent_email: 'parent@test.ci' }),
+    ]);
+
+    const service = makeService();
+    await service.handleStudentAbsent(baseStudentPayload);
+
+    const smsCall = smsQueue.add.mock.calls.find((c) => c[0] === 'send-sms');
+    const emailCall = smsQueue.add.mock.calls.find((c) => c[0] === 'send-email');
+
+    expect(smsCall?.[1]).toEqual(
+      expect.objectContaining({
+        message: expect.stringContaining('Étudiant(e)'),
+      })
+    );
+    expect(smsCall?.[1]).toEqual(
+      expect.objectContaining({
+        message: expect.stringContaining('Awa'),
+      })
+    );
+    expect((smsCall?.[1] as { message: string }).message).not.toContain('{studentLabel}');
+    expect(emailCall?.[1]).toEqual(
+      expect.objectContaining({
+        subject: 'Absence Étudiant(e) — EduTrack',
+      })
+    );
+  });
+
+  it("retombe sur 'élève' quand tenant.student_label est NULL", async () => {
+    dbMocks.dbExecute.mockImplementation(async (query: unknown) => {
+      const text = (query as { queryChunks?: Array<{ value?: string[] } | string> }).queryChunks
+        ?.map((chunk) => (typeof chunk === 'string' ? chunk : chunk?.value?.[0] ?? ''))
+        .join('') ?? '';
+      if (text.includes('FROM public.tenants') && text.includes('student_label')) {
+        return tenantLabelRow(null);
+      }
+      return { rows: [] };
+    });
+
+    vi.spyOn(SubscriptionsRepository.prototype, 'listParentAlertContactsByStudent').mockResolvedValue([
+      makeActiveContact({ parent_email: 'parent@test.ci' }),
+    ]);
+
+    const service = makeService();
+    await service.handleStudentAbsent(baseStudentPayload);
+
+    const emailCall = smsQueue.add.mock.calls.find((c) => c[0] === 'send-email');
+
+    expect(emailCall?.[1]).toEqual(
+      expect.objectContaining({
+        subject: 'Absence élève — EduTrack',
+      })
     );
   });
 });
