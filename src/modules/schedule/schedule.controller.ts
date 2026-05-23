@@ -20,11 +20,13 @@ import {
   hasScheduleOccurrenceBeforeDate,
   findTimeSlotById,
   findTeacherIdByUserId,
+  listActiveSchedulePeriods,
   listSchedulePeriods,
   updateSchedule,
   updateSchedulePeriod,
 } from './schedule.repository.js';
 import {
+  computeOneShotEndDate,
   createPeriodFromInput,
   duplicatePeriod,
   getActiveSchedulesForDate,
@@ -55,6 +57,10 @@ const dateQuerySchema = z.object({
 });
 const effectiveFromQuerySchema = z.object({
   effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+const periodsListQuerySchema = z.object({
+  active: z.enum(['true', 'false']).optional(),
 });
 
 const pgErrorCodeSchema = z.object({
@@ -235,8 +241,12 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     { preHandler: [requireDirectorOrSecretary, attachTenantDb] },
     async (request, reply) => {
       try {
-        await ensureScheduleTemporalColumns(ensureTenantDb(request));
-        const periods = await listSchedulePeriods(ensureTenantDb(request));
+        const db = ensureTenantDb(request);
+        await ensureScheduleTemporalColumns(db);
+        const query = periodsListQuerySchema.parse(request.query ?? {});
+        const periods = query.active === 'true'
+          ? await listActiveSchedulePeriods(db, getTodayIso())
+          : await listSchedulePeriods(db);
         return reply.send({ periods });
       } catch (error) {
         return handleError(request, reply, error);
@@ -442,6 +452,10 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           throw new Error('Class already has a course at the same time');
         }
 
+        const endDate = body.recurrence === 'one_shot'
+          ? computeOneShotEndDate(effectiveFrom)
+          : null;
+
         const created = await createSchedule(db, {
           schedulePeriodId: body.schedule_period_id,
           teacherId: body.teacher_id,
@@ -451,6 +465,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           dayOfWeek: body.day_of_week,
           subject: canonicalSubject,
           startDate: effectiveFrom,
+          endDate,
           isActive: body.is_active,
         });
 

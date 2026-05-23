@@ -93,6 +93,19 @@ const parseUtcDate = (date: string): Date => new Date(`${date}T00:00:00.000Z`);
 
 const formatUtcDate = (value: Date): string => value.toISOString().slice(0, 10);
 
+/**
+ * Calcule la date `end_date` (exclusive) pour un créneau one-shot.
+ *
+ * Le filtre temporel des queries hebdomadaires utilise `end_date > date_du_jour`,
+ * donc pour qu'un créneau n'apparaisse QUE le jour `effectiveFrom`, on pose
+ * `end_date = effectiveFrom + 1 jour`.
+ */
+export const computeOneShotEndDate = (effectiveFromIso: string): string => {
+  const base = parseUtcDate(effectiveFromIso);
+  base.setUTCDate(base.getUTCDate() + 1);
+  return formatUtcDate(base);
+};
+
 const toUtcDateTime = (dateIso: string, time: string): Date => {
   const parts = time.split(':');
   const hours = Number(parts[0] ?? 0);

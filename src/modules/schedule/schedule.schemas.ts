@@ -74,6 +74,9 @@ export const schedulePayloadSchema = z
     day_of_week: z.number().int().min(1).max(6),
     subject: z.string().trim().min(1).max(100),
     effective_from: dateStringSchema.optional(),
+    // Type de récurrence : 'recurring' (toutes les semaines de la période)
+    // ou 'one_shot' (uniquement la date effective_from, ex: rattrapage)
+    recurrence: z.enum(['recurring', 'one_shot']).optional(),
     is_active: z.boolean().optional(),
   })
   .refine(
@@ -97,6 +100,17 @@ export const schedulePayloadSchema = z
     {
       message: 'start_time must be before end_time',
       path: ['end_time'],
+    }
+  )
+  .refine(
+    (value) => {
+      // Un créneau one-shot doit avoir une date d'occurrence
+      if (value.recurrence !== 'one_shot') return true;
+      return !!value.effective_from;
+    },
+    {
+      message: 'effective_from is required for one_shot recurrence',
+      path: ['effective_from'],
     }
   );
 

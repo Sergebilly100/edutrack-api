@@ -166,6 +166,7 @@ export type ScheduleMutationInput = {
   dayOfWeek: number;
   subject: string;
   startDate?: string | null;
+  endDate?: string | null;
   isActive?: boolean;
 };
 
@@ -363,6 +364,21 @@ export const findSchedulePeriodById = async (
 
   const [row] = getRows<SchedulePeriodRow>(result);
   return row ? mapPeriod(row) : null;
+};
+
+export const listActiveSchedulePeriods = async (
+  db: QueryExecutor,
+  todayIso: string
+): Promise<SchedulePeriod[]> => {
+  const result = await db.execute<SchedulePeriodRow>(sql`
+    SELECT id, name, valid_from, valid_to, is_active, created_by, created_at
+    FROM schedule_periods
+    WHERE is_active = true
+      AND valid_to >= ${todayIso}
+    ORDER BY valid_from ASC, created_at DESC
+  `);
+
+  return getRows<SchedulePeriodRow>(result).map(mapPeriod);
 };
 
 export const findActiveSchedulePeriodByDate = async (
@@ -692,6 +708,7 @@ export const createSchedule = async (
       day_of_week,
       subject,
       start_date,
+      end_date,
       is_active
     )
     VALUES (
@@ -703,6 +720,7 @@ export const createSchedule = async (
       ${input.dayOfWeek},
       ${input.subject},
       ${input.startDate ?? null}::date,
+      ${input.endDate ?? null}::date,
       ${input.isActive ?? true}
     )
     RETURNING id
