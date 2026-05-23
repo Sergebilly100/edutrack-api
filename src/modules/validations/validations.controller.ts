@@ -147,6 +147,7 @@ export default async function validationsController(app: FastifyInstance): Promi
           kind: query.kind,
           month: query.month,
           status: query.status,
+          approvalType: query.approvalType,
           search: query.search,
           page: query.page,
           limit: query.limit,

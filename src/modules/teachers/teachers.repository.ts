@@ -26,6 +26,7 @@ type TeacherRow = {
   first_name: string;
   last_name: string;
   phone: string | null;
+  email: string | null;
   type: 'vacataire' | 'permanent';
   subjects: string[];
   hourly_rate: number | null;
@@ -121,6 +122,7 @@ const TEACHER_SELECT = sql`
     split_part(u.name, ' ', 1)                                               AS first_name,
     trim(substring(u.name FROM length(split_part(u.name, ' ', 1)) + 1))     AS last_name,
     u.phone,
+    u.email,
     t.type::text                                                              AS type,
     t.subjects,
     t.hourly_rate,
@@ -214,8 +216,8 @@ export class TeachersRepository {
     const passwordHash = await argon2.hash(password);
 
     const userResult = await this.db.execute(sql`
-      INSERT INTO users (role, name, phone, email, password_hash, is_active)
-      VALUES ('teacher', ${input.name}, ${input.phone}, null, ${passwordHash}, true)
+      INSERT INTO users (role, name, phone, email, password_hash, is_active, must_change_password)
+      VALUES ('teacher', ${input.name}, ${input.phone}, ${input.email ?? null}, ${passwordHash}, true, true)
       RETURNING id
     `);
 
@@ -267,6 +269,7 @@ export class TeachersRepository {
       SET
         name      = ${nextFullName},
         phone     = ${input.phone === undefined ? current.phone : input.phone},
+        email     = ${input.email === undefined ? current.email : input.email},
         is_active = ${input.is_active ?? current.is_active}
       WHERE id = ${current.user_id}
     `);
@@ -320,6 +323,82 @@ export class TeachersRepository {
     `);
 
     return this.getTeacherById(teacherId);
+  }
+
+  /**
+   * Génère un nouveau mot de passe temporaire pour le prof, le hashe, met must_change_password=true.
+   * Marque credentials_sent_at = NOW() pour indiquer que les credentials viennent d'être (re)générés.
+   * Renvoie le mot de passe en clair + l'email du prof (pour transmission).
+   * Renvoie null si le prof n'existe pas.
+   */
+  async resetTeacherPassword(teacherId: string): Promise<{
+    plainPassword: string;
+    email: string | null;
+    fullName: string;
+    username: string;
+  } | null> {
+    const current = await this.getTeacherById(teacherId);
+    if (!current) return null;
+
+    const plainPassword = generateInitialPassword(10);
+    const passwordHash = await argon2.hash(plainPassword);
+
+    await this.db.execute(sql`
+      UPDATE users
+      SET
+        password_hash         = ${passwordHash},
+        must_change_password  = true,
+        credentials_sent_at   = NOW()
+      WHERE id = ${current.user_id}
+    `);
+
+    return {
+      plainPassword,
+      email: current.email,
+      fullName: current.name,
+      username: current.username,
+    };
+  }
+
+  /**
+   * Renvoie la liste des profs sans credentials transmis (credentials_sent_at IS NULL),
+   * filtrée optionnellement sur un sous-ensemble d'IDs.
+   */
+  async listTeachersWithoutCredentials(teacherIds?: string[]): Promise<Array<{
+    teacher_id: string;
+    user_id: string;
+    name: string;
+    email: string | null;
+    username: string;
+  }>> {
+    type Row = {
+      teacher_id: string;
+      user_id: string;
+      name: string;
+      email: string | null;
+      username: string;
+    };
+
+    const idsFilter =
+      teacherIds && teacherIds.length > 0
+        ? sql`AND t.id = ANY(${teacherIds}::uuid[])`
+        : sql``;
+
+    const result = await this.db.execute(sql`
+      SELECT
+        t.id::text AS teacher_id,
+        u.id::text AS user_id,
+        u.name,
+        u.email,
+        t.username
+      FROM teachers t
+      INNER JOIN users u ON u.id = t.user_id
+      WHERE u.is_active = true
+        AND u.credentials_sent_at IS NULL
+        ${idsFilter}
+    `);
+
+    return getRows<Row>(result);
   }
 
   async hasOutstandingUnpaidSalaryRecords(teacherId: string): Promise<boolean> {
@@ -492,10 +571,17 @@ export class TeachersRepository {
         )::int AS absent_count,
         COUNT(CASE WHEN at.status = 'late' THEN 1 END)::int AS late_count,
         COUNT(CASE WHEN at.room_mismatch = true THEN 1 END)::int AS room_mismatch_count,
-        COUNT(CASE WHEN rollcall.has_rollcall = true THEN 1 END)::int AS rollcall_done_count,
+        COUNT(
+          CASE
+            WHEN rollcall.has_rollcall = true
+              AND at.status IN ('present', 'late', 'excused')
+            THEN 1
+          END
+        )::int AS rollcall_done_count,
         COUNT(
           CASE
             WHEN rollcall.has_rollcall IS DISTINCT FROM true
+              AND at.status IN ('present', 'late', 'excused')
               AND at.checked_in_at IS NOT NULL
             THEN 1
           END

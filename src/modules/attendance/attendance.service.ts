@@ -684,7 +684,7 @@ export class AttendanceService {
       slot_label: string;
       start_time: string;
       end_time: string;
-      status: 'present' | 'absent' | 'not_checked';
+      status: 'present' | 'absent' | 'late' | 'excused' | 'not_checked';
       attendance_status: 'present' | 'absent' | 'late' | 'excused' | null;
       late_minutes: number | null;
       room_mismatch: boolean;
@@ -712,11 +712,9 @@ export class AttendanceService {
         ...course,
         class: course.class_name,
         status:
-          course.attendance_status === 'absent'
-            ? 'absent'
-            : course.attendance_status === null
-              ? 'not_checked'
-              : 'present',
+          course.attendance_status === null
+            ? 'not_checked'
+            : course.attendance_status,
         room_mismatch: course.room_mismatch ?? false,
       })),
     };

@@ -7,6 +7,8 @@ import type {
 import { TeachersRepository } from './teachers.repository.js';
 import { getMaxUsersBySchemaName } from '../../shared/utils/users-limit.js';
 import { canonicalizeSubjectList } from '../../shared/utils/subject-normalization.js';
+import { defaultEmailSender } from '../notifications/notifications.service.js';
+import { logger } from '../../shared/observability/logger.js';
 
 export class TeachersModuleError extends Error {
   constructor(
@@ -29,6 +31,7 @@ type TeacherDTO = {
   first_name: string;
   last_name: string;
   phone: string | null;
+  email: string | null;
   type: 'vacataire' | 'permanent';
   subjects: string[];
   hourly_rate: number | null;
@@ -46,6 +49,7 @@ const toDTO = (row: {
   first_name: string;
   last_name: string;
   phone: string | null;
+  email: string | null;
   type: 'vacataire' | 'permanent';
   subjects: string[];
   hourly_rate: number | null;
@@ -61,6 +65,7 @@ const toDTO = (row: {
   first_name: row.first_name,
   last_name: row.last_name,
   phone: row.phone,
+  email: row.email,
   type: row.type,
   subjects: row.subjects,
   hourly_rate: row.hourly_rate,
@@ -191,7 +196,137 @@ export class TeachersService {
   async getAttendanceStats(params: TeacherAttendanceStatsQuery) {
     return this.repository.getAttendanceStats(params);
   }
+
+  /**
+   * Réinitialise le mot de passe d'un prof : génère un mot de passe temporaire,
+   * force must_change_password, marque credentials_sent_at.
+   * Si email présent → tentative d'envoi par email (mot de passe non renvoyé dans la réponse).
+   * Si pas d'email → renvoie le mot de passe en clair pour transmission manuelle.
+   */
+  async resetTeacherPassword(teacherId: string): Promise<{
+    emailSent: boolean;
+    email: string | null;
+    plainPassword?: string;
+  }> {
+    const reset = await this.repository.resetTeacherPassword(teacherId);
+    if (!reset) {
+      throw new TeachersModuleError('Teacher not found', 404, 'TEACHER_NOT_FOUND');
+    }
+
+    if (!reset.email) {
+      return { emailSent: false, email: null, plainPassword: reset.plainPassword };
+    }
+
+    const subject = "Vos identifiants EduTrack";
+    const text = buildCredentialsEmailText({
+      fullName: reset.fullName,
+      username: reset.username,
+      plainPassword: reset.plainPassword,
+    });
+
+    try {
+      const result = await defaultEmailSender({
+        to: reset.email,
+        subject,
+        text,
+        type: 'custom',
+        schemaName: 'public',
+      });
+      if (result.status === 'sent') {
+        return { emailSent: true, email: reset.email };
+      }
+      logger.warn({ teacherId, error: result.errorMessage }, '[teachers] credentials email failed');
+      return { emailSent: false, email: reset.email, plainPassword: reset.plainPassword };
+    } catch (error) {
+      logger.error({ teacherId, err: error }, '[teachers] credentials email crashed');
+      return { emailSent: false, email: reset.email, plainPassword: reset.plainPassword };
+    }
+  }
+
+  /**
+   * Envoie les credentials aux profs qui n'en ont pas encore reçus.
+   * - teacherIds optionnel : restreint à un sous-ensemble.
+   * - Pour chaque prof avec email : regénère mot de passe + envoie email.
+   * - Pour chaque prof sans email : skip (signalé dans le résultat).
+   */
+  async sendCredentialsToTeachers(teacherIds?: string[]): Promise<{
+    sentCount: number;
+    skippedNoEmailCount: number;
+    failedCount: number;
+    skippedNoEmail: Array<{ teacherId: string; name: string }>;
+  }> {
+    const targets = await this.repository.listTeachersWithoutCredentials(teacherIds);
+
+    let sentCount = 0;
+    let failedCount = 0;
+    const skippedNoEmail: Array<{ teacherId: string; name: string }> = [];
+
+    for (const target of targets) {
+      if (!target.email) {
+        skippedNoEmail.push({ teacherId: target.teacher_id, name: target.name });
+        continue;
+      }
+
+      const reset = await this.repository.resetTeacherPassword(target.teacher_id);
+      if (!reset) {
+        failedCount += 1;
+        continue;
+      }
+
+      const subject = "Vos identifiants EduTrack";
+      const text = buildCredentialsEmailText({
+        fullName: reset.fullName,
+        username: reset.username,
+        plainPassword: reset.plainPassword,
+      });
+
+      try {
+        const result = await defaultEmailSender({
+          to: target.email,
+          subject,
+          text,
+          type: 'custom',
+          schemaName: 'public',
+        });
+        if (result.status === 'sent') {
+          sentCount += 1;
+        } else {
+          failedCount += 1;
+          logger.warn({ teacherId: target.teacher_id, error: result.errorMessage }, '[teachers] bulk credentials email failed');
+        }
+      } catch (error) {
+        failedCount += 1;
+        logger.error({ teacherId: target.teacher_id, err: error }, '[teachers] bulk credentials email crashed');
+      }
+    }
+
+    return {
+      sentCount,
+      skippedNoEmailCount: skippedNoEmail.length,
+      failedCount,
+      skippedNoEmail,
+    };
+  }
 }
+
+const buildCredentialsEmailText = (params: {
+  fullName: string;
+  username: string;
+  plainPassword: string;
+}): string => {
+  return [
+    `Bonjour ${params.fullName},`,
+    ``,
+    `Voici vos identifiants de connexion EduTrack :`,
+    `  • Identifiant : ${params.username}`,
+    `  • Mot de passe temporaire : ${params.plainPassword}`,
+    ``,
+    `Pour des raisons de sécurité, vous devrez changer ce mot de passe lors de votre première connexion.`,
+    ``,
+    `À bientôt,`,
+    `L'équipe EduTrack`,
+  ].join('\n');
+};
 
 export const buildTeachersService = (
   db: ConstructorParameters<typeof TeachersRepository>[0]

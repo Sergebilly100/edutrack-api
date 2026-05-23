@@ -56,6 +56,7 @@ const toCreateInput = (payload: unknown): CreateTeacherInput => {
       first_name: firstName,
       last_name: lastName,
       phone: null,
+      email: null,
       type: parsed.type,
       subjects: parsed.subjects,
       hourly_rate: null,
@@ -203,4 +204,52 @@ export default async function teachersController(app: FastifyInstance): Promise<
       }
     }
   );
-}   
+
+  // ─── POST /api/v1/teachers/:id/reset-password ─────────────────────────────
+  // Réinitialise le mot de passe du prof et envoie les credentials par email si possible.
+  app.post(
+    '/api/v1/teachers/:id/reset-password',
+    { preHandler: requirePermission('teachers.edit') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const params = teacherParamsSchema.parse(request.params ?? {});
+
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          const service = buildTeachersService(tenantDb);
+          return service.resetTeacherPassword(params.id);
+        });
+
+        return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  // ─── POST /api/v1/teachers/send-credentials ───────────────────────────────
+  // Envoie les credentials aux profs sans credentials_sent_at.
+  // Body optionnel : { teacher_ids?: string[] } pour restreindre à un sous-ensemble.
+  app.post(
+    '/api/v1/teachers/send-credentials',
+    { preHandler: requirePermission('teachers.edit') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const body = (request.body ?? {}) as { teacher_ids?: unknown };
+        const teacherIds = Array.isArray(body.teacher_ids)
+          ? body.teacher_ids.filter((v): v is string => typeof v === 'string')
+          : undefined;
+
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          const service = buildTeachersService(tenantDb);
+          return service.sendCredentialsToTeachers(teacherIds);
+        });
+
+        return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+}

@@ -900,6 +900,7 @@ export class ValidationsRepository {
     kind?: 'short_hours' | 'gps_suspicious';
     month?: string;
     status?: 'approved' | 'rejected';
+    approvalType?: 'planned' | 'actual';
     search?: string;
     page: number;
     limit: number;
@@ -966,6 +967,13 @@ export class ValidationsRepository {
         )
         ${params.status ? sql`AND at.validation_status = ${params.status}` : sql``}
         ${params.kind === 'gps_suspicious' ? sql`AND at.geo_status = 'suspicious'` : params.kind === 'short_hours' ? sql`AND at.geo_status != 'suspicious'` : sql``}
+        ${
+          params.kind === 'short_hours' && params.approvalType === 'planned'
+            ? sql`AND at.validation_status = 'approved' AND at.validated_hours >= (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0) - 0.01`
+            : params.kind === 'short_hours' && params.approvalType === 'actual'
+              ? sql`AND at.validation_status = 'approved' AND at.validated_hours < (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0) - 0.01`
+              : sql``
+        }
         ${monthStart && monthEnd ? sql`AND at.date BETWEEN ${monthStart}::date AND ${monthEnd}::date` : sql``}
         ${params.search ? sql`AND u.name ILIKE ${'%' + params.search + '%'}` : sql``}
       ORDER BY at.validated_at DESC NULLS LAST, at.date DESC

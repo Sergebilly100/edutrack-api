@@ -134,6 +134,13 @@
       "when": 1747008060000,
       "tag": "0034_attendance_approved_notification",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1748563200000,
+      "tag": "0040_user_credentials_tracking",
+      "breakpoints": true
     }
   ]
 }

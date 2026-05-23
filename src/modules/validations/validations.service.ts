@@ -145,6 +145,7 @@ export class ValidationsService {
     kind?: 'short_hours' | 'gps_suspicious';
     month?: string;
     status?: 'approved' | 'rejected';
+    approvalType?: 'planned' | 'actual';
     search?: string;
     page: number;
     limit: number;
