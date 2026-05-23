@@ -89,6 +89,25 @@ export const authenticateRequest = async (
     return;
   }
 
+  // Si le mot de passe doit être changé, on ne laisse passer que les routes
+  // strictement nécessaires : changement de mdp, profil courant, déconnexion, refresh.
+  if (claims.mustChangePassword) {
+    const url = request.url;
+    const method = request.method.toUpperCase();
+    const isChangePassword = method === 'POST' && url.startsWith('/api/v1/auth/change-password');
+    const isMe = method === 'GET' && url.startsWith('/api/v1/auth/me');
+    const isLogout = method === 'POST' && url.startsWith('/api/v1/auth/logout');
+    const isRefresh = method === 'POST' && url.startsWith('/api/v1/auth/refresh');
+    if (!isChangePassword && !isMe && !isLogout && !isRefresh) {
+      reply.code(403).send({
+        error: 'Password change required',
+        code: 'PASSWORD_CHANGE_REQUIRED',
+        statusCode: 403,
+      });
+      return;
+    }
+  }
+
   // Reject tokens issued before the last password reset for this user.
   // Fail-closed: if Redis is unreachable we'd rather return 503 than honor a
   // potentially-revoked token (a stolen access token must not survive a Redis outage).

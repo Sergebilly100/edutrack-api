@@ -159,34 +159,35 @@ export class ValidationsService {
     return this.repository.listMissingEndScans(month);
   }
 
-  async sendEndScanWarnings(
+  /**
+   * Tolère en masse toutes les sessions sans scan de fin éligibles pour les
+   * enseignants donnés sur le mois donné. Applique réellement end_scan_action='warned'
+   * à chaque session (équivalent au bouton "Tolérer avec avertissement" par-session),
+   * puis envoie UN seul SMS/email récapitulatif par enseignant via l'event existant.
+   * Les sessions déjà tolérées/sanctionnées ne sont pas écrasées.
+   */
+  async bulkWarnMissingEndScans(
     teacherIds: string[],
     month: string,
     context: ServiceContext
-  ): Promise<{ sentCount: number }> {
-    const teachers = await this.repository.getTeacherUserInfo(teacherIds);
-    if (teachers.length === 0) {
-      throw new ValidationModuleError('No teachers found', 404, 'TEACHERS_NOT_FOUND');
+  ): Promise<{ teacherCount: number; warnedCount: number }> {
+    const reason = "Tolérance globale par l'administration";
+    const affected = await this.repository.bulkApplyEndScanWarning({
+      teacherIds,
+      month,
+      reason,
+      actorId: context.userId,
+    });
+
+    if (affected.length === 0) {
+      return { teacherCount: 0, warnedCount: 0 };
     }
 
-    const missing = await this.repository.listMissingEndScans(month);
-    const missingMap = new Map(missing.map((t) => [t.teacherId, t]));
+    let warnedCount = 0;
+    for (const teacher of affected) {
+      warnedCount += teacher.affected_count;
 
-    let sentCount = 0;
-    for (const teacher of teachers) {
-      const entry = missingMap.get(teacher.teacher_id);
-      if (!entry || entry.missingEndScanCount === 0) continue;
-
-      await this.repository.insertEndScanWarningNotification({
-        teacherUserId: teacher.user_id,
-        teacherPhone: teacher.phone,
-        teacherEmail: teacher.email,
-        teacherName: teacher.teacher_name,
-        month,
-        missingCount: entry.missingEndScanCount,
-        validatedBy: context.userId,
-      });
-
+      // Notification résumée par enseignant (réutilise l'event existant)
       emit('teacher.end_scan_warning', {
         tenantId: context.tenantId ?? '',
         schemaName: context.schemaName,
@@ -196,13 +197,11 @@ export class ValidationsService {
         teacherPhone: teacher.phone,
         teacherEmail: teacher.email,
         month,
-        missingCount: entry.missingEndScanCount,
+        missingCount: teacher.affected_count,
       });
-
-      sentCount++;
     }
 
-    return { sentCount };
+    return { teacherCount: affected.length, warnedCount };
   }
 
   async invalidateSession(

@@ -14,6 +14,7 @@ type AuthUserRow = {
   profile_photo_url: string | null;
   password_hash: string;
   is_active: boolean;
+  must_change_password: boolean | null;
   teacher_id: string | null;
   username: string | null;
   keycloak_subject: string | null;
@@ -28,6 +29,7 @@ export type AuthUser = {
   profilePhotoUrl: string | null;
   passwordHash: string;
   isActive: boolean;
+  mustChangePassword: boolean;
   teacherId: string | null;
   username: string | null;
   keycloakSubject: string | null;
@@ -42,6 +44,7 @@ const mapAuthUser = (row: AuthUserRow): AuthUser => ({
   profilePhotoUrl: row.profile_photo_url,
   passwordHash: row.password_hash,
   isActive: row.is_active,
+  mustChangePassword: row.must_change_password ?? false,
   teacherId: row.teacher_id,
   username: row.username,
   keycloakSubject: row.keycloak_subject,
@@ -132,6 +135,7 @@ const baseSelect = sql`
     u.keycloak_subject,
     u.password_hash,
     u.is_active,
+    COALESCE(u.must_change_password, false) AS must_change_password,
     t.id AS teacher_id,
     t.username
   FROM users u
@@ -227,7 +231,8 @@ export const updateUserPasswordHash = async (
 ): Promise<void> => {
   await db.execute(sql`
     UPDATE users
-    SET password_hash = ${passwordHash}
+    SET password_hash = ${passwordHash},
+        must_change_password = false
     WHERE id = ${userId}
   `);
 };

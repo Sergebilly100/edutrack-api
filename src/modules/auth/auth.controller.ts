@@ -112,6 +112,9 @@ const LOGIN_RATE_LIMIT_MAX = (() => {
   }
   return process.env.NODE_ENV === 'production' ? 10 : 200;
 })();
+// LOGIN_RATE_LIMITE_WINDOW correspond à la durée pendant laquelle les tentatives de connexion sont comptabilisées pour le verrouillage du compte. 
+// Par exemple, '1 minute' signifie que si un utilisateur dépasse le nombre maximum de tentatives de connexion échouées (défini par LOGIN_RATE_LIMIT_MAX) en une minute, son compte sera verrouillé pendant une durée déterminée (généralement 15 minutes ou plus). Vous pouvez ajuster cette valeur en fonction de vos besoins en matière de sécurité et d'expérience utilisateur.
+// la durée de verrouillage du compte est definie dans le module login-lockout.js, dans la fonction recordFailedLogin
 const LOGIN_RATE_LIMIT_WINDOW = process.env.AUTH_LOGIN_RATE_LIMIT_WINDOW ?? '1 minute';
 
 const extractHostname = (request: FastifyRequest): string | null => {
@@ -425,6 +428,14 @@ export default async function authController(app: FastifyInstance): Promise<void
             })
           );
         } catch (loginErr) {
+          // Seul un vrai échec d'identifiant doit alimenter le compteur de lockout.
+          // Les erreurs techniques (SQL, réseau, Keycloak indispo…) remontent
+          // telles quelles en 500 et ne pénalisent pas l'utilisateur.
+          const isCredentialsError =
+            loginErr instanceof Error && loginErr.message === 'Invalid credentials';
+          if (!isCredentialsError) {
+            throw loginErr;
+          }
           const { lockedSeconds } = await recordFailedLogin(schemaName, body.identifier);
           if (lockedSeconds > 0) {
             return reply.code(429).send({
@@ -500,6 +511,17 @@ export default async function authController(app: FastifyInstance): Promise<void
             return service.loginParent({ phone: body.phone, password: body.password });
           });
         } catch (loginErr) {
+          // Seul un vrai échec d'identifiant (phone/mot de passe incorrect)
+          // doit alimenter le compteur de lockout. Les erreurs métier
+          // (abonnement expiré, service indisponible) ou techniques (SQL, réseau)
+          // ne pénalisent pas l'utilisateur.
+          const isCredentialsError =
+            loginErr instanceof ParentPortalError &&
+            loginErr.code === 'UNAUTHORIZED' &&
+            loginErr.message === 'Invalid credentials';
+          if (!isCredentialsError) {
+            throw loginErr;
+          }
           const { lockedSeconds } = await recordFailedLogin(schemaName, body.phone);
           if (lockedSeconds > 0) {
             return reply.code(429).send({

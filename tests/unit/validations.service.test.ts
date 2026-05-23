@@ -56,8 +56,7 @@ const repository = {
   listPending: vi.fn(),
   countPending: vi.fn(),
   listMissingEndScans: vi.fn(),
-  getTeacherUserInfo: vi.fn(),
-  insertEndScanWarningNotification: vi.fn(),
+  bulkApplyEndScanWarning: vi.fn(),
   invalidateSession: vi.fn(),
   findAttendanceForEndScanAction: vi.fn(),
   applyEndScanAction: vi.fn(),
@@ -333,32 +332,32 @@ describe('ValidationsService', () => {
     });
   });
 
-  // ── sendEndScanWarnings ───────────────────────────────────────────────────
+  // ── bulkWarnMissingEndScans ───────────────────────────────────────────────
 
-  describe('sendEndScanWarnings', () => {
-    it('envoie les avertissements uniquement aux profs avec des scans manquants', async () => {
-      repository.getTeacherUserInfo.mockResolvedValue([
-        { teacher_id: 'teacher-1', user_id: 'user-1', teacher_name: 'M. Koné', phone: null, email: null },
-        { teacher_id: 'teacher-2', user_id: 'user-2', teacher_name: 'Mme Bah', phone: null, email: null },
+  describe('bulkWarnMissingEndScans', () => {
+    it('applique warned en masse et retourne les compteurs', async () => {
+      repository.bulkApplyEndScanWarning.mockResolvedValue([
+        { teacher_id: 'teacher-1', user_id: 'user-1', teacher_name: 'M. Koné', phone: null, email: null, affected_count: 3 },
+        { teacher_id: 'teacher-2', user_id: 'user-2', teacher_name: 'Mme Bah', phone: null, email: null, affected_count: 2 },
       ]);
-      repository.listMissingEndScans.mockResolvedValue([
-        { teacherId: 'teacher-1', missingEndScanCount: 2, sessions: [] },
-        { teacherId: 'teacher-2', missingEndScanCount: 0, sessions: [] },
-      ]);
-      repository.insertEndScanWarningNotification.mockResolvedValue(undefined);
 
-      const result = await service.sendEndScanWarnings(['teacher-1', 'teacher-2'], '2026-05', context);
+      const result = await service.bulkWarnMissingEndScans(['teacher-1', 'teacher-2'], '2026-05', context);
 
-      expect(result).toEqual({ sentCount: 1 });
-      expect(repository.insertEndScanWarningNotification).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ teacherCount: 2, warnedCount: 5 });
+      expect(repository.bulkApplyEndScanWarning).toHaveBeenCalledWith({
+        teacherIds: ['teacher-1', 'teacher-2'],
+        month: '2026-05',
+        reason: "Tolérance globale par l'administration",
+        actorId: context.userId,
+      });
     });
 
-    it('lève TEACHERS_NOT_FOUND si aucun prof trouvé', async () => {
-      repository.getTeacherUserInfo.mockResolvedValue([]);
+    it('retourne 0/0 quand aucune session éligible', async () => {
+      repository.bulkApplyEndScanWarning.mockResolvedValue([]);
 
-      await expect(
-        service.sendEndScanWarnings(['teacher-1'], '2026-05', context)
-      ).rejects.toMatchObject({ code: 'TEACHERS_NOT_FOUND', statusCode: 404 });
+      const result = await service.bulkWarnMissingEndScans(['teacher-1'], '2026-05', context);
+
+      expect(result).toEqual({ teacherCount: 0, warnedCount: 0 });
     });
   });
 

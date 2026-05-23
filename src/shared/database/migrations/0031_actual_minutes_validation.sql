@@ -10,9 +10,9 @@ BEGIN
     SELECT 1
     FROM information_schema.table_constraints
     WHERE constraint_name = 'att_teacher_actual_minutes_range'
-      AND table_schema = current_schema()
+      AND table_schema = 'tenant'
   ) THEN
-    ALTER TABLE attendances_teacher
+    ALTER TABLE "tenant"."attendances_teacher"
     ADD CONSTRAINT att_teacher_actual_minutes_range
     CHECK (actual_minutes IS NULL OR (actual_minutes >= 0 AND actual_minutes <= 1440));
 
@@ -26,7 +26,7 @@ BEGIN
   BEGIN
     SELECT COUNT(*)
     INTO invalid_count
-    FROM attendances_teacher
+    FROM "tenant"."attendances_teacher"
     WHERE actual_minutes IS NOT NULL
       AND (actual_minutes < 0 OR actual_minutes > 1440);
 

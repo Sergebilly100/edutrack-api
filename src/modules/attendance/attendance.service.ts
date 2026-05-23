@@ -526,7 +526,7 @@ export class AttendanceService {
   ): Promise<Array<{
     id: string;
     schedule_id: string;
-    status: 'present' | 'absent' | 'late' | 'excused';
+    status: 'present' | 'absent' | 'late';
     late_minutes: number | null;
     date: string;
     room_scan_start_at: string | null;
@@ -685,8 +685,8 @@ export class AttendanceService {
       slot_label: string;
       start_time: string;
       end_time: string;
-      status: 'present' | 'absent' | 'late' | 'excused' | 'not_checked';
-      attendance_status: 'present' | 'absent' | 'late' | 'excused' | null;
+      status: 'present' | 'absent' | 'late' | 'not_checked';
+      attendance_status: 'present' | 'absent' | 'late' | null;
       late_minutes: number | null;
       room_mismatch: boolean;
       room_scanned_name: string | null;
@@ -757,7 +757,7 @@ export class AttendanceService {
       room_name: string;
       start_time: string;
       end_time: string;
-      attendance_status: 'present' | 'absent' | 'late' | 'excused' | null;
+      attendance_status: 'present' | 'absent' | 'late' | null;
       late_minutes: number | null;
       checked_in_at: string | null;
       room_mismatch: boolean;
@@ -789,7 +789,7 @@ export class AttendanceService {
       room_name: string;
       start_time: string;
       end_time: string;
-      attendance_status: 'present' | 'absent' | 'late' | 'excused' | null;
+      attendance_status: 'present' | 'absent' | 'late' | null;
       late_minutes: number | null;
       checked_in_at: string | null;
       room_mismatch: boolean;

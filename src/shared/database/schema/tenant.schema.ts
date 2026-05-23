@@ -106,6 +106,8 @@ export const users = tenant.table('users', {
   profilePhotoUrl: text('profile_photo_url'),
   passwordHash: text('password_hash').notNull(),
   isActive: boolean('is_active').notNull().default(true),
+  mustChangePassword: boolean('must_change_password').notNull().default(false),
+  credentialsSentAt: timestamp('credentials_sent_at', { withTimezone: true, mode: 'date' }),
   lastLoginAt: timestamp('last_login_at', { withTimezone: true, mode: 'date' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
     .notNull()

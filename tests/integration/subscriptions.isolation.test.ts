@@ -34,9 +34,12 @@ describe('subscriptions — isolation inter-tenant', () => {
 
     await queryPublic(
       `
-        INSERT INTO public.school_sms_features (tenant_id, is_enabled, commission_pct, sms_cap_per_student, sms_unit_price_fcfa)
-        VALUES ($1::uuid, true, 15.00, 60, 1000)
-        ON CONFLICT (tenant_id) DO UPDATE SET is_enabled = true, sms_unit_price_fcfa = 1000
+        INSERT INTO public.school_sms_features (tenant_id, is_enabled, commission_pct, sms_cap_per_student, sms_unit_price_fcfa, monetize_parent_alerts)
+        VALUES ($1::uuid, true, 15.00, 60, 1000, true)
+        ON CONFLICT (tenant_id) DO UPDATE SET
+          is_enabled = true,
+          sms_unit_price_fcfa = 1000,
+          monetize_parent_alerts = true
       `,
       [tenantId]
     );

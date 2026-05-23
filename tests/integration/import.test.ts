@@ -244,8 +244,13 @@ describe('import integration — teachers', () => {
     expect(res.body.imported).toBe(1);
 
     const [{ count }] = await queryTenant<{ count: number }>(
-      `SELECT COUNT(*)::int AS count FROM ${tenantTable('teachers')} WHERE username LIKE $1`,
-      [`${prefix.toLowerCase().slice(0, 10)}%`]
+      `
+        SELECT COUNT(*)::int AS count
+        FROM ${tenantTable('teachers')} t
+        INNER JOIN ${tenantTable('users')} u ON u.id = t.user_id
+        WHERE u.name = $1
+      `,
+      [`Integration ${prefix}`]
     );
     expect(Number(count)).toBeGreaterThanOrEqual(1);
   });
@@ -344,8 +349,8 @@ describe('import integration — schedule', () => {
       request()
         .post('/api/v1/import/schedule/confirm')
         .set(headers)
-        .field('week_start', '2026-07-07')
-        .field('week_end', '2026-07-14'),
+        .field('week_start', '2026-07-06')
+        .field('week_end', '2026-07-13'),
       rows
     );
     expect(firstRes.status).toBe(200);
@@ -355,8 +360,8 @@ describe('import integration — schedule', () => {
       request()
         .post('/api/v1/import/schedule/confirm')
         .set(headers)
-        .field('week_start', '2026-07-07')
-        .field('week_end', '2026-07-14')
+        .field('week_start', '2026-07-06')
+        .field('week_end', '2026-07-13')
         .field('conflict_acknowledged', 'false'),
       rows
     );
@@ -389,7 +394,7 @@ describe('import integration — history', () => {
     expect(Array.isArray(res.body.items)).toBe(true);
     expect(res.body.items.length).toBeGreaterThanOrEqual(1);
     expect(res.body.items[0]).toMatchObject({
-      import_type: expect.stringMatching(/students|teachers|schedule/),
+      type: expect.stringMatching(/students|teachers|schedule/),
       imported_count: expect.any(Number),
       updated_count: expect.any(Number),
     });

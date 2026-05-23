@@ -34,7 +34,7 @@ type ActiveScheduleRow = {
   sort_order: number;
   day_of_week: number;
   subject: string;
-  attendance_status: 'present' | 'absent' | 'late' | 'excused' | null;
+  attendance_status: 'present' | 'absent' | 'late' | null;
   attendance_checked_in_at: string | null;
   attendance_late_minutes: number | null;
   past_attendance_count: number;
@@ -67,7 +67,7 @@ export type ActiveSchedule = {
     sortOrder: number;
   };
   attendance: {
-    status: 'present' | 'absent' | 'late' | 'excused' | null;
+    status: 'present' | 'absent' | 'late' | null;
     checkedInAt: string | null;
     lateMinutes: number | null;
   };

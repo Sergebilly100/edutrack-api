@@ -247,7 +247,7 @@ export const ensureTenantRealHoursInfrastructure = async (
       COALESCE(
         ROUND(
           COUNT(at.id) FILTER (
-            WHERE at.status IN ('present', 'late', 'excused')
+            WHERE at.status IN ('present', 'late')
           )::numeric
           / NULLIF(COUNT(s.id), 0) * 100,
           1
@@ -309,7 +309,7 @@ export const ensureTenantRealHoursInfrastructure = async (
             -- Taux de présence : 20%
             COALESCE(
               COUNT(at.id) FILTER (
-                WHERE at.status IN ('present', 'late', 'excused')
+                WHERE at.status IN ('present', 'late')
               )::numeric
               / NULLIF(COUNT(s.id), 0) * 20,
               0

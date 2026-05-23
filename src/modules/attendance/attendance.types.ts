@@ -74,7 +74,7 @@ export type ActiveAttendanceItem = {
     endTime: string;
   };
   attendance: {
-    status: 'present' | 'absent' | 'late' | 'excused' | null;
+    status: 'present' | 'absent' | 'late' | null;
     lateMinutes: number | null;
     roomMismatch: boolean;
     roomScannedName: string | null;
@@ -83,7 +83,7 @@ export type ActiveAttendanceItem = {
 };
 
 export type CheckInResult = {
-  status: 'present' | 'absent' | 'late' | 'excused';
+  status: 'present' | 'absent' | 'late';
   lateMinutes: number | null;
   checkedInAt: string;
   geoStatus?: 'verified' | 'suspicious' | 'unavailable' | 'not_checked';

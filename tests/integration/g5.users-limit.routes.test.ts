@@ -51,7 +51,7 @@ describe('G5 users limit enforcement', () => {
 
     expect(response.status).toBe(403);
     expect(response.body).toMatchObject({
-      code: 'USERS_LIMIT_REACHED',
+      code: 'PLAN_LIMIT_REACHED',
       statusCode: 403,
     });
   });

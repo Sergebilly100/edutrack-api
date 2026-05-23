@@ -42,4 +42,4 @@ DROP CONSTRAINT IF EXISTS app_settings_sms_provider_check;
 --> statement-breakpoint
 ALTER TABLE "public"."app_settings"
 ADD CONSTRAINT app_settings_sms_provider_check
-CHECK ("sms_provider" IN ('mock', 'infobip', 'africas_talking', 'twilio', 'orange_api', 'custom'));
+CHECK ("sms_provider" IN ('mock', 'infobip', 'africas_talking', 'twilio', 'orange_api', 'smsmode', 'custom'));

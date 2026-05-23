@@ -38,10 +38,13 @@ describe('subscriptions integration (real db)', () => {
 
     await queryPublic(
       `
-        INSERT INTO public.school_sms_features (tenant_id, is_enabled, commission_pct, sms_cap_per_student, sms_unit_price_fcfa)
-        VALUES ($1::uuid, false, 15.00, 60, NULL)
+        INSERT INTO public.school_sms_features (tenant_id, is_enabled, commission_pct, sms_cap_per_student, sms_unit_price_fcfa, monetize_parent_alerts)
+        VALUES ($1::uuid, false, 15.00, 60, NULL, true)
         ON CONFLICT (tenant_id)
-        DO UPDATE SET is_enabled = EXCLUDED.is_enabled, sms_unit_price_fcfa = EXCLUDED.sms_unit_price_fcfa
+        DO UPDATE SET
+          is_enabled = EXCLUDED.is_enabled,
+          sms_unit_price_fcfa = EXCLUDED.sms_unit_price_fcfa,
+          monetize_parent_alerts = EXCLUDED.monetize_parent_alerts
       `,
       [tenantId]
     );
@@ -124,7 +127,7 @@ describe('subscriptions integration (real db)', () => {
     expect(response.body.parent?.id).toBeTruthy();
     expect(response.body.subscription?.id).toBeTruthy();
     expect(typeof response.body.credentials?.temp_password).toBe('string');
-    expect(response.body.credentials?.temp_password.length).toBe(4);
+    expect(response.body.credentials?.temp_password.length).toBe(10);
     createdParentId = response.body.parent.id;
     createdParentPhone = response.body.parent.phone;
   });
@@ -251,7 +254,7 @@ describe('subscriptions integration (real db)', () => {
 
     expect(response.status).toBe(200);
     expect(typeof response.body.new_temp_password).toBe('string');
-    expect(response.body.new_temp_password.length).toBe(4);
+    expect(response.body.new_temp_password.length).toBe(10);
 
     const state = await queryTenant<{ must_change_password: boolean }>(
       `SELECT must_change_password FROM ${tenantTable('parents')} WHERE id = $1::uuid`,

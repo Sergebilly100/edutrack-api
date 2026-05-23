@@ -51,7 +51,7 @@ type TeacherDailyRow = {
   slot_label: string;
   hours_planned: string | number;
   hours_done: string | number;
-  attendance_status: 'present' | 'absent' | 'late' | 'excused' | null;
+  attendance_status: 'present' | 'absent' | 'late' | null;
   checked_in_at: string | null;
   room_scan_end_at: string | null;
   late_minutes: number | null;

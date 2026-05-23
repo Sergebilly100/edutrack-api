@@ -73,20 +73,28 @@ describe('multi-tenant isolation hardening', () => {
 
       await queryPublic(
         `
-          INSERT INTO public.school_sms_features (tenant_id, is_enabled, commission_pct, sms_cap_per_student, sms_unit_price_fcfa)
-          VALUES ($1::uuid, true, 12.00, 60, 1000)
+          INSERT INTO public.school_sms_features (tenant_id, is_enabled, commission_pct, sms_cap_per_student, sms_unit_price_fcfa, monetize_parent_alerts)
+          VALUES ($1::uuid, true, 12.00, 60, 1000, true)
           ON CONFLICT (tenant_id)
-          DO UPDATE SET is_enabled = true, commission_pct = EXCLUDED.commission_pct, sms_unit_price_fcfa = EXCLUDED.sms_unit_price_fcfa
+          DO UPDATE SET
+            is_enabled = true,
+            commission_pct = EXCLUDED.commission_pct,
+            sms_unit_price_fcfa = EXCLUDED.sms_unit_price_fcfa,
+            monetize_parent_alerts = EXCLUDED.monetize_parent_alerts
         `,
         [tenantAId]
       );
 
       await queryPublic(
         `
-          INSERT INTO public.school_sms_features (tenant_id, is_enabled, commission_pct, sms_cap_per_student, sms_unit_price_fcfa)
-          VALUES ($1::uuid, true, 18.00, 60, 1200)
+          INSERT INTO public.school_sms_features (tenant_id, is_enabled, commission_pct, sms_cap_per_student, sms_unit_price_fcfa, monetize_parent_alerts)
+          VALUES ($1::uuid, true, 18.00, 60, 1200, true)
           ON CONFLICT (tenant_id)
-          DO UPDATE SET is_enabled = true, commission_pct = EXCLUDED.commission_pct, sms_unit_price_fcfa = EXCLUDED.sms_unit_price_fcfa
+          DO UPDATE SET
+            is_enabled = true,
+            commission_pct = EXCLUDED.commission_pct,
+            sms_unit_price_fcfa = EXCLUDED.sms_unit_price_fcfa,
+            monetize_parent_alerts = EXCLUDED.monetize_parent_alerts
         `,
         [tenantBId]
       );

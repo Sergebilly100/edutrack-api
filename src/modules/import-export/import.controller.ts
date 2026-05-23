@@ -135,8 +135,16 @@ const requireImportTypePermission = async (
   request: FastifyRequest,
   reply: FastifyReply
 ): Promise<void> => {
-  const { type } = importTypeParamsSchema.parse(request.params ?? {});
-  const permission = IMPORT_PERMISSION_BY_TYPE[type];
+  const parsed = importTypeParamsSchema.safeParse(request.params ?? {});
+  if (!parsed.success) {
+    reply.code(400).send({
+      error: 'Invalid import type',
+      code: 'BAD_REQUEST',
+      statusCode: 400,
+    });
+    return;
+  }
+  const permission = IMPORT_PERMISSION_BY_TYPE[parsed.data.type];
   await requirePermission(permission)(request, reply);
 };
 

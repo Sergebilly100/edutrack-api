@@ -51,6 +51,10 @@ ensureJwtKeysForIntegration();
 // Force all app DB imports to point to the isolated test database.
 process.env.DATABASE_URL = DATABASE_URL_TEST;
 
+// Provide default values for env vars required by import flows in integration tests.
+process.env.IMPORT_TEACHER_DEFAULT_PASSWORD =
+  process.env.IMPORT_TEACHER_DEFAULT_PASSWORD ?? 'TestTeacherPass!2026';
+
 const schemaSuffix = randomBytes(4).toString('hex');
 export const TEST_SCHEMA_NAME = `school_test_${schemaSuffix}`;
 

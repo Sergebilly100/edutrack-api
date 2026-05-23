@@ -56,7 +56,7 @@ export const missingEndScansQuerySchema = z.object({
   month: z.string().regex(/^\d{4}-\d{2}$/),
 });
 
-export const sendEndScanWarningBodySchema = z.object({
+export const bulkWarnEndScansBodySchema = z.object({
   teacher_ids: z.array(z.string().uuid()).min(1).max(200),
   month: z.string().regex(/^\d{4}-\d{2}$/),
 });
@@ -149,12 +149,4 @@ export type MissingEndScanTeacher = {
   warningCount: number;
   sanctionCount: number;
   sessions: MissingEndScanSession[];
-  /**
-   * true si au moins un SMS global de type 'scan_end_warning' a été envoyé
-   * à ce prof pour le mois demandé. C'est un flag par prof/mois, PAS par session.
-   * Le directeur peut envoyer un seul SMS groupé couvrant plusieurs sessions sans scan
-   * de fin — l'affichage "Notifié" sur la ligne du prof est donc ambigu face aux badges
-   * individuels de chaque session. À distinguer de endScanAction par session.
-   */
-  warningSent: boolean;
 };

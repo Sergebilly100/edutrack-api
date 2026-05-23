@@ -46,10 +46,13 @@ describe('parent auth + parent routes integration', () => {
 
     await queryPublic(
       `
-        INSERT INTO public.school_sms_features (tenant_id, is_enabled, commission_pct, sms_cap_per_student, sms_unit_price_fcfa)
-        VALUES ($1::uuid, true, 15.00, 60, 1000)
+        INSERT INTO public.school_sms_features (tenant_id, is_enabled, commission_pct, sms_cap_per_student, sms_unit_price_fcfa, monetize_parent_alerts)
+        VALUES ($1::uuid, true, 15.00, 60, 1000, true)
         ON CONFLICT (tenant_id)
-        DO UPDATE SET is_enabled = EXCLUDED.is_enabled, sms_unit_price_fcfa = EXCLUDED.sms_unit_price_fcfa
+        DO UPDATE SET
+          is_enabled = EXCLUDED.is_enabled,
+          sms_unit_price_fcfa = EXCLUDED.sms_unit_price_fcfa,
+          monetize_parent_alerts = EXCLUDED.monetize_parent_alerts
       `,
       [tenantId]
     );
@@ -294,7 +297,7 @@ describe('parent auth + parent routes integration', () => {
   it('Parent avec mot de passe temporaire: accès bloqué hors /auth/change-password, puis accès rétabli', async () => {
     const forcedPhone = '2250709993333';
     const tempPassword = '3333';
-    const newPassword = '333333';
+    const newPassword = 'NewPass1234';
     const forcedHash = await argon2.hash(tempPassword);
 
     const parentRows = await queryTenant<IdRow>(

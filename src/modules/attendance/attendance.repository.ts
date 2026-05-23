@@ -40,7 +40,7 @@ type RoomTokenRow = {
 
 type AttendanceWriteRow = {
   id: string;
-  status: 'present' | 'absent' | 'late' | 'excused';
+  status: 'present' | 'absent' | 'late';
   late_minutes: number | null;
   checked_in_at: string | null;
   checked_out_at: string | null;
@@ -48,7 +48,7 @@ type AttendanceWriteRow = {
 
 type ExistingTeacherAttendanceRow = {
   id: string;
-  status: 'present' | 'absent' | 'late' | 'excused';
+  status: 'present' | 'absent' | 'late';
   checked_in_at: string | null;
   checked_out_at: string | null;
   room_scan_end_at: string | null;
@@ -65,7 +65,7 @@ type ActiveAttendanceRow = {
   slot_label: string;
   slot_start_time: string;
   slot_end_time: string;
-  attendance_status: 'present' | 'absent' | 'late' | 'excused' | null;
+  attendance_status: 'present' | 'absent' | 'late' | null;
   late_minutes: number | null;
   room_mismatch: boolean | null;
   room_scanned_name: string | null;
@@ -94,7 +94,7 @@ type StudentAbsenceNotificationCandidateRow = {
 type TeacherAttendanceByDateRow = {
   id: string;
   schedule_id: string;
-  status: 'present' | 'absent' | 'late' | 'excused';
+  status: 'present' | 'absent' | 'late';
   late_minutes: number | null;
   date: string;
   room_scan_start_at: string | null;
@@ -113,7 +113,7 @@ type DirectorTodayCourseRow = {
   slot_label: string;
   start_time: string;
   end_time: string;
-  attendance_status: 'present' | 'absent' | 'late' | 'excused' | null;
+  attendance_status: 'present' | 'absent' | 'late' | null;
   late_minutes: number | null;
   room_mismatch: boolean;
   room_scanned_name: string | null;
@@ -144,7 +144,7 @@ type DirectorHistoryDetailRow = {
   room_name: string;
   start_time: string;
   end_time: string;
-  attendance_status: 'present' | 'absent' | 'late' | 'excused' | null;
+  attendance_status: 'present' | 'absent' | 'late' | null;
   late_minutes: number | null;
   checked_in_at: string | null;
   room_mismatch: boolean;
@@ -388,7 +388,7 @@ export class AttendanceRepository {
     teacherId: string;
     scheduleId: string;
     date: string;
-    status: 'present' | 'absent' | 'late' | 'excused';
+    status: 'present' | 'absent' | 'late';
     lateMinutes: number | null;
     checkedInAt: string;
     checkinLatitude?: number | null;
@@ -1219,8 +1219,7 @@ export class AttendanceRepository {
     for (const course of courses) {
       if (
         course.attendance_status === ATTENDANCE_STATUS.PRESENT ||
-        course.attendance_status === ATTENDANCE_STATUS.LATE ||
-        course.attendance_status === ATTENDANCE_STATUS.EXCUSED
+        course.attendance_status === ATTENDANCE_STATUS.LATE
       ) {
         presentCount += 1;
         continue;
@@ -1283,7 +1282,7 @@ export class AttendanceRepository {
       SELECT
         sbd.date::text AS date,
         COALESCE(
-          SUM(CASE WHEN at.status IN ('present', 'late', 'excused') THEN 1 ELSE 0 END),
+          SUM(CASE WHEN at.status IN ('present', 'late') THEN 1 ELSE 0 END),
           0
         )::int AS present_count,
         COALESCE(
@@ -1297,7 +1296,7 @@ export class AttendanceRepository {
         COUNT(sbd.schedule_id)::int AS total_count,
         COALESCE(
           ROUND(
-            100.0 * SUM(CASE WHEN at.status IN ('present', 'late', 'excused') THEN 1 ELSE 0 END)::numeric
+            100.0 * SUM(CASE WHEN at.status IN ('present', 'late') THEN 1 ELSE 0 END)::numeric
             / NULLIF(COUNT(sbd.schedule_id), 0),
             2
           ),

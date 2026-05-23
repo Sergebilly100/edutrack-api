@@ -118,7 +118,7 @@ describe('attendance integration (real db)', () => {
     });
   });
 
-  it('POST /api/v1/attendance/qr-scan avec token invalide persiste room_mismatch=true', async () => {
+  it('POST /api/v1/attendance/qr-scan avec token invalide retourne 400 QR_NOT_IN_SCHOOL', async () => {
     const context = getSeedContext();
     const headers = await getAuthHeaders('teacher');
     const invalidToken = randomBytes(32).toString('hex');
@@ -129,24 +129,8 @@ describe('attendance integration (real db)', () => {
       schedule_id: context.scheduleId,
     });
 
-    expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({
-      data: {
-        valid: false,
-        roomMismatch: true,
-      },
-    });
-
-    const rows = await queryTenant<{ room_mismatch: boolean }>(
-      `
-        SELECT room_mismatch
-        FROM ${tenantTable('attendances_teacher')}
-        WHERE teacher_id = $1 AND schedule_id = $2 AND date = CURRENT_DATE
-      `,
-      [context.teacherId, context.scheduleId]
-    );
-
-    expect(rows[0]?.room_mismatch).toBe(true);
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({ code: 'QR_NOT_IN_SCHOOL' });
   });
 
   it('POST /api/v1/attendance/qr-scan start après end ne retourne pas 500', async () => {

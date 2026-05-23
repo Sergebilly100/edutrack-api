@@ -12,6 +12,7 @@ import { ValidationModuleError, buildValidationsService } from './validations.se
 import {
   approveValidationBodySchema,
   attendanceIdParamsSchema,
+  bulkWarnEndScansBodySchema,
   cancelEndScanSanctionBodySchema,
   endScanActionBodySchema,
   invalidateSessionBodySchema,
@@ -19,7 +20,6 @@ import {
   notificationIdParamsSchema,
   realHoursConfigBodySchema,
   rejectValidationBodySchema,
-  sendEndScanWarningBodySchema,
   validationHistoryQuerySchema,
 } from './validations.types.js';
 
@@ -175,13 +175,13 @@ export default async function validationsController(app: FastifyInstance): Promi
     }
   });
 
-  app.post('/api/v1/validations/send-end-scan-warning', { preHandler: requirePermission('validations.approve') }, async (request, reply) => {
+  app.post('/api/v1/validations/bulk-warn-end-scans', { preHandler: requirePermission('validations.approve') }, async (request, reply) => {
     try {
       const claims = request.claims!;
-      const body = sendEndScanWarningBodySchema.parse(request.body ?? {});
+      const body = bulkWarnEndScansBodySchema.parse(request.body ?? {});
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
         const service = buildValidationsService(tenantDb);
-        return service.sendEndScanWarnings(body.teacher_ids, body.month, {
+        return service.bulkWarnMissingEndScans(body.teacher_ids, body.month, {
           schemaName: claims.schemaName,
           tenantId: claims.tenantId,
           userId: claims.sub,

@@ -25,7 +25,7 @@ export type Room = {
   is_active: boolean;
 };
 
-export type AttendanceStatus = 'present' | 'absent' | 'late' | 'excused';
+export type AttendanceStatus = 'present' | 'absent' | 'late';
 
 export type AttendanceRecord = {
   id: string;

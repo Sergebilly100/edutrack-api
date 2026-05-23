@@ -493,7 +493,6 @@ export class ValidationsRepository {
       slot_label: string;
       room_name: string | null;
       room_scan_start_at: string | null;
-      warning_sent: boolean;
       end_scan_action: EndScanAction | null;
       end_scan_action_reason: string | null;
       end_scan_action_at: string | null;
@@ -510,12 +509,6 @@ export class ValidationsRepository {
         s.subject,
         ts.label AS slot_label,
         r.name AS room_name,
-        EXISTS (
-          SELECT 1 FROM notifications_log nl
-          WHERE nl.type = 'scan_end_warning'
-            AND nl.recipient_id = u.id
-            AND nl.metadata->>'month' = ${month}
-        ) AS warning_sent,
         at.room_scan_start_at::text AS room_scan_start_at,
         at.end_scan_action,
         at.end_scan_action_reason,
@@ -551,7 +544,6 @@ export class ValidationsRepository {
           warningCount: 0,
           sanctionCount: 0,
           sessions: [],
-          warningSent: row.warning_sent,
         };
         grouped.set(row.teacher_id, entry);
       }
@@ -574,74 +566,6 @@ export class ValidationsRepository {
     }
 
     return Array.from(grouped.values());
-  }
-
-  async insertEndScanWarningNotification(params: {
-    teacherUserId: string;
-    teacherPhone: string | null;
-    teacherEmail: string | null;
-    teacherName: string;
-    month: string;
-    missingCount: number;
-    validatedBy: string;
-  }): Promise<void> {
-    const message = `Attention : ${params.missingCount} cours sans scan de fin détecté(s) pour le mois ${params.month}. Veuillez régulariser la situation.`;
-    await this.db.execute(sql`
-      INSERT INTO notifications_log (
-        type,
-        channel,
-        recipient_id,
-        recipient_phone,
-        recipient_email,
-        message,
-        status,
-        metadata
-      )
-      VALUES (
-        'scan_end_warning',
-        'email',
-        ${params.teacherUserId}::uuid,
-        ${params.teacherPhone ?? ''},
-        ${params.teacherEmail ?? null},
-        ${message},
-        'queued',
-        ${JSON.stringify({
-          month: params.month,
-          missingCount: params.missingCount,
-          teacherName: params.teacherName,
-          validatedBy: params.validatedBy,
-        })}::jsonb
-      )
-    `);
-  }
-
-  async getTeacherUserInfo(teacherIds: string[]): Promise<Array<{
-    teacher_id: string;
-    user_id: string;
-    teacher_name: string;
-    phone: string | null;
-    email: string | null;
-  }>> {
-    if (teacherIds.length === 0) return [];
-    const idList = sql.join(teacherIds.map((id) => sql`${id}::uuid`), sql`, `);
-    const result = await this.db.execute<{
-      teacher_id: string;
-      user_id: string;
-      teacher_name: string;
-      phone: string | null;
-      email: string | null;
-    }>(sql`
-      SELECT
-        t.id::text AS teacher_id,
-        u.id::text AS user_id,
-        u.name AS teacher_name,
-        u.phone,
-        u.email
-      FROM teachers t
-      INNER JOIN users u ON u.id = t.user_id
-      WHERE t.id IN (${idList})
-    `);
-    return getRows(result);
   }
 
   async invalidateSession(params: {
@@ -773,6 +697,93 @@ export class ValidationsRepository {
         end_scan_action_cancel_reason = ${params.reason}
       WHERE id = ${params.attendanceId}
     `);
+  }
+
+  /**
+   * Applique 'warned' en masse à toutes les sessions sans scan de fin éligibles
+   * pour les enseignants donnés sur le mois donné. Ne touche pas aux sessions
+   * déjà actionnées (warned/sanctioned actifs) ; ne re-cible que celles avec
+   * end_scan_action NULL ou end_scan_action_cancelled_at NOT NULL.
+   * Retourne la liste des sessions affectées, groupée par enseignant, pour
+   * permettre l'envoi des notifications consolidées.
+   */
+  async bulkApplyEndScanWarning(params: {
+    teacherIds: string[];
+    month: string;
+    reason: string;
+    actorId: string;
+  }): Promise<Array<{
+    teacher_id: string;
+    user_id: string;
+    teacher_name: string;
+    phone: string | null;
+    email: string | null;
+    affected_count: number;
+  }>> {
+    if (params.teacherIds.length === 0) return [];
+    const monthStart = `${params.month}-01`;
+    const { monthEnd } = monthBoundsFromDate(monthStart);
+    const idList = sql.join(params.teacherIds.map((id) => sql`${id}::uuid`), sql`, `);
+
+    const result = await this.db.execute<{
+      teacher_id: string;
+      user_id: string;
+      teacher_name: string;
+      phone: string | null;
+      email: string | null;
+      affected_count: string;
+    }>(sql`
+      WITH eligible AS (
+        SELECT at.id, t.id AS teacher_id, u.id AS user_id, u.name, u.phone, u.email
+        FROM attendances_teacher at
+        INNER JOIN teachers t ON t.id = at.teacher_id
+        INNER JOIN users u ON u.id = t.user_id
+        INNER JOIN time_slots ts ON ts.id = (
+          SELECT s.time_slot_id FROM schedules s WHERE s.id = at.schedule_id
+        )
+        WHERE t.id IN (${idList})
+          AND at.date BETWEEN ${monthStart}::date AND ${monthEnd}::date
+          AND at.checked_in_at IS NOT NULL
+          AND at.checked_out_at IS NULL
+          AND at.room_scan_end_at IS NULL
+          AND (
+            at.date < CURRENT_DATE
+            OR (NOW() AT TIME ZONE 'Africa/Abidjan') > (at.date::timestamp + ts.end_time + INTERVAL '30 minutes')
+          )
+          AND (at.end_scan_action IS NULL OR at.end_scan_action_cancelled_at IS NOT NULL)
+      ),
+      updated AS (
+        UPDATE attendances_teacher at
+        SET
+          end_scan_action = 'warned'::end_scan_action_type,
+          end_scan_action_reason = ${params.reason},
+          end_scan_action_at = NOW(),
+          end_scan_action_by = ${params.actorId}::uuid,
+          end_scan_action_cancelled_at = NULL,
+          end_scan_action_cancel_reason = NULL
+        FROM eligible e
+        WHERE at.id = e.id
+        RETURNING e.teacher_id, e.user_id, e.name, e.phone, e.email
+      )
+      SELECT
+        teacher_id::text,
+        user_id::text,
+        name AS teacher_name,
+        phone,
+        email,
+        COUNT(*)::text AS affected_count
+      FROM updated
+      GROUP BY teacher_id, user_id, name, phone, email
+    `);
+
+    return getRows(result).map((row) => ({
+      teacher_id: row.teacher_id,
+      user_id: row.user_id,
+      teacher_name: row.teacher_name,
+      phone: row.phone,
+      email: row.email,
+      affected_count: Number(row.affected_count),
+    }));
   }
 
   async insertEndScanActionNotification(params: {

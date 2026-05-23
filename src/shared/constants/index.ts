@@ -1,11 +1,25 @@
+/**
+ * Statuts de présence professeur.
+ * Note : 'excused' n'existe pas pour les profs (l'école doit créer un cours
+ * de rattrapage à la place). L'enum DB conserve 'excused' pour rétro-compat
+ * mais le code l'ignore et le mappe vers 'present' à la lecture.
+ */
 export const ATTENDANCE_STATUS = {
   PRESENT: 'present',
   ABSENT: 'absent',
   LATE: 'late',
-  EXCUSED: 'excused',
 } as const;
 export type AttendanceStatusValue =
   (typeof ATTENDANCE_STATUS)[keyof typeof ATTENDANCE_STATUS];
+
+/** Statuts de présence élève — 'excused' reste valide (justification parent). */
+export const STUDENT_ATTENDANCE_STATUS = {
+  PRESENT: 'present',
+  ABSENT: 'absent',
+  EXCUSED: 'excused',
+} as const;
+export type StudentAttendanceStatusValue =
+  (typeof STUDENT_ATTENDANCE_STATUS)[keyof typeof STUDENT_ATTENDANCE_STATUS];
 
 export const SUBSCRIPTION_STATUS = {
   TRIAL: 'trial',

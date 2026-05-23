@@ -71,6 +71,7 @@ export type LoginResult = {
     phone: string | null;
     email: string | null;
     profilePhotoUrl: string | null;
+    mustChangePassword: boolean;
     positionNames?: string[];
     primaryPosition?: string | null;
     username?: string;
@@ -286,6 +287,7 @@ export const buildClaims = (user: AuthUser, schemaName: string): AccessTokenClai
   sub: user.userId,
   role: normalizeRole(user.role),
   schemaName,
+  ...(user.mustChangePassword ? { mustChangePassword: true } : {}),
   ...(user.role === 'teacher' && user.username ? { username: user.username } : {}),
 });
 
@@ -407,6 +409,7 @@ const sanitizeProfile = (user: AuthUser, positionNames: string[] = []) => {
     phone: user.phone,
     email: user.email,
     profilePhotoUrl: user.profilePhotoUrl,
+    mustChangePassword: user.mustChangePassword,
     ...(normalizedRole === 'staff'
       ? {
           positionNames,

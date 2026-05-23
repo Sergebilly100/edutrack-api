@@ -11,11 +11,11 @@ const getRedis = (): Redis => {
   return _redis;
 };
 
-const FAIL_TTL_SECONDS = 60 * 60;
-const SOFT_LOCK_SECONDS = 5 * 60;
-const HARD_LOCK_SECONDS = 60 * 60;
-const SOFT_LOCK_THRESHOLD = 5;
-const HARD_LOCK_THRESHOLD = 10;
+const FAIL_TTL_SECONDS = 60 * 60; // 1 heure pour compter les échecs de connexion
+const SOFT_LOCK_SECONDS = 5 * 60; // 5 minutes de lock après 5 échecs, pour ralentir les attaques par force brute
+const HARD_LOCK_SECONDS = 60 * 60; // 1 heure de lock après 10 échecs, pour bloquer les attaques persistantes
+const SOFT_LOCK_THRESHOLD = 5; // seuil de 5 échecs pour le soft lock
+const HARD_LOCK_THRESHOLD = 10; // seuil de 10 échecs pour le hard lock
 
 const failKey = (schema: string, identifier: string): string =>
   `login_fail:${schema}:${identifier.toLowerCase()}`;

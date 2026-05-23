@@ -47,7 +47,8 @@ const runTenantMigrations = async (
 
       const schemaAwareSql = content
         .replace(/CREATE SCHEMA "tenant";/g, `CREATE SCHEMA IF NOT EXISTS "${schemaName}";`)
-        .replace(/"tenant"/g, `"${schemaName}"`);
+        .replace(/"tenant"/g, `"${schemaName}"`)
+        .replace(/nspname\s*=\s*'tenant'/g, `nspname = '${schemaName}'`);
 
       const statements = schemaAwareSql
         .split('--> statement-breakpoint')
