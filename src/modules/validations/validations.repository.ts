@@ -497,6 +497,8 @@ export class ValidationsRepository {
       end_scan_action_reason: string | null;
       end_scan_action_at: string | null;
       end_scan_action_cancelled_at: string | null;
+      hourly_rate: number | null;
+      schedule_duration_minutes: number;
     };
 
     const result = await this.db.execute<MissingRow>(sql`
@@ -513,7 +515,9 @@ export class ValidationsRepository {
         at.end_scan_action,
         at.end_scan_action_reason,
         at.end_scan_action_at::text AS end_scan_action_at,
-        at.end_scan_action_cancelled_at::text AS end_scan_action_cancelled_at
+        at.end_scan_action_cancelled_at::text AS end_scan_action_cancelled_at,
+        t.hourly_rate,
+        (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60)::int AS schedule_duration_minutes
       FROM attendances_teacher at
       INNER JOIN teachers t ON t.id = at.teacher_id
       INNER JOIN users u ON u.id = t.user_id
@@ -540,6 +544,7 @@ export class ValidationsRepository {
         entry = {
           teacherId: row.teacher_id,
           teacherName: row.teacher_name,
+          hourlyRate: row.hourly_rate,
           missingEndScanCount: 0,
           warningCount: 0,
           sanctionCount: 0,
@@ -562,6 +567,7 @@ export class ValidationsRepository {
         endScanActionReason: row.end_scan_action_reason ?? null,
         endScanActionAt: row.end_scan_action_at ?? null,
         endScanActionCancelledAt: row.end_scan_action_cancelled_at ?? null,
+        scheduleDurationMinutes: Number(row.schedule_duration_minutes),
       });
     }
 

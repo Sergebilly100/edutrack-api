@@ -133,10 +133,15 @@ export const teachers = tenant.table(
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
       .notNull()
       .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+    updatedBy: uuid('updated_by').references(() => users.id),
   },
   (table) => ({
     teachersUsernameIdx: index('idx_teachers_username').on(table.username),
     teachersUserIdx: index('idx_teachers_user').on(table.userId),
+    teachersUpdatedAtIdx: index('idx_teachers_updated_at').on(table.updatedAt),
   })
 );
 

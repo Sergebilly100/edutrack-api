@@ -157,7 +157,7 @@ export default async function teachersController(app: FastifyInstance): Promise<
    
       const updated = await withTenantSchema(claims.schemaName, async (tenantDb) => {
         const service = buildTeachersService(tenantDb);
-        return service.updateTeacher(params.id, payload);
+        return service.updateTeacher(params.id, payload, claims.sub);
       });
 
       return reply.send(updated);

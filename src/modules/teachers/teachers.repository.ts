@@ -38,6 +38,9 @@ type TeacherRow = {
   username: string;
   user_id: string;
   created_at: Date;
+  updated_at: Date | null;
+  updated_by: string | null;
+  updated_by_name: string | null;
 };
 
 type TotalRow = { total: string | number };
@@ -133,9 +136,13 @@ const TEACHER_SELECT = sql`
     t.blocked_at,
     t.username,
     t.user_id,
-    t.created_at
+    t.created_at,
+    t.updated_at,
+    t.updated_by::text AS updated_by,
+    upd.name           AS updated_by_name
   FROM teachers t
   INNER JOIN users u ON u.id = t.user_id
+  LEFT JOIN users upd ON upd.id = t.updated_by
 `;
 
 export class TeachersRepository {
@@ -255,7 +262,11 @@ export class TeachersRepository {
     return created;
   }
 
-  async updateTeacher(teacherId: string, input: UpdateTeacherInput): Promise<TeacherRow | null> {
+  async updateTeacher(
+    teacherId: string,
+    input: UpdateTeacherInput,
+    actorId?: string | null
+  ): Promise<TeacherRow | null> {
     const current = await this.getTeacherById(teacherId);
     if (!current) return null;
 
@@ -309,6 +320,8 @@ export class TeachersRepository {
     const monthlySalarySql = monthlySalaryVal === null ? sql`NULL` : sql`${monthlySalaryVal}`;
     const hourlyRateSql = hourlyRateVal === null ? sql`NULL` : sql`${hourlyRateVal}`;
 
+    const updatedBySql = actorId ? sql`${actorId}::uuid` : sql`NULL`;
+
     await this.db.execute(sql`
       UPDATE teachers
       SET
@@ -318,7 +331,9 @@ export class TeachersRepository {
         monthly_salary = ${monthlySalarySql},
         is_blocked     = ${nextIsBlocked},
         blocked_reason = ${blockedReasonSql},
-        blocked_at     = ${blockedAtSql}
+        blocked_at     = ${blockedAtSql},
+        updated_at     = NOW(),
+        updated_by     = ${updatedBySql}
       WHERE id = ${teacherId}
     `);
 

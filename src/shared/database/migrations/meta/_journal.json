@@ -141,6 +141,20 @@
       "when": 1748563200000,
       "tag": "0040_user_credentials_tracking",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1748649600000,
+      "tag": "0041_unify_rollcall_rate_in_compliance_view",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1748649660000,
+      "tag": "0042_teachers_updated_audit",
+      "breakpoints": true
     }
   ]
 }

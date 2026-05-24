@@ -41,6 +41,9 @@ type TeacherDTO = {
   blocked_reason: string | null;
   blocked_at: Date | null;
   username: string;
+  updated_at: Date | null;
+  updated_by: string | null;
+  updated_by_name: string | null;
 };
 
 const toDTO = (row: {
@@ -59,6 +62,9 @@ const toDTO = (row: {
   blocked_reason: string | null;
   blocked_at: Date | null;
   username: string;
+  updated_at?: Date | null;
+  updated_by?: string | null;
+  updated_by_name?: string | null;
 }): TeacherDTO => ({
   id: row.id,
   name: row.name,
@@ -75,6 +81,9 @@ const toDTO = (row: {
   blocked_reason: row.blocked_reason,
   blocked_at: row.blocked_at,
   username: row.username,
+  updated_at: row.updated_at ?? null,
+  updated_by: row.updated_by ?? null,
+  updated_by_name: row.updated_by_name ?? null,
 });
 
 export class TeachersService {
@@ -125,7 +134,7 @@ export class TeachersService {
     return toDTO(created);
   }
 
-  async updateTeacher(teacherId: string, input: UpdateTeacherInput) {
+  async updateTeacher(teacherId: string, input: UpdateTeacherInput, actorId?: string | null) {
     const current = await this.repository.getTeacherById(teacherId);
     if (!current) {
       throw new TeachersModuleError('Teacher not found', 404, 'TEACHER_NOT_FOUND');
@@ -165,12 +174,22 @@ export class TeachersService {
       }
     }
 
-    const updated = await this.repository.updateTeacher(teacherId, {
-      ...input,
-      ...(input.subjects ? { subjects: canonicalizeSubjectList(input.subjects) } : {}),
-      hourly_rate: nextType === 'permanent' ? null : nextHourlyRate,
-      monthly_salary: nextType === 'vacataire' ? null : nextMonthlySalary,
-    });
+    // Politique : on conserve toujours hourly_rate et monthly_salary en base,
+    // même si le type courant ne les utilise pas. Cela préserve la cohérence
+    // historique : les salary_records antérieurs gardent leur référence au taux,
+    // et un retour à l'ancien type ne demande pas de re-saisie. Le calcul de
+    // salaire (recalculate*ForMonth) lit sr.hourly_rate snapshoté à la création
+    // du record, pas t.hourly_rate, donc l'historique reste correct.
+    const updated = await this.repository.updateTeacher(
+      teacherId,
+      {
+        ...input,
+        ...(input.subjects ? { subjects: canonicalizeSubjectList(input.subjects) } : {}),
+        hourly_rate: nextHourlyRate,
+        monthly_salary: nextMonthlySalary,
+      },
+      actorId ?? null
+    );
     if (!updated) {
       throw new TeachersModuleError('Teacher not found', 404, 'TEACHER_NOT_FOUND');
     }

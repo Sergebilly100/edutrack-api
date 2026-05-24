@@ -223,19 +223,22 @@ export const ensureTenantRealHoursInfrastructure = async (
         0
       ) AS room_correct_rate,
       -- Score pointage élèves (25%)
+      -- Aligné sur teachers.repository.ts (getAttendanceStats) : on compte
+      -- les sessions où le prof était effectivement présent (status IN present/late/excused)
+      -- ET pour lesquelles au moins un pointage élève existe.
       COALESCE(
         ROUND(
-          COUNT(DISTINCT (at.schedule_id, at.date)) FILTER (
-            WHERE EXISTS (
-              SELECT 1 FROM attendances_student ast
-              WHERE ast.schedule_id = at.schedule_id
-                AND ast.date = at.date
-            )
-            AND at.checked_in_at IS NOT NULL
+          COUNT(at.id) FILTER (
+            WHERE at.status IN ('present', 'late', 'excused')
+              AND EXISTS (
+                SELECT 1 FROM attendances_student ast
+                WHERE ast.schedule_id = at.schedule_id
+                  AND ast.date = at.date
+              )
           )::numeric
           / NULLIF(
             COUNT(at.id) FILTER (
-              WHERE at.checked_in_at IS NOT NULL
+              WHERE at.status IN ('present', 'late', 'excused')
             ),
             0
           ) * 100,
@@ -290,17 +293,17 @@ export const ensureTenantRealHoursInfrastructure = async (
             ) +
             -- Pointage élèves : 25%
             COALESCE(
-              COUNT(DISTINCT (at.schedule_id, at.date)) FILTER (
-                WHERE EXISTS (
-                  SELECT 1 FROM attendances_student ast
-                  WHERE ast.schedule_id = at.schedule_id
-                    AND ast.date = at.date
-                )
-                AND at.checked_in_at IS NOT NULL
+              COUNT(at.id) FILTER (
+                WHERE at.status IN ('present', 'late', 'excused')
+                  AND EXISTS (
+                    SELECT 1 FROM attendances_student ast
+                    WHERE ast.schedule_id = at.schedule_id
+                      AND ast.date = at.date
+                  )
               )::numeric
               / NULLIF(
                 COUNT(at.id) FILTER (
-                  WHERE at.checked_in_at IS NOT NULL
+                  WHERE at.status IN ('present', 'late', 'excused')
                 ),
                 0
               ) * 25,

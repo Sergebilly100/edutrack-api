@@ -140,11 +140,13 @@ export type MissingEndScanSession = {
   endScanActionReason: string | null;
   endScanActionAt: string | null;
   endScanActionCancelledAt: string | null;
+  scheduleDurationMinutes: number;
 };
 
 export type MissingEndScanTeacher = {
   teacherId: string;
   teacherName: string;
+  hourlyRate: number | null;
   missingEndScanCount: number;
   warningCount: number;
   sanctionCount: number;

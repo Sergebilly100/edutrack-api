@@ -127,7 +127,7 @@ describe('teachers.service', () => {
       repository.updateTeacher.mockResolvedValue({
         ...baseTeacher,
         type: 'permanent',
-        hourly_rate: null,
+        hourly_rate: baseTeacher.hourly_rate,
         monthly_salary: 400000,
       });
 
@@ -136,16 +136,19 @@ describe('teachers.service', () => {
         monthly_salary: 400000,
       });
 
+      // Politique : on conserve hourly_rate après changement de type pour préserver
+      // la cohérence des salary_records antérieurs qui peuvent encore le référencer.
       expect(repository.updateTeacher).toHaveBeenCalledWith(
         baseTeacher.id,
         expect.objectContaining({
           type: 'permanent',
-          hourly_rate: null,
+          hourly_rate: baseTeacher.hourly_rate,
           monthly_salary: 400000,
-        })
+        }),
+        null
       );
       expect(result.type).toBe('permanent');
-      expect(result.hourly_rate).toBeNull();
+      expect(result.hourly_rate).toBe(baseTeacher.hourly_rate);
       expect(result.monthly_salary).toBe(400000);
     });
 
@@ -173,13 +176,13 @@ describe('teachers.service', () => {
       ).rejects.toMatchObject({ code: 'TEACHER_NOT_FOUND', statusCode: 404 });
     });
 
-    it('annule hourly_rate quand le type passe à permanent', async () => {
+    it('conserve hourly_rate historique quand le type passe à permanent', async () => {
       repository.getTeacherById.mockResolvedValue(baseTeacher);
       repository.hasOutstandingUnpaidSalaryRecords.mockResolvedValue(false);
       repository.updateTeacher.mockResolvedValue({
         ...baseTeacher,
         type: 'permanent',
-        hourly_rate: null,
+        hourly_rate: baseTeacher.hourly_rate,
         monthly_salary: 350000,
       });
 
@@ -188,20 +191,26 @@ describe('teachers.service', () => {
         monthly_salary: 350000,
       });
 
+      // Politique : on conserve hourly_rate pour préserver la cohérence des
+      // salary_records antérieurs qui peuvent encore le référencer.
       expect(repository.updateTeacher).toHaveBeenCalledWith(
         baseTeacher.id,
-        expect.objectContaining({ hourly_rate: null, monthly_salary: 350000 })
+        expect.objectContaining({
+          hourly_rate: baseTeacher.hourly_rate,
+          monthly_salary: 350000,
+        }),
+        null
       );
     });
 
-    it('annule monthly_salary quand le type passe à vacataire', async () => {
+    it('conserve monthly_salary historique quand le type passe à vacataire', async () => {
       repository.getTeacherById.mockResolvedValue(basePermanent);
       repository.hasOutstandingUnpaidSalaryRecords.mockResolvedValue(false);
       repository.updateTeacher.mockResolvedValue({
         ...basePermanent,
         type: 'vacataire',
         hourly_rate: 6000,
-        monthly_salary: null,
+        monthly_salary: basePermanent.monthly_salary,
       });
 
       await service.updateTeacher(basePermanent.id, {
@@ -211,7 +220,11 @@ describe('teachers.service', () => {
 
       expect(repository.updateTeacher).toHaveBeenCalledWith(
         basePermanent.id,
-        expect.objectContaining({ monthly_salary: null, hourly_rate: 6000 })
+        expect.objectContaining({
+          monthly_salary: basePermanent.monthly_salary,
+          hourly_rate: 6000,
+        }),
+        null
       );
     });
   });
