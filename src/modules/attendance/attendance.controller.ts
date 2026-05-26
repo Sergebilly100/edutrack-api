@@ -36,8 +36,35 @@ const handleError = (
     });
   }
 
+  // On log le détail PG (code, detail, hint, position, query) pour diagnostiquer
+  // les 500 sans devoir attacher un debugger — utile sur le 500 récurrent du
+  // pointage élève (cast enum / search_path / FK manquante / search_path KO).
+  const pgError = error as {
+    code?: string;
+    detail?: string;
+    hint?: string;
+    position?: string;
+    table?: string;
+    column?: string;
+    constraint?: string;
+    routine?: string;
+    where?: string;
+  };
   request.log.error(
-    { err: error instanceof Error ? error.message : 'unknown error' },
+    {
+      err: error instanceof Error ? error.message : 'unknown error',
+      stack: error instanceof Error ? error.stack : undefined,
+      pgCode: pgError?.code,
+      pgDetail: pgError?.detail,
+      pgHint: pgError?.hint,
+      pgTable: pgError?.table,
+      pgColumn: pgError?.column,
+      pgConstraint: pgError?.constraint,
+      pgRoutine: pgError?.routine,
+      pgWhere: pgError?.where,
+      url: request.url,
+      method: request.method,
+    },
     '[attendance] unhandled error'
   );
 

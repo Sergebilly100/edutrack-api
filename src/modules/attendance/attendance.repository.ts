@@ -837,15 +837,43 @@ export class AttendanceRepository {
       absentSet.has(id) ? ATTENDANCE_STATUS.ABSENT : ATTENDANCE_STATUS.PRESENT
     );
 
-    // Single bulk INSERT with unnest — O(1) RTT instead of O(N)
+    // Construction des array literals via sql.join — pattern obligatoire avec
+    // drizzle + node-postgres pour les arrays passés à `unnest()`. Si on
+    // interpole directement `${jsArray}::uuid[]`, drizzle expand chaque élément
+    // en placeholder séparé, ce qui transforme l'array JS en un tuple PG
+    // (`($1, $2, …)::uuid[]`) — PG refuse alors avec "function unnest(record,
+    // record) does not exist". Le ARRAY[...]::T[] est interprété comme un
+    // littéral array correct.
+    //
+    // status est cast vers l'enum `attendance_student_status` (résolu via
+    // search_path tenant). Sans ce cast, PG refuse l'INSERT text → enum
+    // ("column is of type attendance_student_status but expression is of
+    // type text") → 500 sur tout pointage élève.
+    //
+    // unnest(arr1, arr2) (forme multi-arguments) garantit l'alignement
+    // ligne-à-ligne entre student_id et status — sans risque de produit
+    // cartésien comme avec deux `unnest()` séparés dans le SELECT.
+    const studentIdsArray = sql`ARRAY[${sql.join(
+      studentIds.map((id) => sql`${id}::uuid`),
+      sql`, `
+    )}]`;
+    const statusesArray = sql`ARRAY[${sql.join(
+      statuses.map((s) => sql`${s}::attendance_student_status`),
+      sql`, `
+    )}]`;
+
     const result = await this.db.execute<{ id: string }>(sql`
       INSERT INTO attendances_student (student_id, schedule_id, date, status, marked_by)
       SELECT
-        unnest(${studentIds}::uuid[]) AS student_id,
-        ${params.scheduleId}::uuid   AS schedule_id,
-        ${params.date}::date         AS date,
-        unnest(${statuses}::text[])  AS status,
-        ${params.markedByUserId}     AS marked_by
+        u.student_id,
+        ${params.scheduleId}::uuid,
+        ${params.date}::date,
+        u.status,
+        ${params.markedByUserId}::uuid
+      FROM unnest(
+        ${studentIdsArray},
+        ${statusesArray}
+      ) AS u(student_id, status)
       ON CONFLICT (student_id, schedule_id, date)
       DO UPDATE SET
         status    = EXCLUDED.status,
