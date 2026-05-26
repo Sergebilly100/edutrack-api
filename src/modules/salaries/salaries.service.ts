@@ -197,4 +197,24 @@ export const registerSalaryEventListeners = (): void => {
       });
     });
   });
+
+  // Après chaque paiement de salaire (online ou sync offline), recalculer
+  // le salary_record pour intégrer les modifications d'attendance intervenues
+  // entre la dernière compute et le paiement (validations, sanctions, annulations).
+  on('salary.payment_recorded', (payload) => {
+    void withTenantSchema(payload.schemaName, async (tenantDb) => {
+      const service = buildSalariesService(tenantDb);
+      try {
+        await service.recalculateForTeacherMonth({
+          teacherId: payload.teacherId,
+          month: payload.periodMonth,
+        });
+      } catch (error) {
+        if (error instanceof SalariesModuleError && error.code === 'SALARY_RECORD_NOT_FOUND') {
+          return;
+        }
+        throw error;
+      }
+    });
+  });
 };

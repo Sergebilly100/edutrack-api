@@ -204,6 +204,19 @@ export type TeacherEndScanWarningPayload = {
   missingCount: number;
 };
 
+export type SalaryPaymentRecordedPayload = {
+  tenantId: string;
+  schemaName: string;
+  teacherId: string;
+  salaryRecordId: string;
+  periodMonth: string;
+  amountFcfa: number;
+  hoursPaid: number | null;
+  paidBy: string;
+  /** Indique si le paiement a été synchronisé depuis une queue offline. */
+  fromOfflineSync: boolean;
+};
+
 export type EventMap = {
   'teacher.checkout_completed': TeacherCheckoutCompletedPayload;
   'teacher.checked_in': TeacherCheckedInPayload;
@@ -241,6 +254,7 @@ export type EventMap = {
     | RoomDeletedPayload
     | RoomQrRegeneratedPayload;
   'import.completed': ImportCompletedPayload;
+  'salary.payment_recorded': SalaryPaymentRecordedPayload;
 };
 
 /**

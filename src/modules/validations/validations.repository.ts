@@ -36,6 +36,8 @@ type PendingValidationRow = {
   validation_reason: string | null;
   hourly_rate: number | null;
   kind: ValidationKind;
+  /** Tableau Postgres des critères déclenchés (peut contenir plusieurs valeurs). */
+  kinds: ValidationKind[] | null;
   slot_label: string | null;
   room_name: string | null;
 };
@@ -83,6 +85,7 @@ const mapPendingRow = (row: PendingValidationRow): PendingValidationItem => ({
   validationReason: row.validation_reason,
   hourlyRate: row.hourly_rate,
   kind: row.kind,
+  kinds: row.kinds && row.kinds.length > 0 ? row.kinds : [row.kind],
   slotLabel: row.slot_label ?? null,
   roomName: row.room_name ?? null,
 });
@@ -103,47 +106,72 @@ export class ValidationsRepository {
         LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
         WHERE t.schema_name = current_schema()
         LIMIT 1
-      )
-      SELECT
-        at.id::text AS attendance_id,
-        t.id::text AS teacher_id,
-        u.id::text AS teacher_user_id,
-        u.name AS teacher_name,
-        u.phone AS teacher_phone,
-        u.email AS teacher_email,
-        s.subject AS course_name,
-        c.name AS class_name,
-        at.date::text AS date,
-        at.checked_in_at::text AS checked_in_at,
-        at.checked_out_at::text AS checked_out_at,
-        at.geo_status,
-        at.checkin_distance,
-        at.actual_minutes,
-        (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0)::numeric(8,2) AS schedule_duration_minutes,
-        at.validation_reason,
-        t.hourly_rate,
-        CASE
-          WHEN at.geo_status = 'suspicious' THEN 'gps_suspicious'
-          ELSE 'short_hours'
-        END AS kind,
-        ts.label AS slot_label,
-        r.name AS room_name
-      FROM attendances_teacher at
-      INNER JOIN teachers t ON t.id = at.teacher_id
-      INNER JOIN users u ON u.id = t.user_id
-      INNER JOIN schedules s ON s.id = at.schedule_id
-      INNER JOIN classes c ON c.id = s.class_id
-      INNER JOIN time_slots ts ON ts.id = s.time_slot_id
-      LEFT JOIN rooms r ON r.id = s.room_id
-      WHERE at.validation_status = 'pending'
-        AND (
-          at.geo_status = 'suspicious'
-          OR (
+      ),
+      base AS (
+        SELECT
+          at.id AS attendance_id,
+          t.id AS teacher_id,
+          u.id AS teacher_user_id,
+          u.name AS teacher_name,
+          u.phone AS teacher_phone,
+          u.email AS teacher_email,
+          s.subject AS course_name,
+          c.name AS class_name,
+          at.date,
+          at.checked_in_at,
+          at.checked_out_at,
+          at.geo_status,
+          at.checkin_distance,
+          at.actual_minutes,
+          (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0)::numeric(8,2) AS schedule_duration_minutes,
+          at.validation_reason,
+          t.hourly_rate,
+          ts.label AS slot_label,
+          r.name AS room_name,
+          (at.geo_status = 'suspicious') AS is_gps_suspicious,
+          (
             at.actual_minutes IS NOT NULL
             AND at.actual_minutes < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
-          )
-        )
-      ORDER BY at.date DESC, at.checked_in_at DESC NULLS LAST, u.name ASC
+          ) AS is_short_hours
+        FROM attendances_teacher at
+        INNER JOIN teachers t ON t.id = at.teacher_id
+        INNER JOIN users u ON u.id = t.user_id
+        INNER JOIN schedules s ON s.id = at.schedule_id
+        INNER JOIN classes c ON c.id = s.class_id
+        INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+        LEFT JOIN rooms r ON r.id = s.room_id
+        WHERE at.validation_status = 'pending'
+      )
+      SELECT
+        attendance_id::text AS attendance_id,
+        teacher_id::text AS teacher_id,
+        teacher_user_id::text AS teacher_user_id,
+        teacher_name,
+        teacher_phone,
+        teacher_email,
+        course_name,
+        class_name,
+        date::text AS date,
+        checked_in_at::text AS checked_in_at,
+        checked_out_at::text AS checked_out_at,
+        geo_status,
+        checkin_distance,
+        actual_minutes,
+        schedule_duration_minutes,
+        validation_reason,
+        hourly_rate,
+        -- Onglet primaire : short_hours quand le motif "heures" est présent
+        -- (le directeur doit saisir validated_hours), sinon gps_suspicious.
+        CASE WHEN is_short_hours THEN 'short_hours' ELSE 'gps_suspicious' END AS kind,
+        ARRAY_REMOVE(ARRAY[
+          CASE WHEN is_short_hours THEN 'short_hours' END,
+          CASE WHEN is_gps_suspicious THEN 'gps_suspicious' END
+        ], NULL)::text[] AS kinds,
+        slot_label,
+        room_name
+      FROM base
+      WHERE is_gps_suspicious OR is_short_hours
+      ORDER BY date DESC, checked_in_at DESC NULLS LAST, teacher_name ASC
     `);
 
     return getRows(result).reduce<PendingValidationGroups>(
@@ -165,21 +193,26 @@ export class ValidationsRepository {
         LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
         WHERE t.schema_name = current_schema()
         LIMIT 1
-      )
-      SELECT
-        CASE WHEN at.geo_status = 'suspicious' THEN 'gps_suspicious' ELSE 'short_hours' END AS kind,
-        COUNT(*)::text AS cnt
-      FROM attendances_teacher at
-      INNER JOIN schedules s ON s.id = at.schedule_id
-      INNER JOIN time_slots ts ON ts.id = s.time_slot_id
-      WHERE at.validation_status = 'pending'
-        AND (
-          at.geo_status = 'suspicious'
-          OR (
+      ),
+      pending_base AS (
+        SELECT
+          (at.geo_status = 'suspicious') AS is_gps_suspicious,
+          (
             at.actual_minutes IS NOT NULL
             AND at.actual_minutes < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
-          )
-        )
+          ) AS is_short_hours
+        FROM attendances_teacher at
+        INNER JOIN schedules s ON s.id = at.schedule_id
+        INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+        WHERE at.validation_status = 'pending'
+      )
+      -- Onglet primaire identique à listPending : short_hours prioritaire si déclenché,
+      -- sinon gps_suspicious. Garantit qu'un cours multi-critères n'est compté qu'une fois.
+      SELECT
+        CASE WHEN is_short_hours THEN 'short_hours' ELSE 'gps_suspicious' END AS kind,
+        COUNT(*)::text AS cnt
+      FROM pending_base
+      WHERE is_gps_suspicious OR is_short_hours
       GROUP BY 1
       UNION ALL
       SELECT
@@ -214,6 +247,13 @@ export class ValidationsRepository {
     const db = tx ?? this.db;
 
     const result = await db.execute<AttendanceValidationContextRow>(sql`
+      WITH feature_flags AS (
+        SELECT COALESCE(f.checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
+        FROM public.tenants t
+        LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
+        WHERE t.schema_name = current_schema()
+        LIMIT 1
+      )
       SELECT
         at.id::text AS attendance_id,
         t.id::text AS teacher_id,
@@ -232,7 +272,20 @@ export class ValidationsRepository {
         (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0)::numeric(8,2) AS schedule_duration_minutes,
         at.validation_reason,
         t.hourly_rate,
-        CASE WHEN at.geo_status = 'suspicious' THEN 'gps_suspicious' ELSE 'short_hours' END AS kind,
+        CASE
+          WHEN at.actual_minutes IS NOT NULL
+            AND at.actual_minutes < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
+          THEN 'short_hours'
+          ELSE 'gps_suspicious'
+        END AS kind,
+        ARRAY_REMOVE(ARRAY[
+          CASE
+            WHEN at.actual_minutes IS NOT NULL
+              AND at.actual_minutes < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
+            THEN 'short_hours'
+          END,
+          CASE WHEN at.geo_status = 'suspicious' THEN 'gps_suspicious' END
+        ], NULL)::text[] AS kinds,
         DATE_TRUNC('month', at.date)::date::text AS period_month,
         ts.label AS slot_label,
         r.name AS room_name
@@ -940,6 +993,7 @@ export class ValidationsRepository {
       validation_reason: string | null;
       validated_at: string | null;
       kind: ValidationKind;
+      kinds: ValidationKind[] | null;
       slot_label: string | null;
       room_name: string | null;
       schedule_duration_minutes: string | number;
@@ -949,6 +1003,13 @@ export class ValidationsRepository {
     };
 
     const result = await this.db.execute<HistoryRow>(sql`
+      WITH feature_flags AS (
+        SELECT COALESCE(f.checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
+        FROM public.tenants t
+        LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
+        WHERE t.schema_name = current_schema()
+        LIMIT 1
+      )
       SELECT
         at.id::text AS attendance_id,
         t.id::text AS teacher_id,
@@ -961,9 +1022,19 @@ export class ValidationsRepository {
         at.validation_reason,
         at.validated_at::text AS validated_at,
         CASE
-          WHEN at.geo_status = 'suspicious' THEN 'gps_suspicious'
-          ELSE 'short_hours'
+          WHEN at.actual_minutes IS NOT NULL
+            AND at.actual_minutes < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
+          THEN 'short_hours'
+          ELSE 'gps_suspicious'
         END AS kind,
+        ARRAY_REMOVE(ARRAY[
+          CASE
+            WHEN at.actual_minutes IS NOT NULL
+              AND at.actual_minutes < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
+            THEN 'short_hours'
+          END,
+          CASE WHEN at.geo_status = 'suspicious' THEN 'gps_suspicious' END
+        ], NULL)::text[] AS kinds,
         ts.label AS slot_label,
         r.name AS room_name,
         (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0)::numeric(8,2) AS schedule_duration_minutes,
@@ -1013,6 +1084,7 @@ export class ValidationsRepository {
         validationReason: row.validation_reason,
         validatedAt: row.validated_at,
         kind: row.kind,
+        kinds: row.kinds && row.kinds.length > 0 ? row.kinds : [row.kind],
         slotLabel: row.slot_label ?? null,
         roomName: row.room_name ?? null,
         scheduleDurationMinutes: toNumber(row.schedule_duration_minutes) ?? 0,

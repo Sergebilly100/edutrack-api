@@ -63,6 +63,19 @@ const makePaymentSummary = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const makeSalaryPayment = (overrides: Record<string, unknown> = {}) => ({
+  id: 'payment-1',
+  salary_record_id: 'record-1',
+  hours_paid: '5',
+  amount_fcfa: 25000,
+  paid_at: '2026-04-15T10:00:00.000Z',
+  paid_by: 'director-1',
+  paid_by_name: null,
+  paid_by_role: null,
+  notes: null,
+  ...overrides,
+});
+
 const repository = {
   listTeacherMonthlyMetrics: vi.fn(),
   getLastComputedDate: vi.fn(),
@@ -381,7 +394,10 @@ describe('BillingService', () => {
         makeSalaryRecord({ hours_done: '10', hourly_rate: 5000, total_fcfa: 50000 })
       );
       repository.getSalaryPaymentsSummary.mockResolvedValue(makePaymentSummary());
-      repository.createVacatairePartialPaymentAtomic.mockResolvedValue({ record: partialRecord });
+      repository.createVacatairePartialPaymentAtomic.mockResolvedValue({
+        record: partialRecord,
+        payment: makeSalaryPayment({ hours_paid: '5', amount_fcfa: 25000 }),
+      });
       repository.auditSalaryAction.mockResolvedValue(undefined);
 
       const result = await service.updateSalaryRecordStatus({
@@ -403,7 +419,10 @@ describe('BillingService', () => {
         makeSalaryRecord({ hours_done: '10', hourly_rate: 5000, total_fcfa: 50000 })
       );
       repository.getSalaryPaymentsSummary.mockResolvedValue(makePaymentSummary());
-      repository.createVacatairePartialPaymentAtomic.mockResolvedValue({ record: paidRecord });
+      repository.createVacatairePartialPaymentAtomic.mockResolvedValue({
+        record: paidRecord,
+        payment: makeSalaryPayment({ hours_paid: '10', amount_fcfa: 50000 }),
+      });
       repository.auditSalaryAction.mockResolvedValue(undefined);
 
       const result = await service.updateSalaryRecordStatus({

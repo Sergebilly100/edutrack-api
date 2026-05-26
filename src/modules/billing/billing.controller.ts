@@ -344,6 +344,7 @@ export default async function billingController(
               userId: claims.sub,
               role: claims.role as 'director' | 'staff' | 'teacher' | 'super_admin',
               schemaName: claims.schemaName,
+              tenantId: claims.tenantId,
             },
           });
         });

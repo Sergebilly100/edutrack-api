@@ -33,7 +33,10 @@ export type PendingValidationItem = {
   scheduleDurationMinutes: number;
   validationReason: string | null;
   hourlyRate: number | null;
+  /** Onglet où l'item est affiché en priorité (action la plus contraignante). */
   kind: ValidationKind;
+  /** Tous les critères déclenchés sur cet item (peut contenir plusieurs valeurs). */
+  kinds: ValidationKind[];
   slotLabel: string | null;
   roomName: string | null;
 };
@@ -103,6 +106,7 @@ export type ValidationHistoryItem = {
   validationReason: string | null;
   validatedAt: string | null;
   kind: ValidationKind;
+  kinds: ValidationKind[];
   slotLabel: string | null;
   roomName: string | null;
   scheduleDurationMinutes: number;

@@ -316,21 +316,45 @@ export function buildDashboardRepository(db: TenantDb) {
         WHERE t.type = 'vacataire'
           AND u.is_active = true
       )
+      -- Heures réellement comptabilisées pour le paiement :
+      --   - approved → validated_hours (peut être < hours prévues)
+      --   - rejected → 0
+      --   - present/late/excused (sans validation_status finale) → hours pleines
+      -- Heures économisées par l'école = hours prévues - hours payées,
+      -- ce qui inclut désormais la différence "approbation à heures réduites".
       SELECT
         COALESCE(SUM(es.hours), 0)::numeric(8,2) AS monthly_total_hours,
         COALESCE(SUM(es.hours) FILTER (WHERE es.d <= ${periodEnd}::date), 0)::numeric(8,2) AS planned_hours_until_period_end,
-        COALESCE(SUM(es.hours) FILTER (
-          WHERE es.d <= ${periodEnd}::date
-            AND at.status IN ('present', 'late', 'excused')
+        COALESCE(SUM(
+          CASE
+            WHEN es.d > ${periodEnd}::date THEN 0
+            WHEN at.validation_status = 'approved' THEN COALESCE(at.validated_hours, 0)
+            WHEN at.validation_status = 'rejected' THEN 0
+            WHEN at.status IN ('present', 'late', 'excused') THEN es.hours
+            ELSE 0
+          END
         ), 0)::numeric(8,2) AS completed_hours_until_period_end,
         COALESCE(SUM(es.hours * es.hourly_rate), 0)::numeric(12,2) AS attendance_monthly_total,
-        COALESCE(SUM(es.hours * es.hourly_rate) FILTER (
-          WHERE es.d <= ${periodEnd}::date
-            AND at.status IN ('present', 'late', 'excused')
+        COALESCE(SUM(
+          CASE
+            WHEN es.d > ${periodEnd}::date THEN 0
+            WHEN at.validation_status = 'approved' THEN COALESCE(at.validated_hours, 0) * es.hourly_rate
+            WHEN at.validation_status = 'rejected' THEN 0
+            WHEN at.status IN ('present', 'late', 'excused') THEN es.hours * es.hourly_rate
+            ELSE 0
+          END
         ), 0)::numeric(12,2) AS to_pay_current_period,
-        COALESCE(SUM(es.hours * es.hourly_rate) FILTER (
-          WHERE es.d <= ${periodEnd}::date
-            AND (at.id IS NULL OR at.status = 'absent')
+        COALESCE(SUM(
+          CASE
+            WHEN es.d > ${periodEnd}::date THEN 0
+            -- Approbation à heures réduites : la différence est une économie
+            WHEN at.validation_status = 'approved'
+              THEN GREATEST(0, es.hours - COALESCE(at.validated_hours, 0)) * es.hourly_rate
+            -- Cours rejeté ou marqué absent : économie pleine
+            WHEN at.validation_status = 'rejected' THEN es.hours * es.hourly_rate
+            WHEN at.id IS NULL OR at.status = 'absent' THEN es.hours * es.hourly_rate
+            ELSE 0
+          END
         ), 0)::numeric(12,2) AS saved_amount
       FROM expected_schedules es
       LEFT JOIN attendances_teacher at

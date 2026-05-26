@@ -1,4 +1,5 @@
 import { BillingRepository, type SalaryRecordStatus } from './billing.repository.js';
+import { emit } from '../../shared/events/event-bus.js';
 
 export class BillingModuleError extends Error {
   constructor(
@@ -534,7 +535,9 @@ export class BillingService {
     status: 'paid' | 'disputed';
     notes?: string;
     hoursToPay?: number;
-    actor: { userId: string; role: 'director' | 'staff' | 'teacher' | 'super_admin'; schemaName: string };
+    actor: { userId: string; role: 'director' | 'staff' | 'teacher' | 'super_admin'; schemaName: string; tenantId?: string };
+    /** True quand la mutation provient d'une synchronisation offline (PWA). */
+    fromOfflineSync?: boolean;
   }) {
     if (input.status === 'paid' && input.actor.role !== 'director') {
       throw new BillingModuleError(
@@ -549,6 +552,9 @@ export class BillingService {
       throw new BillingModuleError('Salary record not found', 404, 'SALARY_RECORD_NOT_FOUND');
     }
     let updated;
+    // Garde trace du paiement effectivement créé pour émettre l'event de recalcul
+    // (null pour 'disputed', qui ne crée pas de paiement).
+    let recordedPayment: { amountFcfa: number; hoursPaid: number | null } | null = null;
     if (input.status === 'disputed') {
       updated = await this.repository.updateSalaryStatus({
         recordId: input.recordId,
@@ -587,6 +593,7 @@ export class BillingService {
           notes: input.notes,
           paidBy: input.actor.userId,
         });
+        recordedPayment = { amountFcfa: existing.total_fcfa, hoursPaid: null };
       } else {
         // Validation préliminaire (avant transaction)
         if (input.hoursToPay === undefined || !Number.isFinite(input.hoursToPay) || input.hoursToPay <= 0) {
@@ -610,6 +617,13 @@ export class BillingService {
           });
 
           updated = result.record;
+          recordedPayment = {
+            amountFcfa: result.payment.amount_fcfa,
+            hoursPaid:
+              result.payment.hours_paid === null
+                ? null
+                : BillingRepository.toNumber(result.payment.hours_paid),
+          };
         } catch (error) {
           // La transaction a échoué : soit heures insuffisantes, soit record non trouvé
           const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -658,6 +672,23 @@ export class BillingService {
         hoursToPay: input.hoursToPay ?? null,
       },
     });
+
+    if (recordedPayment) {
+      // Déclenche un recalcul async du salary_record en lisant l'état courant
+      // des pointages (validations, sanctions, annulations) — voir
+      // registerSalaryEventListeners dans salaries.service.ts.
+      emit('salary.payment_recorded', {
+        tenantId: input.actor.tenantId ?? '',
+        schemaName: input.actor.schemaName,
+        teacherId: updated.teacher_id,
+        salaryRecordId: updated.id,
+        periodMonth: updated.period_month.slice(0, 7),
+        amountFcfa: recordedPayment.amountFcfa,
+        hoursPaid: recordedPayment.hoursPaid,
+        paidBy: input.actor.userId,
+        fromOfflineSync: input.fromOfflineSync ?? false,
+      });
+    }
 
     return {
       record: {
