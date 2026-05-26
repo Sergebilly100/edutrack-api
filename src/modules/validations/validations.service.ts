@@ -248,7 +248,7 @@ export class ValidationsService {
   // ── End-scan actions ─────────────────────────────────────────────────────
 
   async applyEndScanAction(
-    input: { attendanceId: string; action: EndScanAction; reason: string },
+    input: { attendanceId: string; action: EndScanAction; reason: string; validatedHours?: number },
     context: ServiceContext
   ): Promise<{ success: true }> {
     const record = await this.repository.findAttendanceForEndScanAction(input.attendanceId);
@@ -286,6 +286,19 @@ export class ValidationsService {
         reason: input.reason,
         actorId: context.userId,
       });
+      await this.repository.recomputeForAttendanceDate(record.teacher_id, record.date);
+    } else if (input.action === 'warned' && input.validatedHours !== undefined) {
+      // Le directeur tolère le scan manquant ET fixe explicitement les heures
+      // à créditer (ex: cours court probable → créditer la borne supérieure
+      // au lieu des heures pleines du créneau). On approuve l'attendance avec
+      // validated_hours pour que recomputeTeacherSalaryForMonth les utilise.
+      await this.repository.approve(
+        {
+          attendanceId: input.attendanceId,
+          validatedHours: input.validatedHours,
+          validatedBy: context.userId,
+        }
+      );
       await this.repository.recomputeForAttendanceDate(record.teacher_id, record.date);
     }
 

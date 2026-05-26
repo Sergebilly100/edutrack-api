@@ -73,6 +73,12 @@ export const endScanActionBodySchema = z.object({
   attendance_id: z.string().uuid(),
   action: z.enum(['warned', 'sanctioned']),
   reason: z.string().trim().min(3).max(500),
+  /**
+   * Heures à créditer lorsque action='warned' et que le directeur veut
+   * imputer une durée différente de celle prévue par le créneau (ex: cours court).
+   * Ignoré pour action='sanctioned' (toujours 0 par définition).
+   */
+  validated_hours: z.number().min(0).max(24).optional(),
 });
 
 export const cancelEndScanSanctionBodySchema = z.object({
