@@ -145,6 +145,18 @@ export type MissingEndScanSession = {
   endScanActionAt: string | null;
   endScanActionCancelledAt: string | null;
   scheduleDurationMinutes: number;
+  /**
+   * Durée estimée du cours en minutes, calculée comme (end_time_prévu - checked_in_at).
+   * Sert uniquement à l'aide à la décision : ne crédite rien sur le salaire.
+   * null si checked_in_at est absent ou si le calcul n'est pas possible.
+   */
+  estimatedDurationMinutes: number | null;
+  /**
+   * True si l'estimation suggère un cours court (estimation < durée prévue - tolérance).
+   * N'a de sens qu'en hypothèse "le prof a réellement enseigné jusqu'à l'heure de fin
+   * du créneau" — c'est la borne supérieure de ce qui a pu être fait sans scan de fin.
+   */
+  likelyShortHours: boolean;
 };
 
 export type MissingEndScanTeacher = {

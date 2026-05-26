@@ -164,9 +164,9 @@ export class ValidationsRepository {
         -- (le directeur doit saisir validated_hours), sinon gps_suspicious.
         CASE WHEN is_short_hours THEN 'short_hours' ELSE 'gps_suspicious' END AS kind,
         ARRAY_REMOVE(ARRAY[
-          CASE WHEN is_short_hours THEN 'short_hours' END,
-          CASE WHEN is_gps_suspicious THEN 'gps_suspicious' END
-        ], NULL)::text[] AS kinds,
+          CASE WHEN is_short_hours THEN 'short_hours'::text END,
+          CASE WHEN is_gps_suspicious THEN 'gps_suspicious'::text END
+        ], NULL) AS kinds,
         slot_label,
         room_name
       FROM base
@@ -282,10 +282,10 @@ export class ValidationsRepository {
           CASE
             WHEN at.actual_minutes IS NOT NULL
               AND at.actual_minutes < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
-            THEN 'short_hours'
+            THEN 'short_hours'::text
           END,
-          CASE WHEN at.geo_status = 'suspicious' THEN 'gps_suspicious' END
-        ], NULL)::text[] AS kinds,
+          CASE WHEN at.geo_status = 'suspicious' THEN 'gps_suspicious'::text END
+        ], NULL) AS kinds,
         DATE_TRUNC('month', at.date)::date::text AS period_month,
         ts.label AS slot_label,
         r.name AS room_name
@@ -552,9 +552,18 @@ export class ValidationsRepository {
       end_scan_action_cancelled_at: string | null;
       hourly_rate: number | null;
       schedule_duration_minutes: number;
+      estimated_duration_minutes: number | null;
+      likely_short_hours: boolean;
     };
 
     const result = await this.db.execute<MissingRow>(sql`
+      WITH feature_flags AS (
+        SELECT COALESCE(f.checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
+        FROM public.tenants t
+        LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
+        WHERE t.schema_name = current_schema()
+        LIMIT 1
+      )
       SELECT
         t.id::text AS teacher_id,
         u.name AS teacher_name,
@@ -570,7 +579,26 @@ export class ValidationsRepository {
         at.end_scan_action_at::text AS end_scan_action_at,
         at.end_scan_action_cancelled_at::text AS end_scan_action_cancelled_at,
         t.hourly_rate,
-        (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60)::int AS schedule_duration_minutes
+        (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60)::int AS schedule_duration_minutes,
+        -- Estimation : si le prof a réellement enseigné jusqu'à l'heure de fin prévue,
+        -- la durée maximale du cours est (end_time - checked_in_at). C'est une borne
+        -- supérieure : indication d'aide à la décision, sans impact sur le salaire.
+        CASE
+          WHEN at.checked_in_at IS NULL THEN NULL
+          ELSE GREATEST(
+            0,
+            EXTRACT(EPOCH FROM ((at.date::timestamp + ts.end_time) - at.checked_in_at)) / 60
+          )::int
+        END AS estimated_duration_minutes,
+        CASE
+          WHEN at.checked_in_at IS NULL THEN false
+          ELSE (
+            EXTRACT(EPOCH FROM ((at.date::timestamp + ts.end_time) - at.checked_in_at)) / 60
+            <
+            (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0)
+              - (SELECT checkout_tolerance_minutes FROM feature_flags)
+          )
+        END AS likely_short_hours
       FROM attendances_teacher at
       INNER JOIN teachers t ON t.id = at.teacher_id
       INNER JOIN users u ON u.id = t.user_id
@@ -621,6 +649,11 @@ export class ValidationsRepository {
         endScanActionAt: row.end_scan_action_at ?? null,
         endScanActionCancelledAt: row.end_scan_action_cancelled_at ?? null,
         scheduleDurationMinutes: Number(row.schedule_duration_minutes),
+        estimatedDurationMinutes:
+          row.estimated_duration_minutes === null
+            ? null
+            : Number(row.estimated_duration_minutes),
+        likelyShortHours: row.likely_short_hours === true,
       });
     }
 
@@ -1031,10 +1064,10 @@ export class ValidationsRepository {
           CASE
             WHEN at.actual_minutes IS NOT NULL
               AND at.actual_minutes < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
-            THEN 'short_hours'
+            THEN 'short_hours'::text
           END,
-          CASE WHEN at.geo_status = 'suspicious' THEN 'gps_suspicious' END
-        ], NULL)::text[] AS kinds,
+          CASE WHEN at.geo_status = 'suspicious' THEN 'gps_suspicious'::text END
+        ], NULL) AS kinds,
         ts.label AS slot_label,
         r.name AS room_name,
         (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0)::numeric(8,2) AS schedule_duration_minutes,
