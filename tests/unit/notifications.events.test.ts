@@ -139,7 +139,7 @@ describe('notifications event-bus integration', () => {
       tenantDb,
       expect.objectContaining({
         type: 'teacher_qr_mismatch',
-        status: 'skipped_unknown',
+        status: 'sent',
       })
     );
   });

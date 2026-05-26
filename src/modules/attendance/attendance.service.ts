@@ -81,6 +81,51 @@ const resolveGeo = (input: {
 // QUALITÉ FIX : monthBoundsFromDate déplacé vers shared/utils/date.ts
 export const monthBoundsFromDate = getMonthBounds;
 
+// Fenêtre d'acceptation d'un `client_timestamp` (action réelle vs heure de sync).
+// On accepte jusqu'à 24h dans le passé pour couvrir un téléphone offline une
+// journée entière, et 5 min dans le futur pour tolérer une horloge client
+// légèrement désynchronisée.
+const CLIENT_TIMESTAMP_MAX_PAST_MS = 24 * 60 * 60 * 1000; // 24h
+const CLIENT_TIMESTAMP_MAX_FUTURE_MS = 5 * 60 * 1000; // 5 min
+
+// Retourne l'horodatage réel à utiliser pour l'action :
+// - si le client a fourni `client_timestamp` ET qu'il est dans la fenêtre acceptée
+//   → on l'utilise (cas du pointage offline rejoué après sync)
+// - sinon → on prend l'heure serveur (comportement historique)
+//
+// Les rejets sont silencieux (fallback serveur) plutôt que des erreurs : la
+// présence du prof importe plus qu'un timestamp pixel-perfect.
+const resolveActualOccurredAt = (clientTimestamp: string | undefined): Date => {
+  const serverNow = new Date();
+  if (!clientTimestamp) {
+    return serverNow;
+  }
+
+  const parsed = new Date(clientTimestamp);
+  if (Number.isNaN(parsed.getTime())) {
+    logger.warn({ clientTimestamp }, '[attendance] invalid client_timestamp, falling back to server time');
+    return serverNow;
+  }
+
+  const drift = serverNow.getTime() - parsed.getTime();
+  if (drift > CLIENT_TIMESTAMP_MAX_PAST_MS) {
+    logger.warn(
+      { clientTimestamp, driftMs: drift },
+      '[attendance] client_timestamp too old, falling back to server time'
+    );
+    return serverNow;
+  }
+  if (drift < -CLIENT_TIMESTAMP_MAX_FUTURE_MS) {
+    logger.warn(
+      { clientTimestamp, driftMs: drift },
+      '[attendance] client_timestamp in the future, falling back to server time'
+    );
+    return serverNow;
+  }
+
+  return parsed;
+};
+
 export class AttendanceService {
   constructor(private readonly repository: AttendanceRepository) {}
 
@@ -91,6 +136,7 @@ export class AttendanceService {
       latitude?: number;
       longitude?: number;
       accuracy?: number;
+      clientTimestamp?: string;
     },
     context: ServiceContext
   ): Promise<CheckInResult> {
@@ -108,7 +154,10 @@ export class AttendanceService {
     }
 
     const date = input.date ?? currentDateIso();
-    const checkedInAt = new Date();
+    // Si l'action vient d'une queue offline, `clientTimestamp` reflète l'heure
+    // réelle du pointage et évite que le prof apparaisse en retard / absent
+    // alors qu'il était présent à l'heure.
+    const checkedInAt = resolveActualOccurredAt(input.clientTimestamp);
     const slotStart = toSlotDateTime(date, schedule.slotStartTime);
     const slotEnd = toSlotDateTime(date, schedule.slotEndTime);
     const status = calculateAttendanceStatus(checkedInAt, slotStart, slotEnd);
@@ -195,6 +244,7 @@ export class AttendanceService {
       latitude?: number;
       longitude?: number;
       accuracy?: number;
+      clientTimestamp?: string;
     },
     context: ServiceContext
   ): Promise<{ success: true; actualMinutes: number; geoStatus: GeoStatus }> {
@@ -239,7 +289,9 @@ export class AttendanceService {
       );
     }
 
-    const checkedOutAt = new Date();
+    // Idem checkIn : on respecte l'heure réelle de fin de cours quand fournie
+    // par un client offline, pour ne pas surévaluer la durée du cours.
+    const checkedOutAt = resolveActualOccurredAt(input.clientTimestamp);
     const checkedInAt = new Date(existing.checked_in_at);
     const actualMinutes = Math.max(
       0,
@@ -308,6 +360,7 @@ export class AttendanceService {
       scanType: 'start' | 'end';
       scheduleId: string;
       date?: string;
+      clientTimestamp?: string;
     },
     context: ServiceContext
   ): Promise<{
@@ -329,7 +382,9 @@ export class AttendanceService {
     }
 
     const date = input.date ?? currentDateIso();
-    const scannedAt = new Date();
+    // Le scan QR offline doit refléter l'heure réelle du scan (validateRoomScan
+    // utilise scanTime pour vérifier la fenêtre de tolérance autour du créneau).
+    const scannedAt = resolveActualOccurredAt(input.clientTimestamp);
 
     const scannedRoom = await this.repository.findRoomByToken(input.qrToken);
     if (!scannedRoom) {
@@ -429,6 +484,7 @@ export class AttendanceService {
       scanType: 'start' | 'end';
       scheduleId: string;
       date?: string;
+      clientTimestamp?: string;
     },
     context: ServiceContext
   ): Promise<{ success: true }> {
@@ -455,7 +511,7 @@ export class AttendanceService {
     }
 
     const date = input.date ?? currentDateIso();
-    const scannedAt = new Date();
+    const scannedAt = resolveActualOccurredAt(input.clientTimestamp);
 
     if (input.scanType === 'start') {
       const existing = await this.repository.getTeacherAttendance({

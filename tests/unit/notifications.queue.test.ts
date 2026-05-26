@@ -103,7 +103,7 @@ describe('notifications.queue', () => {
     expect(repository.markQrAlertSent).not.toHaveBeenCalled();
   });
 
-  it('envoie le résumé quotidien profs aux directeurs des écoles actives', async () => {
+  it('envoie le résumé quotidien profs aux directeurs des écoles actives (email uniquement)', async () => {
     mocks.dbExecute.mockResolvedValueOnce({
       rows: [
         { id: 'tenant-1', schema_name: 'school_sainte_marie', name: 'Sainte Marie' },
@@ -113,7 +113,7 @@ describe('notifications.queue', () => {
     repository.getTeacherDailySummaryContext
       .mockResolvedValueOnce({
         directorPhone: '2250700000001',
-        directorEmail: null,
+        directorEmail: 'directeur@sainte-marie.ci',
         totalCourses: 8,
         presentCount: 5,
         lateCount: 1,
@@ -141,28 +141,23 @@ describe('notifications.queue', () => {
     );
 
     expect(mocks.withTenantSchema).toHaveBeenCalledTimes(2);
+    // SMS bilan désactivé (décision produit 2026-05) — seul l'email part.
     expect(repository.insertNotificationLog).toHaveBeenCalledTimes(1);
     expect(repository.insertNotificationLog).toHaveBeenCalledWith(
       tenantDb,
       expect.objectContaining({
         type: 'teacher_absent_director',
-        recipientPhone: '2250700000001',
+        channel: 'email',
+        recipientEmail: 'directeur@sainte-marie.ci',
         status: 'queued',
       })
     );
-    expect(smsSender).toHaveBeenCalledTimes(1);
-    expect(smsSender).toHaveBeenCalledWith(
+    expect(smsSender).not.toHaveBeenCalled();
+    expect(emailSender).toHaveBeenCalledWith(
       expect.objectContaining({
-        to: '2250700000001',
+        to: 'directeur@sainte-marie.ci',
         type: 'teacher_absent_director',
         schemaName: 'school_sainte_marie',
-      })
-    );
-    expect(repository.updateNotificationLogStatus).toHaveBeenCalledWith(
-      tenantDb,
-      expect.objectContaining({
-        status: 'sent',
-        providerRef: 'provider-1',
       })
     );
   });

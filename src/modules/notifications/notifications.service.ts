@@ -15,6 +15,7 @@ import type {
   EventMap,
   StudentAbsentPayload,
   SubscriptionExpiredPayload,
+  SubscriptionRevenuePayoutPayload,
   TeacherAttendanceApprovedPayload,
   TeacherAttendanceRejectedPayload,
   TeacherEndScanActionPayload,
@@ -53,11 +54,11 @@ type NotificationsServiceDeps = {
     callback: (tenantDb: TenantDbLike) => Promise<T>
   ) => Promise<T>;
   eventBus: {
-    on: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'teacher.qr_invalid' | 'teacher.attendance_rejected' | 'teacher.attendance_approved' | 'teacher.end_scan_action' | 'teacher.sanction_cancelled' | 'teacher.end_scan_warning' | 'student.absent' | 'subscription.expired'>>(
+    on: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'teacher.qr_invalid' | 'teacher.attendance_rejected' | 'teacher.attendance_approved' | 'teacher.end_scan_action' | 'teacher.sanction_cancelled' | 'teacher.end_scan_warning' | 'student.absent' | 'subscription.expired' | 'subscription.revenue_payout'>>(
       event: K,
       handler: (payload: EventMap[K]) => void
     ) => void;
-    off: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'teacher.qr_invalid' | 'teacher.attendance_rejected' | 'teacher.attendance_approved' | 'teacher.end_scan_action' | 'teacher.sanction_cancelled' | 'teacher.end_scan_warning' | 'student.absent' | 'subscription.expired'>>(
+    off: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'teacher.qr_invalid' | 'teacher.attendance_rejected' | 'teacher.attendance_approved' | 'teacher.end_scan_action' | 'teacher.sanction_cancelled' | 'teacher.end_scan_warning' | 'student.absent' | 'subscription.expired' | 'subscription.revenue_payout'>>(
       event: K,
       handler: (payload: EventMap[K]) => void
     ) => void;
@@ -677,6 +678,17 @@ export class NotificationsService {
     });
   };
 
+  private readonly subscriptionRevenuePayoutListener = (
+    payload: EventMap['subscription.revenue_payout']
+  ): void => {
+    void this.handleSubscriptionRevenuePayout(payload).catch((error) => {
+      logger.error(
+        { err: error instanceof Error ? error.message : String(error) },
+        '[notifications] failed to process subscription.revenue_payout'
+      );
+    });
+  };
+
   private readonly teacherEndScanActionListener = (
     payload: EventMap['teacher.end_scan_action']
   ): void => {
@@ -729,6 +741,7 @@ export class NotificationsService {
     this.deps.eventBus.on('teacher.end_scan_warning', this.teacherEndScanWarningListener);
     this.deps.eventBus.on('student.absent', this.studentAbsentListener);
     this.deps.eventBus.on('subscription.expired', this.subscriptionExpiredListener);
+    this.deps.eventBus.on('subscription.revenue_payout', this.subscriptionRevenuePayoutListener);
   }
 
   stop(): void {
@@ -749,6 +762,7 @@ export class NotificationsService {
     this.deps.eventBus.off('teacher.end_scan_warning', this.teacherEndScanWarningListener);
     this.deps.eventBus.off('student.absent', this.studentAbsentListener);
     this.deps.eventBus.off('subscription.expired', this.subscriptionExpiredListener);
+    this.deps.eventBus.off('subscription.revenue_payout', this.subscriptionRevenuePayoutListener);
   }
 
   // La méthode handleTeacherLate est une fonction asynchrone qui traite les événements de type 'teacher.late'. 
@@ -823,13 +837,15 @@ export class NotificationsService {
         slotLabel: context.slotLabel,
       });
 
-      // Log uniquement — pas de SMS envoyé pour ces alertes QR (dashboard uniquement)
+      // Notif app directeur uniquement — pas de SMS envoyé (décision produit 2026-05).
+      // Le status 'sent' rend la notification visible dans le panneau directeur (whitelist).
       await this.deps.repository.insertNotificationLog(tenantDb, {
         type: notificationType,
         recipientPhone: context.directorPhone ?? '',
         message,
-        status: 'skipped_unknown',
+        status: 'sent',
         relatedId: payload.scheduleId,
+        sentAt: new Date(),
       });
 
       // Marquer qr_alert_sent pour éviter les doublons de détection
@@ -997,44 +1013,46 @@ export class NotificationsService {
           ? `${payload.validatedHours.toFixed(2).replace('.00', '')}h validées`
           : 'heures validées';
 
-      if (payload.teacherPhone) {
-        const smsMessage = `[EduTrack] Présence validée — ${payload.courseName} du ${payload.date}. ${validatedHoursLabel}. Consultez l'app pour le détail.`;
-        const smsQueueRef = buildQueueRef(payload.schemaName, 'attendance_approved');
-
-        await this.deps.repository.insertNotificationLog(tenantDb, {
-          type: 'attendance_approved',
-          channel: 'sms',
-          recipientPhone: payload.teacherPhone,
-          message: smsMessage,
-          status: 'queued',
-          providerRef: smsQueueRef,
-          relatedId: payload.attendanceId,
-        });
-
-        tasks.push(
-          this.deps.smsQueue.add(
-            'send-sms',
-            toSmsJobData({
-              queueRef: smsQueueRef,
-              to: payload.teacherPhone,
-              message: smsMessage,
-              notificationType: 'attendance_approved',
-              schemaName: payload.schemaName,
-              relatedId: payload.attendanceId,
-            }),
-            {
-              jobId: smsQueueRef,
-              attempts: 3,
-              backoff: { type: 'exponential', delay: 5_000 },
-              removeOnComplete: true,
-              removeOnFail: { count: 1000 },
-            }
-          ).then(() => undefined)
-        );
-      }
+      // SMS attendance_approved désactivé (décision produit 2026-05) — canal email + in-app uniquement.
+      // Conservé en commentaire pour rétablissement rapide si besoin.
+      // if (payload.teacherPhone) {
+      //   const smsMessage = `[EduTrack] Présence validée — ${payload.courseName} du ${payload.date}. ${validatedHoursLabel}. Consultez l'app pour le détail.`;
+      //   const smsQueueRef = buildQueueRef(payload.schemaName, 'attendance_approved');
+      //
+      //   await this.deps.repository.insertNotificationLog(tenantDb, {
+      //     type: 'attendance_approved',
+      //     channel: 'sms',
+      //     recipientPhone: payload.teacherPhone,
+      //     message: smsMessage,
+      //     status: 'queued',
+      //     providerRef: smsQueueRef,
+      //     relatedId: payload.attendanceId,
+      //   });
+      //
+      //   tasks.push(
+      //     this.deps.smsQueue.add(
+      //       'send-sms',
+      //       toSmsJobData({
+      //         queueRef: smsQueueRef,
+      //         to: payload.teacherPhone,
+      //         message: smsMessage,
+      //         notificationType: 'attendance_approved',
+      //         schemaName: payload.schemaName,
+      //         relatedId: payload.attendanceId,
+      //       }),
+      //       {
+      //         jobId: smsQueueRef,
+      //         attempts: 3,
+      //         backoff: { type: 'exponential', delay: 5_000 },
+      //         removeOnComplete: true,
+      //         removeOnFail: { count: 1000 },
+      //       }
+      //     ).then(() => undefined)
+      //   );
+      // }
 
       if (payload.teacherEmail) {
-        const emailText = `Votre présence pour le cours ${payload.courseName} du ${payload.date} a été validée.\n${validatedHoursLabel}.\nConsultez votre espace EduTrack pour le récapitulatif.`;
+        const emailText = `Votre présence pour le cours ${payload.courseName} du ${payload.date} a été validée.\n${validatedHoursLabel}.\n\nRappel important : veillez à scanner exclusivement le QR code de la salle où vous êtes affecté(e). Tout scan d'un QR d'une autre salle peut entraîner une sanction.\n\nConsultez votre espace EduTrack pour le récapitulatif.`;
         const emailQueueRef = buildQueueRef(payload.schemaName, 'attendance_approved');
 
         await this.deps.repository.insertNotificationLog(tenantDb, {
@@ -1095,10 +1113,12 @@ export class NotificationsService {
     const tasks: Array<Promise<void>> = [];
 
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
-      if (payload.teacherPhone) {
-        const smsQueueRef = buildQueueRef(payload.schemaName, isSanction ? 'scan_end_sanction' : 'scan_end_warning');
+      // SMS uniquement pour la sanction (impact direct sur salaire) — l'avertissement ne déclenche
+      // plus de SMS (décision produit 2026-05). Bloc warning conservé en commentaire ci-dessous.
+      if (isSanction && payload.teacherPhone) {
+        const smsQueueRef = buildQueueRef(payload.schemaName, 'scan_end_sanction');
         await this.deps.repository.insertNotificationLog(tenantDb, {
-          type: isSanction ? 'scan_end_sanction' : 'scan_end_warning',
+          type: 'scan_end_sanction',
           channel: 'sms',
           recipientPhone: payload.teacherPhone,
           message,
@@ -1113,7 +1133,7 @@ export class NotificationsService {
               queueRef: smsQueueRef,
               to: payload.teacherPhone,
               message,
-              notificationType: isSanction ? 'scan_end_sanction' : 'scan_end_warning',
+              notificationType: 'scan_end_sanction',
               schemaName: payload.schemaName,
               relatedId: payload.attendanceId,
             }),
@@ -1121,6 +1141,33 @@ export class NotificationsService {
           ).then(() => undefined)
         );
       }
+      // Bloc SMS warning désactivé — restaurer en supprimant le commentaire ci-dessous et la condition isSanction ci-dessus.
+      // if (!isSanction && payload.teacherPhone) {
+      //   const smsQueueRef = buildQueueRef(payload.schemaName, 'scan_end_warning');
+      //   await this.deps.repository.insertNotificationLog(tenantDb, {
+      //     type: 'scan_end_warning',
+      //     channel: 'sms',
+      //     recipientPhone: payload.teacherPhone,
+      //     message,
+      //     status: 'queued',
+      //     providerRef: smsQueueRef,
+      //     relatedId: payload.attendanceId,
+      //   });
+      //   tasks.push(
+      //     this.deps.smsQueue.add(
+      //       'send-sms',
+      //       toSmsJobData({
+      //         queueRef: smsQueueRef,
+      //         to: payload.teacherPhone,
+      //         message,
+      //         notificationType: 'scan_end_warning',
+      //         schemaName: payload.schemaName,
+      //         relatedId: payload.attendanceId,
+      //       }),
+      //       { jobId: smsQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: { count: 1000 } }
+      //     ).then(() => undefined)
+      //   );
+      // }
 
       if (payload.teacherEmail) {
         const emailText = isSanction
@@ -1163,36 +1210,38 @@ export class NotificationsService {
     if (!payload.teacherEmail && !payload.teacherPhone) return;
     if (!payload.schemaName) return;
 
-    const message = `[EduTrack] La sanction pour ${payload.courseName} du ${payload.date} a été annulée. Votre cours est de nouveau comptabilisé.`;
+    // Message conservé pour le canal in-app (référencé par le UI prof) — pas d'envoi SMS.
+    void `[EduTrack] La sanction pour ${payload.courseName} du ${payload.date} a été annulée. Votre cours est de nouveau comptabilisé.`;
     const tasks: Array<Promise<void>> = [];
 
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
-      if (payload.teacherPhone) {
-        const smsQueueRef = buildQueueRef(payload.schemaName, 'scan_end_sanction_cancelled');
-        await this.deps.repository.insertNotificationLog(tenantDb, {
-          type: 'scan_end_sanction_cancelled',
-          channel: 'sms',
-          recipientPhone: payload.teacherPhone,
-          message,
-          status: 'queued',
-          providerRef: smsQueueRef,
-          relatedId: payload.attendanceId,
-        });
-        tasks.push(
-          this.deps.smsQueue.add(
-            'send-sms',
-            toSmsJobData({
-              queueRef: smsQueueRef,
-              to: payload.teacherPhone,
-              message,
-              notificationType: 'scan_end_sanction_cancelled',
-              schemaName: payload.schemaName,
-              relatedId: payload.attendanceId,
-            }),
-            { jobId: smsQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: { count: 1000 } }
-          ).then(() => undefined)
-        );
-      }
+      // SMS scan_end_sanction_cancelled désactivé (décision produit 2026-05) — email + in-app uniquement.
+      // if (payload.teacherPhone) {
+      //   const smsQueueRef = buildQueueRef(payload.schemaName, 'scan_end_sanction_cancelled');
+      //   await this.deps.repository.insertNotificationLog(tenantDb, {
+      //     type: 'scan_end_sanction_cancelled',
+      //     channel: 'sms',
+      //     recipientPhone: payload.teacherPhone,
+      //     message,
+      //     status: 'queued',
+      //     providerRef: smsQueueRef,
+      //     relatedId: payload.attendanceId,
+      //   });
+      //   tasks.push(
+      //     this.deps.smsQueue.add(
+      //       'send-sms',
+      //       toSmsJobData({
+      //         queueRef: smsQueueRef,
+      //         to: payload.teacherPhone,
+      //         message,
+      //         notificationType: 'scan_end_sanction_cancelled',
+      //         schemaName: payload.schemaName,
+      //         relatedId: payload.attendanceId,
+      //       }),
+      //       { jobId: smsQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: { count: 1000 } }
+      //     ).then(() => undefined)
+      //   );
+      // }
 
       if (payload.teacherEmail) {
         const emailText = `La sanction appliquée pour ${payload.courseName} du ${payload.date} a été annulée. Motif de l'annulation : ${payload.cancelReason}. Votre cours est de nouveau comptabilisé dans votre salaire.`;
@@ -1233,34 +1282,35 @@ export class NotificationsService {
     if (!payload.teacherEmail && !payload.teacherPhone) return;
     if (!payload.schemaName) return;
 
-    const message = `[EduTrack] ${payload.missingCount} cours sans scan de fin pour ${payload.month}. Veuillez régulariser.`;
+    void `[EduTrack] ${payload.missingCount} cours sans scan de fin pour ${payload.month}. Veuillez régulariser.`;
     const tasks: Array<Promise<void>> = [];
 
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
-      if (payload.teacherPhone) {
-        const smsQueueRef = buildQueueRef(payload.schemaName, 'scan_end_warning');
-        await this.deps.repository.insertNotificationLog(tenantDb, {
-          type: 'scan_end_warning',
-          channel: 'sms',
-          recipientPhone: payload.teacherPhone,
-          message,
-          status: 'queued',
-          providerRef: smsQueueRef,
-        });
-        tasks.push(
-          this.deps.smsQueue.add(
-            'send-sms',
-            toSmsJobData({
-              queueRef: smsQueueRef,
-              to: payload.teacherPhone,
-              message,
-              notificationType: 'scan_end_warning',
-              schemaName: payload.schemaName,
-            }),
-            { jobId: smsQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: { count: 1000 } }
-          ).then(() => undefined)
-        );
-      }
+      // SMS scan_end_warning désactivé (décision produit 2026-05) — email + in-app uniquement.
+      // if (payload.teacherPhone) {
+      //   const smsQueueRef = buildQueueRef(payload.schemaName, 'scan_end_warning');
+      //   await this.deps.repository.insertNotificationLog(tenantDb, {
+      //     type: 'scan_end_warning',
+      //     channel: 'sms',
+      //     recipientPhone: payload.teacherPhone,
+      //     message,
+      //     status: 'queued',
+      //     providerRef: smsQueueRef,
+      //   });
+      //   tasks.push(
+      //     this.deps.smsQueue.add(
+      //       'send-sms',
+      //       toSmsJobData({
+      //         queueRef: smsQueueRef,
+      //         to: payload.teacherPhone,
+      //         message,
+      //         notificationType: 'scan_end_warning',
+      //         schemaName: payload.schemaName,
+      //       }),
+      //       { jobId: smsQueueRef, attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: true, removeOnFail: { count: 1000 } }
+      //     ).then(() => undefined)
+      //   );
+      // }
 
       if (payload.teacherEmail) {
         const emailText = `Vous avez ${payload.missingCount} cours sans scan de fin pour le mois ${payload.month}. Veuillez vous rapprocher de l'administration pour régulariser la situation.`;
@@ -1798,6 +1848,75 @@ export class NotificationsService {
           text: emailText,
           recipientPhone: payload.directorPhone,
           notificationType: 'payment_reminder',
+          schemaName: payload.schemaName,
+        }),
+        {
+          jobId: emailQueueRef,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5_000 },
+          removeOnComplete: true,
+          removeOnFail: { count: 1000 },
+        }
+      );
+    });
+  }
+
+  // Notifie le directeur quand l'admin EduTrack enregistre un versement "revenus abonnements".
+  // Canal in-app + email uniquement (jamais SMS).
+  async handleSubscriptionRevenuePayout(payload: SubscriptionRevenuePayoutPayload): Promise<void> {
+    await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
+      const director = await this.deps.repository.getDirectorContact(tenantDb);
+      if (!director?.directorPhone && !director?.directorEmail) {
+        return;
+      }
+
+      const formattedAmount = new Intl.NumberFormat('fr-FR', {
+        maximumFractionDigits: 0,
+      }).format(Math.max(0, payload.amountFcfa));
+      const periodLine =
+        payload.periodFrom && payload.periodTo
+          ? `\nPériode couverte : du ${payload.periodFrom} au ${payload.periodTo}.`
+          : '';
+      const referenceLine = payload.reference ? `\nRéférence : ${payload.reference}.` : '';
+      const message = `Versement de ${formattedAmount} FCFA reçu le ${payload.paymentDate} pour votre abonnement EduTrack.${periodLine}${referenceLine}`;
+
+      const inAppQueueRef = buildQueueRef(payload.schemaName, 'subscription_revenue_payout');
+      await this.deps.repository.insertNotificationLog(tenantDb, {
+        type: 'subscription_revenue_payout',
+        channel: 'sms',
+        recipientPhone: director.directorPhone ?? '',
+        message,
+        status: 'sent',
+        providerRef: inAppQueueRef,
+        sentAt: new Date(),
+      });
+
+      if (!director.directorEmail) {
+        return;
+      }
+
+      const emailText = `Bonjour,\n\nNous avons bien enregistré un versement de ${formattedAmount} FCFA pour l'abonnement de ${payload.schoolName}.\nDate du versement : ${payload.paymentDate}.${periodLine}${referenceLine}\n\nMerci pour votre confiance.\nL'équipe EduTrack`;
+      const emailQueueRef = buildQueueRef(payload.schemaName, 'subscription_revenue_payout');
+
+      await this.deps.repository.insertNotificationLog(tenantDb, {
+        type: 'subscription_revenue_payout',
+        channel: 'email',
+        recipientPhone: director.directorPhone ?? '',
+        recipientEmail: director.directorEmail,
+        message: emailText,
+        status: 'queued',
+        providerRef: emailQueueRef,
+      });
+
+      await this.deps.smsQueue.add(
+        'send-email',
+        toEmailJobData({
+          queueRef: emailQueueRef,
+          to: director.directorEmail,
+          subject: `[EduTrack] Versement enregistré — ${payload.schoolName}`,
+          text: emailText,
+          recipientPhone: director.directorPhone ?? '',
+          notificationType: 'subscription_revenue_payout',
           schemaName: payload.schemaName,
         }),
         {

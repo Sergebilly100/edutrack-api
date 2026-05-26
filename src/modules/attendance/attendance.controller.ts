@@ -115,6 +115,7 @@ export default async function attendanceController(app: FastifyInstance): Promis
             latitude: body.latitude,
             longitude: body.longitude,
             accuracy: body.accuracy,
+            clientTimestamp: body.client_timestamp,
           },
           {
             schemaName: claims.schemaName,
@@ -149,6 +150,7 @@ export default async function attendanceController(app: FastifyInstance): Promis
             latitude: body.latitude,
             longitude: body.longitude,
             accuracy: body.accuracy,
+            clientTimestamp: body.client_timestamp,
           },
           {
             schemaName: claims.schemaName,
@@ -182,6 +184,7 @@ export default async function attendanceController(app: FastifyInstance): Promis
             scanType: body.scan_type,
             scheduleId: body.schedule_id,
             date: body.date,
+            clientTimestamp: body.client_timestamp,
           },
           {
             schemaName: claims.schemaName,
@@ -214,6 +217,7 @@ export default async function attendanceController(app: FastifyInstance): Promis
             scanType: body.scan_type,
             scheduleId: body.schedule_id,
             date: body.date,
+            clientTimestamp: body.client_timestamp,
           },
           {
             schemaName: claims.schemaName,

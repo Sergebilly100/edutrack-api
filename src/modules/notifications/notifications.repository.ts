@@ -64,6 +64,9 @@ export type NotificationsRepository = {
     tenantDb: TenantDbLike,
     payload: { teacherId: string }
   ) => Promise<{ directorPhone: string | null; directorEmail: string | null } | null>;
+  getDirectorContact: (
+    tenantDb: TenantDbLike
+  ) => Promise<{ directorPhone: string | null; directorEmail: string | null } | null>;
   insertNotificationLog: (
     tenantDb: TenantDbLike,
     params: {
@@ -239,6 +242,31 @@ export const defaultRepository: NotificationsRepository = {
     };
   },
 
+  async getDirectorContact(tenantDb) {
+    const result = await asExecutor(tenantDb).execute<{
+      director_phone: string | null;
+      director_email: string | null;
+    }>(sql`
+      SELECT u.phone AS director_phone, u.email AS director_email
+      FROM users u
+      WHERE u.role = 'director'
+        AND u.is_active = true
+        AND (u.phone IS NOT NULL OR u.email IS NOT NULL)
+      ORDER BY u.created_at ASC
+      LIMIT 1
+    `);
+
+    const row = getFirstRow(result);
+    if (!row) {
+      return null;
+    }
+
+    return {
+      directorPhone: row.director_phone,
+      directorEmail: row.director_email,
+    };
+  },
+
   async getQrInvalidAlertContext(tenantDb) {
     const result = await asExecutor(tenantDb).execute<{
       director_phone: string | null;
@@ -394,15 +422,28 @@ export const defaultRepository: NotificationsRepository = {
 
   async listNotificationLog(tenantDb, params) {
     const safeLimit = Math.max(1, Math.min(params.limit, 50));
-    // Ces types sont destinés aux parents/élèves — jamais exposés au directeur dans son log
-    const DIRECTOR_EXCLUDED_TYPES: NotificationType[] = ['student_absent_parent'];
-    const filteredTypes = (params.types?.filter(Boolean) ?? []).filter(
-      (t) => !DIRECTOR_EXCLUDED_TYPES.includes(t)
+    // Whitelist stricte : seuls les types destinés au directeur apparaissent dans son panneau.
+    // Tout type prof/parent est invisible au directeur (corrige fuite notifications cross-roles).
+    const DIRECTOR_ALLOWED_TYPES: NotificationType[] = [
+      'teacher_late_director',
+      'teacher_absent_director',
+      'teacher_qr_mismatch',
+      'teacher_qr_missing_scan',
+      'teacher_qr_scan_out_of_time',
+      'qr_invalid_alert',
+      'payment_reminder',
+      'subscription_expiry_alert',
+      'subscription_revenue_payout',
+      'custom',
+    ];
+    const requestedTypes = (params.types?.filter(Boolean) ?? []).filter((t) =>
+      DIRECTOR_ALLOWED_TYPES.includes(t)
     );
-    const whereClause =
-      filteredTypes.length === 0
-        ? sql`WHERE type NOT IN (${sql.join(DIRECTOR_EXCLUDED_TYPES.map((item) => sql`${item}`), sql`, `)})`
-        : sql`WHERE type IN (${sql.join(filteredTypes.map((item) => sql`${item}`), sql`, `)})`;
+    const effectiveTypes = requestedTypes.length === 0 ? DIRECTOR_ALLOWED_TYPES : requestedTypes;
+    const whereClause = sql`WHERE type IN (${sql.join(
+      effectiveTypes.map((item) => sql`${item}`),
+      sql`, `
+    )})`;
     const columnsResult = await asExecutor(tenantDb).execute<{
       has_channel: boolean;
       has_recipient_email: boolean;
@@ -480,7 +521,13 @@ export const defaultRepository: NotificationsRepository = {
           (nl.recipient_email IS NOT NULL AND nl.recipient_email = u.email)
           OR (nl.recipient_phone IS NOT NULL AND nl.recipient_phone = u.phone)
         )
-        AND nl.type IN ('attendance_rejected', 'attendance_approved', 'scan_end_warning', 'scan_end_sanction', 'scan_end_sanction_cancelled')
+        AND nl.type IN (
+          'attendance_rejected',
+          'attendance_approved',
+          'scan_end_warning',
+          'scan_end_sanction',
+          'scan_end_sanction_cancelled'
+        )
       ORDER BY nl.created_at DESC
       LIMIT ${safeLimit}
     `);

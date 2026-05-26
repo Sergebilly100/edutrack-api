@@ -2126,6 +2126,27 @@ export const addManualPayment = async (
       WHERE id = ${subscriptionId}
     `);
   }
+
+  const tenantResult = await publicDb.execute<{ schema_name: string; name: string }>(sql`
+    SELECT schema_name, name
+    FROM public.tenants
+    WHERE id = ${tenantId}
+    LIMIT 1
+  `);
+  const tenantRow = getRows<{ schema_name: string; name: string }>(tenantResult)[0];
+  if (tenantRow) {
+    emit('subscription.revenue_payout', {
+      tenantId,
+      schemaName: tenantRow.schema_name,
+      schoolName: tenantRow.name,
+      amountFcfa: payload.amount_fcfa,
+      paymentDate: payload.date,
+      provider: payload.provider,
+      reference: payload.reference ?? null,
+      periodFrom: payload.period_from ?? null,
+      periodTo: payload.period_to ?? null,
+    });
+  }
 };
 
 const toDateLabel = (value: string | null): string => {

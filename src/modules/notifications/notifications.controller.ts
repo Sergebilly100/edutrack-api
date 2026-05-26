@@ -5,7 +5,12 @@ import { randomUUID } from 'node:crypto';
 import type { Queue } from 'bullmq';
 
 import { db as publicDb, withTenantSchema } from '../../shared/database/db.js';
-import { requireDirector, requirePermission, requireTeacher } from '../../shared/middleware/auth.middleware.js';
+import {
+  authenticateRequest,
+  requireDirector,
+  requirePermission,
+  requireTeacher,
+} from '../../shared/middleware/auth.middleware.js';
 import type { NotificationType } from '../../shared/types/index.js';
 
 import { defaultRepository } from './notifications.repository.js';
@@ -25,6 +30,7 @@ const notificationTypes: NotificationType[] = [
   'scan_end_sanction',
   'scan_end_sanction_cancelled',
   'subscription_expiry_alert',
+  'subscription_revenue_payout',
   'payment_reminder',
   'custom',
 ];
@@ -112,7 +118,18 @@ export default async function notificationsController(
 ): Promise<void> {
   app.post(
     '/api/v1/notifications/:id/retry',
-    { preHandler: requirePermission('students.excuse') },
+    {
+      preHandler: async (request, reply) => {
+        await authenticateRequest(request, reply);
+        if (reply.sent) return;
+        // Le directeur peut retry n'importe quel SMS de son école ; les autres rôles
+        // doivent avoir explicitement la permission students.excuse (cas des SMS parents).
+        if (request.claims?.role === 'director') {
+          return;
+        }
+        return requirePermission('students.excuse')(request, reply);
+      },
+    },
     async (request, reply) => {
       if (!options.smsQueue) {
         return reply.code(503).send({

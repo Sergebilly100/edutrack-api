@@ -53,6 +53,7 @@ export const NOTIFICATION_TYPE = {
   SCAN_END_SANCTION: 'scan_end_sanction',
   SCAN_END_SANCTION_CANCELLED: 'scan_end_sanction_cancelled',
   SUBSCRIPTION_EXPIRY_ALERT: 'subscription_expiry_alert',
+  SUBSCRIPTION_REVENUE_PAYOUT: 'subscription_revenue_payout',
   PAYMENT_REMINDER: 'payment_reminder',
   CUSTOM: 'custom',
 } as const;

@@ -64,6 +64,7 @@ export type NotificationType =
   | 'scan_end_sanction'
   | 'scan_end_sanction_cancelled'
   | 'subscription_expiry_alert'
+  | 'subscription_revenue_payout'
   | 'payment_reminder'
   | 'custom';
 

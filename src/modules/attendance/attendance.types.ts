@@ -2,12 +2,23 @@ import { z } from 'zod';
 
 export const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
+// Horodatage client capturé au moment réel de l'action (ex: pointage offline
+// puis synchronisé plus tard). Le backend l'utilise quand fourni pour calculer
+// retard / présence sur le temps réel et non l'heure de la sync.
+// La validation anti-tricherie (fenêtre 24h passé / 5min futur) est faite
+// dans le service via resolveActualOccurredAt().
+export const clientTimestampSchema = z
+  .string()
+  .datetime({ message: 'client_timestamp must be ISO 8601 UTC' })
+  .optional();
+
 export const checkInBodySchema = z.object({
   schedule_id: z.string().uuid(),
   date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format').optional(),
   latitude: z.number().min(-90).max(90).optional(),
   longitude: z.number().min(-180).max(180).optional(),
   accuracy: z.number().min(0).max(10000).optional(),
+  client_timestamp: clientTimestampSchema,
 });
 
 export const checkOutBodySchema = z.object({
@@ -16,6 +27,7 @@ export const checkOutBodySchema = z.object({
   longitude: z.number().min(-180).max(180).optional(),
   accuracy: z.number().min(0).max(10000).optional(),
   date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format').optional(),
+  client_timestamp: clientTimestampSchema,
 });
 
 export const qrScanBodySchema = z.object({
@@ -23,12 +35,14 @@ export const qrScanBodySchema = z.object({
   scan_type: z.enum(['start', 'end']),
   schedule_id: z.string().uuid(),
   date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format').optional(),
+  client_timestamp: clientTimestampSchema,
 });
 
 export const qrSkipBodySchema = z.object({
   scan_type: z.enum(['start', 'end']),
   schedule_id: z.string().uuid(),
   date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format').optional(),
+  client_timestamp: clientTimestampSchema,
 });
 
 // ── NOUVEAU ──────────────────────────────────────────────────────────────────

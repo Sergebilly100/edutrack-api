@@ -63,6 +63,7 @@ export const notificationTypeEnum = tenant.enum('notification_type', [
   'scan_end_sanction',
   'scan_end_sanction_cancelled',
   'subscription_expiry_alert',
+  'subscription_revenue_payout',
   'payment_reminder',
   'custom',
 ]);

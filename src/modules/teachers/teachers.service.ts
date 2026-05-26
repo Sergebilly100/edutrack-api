@@ -340,7 +340,7 @@ const buildCredentialsEmailText = (params: {
     `  • Identifiant : ${params.username}`,
     `  • Mot de passe temporaire : ${params.plainPassword}`,
     ``,
-    `Pour des raisons de sécurité, vous devrez changer ce mot de passe lors de votre première connexion.`,
+    `Pour des raisons de sécurité, vous devrez changer ce mot de passe lors de votre prochaine connexion.`,
     ``,
     `À bientôt,`,
     `L'équipe EduTrack`,

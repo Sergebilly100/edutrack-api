@@ -139,7 +139,8 @@ const processTeacherDailySummaryJob = async (
         return;
       }
 
-      const message = buildTeacherDailySummarySms({
+      // 'message' (texte SMS) calculé en référence pour les commentaires SMS désactivés.
+      void buildTeacherDailySummarySms({
         date,
         absentCount: context.absentCount,
         lateCount: context.lateCount,
@@ -148,42 +149,44 @@ const processTeacherDailySummaryJob = async (
       });
       const tasks: Array<Promise<void>> = [];
 
-      if (context.directorPhone) {
-        const queueRef = buildQueueRef(tenant.schemaName, 'teacher_absent_director', date, 'sms');
-
-        await deps.repository.insertNotificationLog(tenantDb, {
-          type: 'teacher_absent_director',
-          channel: 'sms',
-          recipientPhone: context.directorPhone,
-          message,
-          status: 'queued',
-          providerRef: queueRef,
-        });
-
-        tasks.push(
-          deps
-            .smsSender({
-              to: context.directorPhone,
-              message,
-              type: 'teacher_absent_director',
-              schemaName: tenant.schemaName,
-            })
-            .then((smsResult) =>
-              deps.repository.updateNotificationLogStatus(tenantDb, {
-                queueRef,
-                status: smsResult.status === 'sent' ? 'sent' : 'failed',
-                providerRef: smsResult.providerRef,
-                sentAt: smsResult.status === 'sent' ? new Date() : undefined,
-              })
-            )
-            .catch(() =>
-              deps.repository.updateNotificationLogStatus(tenantDb, {
-                queueRef,
-                status: 'failed',
-              })
-            )
-        );
-      }
+      // SMS bilan journalier directeur désactivé (décision produit 2026-05) — email + in-app uniquement.
+      // Conservé en commentaire pour rétablissement rapide.
+      // if (context.directorPhone) {
+      //   const queueRef = buildQueueRef(tenant.schemaName, 'teacher_absent_director', date, 'sms');
+      //
+      //   await deps.repository.insertNotificationLog(tenantDb, {
+      //     type: 'teacher_absent_director',
+      //     channel: 'sms',
+      //     recipientPhone: context.directorPhone,
+      //     message,
+      //     status: 'queued',
+      //     providerRef: queueRef,
+      //   });
+      //
+      //   tasks.push(
+      //     deps
+      //       .smsSender({
+      //         to: context.directorPhone,
+      //         message,
+      //         type: 'teacher_absent_director',
+      //         schemaName: tenant.schemaName,
+      //       })
+      //       .then((smsResult) =>
+      //         deps.repository.updateNotificationLogStatus(tenantDb, {
+      //           queueRef,
+      //           status: smsResult.status === 'sent' ? 'sent' : 'failed',
+      //           providerRef: smsResult.providerRef,
+      //           sentAt: smsResult.status === 'sent' ? new Date() : undefined,
+      //         })
+      //       )
+      //       .catch(() =>
+      //         deps.repository.updateNotificationLogStatus(tenantDb, {
+      //           queueRef,
+      //           status: 'failed',
+      //         })
+      //       )
+      //   );
+      // }
 
       if (context.directorEmail) {
         const emailQueueRef = buildQueueRef(
@@ -313,42 +316,44 @@ const processValidationDailySummaryJob = async (
 
       const message = `[EduTrack] ${pendingCount} présence(s) en attente de validation. Consultez l'app.`;
       const tasks: Array<Promise<void>> = [];
-      if (row.director_phone) {
-        const queueRef = buildQueueRef(tenant.schemaName, 'custom', date, 'sms');
-
-        await deps.repository.insertNotificationLog(tenantDb, {
-          type: 'custom',
-          channel: 'sms',
-          recipientPhone: row.director_phone,
-          message,
-          status: 'queued',
-          providerRef: queueRef,
-        });
-
-        tasks.push(
-          deps
-            .smsSender({
-              to: row.director_phone,
-              message,
-              type: 'custom',
-              schemaName: tenant.schemaName,
-            })
-            .then((smsResult) =>
-              deps.repository.updateNotificationLogStatus(tenantDb, {
-                queueRef,
-                status: smsResult.status === 'sent' ? 'sent' : 'failed',
-                providerRef: smsResult.providerRef,
-                sentAt: smsResult.status === 'sent' ? new Date() : undefined,
-              })
-            )
-            .catch(() =>
-              deps.repository.updateNotificationLogStatus(tenantDb, {
-                queueRef,
-                status: 'failed',
-              })
-            )
-        );
-      }
+      // SMS validations horaires en attente désactivé (décision produit 2026-05) — email + in-app uniquement.
+      // if (row.director_phone) {
+      //   const queueRef = buildQueueRef(tenant.schemaName, 'custom', date, 'sms');
+      //
+      //   await deps.repository.insertNotificationLog(tenantDb, {
+      //     type: 'custom',
+      //     channel: 'sms',
+      //     recipientPhone: row.director_phone,
+      //     message,
+      //     status: 'queued',
+      //     providerRef: queueRef,
+      //   });
+      //
+      //   tasks.push(
+      //     deps
+      //       .smsSender({
+      //         to: row.director_phone,
+      //         message,
+      //         type: 'custom',
+      //         schemaName: tenant.schemaName,
+      //       })
+      //       .then((smsResult) =>
+      //         deps.repository.updateNotificationLogStatus(tenantDb, {
+      //           queueRef,
+      //           status: smsResult.status === 'sent' ? 'sent' : 'failed',
+      //           providerRef: smsResult.providerRef,
+      //           sentAt: smsResult.status === 'sent' ? new Date() : undefined,
+      //         })
+      //       )
+      //       .catch(() =>
+      //         deps.repository.updateNotificationLogStatus(tenantDb, {
+      //           queueRef,
+      //           status: 'failed',
+      //         })
+      //       )
+      //   );
+      // }
+      void message; // gardé en référence pour le canal in-app
       if (row.director_email) {
         const emailQueueRef = buildQueueRef(tenant.schemaName, 'custom', date, 'email');
         const emailText = `${message}\n\nValidations pendantes :\n${row.pending_details ?? '- Aucun détail disponible'}`;

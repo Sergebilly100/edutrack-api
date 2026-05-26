@@ -101,6 +101,18 @@ export type SubscriptionExpiredPayload = {
   directorEmail?: string | null;
 };
 
+export type SubscriptionRevenuePayoutPayload = {
+  tenantId: string;
+  schemaName: string;
+  schoolName: string;
+  amountFcfa: number;
+  paymentDate: string;
+  provider: 'manual' | 'mtn_momo' | 'orange_money';
+  reference?: string | null;
+  periodFrom?: string | null;
+  periodTo?: string | null;
+};
+
 export type RoomCreatedPayload = {
   tenantId: string;
   schemaName: string;
@@ -218,6 +230,7 @@ export type EventMap = {
     | TeacherAbsentPayload;
   'student.absent': StudentAbsentPayload;
   'subscription.expired': SubscriptionExpiredPayload;
+  'subscription.revenue_payout': SubscriptionRevenuePayoutPayload;
   'room.created': RoomCreatedPayload;
   'room.updated': RoomUpdatedPayload;
   'room.deleted': RoomDeletedPayload;

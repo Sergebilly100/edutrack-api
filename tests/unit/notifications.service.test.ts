@@ -99,6 +99,7 @@ const ALL_EVENTS = [
   'teacher.end_scan_warning',
   'student.absent',
   'subscription.expired',
+  'subscription.revenue_payout',
 ];
 
 const baseContext = {
@@ -294,7 +295,7 @@ describe('handleTeacherQrAlert', () => {
       tenantDb,
       expect.objectContaining({
         type: 'teacher_qr_mismatch',
-        status: 'skipped_unknown',
+        status: 'sent',
         relatedId: 'schedule-1',
       })
     );
@@ -321,7 +322,7 @@ describe('handleTeacherQrAlert', () => {
     expect(smsQueue.add).not.toHaveBeenCalled();
     expect(repository.insertNotificationLog).toHaveBeenCalledWith(
       tenantDb,
-      expect.objectContaining({ type: 'teacher_qr_missing_scan', status: 'skipped_unknown' })
+      expect.objectContaining({ type: 'teacher_qr_missing_scan', status: 'sent' })
     );
   });
 
@@ -341,7 +342,7 @@ describe('handleTeacherQrAlert', () => {
     expect(smsQueue.add).not.toHaveBeenCalled();
     expect(repository.insertNotificationLog).toHaveBeenCalledWith(
       tenantDb,
-      expect.objectContaining({ type: 'teacher_qr_scan_out_of_time', status: 'skipped_unknown' })
+      expect.objectContaining({ type: 'teacher_qr_scan_out_of_time', status: 'sent' })
     );
   });
 
