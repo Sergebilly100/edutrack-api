@@ -55,6 +55,7 @@ const toCreateInput = (payload: unknown): CreateTeacherInput => {
       name: parsed.name.trim(),
       first_name: firstName,
       last_name: lastName,
+      matricule: null,
       phone: null,
       email: null,
       type: parsed.type,

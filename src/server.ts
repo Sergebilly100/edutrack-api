@@ -321,11 +321,21 @@ const start = async (): Promise<void> => {
     // Schedule geo auto-approve job (daily at 3 AM)
     await scheduleGeoAutoApprove();
 
+    // On ne garde que les tenants dont le schéma PG existe réellement.
+    // public.tenants accumule des lignes orphelines (tests d'intégration qui
+    // suppriment le schéma sans nettoyer la ligne) ; enregistrer un scheduler
+    // pour ces schémas inexistants faisait planter le job mark-absences en
+    // boucle toutes les 15 min.
     const activeTenantsResult = await db.execute<{ id: string; schema_name: string }>(sql`
-      SELECT id::text AS id, schema_name
-      FROM public.tenants
-      WHERE status IN ('trial', 'active')
-      ORDER BY created_at ASC
+      SELECT t.id::text AS id, t.schema_name
+      FROM public.tenants t
+      WHERE t.status IN ('trial', 'active')
+        AND EXISTS (
+          SELECT 1
+          FROM information_schema.schemata s
+          WHERE s.schema_name = t.schema_name
+        )
+      ORDER BY t.created_at ASC
     `);
     const activeTenants = activeTenantsResult.rows ?? [];
     if (activeTenants.length === 0) {

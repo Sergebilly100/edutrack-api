@@ -21,6 +21,13 @@ export class TeachersModuleError extends Error {
   }
 }
 
+// Détecte une violation d'unicité PostgreSQL (code 23505) sur le matricule.
+const isMatriculeUniqueViolation = (error: unknown): boolean => {
+  if (typeof error !== 'object' || error === null) return false;
+  const { code, constraint } = error as { code?: unknown; constraint?: unknown };
+  return code === '23505' && typeof constraint === 'string' && constraint.includes('matricule');
+};
+
 // DTO partagé pour toutes les réponses du module teachers.
 // Expose les deux dimensions distinctes :
 //   • is_active    → accès au compte (table users)
@@ -30,6 +37,7 @@ type TeacherDTO = {
   name: string;
   first_name: string;
   last_name: string;
+  matricule: string | null;
   phone: string | null;
   email: string | null;
   type: 'vacataire' | 'permanent';
@@ -51,6 +59,7 @@ const toDTO = (row: {
   name: string;
   first_name: string;
   last_name: string;
+  matricule: string | null;
   phone: string | null;
   email: string | null;
   type: 'vacataire' | 'permanent';
@@ -70,6 +79,7 @@ const toDTO = (row: {
   name: row.name,
   first_name: row.first_name,
   last_name: row.last_name,
+  matricule: row.matricule,
   phone: row.phone,
   email: row.email,
   type: row.type,
@@ -127,11 +137,22 @@ export class TeachersService {
       );
     }
 
-    const created = await this.repository.createTeacher({
-      ...input,
-      subjects: canonicalizeSubjectList(input.subjects),
-    });
-    return toDTO(created);
+    try {
+      const created = await this.repository.createTeacher({
+        ...input,
+        subjects: canonicalizeSubjectList(input.subjects),
+      });
+      return toDTO(created);
+    } catch (error) {
+      if (isMatriculeUniqueViolation(error)) {
+        throw new TeachersModuleError(
+          'Ce matricule est déjà utilisé par un autre professeur',
+          409,
+          'MATRICULE_ALREADY_EXISTS'
+        );
+      }
+      throw error;
+    }
   }
 
   async updateTeacher(teacherId: string, input: UpdateTeacherInput, actorId?: string | null) {
@@ -180,16 +201,28 @@ export class TeachersService {
     // et un retour à l'ancien type ne demande pas de re-saisie. Le calcul de
     // salaire (recalculate*ForMonth) lit sr.hourly_rate snapshoté à la création
     // du record, pas t.hourly_rate, donc l'historique reste correct.
-    const updated = await this.repository.updateTeacher(
-      teacherId,
-      {
-        ...input,
-        ...(input.subjects ? { subjects: canonicalizeSubjectList(input.subjects) } : {}),
-        hourly_rate: nextHourlyRate,
-        monthly_salary: nextMonthlySalary,
-      },
-      actorId ?? null
-    );
+    let updated;
+    try {
+      updated = await this.repository.updateTeacher(
+        teacherId,
+        {
+          ...input,
+          ...(input.subjects ? { subjects: canonicalizeSubjectList(input.subjects) } : {}),
+          hourly_rate: nextHourlyRate,
+          monthly_salary: nextMonthlySalary,
+        },
+        actorId ?? null
+      );
+    } catch (error) {
+      if (isMatriculeUniqueViolation(error)) {
+        throw new TeachersModuleError(
+          'Ce matricule est déjà utilisé par un autre professeur',
+          409,
+          'MATRICULE_ALREADY_EXISTS'
+        );
+      }
+      throw error;
+    }
     if (!updated) {
       throw new TeachersModuleError('Teacher not found', 404, 'TEACHER_NOT_FOUND');
     }

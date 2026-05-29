@@ -25,6 +25,7 @@ type TeacherRow = {
   name: string;
   first_name: string;
   last_name: string;
+  matricule: string | null;
   phone: string | null;
   email: string | null;
   type: 'vacataire' | 'permanent';
@@ -49,6 +50,7 @@ type CountRow = { count: string | number };
 type TeacherAttendanceStatsRow = {
   teacher_id: string;
   teacher_name: string;
+  teacher_matricule: string | null;
   teacher_type: 'vacataire' | 'permanent' | string;
   subjects: string[] | null;
   total_scheduled: string | number;
@@ -104,6 +106,7 @@ const buildWhere = (query: TeachersListQuery): ReturnType<typeof sql>[] => {
       sql`(
         u.name ILIKE ${`%${query.search}%`}
         OR t.username ILIKE ${`%${query.search}%`}
+        OR t.matricule ILIKE ${`%${query.search}%`}
       )`
     );
   }
@@ -124,6 +127,7 @@ const TEACHER_SELECT = sql`
     u.name,
     split_part(u.name, ' ', 1)                                               AS first_name,
     trim(substring(u.name FROM length(split_part(u.name, ' ', 1)) + 1))     AS last_name,
+    t.matricule,
     u.phone,
     u.email,
     t.type::text                                                              AS type,
@@ -235,6 +239,7 @@ export class TeachersRepository {
       INSERT INTO teachers (
         user_id,
         username,
+        matricule,
         type,
         subjects,
         hourly_rate,
@@ -244,6 +249,7 @@ export class TeachersRepository {
       VALUES (
         ${user.id},
         ${username},
+        ${input.matricule ?? null},
         ${input.type},
         ${input.subjects},
         ${input.hourly_rate},
@@ -315,6 +321,9 @@ export class TeachersRepository {
     }
     const subjectsArray = input.subjects ?? current.subjects ?? [];
     const subjectsLiteral = sql.raw(`ARRAY[${subjectsArray.map((s) => `'${s.replace(/'/g, "''")}'`).join(',')}]::text[]`);
+    // undefined = conserver la valeur courante ; null/valeur = écraser.
+    const nextMatricule = input.matricule === undefined ? current.matricule : input.matricule;
+    const matriculeSql = nextMatricule === null ? sql`NULL` : sql`${nextMatricule}`;
     const monthlySalaryVal = input.monthly_salary === undefined ? current.monthly_salary : input.monthly_salary;
     const hourlyRateVal = input.hourly_rate === undefined ? current.hourly_rate : input.hourly_rate;
     const monthlySalarySql = monthlySalaryVal === null ? sql`NULL` : sql`${monthlySalaryVal}`;
@@ -325,6 +334,7 @@ export class TeachersRepository {
     await this.db.execute(sql`
       UPDATE teachers
       SET
+        matricule      = ${matriculeSql},
         type           = ${input.type ?? current.type},
         subjects       = ${subjectsLiteral},
         hourly_rate    = ${hourlyRateSql},
@@ -510,6 +520,7 @@ export class TeachersRepository {
     Array<{
       teacher_id: string;
       teacher_name: string;
+      teacher_matricule: string | null;
       teacher_type: 'vacataire' | 'permanent';
       subjects: string[];
       total_scheduled: number;
@@ -546,6 +557,7 @@ export class TeachersRepository {
         SELECT
           t.id AS teacher_id,
           u.name AS teacher_name,
+          t.matricule AS teacher_matricule,
           t.type AS teacher_type,
           t.subjects,
           s.id AS schedule_id,
@@ -572,6 +584,7 @@ export class TeachersRepository {
       SELECT
         sc.teacher_id::text AS teacher_id,
         sc.teacher_name,
+        sc.teacher_matricule,
         sc.teacher_type::text AS teacher_type,
         sc.subjects,
         COUNT(sc.schedule_id)::int AS total_scheduled,
@@ -622,7 +635,7 @@ export class TeachersRepository {
           AND ast.date = sc.date
         LIMIT 1
       ) rollcall ON true
-      GROUP BY sc.teacher_id, sc.teacher_name, sc.teacher_type, sc.subjects
+      GROUP BY sc.teacher_id, sc.teacher_name, sc.teacher_matricule, sc.teacher_type, sc.subjects
       HAVING
         CASE
           WHEN ${statusFilter} = 'absent'
@@ -654,6 +667,7 @@ export class TeachersRepository {
     return getRows<TeacherAttendanceStatsRow>(result).map((row) => ({
       teacher_id: row.teacher_id,
       teacher_name: row.teacher_name,
+      teacher_matricule: row.teacher_matricule ?? null,
       teacher_type: row.teacher_type === 'permanent' ? 'permanent' : 'vacataire',
       subjects: Array.isArray(row.subjects) ? row.subjects : [],
       total_scheduled: toNumber(row.total_scheduled),

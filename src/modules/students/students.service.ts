@@ -57,6 +57,12 @@ const isDbConstraintError = (error: unknown, code: string): boolean => {
   return (error as { code?: string }).code === code;
 };
 
+const isMatriculeUniqueViolation = (error: unknown): boolean => {
+  if (typeof error !== 'object' || error === null) return false;
+  const { code, constraint } = error as { code?: unknown; constraint?: unknown };
+  return code === '23505' && typeof constraint === 'string' && constraint.includes('matricule');
+};
+
 const deduplicateAbsences = (ids: string[]): string[] => Array.from(new Set(ids));
 
 export class StudentsService {
@@ -92,6 +98,13 @@ export class StudentsService {
       if (error instanceof Error && error.message === 'Class not found') {
         throw new StudentsModuleError('Class not found', 404, 'CLASS_NOT_FOUND');
       }
+      if (isMatriculeUniqueViolation(error)) {
+        throw new StudentsModuleError(
+          'Ce matricule est déjà utilisé par un autre élève',
+          409,
+          'MATRICULE_ALREADY_EXISTS'
+        );
+      }
       if (isDbConstraintError(error, '23503')) {
         throw new StudentsModuleError('Class not found', 404, 'CLASS_NOT_FOUND');
       }
@@ -106,6 +119,13 @@ export class StudentsService {
       return student;
     } catch (error) {
       if (error instanceof StudentsModuleError) throw error;
+      if (isMatriculeUniqueViolation(error)) {
+        throw new StudentsModuleError(
+          'Ce matricule est déjà utilisé par un autre élève',
+          409,
+          'MATRICULE_ALREADY_EXISTS'
+        );
+      }
       if (isDbConstraintError(error, '23503')) {
         throw new StudentsModuleError('Class not found', 404, 'CLASS_NOT_FOUND');
       }

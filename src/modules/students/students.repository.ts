@@ -32,6 +32,8 @@ type StudentRow = {
   class_name: string;
   first_name: string;
   last_name: string;
+  matricule: string | null;
+  birth_date: string | null;
   parent_name: string | null;
   parent_phone: string | null;
   parent_email: string | null;
@@ -49,6 +51,8 @@ type ExistingStudentRow = {
   class_id: string;
   first_name: string;
   last_name: string;
+  matricule: string | null;
+  birth_date: string | null;
   parent_name: string | null;
   parent_phone: string | null;
   parent_email: string | null;
@@ -208,6 +212,8 @@ const mapStudent = (row: StudentRow): StudentRecord => ({
   className: row.class_name,
   firstName: row.first_name,
   lastName: row.last_name,
+  matricule: row.matricule,
+  birthDate: row.birth_date,
   parentName: row.parent_name,
   parentPhone: row.parent_phone,
   parentEmail: row.parent_email,
@@ -271,7 +277,7 @@ const buildStudentsWhere = (query: StudentsListQuery): SQL[] => {
   if (typeof query.is_active === 'boolean') where.push(sql`s.is_active = ${query.is_active}`);
   if (query.search) {
     where.push(
-      sql`(s.first_name ILIKE ${`%${query.search}%`} OR s.last_name ILIKE ${`%${query.search}%`})`
+      sql`(s.first_name ILIKE ${`%${query.search}%`} OR s.last_name ILIKE ${`%${query.search}%`} OR s.matricule ILIKE ${`%${query.search}%`})`
     );
   }
   return where;
@@ -325,6 +331,8 @@ export class StudentsRepository {
           c.name AS class_name,
           s.first_name,
           s.last_name,
+          s.matricule,
+          s.birth_date::text AS birth_date,
           s.parent_name,
           s.parent_phone,
           s.parent_email,
@@ -383,13 +391,14 @@ export class StudentsRepository {
   async createStudent(input: CreateStudentInput): Promise<StudentRecord> {
     const result = await this.db.execute(sql`
       INSERT INTO students (
-        class_id, first_name, last_name,
+        class_id, first_name, last_name, matricule, birth_date,
         parent_name, parent_phone, parent_email,
         parent_name_2, parent_phone_2,
         notes, is_active
       )
       VALUES (
         ${input.class_id}, ${input.first_name}, ${input.last_name},
+        ${input.matricule ?? null}, ${input.birth_date ?? null},
         ${input.parent_name}, ${input.parent_phone}, ${input.parent_email ?? null},
         ${input.parent_name_2}, ${input.parent_phone_2},
         ${input.notes}, ${input.is_active}
@@ -397,7 +406,7 @@ export class StudentsRepository {
       RETURNING
         id, class_id,
         (SELECT name FROM classes WHERE id = class_id) AS class_name,
-        first_name, last_name,
+        first_name, last_name, matricule, birth_date::text AS birth_date,
         parent_name, parent_phone, parent_email,
         parent_name_2, parent_phone_2,
         notes, is_active, created_at
@@ -418,7 +427,7 @@ export class StudentsRepository {
     const result = await this.db.execute(sql`
       SELECT
         s.id, s.class_id, c.name AS class_name,
-        s.first_name, s.last_name,
+        s.first_name, s.last_name, s.matricule, s.birth_date::text AS birth_date,
         s.parent_name, s.parent_phone, s.parent_email,
         s.parent_name_2, s.parent_phone_2,
         s.notes, s.is_active, s.created_at
@@ -437,7 +446,7 @@ export class StudentsRepository {
     input: UpdateStudentInput
   ): Promise<StudentRecord | null> {
     const currentResult = await this.db.execute(sql`
-      SELECT id, class_id, first_name, last_name,
+      SELECT id, class_id, first_name, last_name, matricule, birth_date::text AS birth_date,
              parent_name, parent_phone, parent_email,
              parent_name_2, parent_phone_2,
              notes, is_active
@@ -451,6 +460,11 @@ export class StudentsRepository {
 
     const nextClassId = input.class_id ?? current.class_id;
     const nextIsActive = input.is_active ?? current.is_active;
+    // undefined = conserver ; null/valeur = écraser.
+    const nextMatricule = input.matricule === undefined ? current.matricule : input.matricule;
+    const matriculeSql = nextMatricule === null ? sql`NULL` : sql`${nextMatricule}`;
+    const nextBirthDate = input.birth_date === undefined ? current.birth_date : input.birth_date;
+    const birthDateSql = nextBirthDate === null ? sql`NULL` : sql`${nextBirthDate}::date`;
     const nextParentName =
       input.parent_name !== undefined ? input.parent_name : current.parent_name;
     const nextParentPhone =
@@ -469,6 +483,8 @@ export class StudentsRepository {
         class_id = ${nextClassId},
         first_name = ${input.first_name ?? current.first_name},
         last_name = ${input.last_name ?? current.last_name},
+        matricule = ${matriculeSql},
+        birth_date = ${birthDateSql},
         parent_name = ${nextParentName},
         parent_phone = ${nextParentPhone},
         parent_email = ${nextParentEmail},
@@ -502,7 +518,7 @@ export class StudentsRepository {
         AND c.id = s.class_id
       RETURNING
         s.id, s.class_id, c.name AS class_name,
-        s.first_name, s.last_name,
+        s.first_name, s.last_name, s.matricule, s.birth_date::text AS birth_date,
         s.parent_name, s.parent_phone, s.parent_email,
         s.parent_name_2, s.parent_phone_2,
         s.notes, s.is_active, s.created_at
@@ -639,6 +655,8 @@ export class StudentsRepository {
       id: student.id,
       firstName: student.firstName,
       lastName: student.lastName,
+      matricule: student.matricule,
+      birthDate: student.birthDate,
       className: student.className,
       classId: student.classId,
       isActive: student.isActive,

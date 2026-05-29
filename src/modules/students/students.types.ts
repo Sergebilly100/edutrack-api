@@ -37,6 +37,8 @@ export const createStudentBodySchema = z.object({
   class_id: z.uuid(),
   first_name: z.string().trim().min(1).max(100),
   last_name: z.string().trim().min(1).max(100),
+  matricule: z.string().trim().min(1).max(50).nullable().optional().default(null),
+  birth_date: z.string().regex(ISO_DATE_REGEX).nullable().optional().default(null),
   parent_name: parentNameSchema.optional().default(null),
   parent_phone: parentPhoneSchema.default(null),
   parent_email: z.string().trim().email().nullable().optional().default(null),
@@ -55,6 +57,8 @@ export const updateStudentBodySchema = z
     class_id: z.uuid().optional(),
     first_name: z.string().trim().min(1).max(100).optional(),
     last_name: z.string().trim().min(1).max(100).optional(),
+    matricule: z.string().trim().min(1).max(50).nullable().optional(),
+    birth_date: z.string().regex(ISO_DATE_REGEX).nullable().optional(),
     parent_name: parentNameSchema.optional(),
     parent_phone: parentPhoneSchema.optional(),
     parent_email: z.string().trim().email().nullable().optional(),
@@ -133,6 +137,8 @@ export type StudentRecord = {
   className: string;
   firstName: string;
   lastName: string;
+  matricule: string | null;
+  birthDate: string | null;
   parentName?: string | null;
   parentPhone: string | null;
   parentEmail?: string | null;
@@ -175,6 +181,8 @@ export type StudentDetailRecord = {
   id: string;
   firstName: string;
   lastName: string;
+  matricule: string | null;
+  birthDate: string | null;
   className: string;
   classId: string;
   isActive: boolean;

@@ -45,6 +45,33 @@ export const getPoolStats = (): {
 export const db = drizzle(pool);
 export type TenantDb = NodePgDatabase<Record<string, unknown>>;
 
+// Tables cœur attendues dans tout schéma tenant correctement provisionné.
+// Sert de garde avant d'exécuter un job tenant (cron) : un schéma orphelin —
+// ligne résiduelle dans public.tenants dont le schéma PG a été supprimé — ne
+// doit pas faire planter le worker en boucle.
+const REQUIRED_TENANT_TABLES = ['schedule_periods', 'schedules', 'attendances_teacher'] as const;
+
+/**
+ * Renvoie true si `schemaName` existe en base ET contient les tables cœur
+ * tenant. Permet aux workers/cron d'ignorer proprement les schémas non
+ * provisionnés au lieu de lever une exception (`relation ... does not exist`).
+ */
+export const schemaIsProvisioned = async (schemaName: string): Promise<boolean> => {
+  if (!/^[a-z][a-z0-9_]{0,62}$/.test(schemaName)) {
+    return false;
+  }
+
+  const result = await pool.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count
+     FROM information_schema.tables
+     WHERE table_schema = $1
+       AND table_name = ANY($2::text[])`,
+    [schemaName, [...REQUIRED_TENANT_TABLES]]
+  );
+
+  return Number(result.rows[0]?.count ?? 0) === REQUIRED_TENANT_TABLES.length;
+};
+
 export const acquireTenantDb = async (
   schemaName: string
 ): Promise<{ db: TenantDb; release: () => void }> => {

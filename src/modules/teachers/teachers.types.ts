@@ -24,6 +24,7 @@ const fullPayloadSchema = z
   .object({
     first_name: z.string().trim().min(1).max(100),
     last_name: z.string().trim().min(1).max(100),
+    matricule: z.string().trim().min(1).max(50).nullable().optional().default(null),
     phone: z.string().regex(PHONE_CI_REGEX).nullable().optional().default(null),
     email: z.string().trim().email().max(255).nullable().optional().default(null),
     type: teacherTypeSchema,
@@ -61,6 +62,7 @@ export const updateTeacherBodySchema = z
   .object({
     first_name: z.string().trim().min(1).max(100).optional(),
     last_name: z.string().trim().min(1).max(100).optional(),
+    matricule: z.string().trim().min(1).max(50).nullable().optional(),
     phone: z.string().regex(PHONE_CI_REGEX).nullable().optional(),
     email: z.string().trim().email().max(255).nullable().optional(),
     type: teacherTypeSchema.optional(),
