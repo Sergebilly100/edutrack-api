@@ -131,11 +131,22 @@ export function buildDashboardRepository(db: TenantDb) {
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id
         WHERE u.is_active = true
       )
+      -- Heures effectuées : identiques à celles de l'Économie (getSalaryStatsForMonth)
+      -- pour que les cartes "Taux de présence profs" et "Économie du mois" présentent
+      -- le même nombre d'heures effectuées :
+      --   - approved → validated_hours (peut être < heures prévues)
+      --   - rejected → 0
+      --   - present/late/excused (sans validation finalisée) → heures pleines du créneau
       SELECT
         es.teacher_type,
         COALESCE(SUM(es.hours), 0)::numeric(8,2) AS planned_hours,
-        COALESCE(SUM(es.hours) FILTER (
-          WHERE at.status IN ('present', 'late', 'excused')
+        COALESCE(SUM(
+          CASE
+            WHEN at.validation_status = 'approved' THEN COALESCE(at.validated_hours, 0)
+            WHEN at.validation_status = 'rejected' THEN 0
+            WHEN at.status IN ('present', 'late', 'excused') THEN es.hours
+            ELSE 0
+          END
         ), 0)::numeric(8,2) AS completed_hours
       FROM expected_schedules es
       LEFT JOIN attendances_teacher at

@@ -110,6 +110,54 @@ describe('validations routes integration (real db)', () => {
         response.body.gps_suspicious + response.body.short_hours
       );
     });
+
+    it('exclut du compteur missing_end_scan une session déjà tolérée (action active)', async () => {
+      const headers = await getAuthHeaders('director');
+
+      // Session sans scan de fin (pointé, pas de checkout ni room_scan_end_at, date passée).
+      const id = await insertPendingAttendance();
+
+      const before = await request()
+        .get('/api/v1/validations/pending/count')
+        .set(headers);
+      expect(before.status).toBe(200);
+      const countedBefore = before.body.missing_end_scan;
+      expect(countedBefore).toBeGreaterThanOrEqual(1);
+
+      // Le directeur tolère : action 'warned' active (non annulée) → "traité".
+      await queryTenant(
+        `UPDATE ${tenantTable('attendances_teacher')}
+           SET end_scan_action = 'warned', end_scan_action_at = NOW(), end_scan_action_cancelled_at = NULL
+         WHERE id = $1`,
+        [id]
+      );
+
+      const after = await request()
+        .get('/api/v1/validations/pending/count')
+        .set(headers);
+      expect(after.status).toBe(200);
+      // La session traitée ne doit plus être comptée : le badge peut retomber à 0.
+      expect(after.body.missing_end_scan).toBe(countedBefore - 1);
+
+      // Annuler l'action la réintègre au compteur (cohérent avec countEligibleSessions).
+      await queryTenant(
+        `UPDATE ${tenantTable('attendances_teacher')}
+           SET end_scan_action_cancelled_at = NOW()
+         WHERE id = $1`,
+        [id]
+      );
+      const reverted = await request()
+        .get('/api/v1/validations/pending/count')
+        .set(headers);
+      expect(reverted.status).toBe(200);
+      expect(reverted.body.missing_end_scan).toBe(countedBefore);
+
+      // Nettoyage pour ne pas polluer les autres tests partageant le tenant seedé.
+      await queryTenant(
+        `DELETE FROM ${tenantTable('attendances_teacher')} WHERE id = $1`,
+        [id]
+      );
+    });
   });
 
   // ── PATCH /api/v1/validations/:id/approve ────────────────────────────────

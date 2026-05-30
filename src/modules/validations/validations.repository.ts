@@ -225,6 +225,11 @@ export class ValidationsRepository {
         AND at.checked_out_at IS NULL
         AND at.room_scan_end_at IS NULL
         AND at.validation_status NOT IN ('approved', 'rejected')
+        -- Une session est "traitée" dès qu'une action scan-de-fin active y est appliquée
+        -- (tolérée/sanctionnée et non annulée). On l'exclut du compteur pour qu'il
+        -- retombe à 0 quand tous les cas sont traités, cohérent avec countEligibleSessions
+        -- côté frontend. Les actions annulées (cancelled_at NOT NULL) restent comptées.
+        AND (at.end_scan_action IS NULL OR at.end_scan_action_cancelled_at IS NOT NULL)
         AND at.date <= (NOW() AT TIME ZONE 'Africa/Abidjan')::date
         AND (
           at.date < (NOW() AT TIME ZONE 'Africa/Abidjan')::date
