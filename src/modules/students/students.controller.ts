@@ -1,11 +1,14 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { ZodError } from 'zod';
 
+import { z } from 'zod';
+
 import { withTenantSchema } from '../../shared/database/db.js';
 import {
   requireTeacherOrDirectorOrSecretary,
   requirePermission,
 } from '../../shared/middleware/auth.middleware.js';
+import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
 
 import { StudentsModuleError, buildStudentsService } from './students.service.js';
 import {
@@ -47,7 +50,14 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
   });
 };
 
-export default async function studentsController(app: FastifyInstance): Promise<void> {
+const absenceExportQuerySchema = absenceStatsQuerySchema.extend({
+  student_label: z.string().trim().min(1).max(40).default('Élève'),
+});
+
+export default async function studentsController(
+  app: FastifyInstance,
+  options: { pdfQueue?: PdfExportQueueHandle } = {}
+): Promise<void> {
   // ─── Students CRUD ──────────────────────────────────────────────────────────
 
   app.get(
@@ -132,6 +142,47 @@ export default async function studentsController(app: FastifyInstance): Promise<
         });
 
         return reply.send(result);
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  // Bilan des absences élèves (PDF asynchrone via la queue d'export).
+  // Remplace l'ancien export CSV navigateur.
+  app.get(
+    '/api/v1/students/absence-stats/export',
+    { preHandler: requirePermission('students.view') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const query = absenceExportQuerySchema.parse(request.query ?? {});
+
+        if (!options.pdfQueue) {
+          return reply.code(503).send({
+            error: 'Export queue unavailable',
+            code: 'EXPORT_QUEUE_UNAVAILABLE',
+            statusCode: 503,
+          });
+        }
+
+        const job = await options.pdfQueue.add(
+          'student-absences-export',
+          {
+            type: 'student-absences-export',
+            schemaName: claims.schemaName,
+            studentLabel: query.student_label,
+            classId: query.class_id,
+            subject: query.subject,
+            from: query.from,
+            to: query.to,
+            minAbsences: query.min_absences,
+            smsStatus: query.sms_status,
+          },
+          { removeOnComplete: 100, removeOnFail: 100 }
+        );
+
+        return reply.send({ jobId: job.id });
       } catch (error) {
         return handleError(reply, error);
       }

@@ -32,6 +32,7 @@ export const listParentsQuerySchema = z.object({
   search: z.string().trim().min(1).max(255).optional(),
   status: z.enum(['active', 'expired', 'cancelled']).optional(),
   month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+  created_by: z.string().uuid().optional(),
 });
 
 export const createParentSubscriptionBodySchema = z.object({

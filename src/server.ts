@@ -221,12 +221,12 @@ app.addHook('onRequest', async (request, reply) => {
 
 app.register(authController);
 app.register(adminController, { deadLetterQueue });
-app.register(attendanceController);
+app.register(attendanceController, { pdfQueue: billingPdfQueue });
 app.register(dashboardController);
 app.register(notificationsController, { smsQueue: notificationsQueue });
 app.register(billingController, { billingPdfQueue })
-app.register(studentsController);
-app.register(teachersController);
+app.register(studentsController, { pdfQueue: billingPdfQueue });
+app.register(teachersController, { pdfQueue: billingPdfQueue });
 app.register(validationsController);
 app.register(scheduleController);
 app.register(roomsController);
@@ -234,7 +234,7 @@ app.register(documentsController);
 app.register(schoolController);
 app.register(importExportController);
 app.register(permissionsController);
-app.register(subscriptionsController);
+app.register(subscriptionsController, { pdfQueue: billingPdfQueue });
 app.register(parentPortalController);
 
 app.get('/health', async () => ({ status: 'ok' }));

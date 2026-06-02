@@ -22,6 +22,7 @@ import {
   monthQuerySchema,
   recordParamsSchema,
   salaryHistoryQuerySchema,
+  paymentHistoryExportBodySchema,
   salaryBulkExportBodySchema,
   salarySingleExportBodySchema,
   teacherParamsSchema,
@@ -459,6 +460,36 @@ export default async function billingController(
             periodFrom: body.periodFrom,
             periodTo: body.periodTo,
             teacherId: body.teacherId ?? null,
+          },
+          {
+            removeOnComplete: 100,
+            removeOnFail: 100,
+          }
+        );
+
+        return reply.send({ jobId: job.id });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/billing/salary/export/payment-history',
+    { preHandler: requirePermission('salary.export') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const body = paymentHistoryExportBodySchema.parse(request.body ?? {});
+
+        const job = await billingPdfQueue.add(
+          'salary-export-payment-history',
+          {
+            type: 'salary-export-payment-history',
+            schemaName: claims.schemaName,
+            teacherId: body.teacherId,
+            periodFrom: body.periodFrom,
+            periodTo: body.periodTo,
           },
           {
             removeOnComplete: 100,

@@ -1,11 +1,12 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { ZodError } from 'zod';
+import { ZodError, z } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
 import {
   requireDirectorOrSecretary,
   requirePermission,
 } from '../../shared/middleware/auth.middleware.js';
+import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
 import { SubscriptionsRepository } from './subscriptions.repository.js';
 import { SubscriptionsModuleError, SubscriptionsService } from './subscriptions.service.js';
 import {
@@ -52,7 +53,20 @@ const handleError = (request: FastifyRequest, reply: FastifyReply, error: unknow
   });
 };
 
-export default async function subscriptionsController(app: FastifyInstance): Promise<void> {
+const revenueExportBodySchema = z
+  .object({
+    periodFrom: z.string().regex(/^\d{4}-\d{2}$/),
+    periodTo: z.string().regex(/^\d{4}-\d{2}$/),
+  })
+  .refine((value) => value.periodFrom <= value.periodTo, {
+    message: 'periodFrom must be before or equal to periodTo',
+    path: ['periodFrom'],
+  });
+
+export default async function subscriptionsController(
+  app: FastifyInstance,
+  options: { pdfQueue?: PdfExportQueueHandle } = {}
+): Promise<void> {
   app.get(
     '/api/v1/settings/sms-price',
     { preHandler: requireDirectorOrSecretary },
@@ -101,6 +115,23 @@ export default async function subscriptionsController(app: FastifyInstance): Pro
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
           const service = new SubscriptionsService(new SubscriptionsRepository(tenantDb));
           return service.listSubscriptionClasses({ search: query.search });
+        });
+        return reply.send({ data: result });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.get(
+    '/api/v1/subscriptions/creators',
+    { preHandler: requirePermission('subscriptions.view') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          const service = new SubscriptionsService(new SubscriptionsRepository(tenantDb));
+          return service.listCreators();
         });
         return reply.send({ data: result });
       } catch (error) {
@@ -369,6 +400,42 @@ export default async function subscriptionsController(app: FastifyInstance): Pro
           });
         });
         return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  // Bilan des reversements (PDF asynchrone via la queue d'export).
+  // Remplace l'ancienne impression HTML navigateur.
+  app.post(
+    '/api/v1/subscriptions/revenue/export',
+    { preHandler: requirePermission('subscriptions.revenue') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const body = revenueExportBodySchema.parse(request.body ?? {});
+
+        if (!options.pdfQueue) {
+          return reply.code(503).send({
+            error: 'Export queue unavailable',
+            code: 'EXPORT_QUEUE_UNAVAILABLE',
+            statusCode: 503,
+          });
+        }
+
+        const job = await options.pdfQueue.add(
+          'revenue-export',
+          {
+            type: 'revenue-export',
+            schemaName: claims.schemaName,
+            periodFrom: body.periodFrom,
+            periodTo: body.periodTo,
+          },
+          { removeOnComplete: 100, removeOnFail: 100 }
+        );
+
+        return reply.send({ jobId: job.id });
       } catch (error) {
         return handleError(request, reply, error);
       }

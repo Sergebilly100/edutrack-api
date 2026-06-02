@@ -440,7 +440,7 @@ export const defaultRepository: NotificationsRepository = {
       DIRECTOR_ALLOWED_TYPES.includes(t)
     );
     const effectiveTypes = requestedTypes.length === 0 ? DIRECTOR_ALLOWED_TYPES : requestedTypes;
-    const whereClause = sql`WHERE type IN (${sql.join(
+    const whereClause = sql`WHERE type::text IN (${sql.join(
       effectiveTypes.map((item) => sql`${item}`),
       sql`, `
     )})`;
@@ -521,7 +521,7 @@ export const defaultRepository: NotificationsRepository = {
           (nl.recipient_email IS NOT NULL AND nl.recipient_email = u.email)
           OR (nl.recipient_phone IS NOT NULL AND nl.recipient_phone = u.phone)
         )
-        AND nl.type IN (
+        AND nl.type::text IN (
           'attendance_rejected',
           'attendance_approved',
           'scan_end_warning',

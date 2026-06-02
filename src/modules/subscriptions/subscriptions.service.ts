@@ -95,7 +95,14 @@ export class SubscriptionsService {
   }
 
   async listParents(schemaName: string, query: ListParentsQuery) {
-    const result = await this.repository.listParents(query);
+    const result = await this.repository.listParents({
+      page: query.page,
+      limit: query.limit,
+      search: query.search,
+      status: query.status,
+      month: query.month,
+      createdBy: query.created_by,
+    });
     const in30Iso = businessDateFromNowPlusDays(30);
     return {
       data: result.rows.map((row) => {
@@ -142,6 +149,8 @@ export class SubscriptionsService {
           full_name: row.full_name,
           phone: row.phone,
           email: row.email,
+          created_by: row.created_by,
+          created_by_name: row.created_by_name,
           latest_subscription: row.subscription_id
             ? {
                 id: row.subscription_id,
@@ -154,6 +163,8 @@ export class SubscriptionsService {
                 monthly_amount_fcfa: monthlyAmount,
                 expires_soon: Boolean(resolvedEndsAt && resolvedEndsAt < in30Iso),
                 days_remaining: daysRemaining,
+                created_by: row.created_by,
+                created_by_name: row.created_by_name,
               }
             : null,
           students: row.students ?? [],
@@ -171,6 +182,10 @@ export class SubscriptionsService {
 
   async listSubscriptionClasses(query: { search?: string }) {
     return this.repository.listSubscriptionClasses({ search: query.search });
+  }
+
+  async listCreators() {
+    return this.repository.listSubscriptionCreators();
   }
 
   async listSubscriptionStudentsByClass(query: {

@@ -3,14 +3,30 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import archiver from 'archiver';
-import { sql } from 'drizzle-orm';
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { Queue, Worker, type Job } from 'bullmq';
 import type { Redis } from 'ioredis';
 
-import { db, withTenantSchema } from '../../shared/database/db.js';
 import { logger as appLogger } from '../../shared/observability/logger.js';
+import {
+  fetchSchoolBranding,
+  renderPaymentHistory,
+  renderRevenueReport,
+  renderSchoolSalaryBilan,
+  renderStudentAbsencesReport,
+  renderTeacherAttendanceReport,
+  renderTeacherHoursReport,
+  renderTeacherMultiPeriodBilan,
+  renderTeacherSalaryBilan,
+  type DocumentBranding,
+  type TeacherSalaryDetails,
+} from '../../shared/pdf/index.js';
+import { withTenantSchema } from '../../shared/database/db.js';
 import { isR2Configured, uploadBuffer } from '../../shared/storage/r2.js';
+import { buildAttendanceService } from '../attendance/attendance.service.js';
+import { buildStudentsService } from '../students/students.service.js';
+import { SubscriptionsRepository } from '../subscriptions/subscriptions.repository.js';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
+import { buildTeachersService } from '../teachers/teachers.service.js';
 
 import { buildBillingService } from './billing.service.js';
 
@@ -22,38 +38,6 @@ export const BILLING_EXPORT_DIR = process.env.BILLING_EXPORT_DIR ?? '/tmp/edutra
 
 const toSafeFilePart = (value: string): string => value.replace(/[^a-zA-Z0-9_-]+/g, '_');
 
-/**
- * Formate le statut de paiement pour l'affichage dans les PDFs.
- */
-const formatPaymentStatus = (status: string): string => {
-  switch (status) {
-    case 'paid':
-      return 'Payé';
-    case 'disputed':
-      return 'Litige';
-    case 'pending':
-      return 'En attente';
-    case 'nothing_to_pay':
-      return 'Rien à payer';
-    default:
-      return status;
-  }
-};
-
-/**
- * Formate le type de rémunération pour l'affichage dans les PDFs.
- */
-const formatCompensationType = (
-  teacherType: 'vacataire' | 'permanent',
-  hourlyRate: number | null,
-  monthlySalary: number | null
-): string => {
-  if (teacherType === 'permanent') {
-    return `Salaire mensuel: ${monthlySalary ?? 'Non renseigné'} FCFA`;
-  }
-  return `Taux horaire: ${hourlyRate ?? 'Non renseigné'} FCFA/h`;
-};
-
 const toMonthDateUtc = (month: string): Date => {
   const [yearRaw, monthRaw] = month.split('-');
   const year = Number(yearRaw);
@@ -64,15 +48,6 @@ const toMonthDateUtc = (month: string): Date => {
   }
 
   return new Date(Date.UTC(year, monthValue - 1, 1));
-};
-
-const formatMonthLabel = (month: string): string => {
-  const date = toMonthDateUtc(month);
-  return new Intl.DateTimeFormat('fr-FR', {
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'UTC',
-  }).format(date);
 };
 
 const iterateMonths = (periodFrom: string, periodTo: string): string[] => {
@@ -93,296 +68,43 @@ const iterateMonths = (periodFrom: string, periodTo: string): string[] => {
 
 type TeacherExportPayload = Awaited<ReturnType<ReturnType<typeof buildBillingService>['getExportTeacherPayload']>>;
 
-type SchoolBranding = {
-  schoolName: string;
-  logoUrl: string | null;
-};
-
-type LoadedLogo = {
-  bytes: Uint8Array;
-  format: 'png' | 'jpg';
-};
-
-type PdfBranding = {
-  schoolName: string;
-  logo: LoadedLogo | null;
-};
-
-const DEFAULT_SCHOOL_NAME = 'École';
-
-const fetchSchoolBranding = async (schemaName: string): Promise<SchoolBranding> => {
-  const result = await db.execute<{ name: string | null; logo_url: string | null }>(sql`
-    SELECT name, logo_url
-    FROM public.tenants
-    WHERE schema_name = ${schemaName}
-    LIMIT 1
-  `);
-
-  const row = result.rows[0];
-  if (!row) {
-    return {
-      schoolName: DEFAULT_SCHOOL_NAME,
-      logoUrl: null,
-    };
-  }
-
-  return {
-    schoolName: row.name?.trim() || DEFAULT_SCHOOL_NAME,
-    logoUrl: row.logo_url?.trim() || null,
-  };
-};
-
-const parseDataUri = (value: string): { contentType: string; data: Uint8Array } | null => {
-  const match = /^data:([^;,]+);base64,(.+)$/i.exec(value.trim());
-  if (!match) {
-    return null;
-  }
-
-  const [, contentType, base64Body] = match;
-  try {
-    return {
-      contentType,
-      data: Uint8Array.from(Buffer.from(base64Body, 'base64')),
-    };
-  } catch {
-    return null;
-  }
-};
-
-const detectImageFormat = (bytes: Uint8Array, contentType?: string): 'png' | 'jpg' | null => {
-  if (bytes.length >= 8) {
-    const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-    const isPng = pngSignature.every((value, index) => bytes[index] === value);
-    if (isPng) {
-      return 'png';
-    }
-  }
-
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
-    return 'jpg';
-  }
-
-  const normalizedType = contentType?.toLowerCase() ?? '';
-  if (normalizedType.includes('png')) {
-    return 'png';
-  }
-  if (normalizedType.includes('jpeg') || normalizedType.includes('jpg')) {
-    return 'jpg';
-  }
-
-  return null;
-};
-
 /**
- * Télécharge le logo école avec retry automatique (backoff exponentiel).
- * Logs les échecs pour monitoring via Sentry.
+ * Adapte le payload du service billing à la forme attendue par le template PDF.
+ * Garde le module billing et le toolkit PDF découplés (pas d'import croisé de types).
  */
-const loadLogo = async (logoUrl: string | null, logger?: { warn: (msg: string, meta?: Record<string, unknown>) => void }): Promise<LoadedLogo | null> => {
-  if (!logoUrl) {
-    return null;
-  }
-
-  // Cas 1: Data URI (déjà encodé en base64)
-  const dataUri = parseDataUri(logoUrl);
-  if (dataUri) {
-    const format = detectImageFormat(dataUri.data, dataUri.contentType);
-    if (!format) {
-      logger?.warn('[billing] Invalid image format in data URI', { logoUrl: logoUrl.slice(0, 50) });
-      return null;
-    }
-
-    return {
-      bytes: dataUri.data,
-      format,
-    };
-  }
-
-  // Cas 2: URL HTTP(S)
-  if (!/^https?:\/\//i.test(logoUrl)) {
-    logger?.warn('[billing] Invalid logo URL (not http/https)', { logoUrl });
-    return null;
-  }
-
-  // Retry avec backoff exponentiel : 3 tentatives (0ms, 500ms, 2000ms)
-  const maxRetries = 3;
-  const baseDelay = 500;
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      const response = await fetch(logoUrl, {
-        signal: AbortSignal.timeout(8000), // Augmenté de 5s à 8s
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const arrayBuffer = await response.arrayBuffer();
-      const bytes = new Uint8Array(arrayBuffer);
-      const format = detectImageFormat(bytes, response.headers.get('content-type') ?? undefined);
-
-      if (!format) {
-        logger?.warn('[billing] Invalid image format from URL', { logoUrl, contentType: response.headers.get('content-type') });
-        return null;
-      }
-
-      // Succès !
-      if (attempt > 0) {
-        logger?.warn('[billing] Logo loaded after retry', { logoUrl, attempt: attempt + 1 });
-      }
-
-      return {
-        bytes,
-        format,
-      };
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-
-      if (attempt < maxRetries - 1) {
-        // Attendre avant de retry (backoff exponentiel)
-        const delay = baseDelay * Math.pow(2, attempt);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  // Échec après tous les retries
-  logger?.warn('[billing] Failed to load logo after retries', {
-    logoUrl,
-    attempts: maxRetries,
-    error: lastError?.message,
-  });
-
-  return null;
-};
-
-const buildTeacherExportLines = (details: TeacherExportPayload): string[] => {
-  const compensationLine = formatCompensationType(
-    details.teacher.type,
-    details.teacher.hourlyRate,
-    details.teacher.monthlySalary
-  );
-
-  const paymentDateLine = details.payment.paidAt
-    ? `Dernier paiement: ${new Date(details.payment.paidAt).toISOString()}`
-    : 'Dernier paiement: Aucun';
-
-  const paymentNoteLine = details.payment.notes
-    ? `Note paiement: ${details.payment.notes}`
-    : 'Note paiement: -';
-
-  return [
-    `Professeur: ${details.teacher.name}`,
-    `Mois: ${details.month}`,
-    `Type: ${details.teacher.type}`,
-    compensationLine,
-    `Statut paiement: ${formatPaymentStatus(details.summary.status)}`,
-    paymentDateLine,
-    `Montant deja paye: ${details.summary.amountAlreadyPaid ?? 0} FCFA`,
-    `Montant restant a payer: ${details.summary.amountRemainingToPayNow ?? 0} FCFA`,
-    paymentNoteLine,
-    `Heures prevues: ${details.summary.hoursPlanned.toFixed(2)}h`,
-    `Heures effectuees: ${details.summary.hoursDone.toFixed(2)}h`,
-    `Total FCFA: ${details.summary.totalFcfa ?? 'N/A'}`,
-    '',
-    'Details jour par jour:',
-    ...details.rows.map(
-      (row) =>
-        `${row.date} | ${row.slotLabel} | ${row.subject} (${row.className}) | ${row.attendanceStatus} | ${row.hoursDone.toFixed(2)}h`
-    ),
-  ];
-};
-
-const createSimplePdfBytes = async (params: {
-  title: string;
-  subtitle: string;
-  lines: string[];
-  branding?: PdfBranding;
-}): Promise<Uint8Array> => {
-  const pdf = await PDFDocument.create();
-  let page = pdf.addPage([595, 842]);
-  const font = await pdf.embedFont(StandardFonts.Helvetica);
-  const boldFont = await pdf.embedFont(StandardFonts.HelveticaBold);
-  const schoolName = params.branding?.schoolName ?? DEFAULT_SCHOOL_NAME;
-  const embeddedLogo = params.branding?.logo
-    ? params.branding.logo.format === 'png'
-      ? await pdf.embedPng(params.branding.logo.bytes)
-      : await pdf.embedJpg(params.branding.logo.bytes)
-    : null;
-
-  const drawHeader = (targetPage: typeof page) => {
-    const pageWidth = targetPage.getWidth();
-    const logoMaxWidth = 72;
-    const logoMaxHeight = 72;
-
-    if (embeddedLogo) {
-      const scale = Math.min(
-        logoMaxWidth / embeddedLogo.width,
-        logoMaxHeight / embeddedLogo.height,
-        1
-      );
-      const width = embeddedLogo.width * scale;
-      const height = embeddedLogo.height * scale;
-      targetPage.drawImage(embeddedLogo, {
-        x: pageWidth - 40 - width,
-        y: 760,
-        width,
-        height,
-      });
-    }
-
-    targetPage.drawText(params.title, {
-      x: 40,
-      y: 760,
-      size: 18,
-      font: boldFont,
-    });
-
-    targetPage.drawText(params.subtitle, {
-      x: 40,
-      y: 740,
-      size: 11,
-      font,
-    });
-
-    targetPage.drawText(`Ecole: ${schoolName}`, {
-      x: 40,
-      y: 724,
-      size: 10,
-      font,
-      color: rgb(0.3, 0.3, 0.3),
-    });
-  };
-
-  drawHeader(page);
-
-  let cursorY = 695;
-  for (const line of params.lines) {
-    if (cursorY < 60) {
-      cursorY = 695;
-      page = pdf.addPage([595, 842]);
-      drawHeader(page);
-    }
-
-    page.drawText(line, {
-      x: 40,
-      y: cursorY,
-      size: 10,
-      font,
-    });
-    cursorY -= 16;
-  }
-
-  page.drawText('Signature directeur: ___________________________', {
-    x: 40,
-    y: 40,
-    size: 10,
-    font,
-  });
-
-  return pdf.save();
-};
+const toTeacherDetails = (payload: TeacherExportPayload): TeacherSalaryDetails => ({
+  month: payload.month,
+  teacher: {
+    id: payload.teacher.id,
+    name: payload.teacher.name,
+    type: payload.teacher.type,
+    hourlyRate: payload.teacher.hourlyRate,
+    monthlySalary: payload.teacher.monthlySalary,
+  },
+  summary: {
+    hoursPlanned: payload.summary.hoursPlanned,
+    hoursDone: payload.summary.hoursDone,
+    totalFcfa: payload.summary.totalFcfa,
+    status: payload.summary.status,
+    absenceHours: payload.summary.absenceHours,
+    amountAlreadyPaid: payload.summary.amountAlreadyPaid,
+    amountRemainingToPayNow: payload.summary.amountRemainingToPayNow,
+  },
+  payment: {
+    paidAt: payload.payment.paidAt,
+    paidByName: payload.payment.paidByName,
+    notes: payload.payment.notes,
+  },
+  rows: payload.rows.map((row) => ({
+    date: row.date,
+    slotLabel: row.slotLabel,
+    subject: row.subject,
+    className: row.className,
+    attendanceStatus: row.attendanceStatus,
+    lateMinutes: row.lateMinutes,
+    hoursDone: row.hoursDone,
+  })),
+});
 
 type ExportArtifact = {
   filePath: string;
@@ -395,28 +117,21 @@ type ExportArtifact = {
 // jobId in the filename is unique enough to avoid collisions across tenants.
 const buildR2Key = (fileName: string): string => `billing/exports/${fileName}`;
 
-const writeSimplePdf = async (params: {
-  title: string;
-  subtitle: string;
-  lines: string[];
-  fileName: string;
-  branding?: PdfBranding;
-}): Promise<ExportArtifact> => {
-  const bytes = await createSimplePdfBytes(params);
+const persistPdf = async (bytes: Uint8Array, fileName: string): Promise<ExportArtifact> => {
   const generatedAt = new Date().toISOString();
 
   if (isR2Configured()) {
-    const r2Key = buildR2Key(params.fileName);
+    const r2Key = buildR2Key(fileName);
     await uploadBuffer(r2Key, Buffer.from(bytes), 'application/pdf');
     // filePath kept empty-ish for the legacy return type; the download endpoint
     // checks r2Key first and only falls back to filePath when R2 is off.
-    return { filePath: '', fileName: params.fileName, generatedAt, r2Key };
+    return { filePath: '', fileName, generatedAt, r2Key };
   }
 
   await mkdir(BILLING_EXPORT_DIR, { recursive: true });
-  const filePath = path.join(BILLING_EXPORT_DIR, params.fileName);
+  const filePath = path.join(BILLING_EXPORT_DIR, fileName);
   await writeFile(filePath, bytes);
-  return { filePath, fileName: params.fileName, generatedAt };
+  return { filePath, fileName, generatedAt };
 };
 
 const writeZipArchive = async (params: {
@@ -485,6 +200,48 @@ export type BillingPdfJobData =
       periodFrom: string;
       periodTo: string;
       teacherId: string | null;
+    }
+  | {
+      type: 'salary-export-payment-history';
+      schemaName: string;
+      teacherId: string;
+      periodFrom: string;
+      periodTo: string;
+    }
+  | {
+      type: 'attendance-hours-export';
+      schemaName: string;
+      teacherId: string;
+      teacherName: string;
+      from: string;
+      to: string;
+    }
+  | {
+      type: 'student-absences-export';
+      schemaName: string;
+      studentLabel: string;
+      classId: string | undefined;
+      subject: string | undefined;
+      from: string;
+      to: string;
+      minAbsences: number;
+      smsStatus: 'sent' | 'not_sent' | 'failed' | undefined;
+    }
+  | {
+      type: 'teacher-attendance-export';
+      schemaName: string;
+      from: string;
+      to: string;
+      statusFilter: 'absent' | 'room_mismatch' | 'rollcall_missing' | 'late' | undefined;
+      teacherId: string | undefined;
+      subject: string | undefined;
+      classId: string | undefined;
+    }
+  | {
+      type: 'revenue-export';
+      schemaName: string;
+      periodFrom: string;
+      periodTo: string;
     };
 
 export type BillingPdfJobResult = {
@@ -500,8 +257,6 @@ export type BillingPdfJobResult = {
 export const processBillingPdfJob = async (
   job: Job<BillingPdfJobData>
 ): Promise<BillingPdfJobResult> => {
-  const schoolBranding = await fetchSchoolBranding(job.data.schemaName);
-
   // Logger contextualisé pour le job courant
   const logger = {
     warn: (msg: string, meta?: Record<string, unknown>) => {
@@ -509,138 +264,228 @@ export const processBillingPdfJob = async (
     },
   };
 
-  const branding: PdfBranding = {
-    schoolName: schoolBranding.schoolName,
-    logo: await loadLogo(schoolBranding.logoUrl, logger),
-  };
+  const branding: DocumentBranding = await fetchSchoolBranding(job.data.schemaName, logger);
 
   return withTenantSchema(job.data.schemaName, async (tenantDb) => {
     const service = buildBillingService(tenantDb);
 
     if (job.data.type === 'salary-export-teacher') {
-      const details = await service.getExportTeacherPayload(job.data.teacherId, job.data.month);
-      const monthSafe = toSafeFilePart(job.data.month);
-      const teacherSafe = toSafeFilePart(details.teacher.name);
-      const fileName = `salary_teacher_${teacherSafe}_${monthSafe}.pdf`;
-
-      const lines = buildTeacherExportLines(details);
-
-      const result = await writeSimplePdf({
-        title: 'Bilan Salaire Professeur',
-        subtitle: `Export genere automatiquement - job ${job.id ?? ''}`,
-        lines,
-        fileName,
-        branding,
-      });
-      return {
-        ...result,
-        fileType: 'pdf',
-      };
+      const payload = await service.getExportTeacherPayload(job.data.teacherId, job.data.month);
+      const fileName = `bilan_salaire_${toSafeFilePart(payload.teacher.name)}_${toSafeFilePart(job.data.month)}.pdf`;
+      const bytes = await renderTeacherSalaryBilan(branding, toTeacherDetails(payload));
+      const result = await persistPdf(bytes, fileName);
+      return { ...result, fileType: 'pdf' };
     }
 
     if (job.data.type === 'salary-export-school') {
       const summary = await service.getExportSchoolPayload(job.data.month);
-      const monthSafe = toSafeFilePart(job.data.month);
-      const fileName = `salary_school_${monthSafe}.pdf`;
-
-      const lines = [
-        `Mois: ${summary.month}`,
-        '',
-        ...summary.items.map(
-          (item) =>
-            `${item.teacherName} | ${item.teacherType} | prevu=${item.hoursPlanned.toFixed(2)}h | fait=${item.hoursDone.toFixed(2)}h | total=${item.totalFcfa ?? 'N/A'} | statut=${item.status}`
-        ),
-      ];
-
-      const result = await writeSimplePdf({
-        title: 'Bilan Salaires Ecole',
-        subtitle: `Export global - job ${job.id ?? ''}`,
-        lines,
-        fileName,
-        branding,
-      });
-
-      return {
-        ...result,
-        fileType: 'pdf',
-      };
+      const fileName = `bilan_salaires_ecole_${toSafeFilePart(job.data.month)}.pdf`;
+      const bytes = await renderSchoolSalaryBilan(branding, summary);
+      const result = await persistPdf(bytes, fileName);
+      return { ...result, fileType: 'pdf' };
     }
 
+    if (job.data.type === 'salary-export-payment-history') {
+      const { teacherId, periodFrom, periodTo } = job.data;
+      const history = await service.getTeacherPaymentHistory(teacherId, 2000, 0);
+      const items = history.items.filter(
+        (item) => item.month >= periodFrom && item.month <= periodTo
+      );
+      const coverageSafe = `${toSafeFilePart(periodFrom)}_${toSafeFilePart(periodTo)}`;
+      const fileName = `historique_paiements_${toSafeFilePart(history.teacher.name)}_${coverageSafe}.pdf`;
+      const bytes = await renderPaymentHistory(branding, {
+        teacher: { name: history.teacher.name, type: history.teacher.type },
+        periodFrom,
+        periodTo,
+        items: items.map((item) => ({
+          month: item.month,
+          amountFcfa: item.amountFcfa,
+          hoursPaid: item.hoursPaid,
+          status: item.status,
+          paidAt: item.paidAt,
+          paidByName: item.paidByName,
+          notes: item.notes,
+        })),
+      });
+      const result = await persistPdf(bytes, fileName);
+      return { ...result, fileType: 'pdf' };
+    }
+
+    if (job.data.type === 'attendance-hours-export') {
+      const { teacherId, teacherName, from, to } = job.data;
+      const rows = await buildAttendanceService(tenantDb).exportTeacherHistory({
+        teacherId,
+        from,
+        to,
+      });
+      const resolvedName = rows[0]?.teacher_name ?? teacherName;
+      const fileName = `bilan_heures_${toSafeFilePart(resolvedName)}_${toSafeFilePart(from)}_${toSafeFilePart(to)}.pdf`;
+      const bytes = await renderTeacherHoursReport(branding, {
+        teacher: { name: resolvedName },
+        periodFrom: from,
+        periodTo: to,
+        rows: rows.map((row) => ({
+          date: row.date,
+          subject: row.subject,
+          className: row.class_name,
+          roomName: row.room_name,
+          startTime: row.start_time,
+          endTime: row.end_time,
+          attendanceStatus: row.attendance_status,
+          lateMinutes: row.late_minutes,
+          rollcallDone: row.student_rollcall_done,
+          studentPresentCount: row.student_present_count,
+          studentAbsentCount: row.student_absent_count,
+          studentTotalCount: row.student_total_count,
+        })),
+      });
+      const result = await persistPdf(bytes, fileName);
+      return { ...result, fileType: 'pdf' };
+    }
+
+    if (job.data.type === 'student-absences-export') {
+      const { studentLabel, classId, subject, from, to, minAbsences, smsStatus } = job.data;
+      const rows = await buildStudentsService(tenantDb).getAbsenceStats({
+        from,
+        to,
+        min_absences: minAbsences,
+        ...(classId !== undefined ? { class_id: classId } : {}),
+        ...(subject !== undefined ? { subject } : {}),
+        ...(smsStatus !== undefined ? { sms_status: smsStatus } : {}),
+      });
+      const fileName = `bilan_absences_eleves_${toSafeFilePart(from)}_${toSafeFilePart(to)}.pdf`;
+      const bytes = await renderStudentAbsencesReport(branding, {
+        studentLabel,
+        from,
+        to,
+        rows: rows.map((row) => ({
+          studentName: row.studentName,
+          className: row.className,
+          absenceCount: row.absenceCount,
+          absenceRate: row.absenceRate,
+          parentPhone: row.parentPhone,
+          parentPhone2: row.parentPhone2,
+          smsSummary: row.smsSummary,
+        })),
+      });
+      const result = await persistPdf(bytes, fileName);
+      return { ...result, fileType: 'pdf' };
+    }
+
+    if (job.data.type === 'teacher-attendance-export') {
+      const { from, to, statusFilter, teacherId, subject, classId } = job.data;
+      const rows = await buildTeachersService(tenantDb).getAttendanceStats({
+        from,
+        to,
+        ...(subject !== undefined ? { subject } : {}),
+        ...(classId !== undefined ? { class_id: classId } : {}),
+        ...(teacherId !== undefined ? { teacher_id: teacherId } : {}),
+        ...(statusFilter !== undefined ? { status_filter: statusFilter } : {}),
+      });
+      const fileName = `bilan_presence_profs_${toSafeFilePart(from)}_${toSafeFilePart(to)}.pdf`;
+      const bytes = await renderTeacherAttendanceReport(branding, {
+        from,
+        to,
+        rows: rows.map((row) => ({
+          teacherName: row.teacher_name,
+          teacherType: row.teacher_type,
+          attendanceRate: row.attendance_rate,
+          presentCount: row.present_count,
+          totalScheduled: row.total_scheduled,
+          hoursDone: row.hours_done,
+          hoursScheduled: row.hours_scheduled,
+          lateCount: row.late_count,
+          roomMismatchCount: row.room_mismatch_count,
+          rollcallMissingCount: row.rollcall_missing_count,
+        })),
+      });
+      const result = await persistPdf(bytes, fileName);
+      return { ...result, fileType: 'pdf' };
+    }
+
+    if (job.data.type === 'revenue-export') {
+      const { schemaName, periodFrom, periodTo } = job.data;
+      // revenueHistory renvoie les N derniers mois ; on borne ensuite sur la
+      // période demandée. 36 = plafond accepté par le schéma de l'historique.
+      const subscriptionsService = new SubscriptionsService(
+        new SubscriptionsRepository(tenantDb)
+      );
+      const history = await subscriptionsService.revenueHistory(schemaName, 36);
+      const filtered = history.filter(
+        (item) => item.month >= periodFrom && item.month <= periodTo
+      );
+      const fileName = `bilan_reversements_${toSafeFilePart(periodFrom)}_${toSafeFilePart(periodTo)}.pdf`;
+      const bytes = await renderRevenueReport(branding, {
+        periodFrom,
+        periodTo,
+        rows: filtered.map((item) => ({
+          month: item.month,
+          subscriptionsNewThisMonth: item.subscriptions_new_this_month,
+          subscriptionsActiveCount: item.subscriptions_active_count,
+          totalCollectedFcfa: item.total_collected_fcfa,
+          commissionDueFcfa: item.commission_due_fcfa,
+          commissionPaidFcfa: item.commission_paid_fcfa,
+          commissionRemainingFcfa: item.commission_remaining_fcfa,
+          paymentStatus: item.payment_status,
+        })),
+      });
+      const result = await persistPdf(bytes, fileName);
+      return { ...result, fileType: 'pdf' };
+    }
+
+    // salary-export-bulk : un prof (multi-période, un seul PDF) ou tous (zip).
     const months = iterateMonths(job.data.periodFrom, job.data.periodTo);
     const rangeSafe = `${toSafeFilePart(job.data.periodFrom)}_${toSafeFilePart(job.data.periodTo)}`;
 
     if (job.data.teacherId) {
-      const allLines: string[] = [];
-      let teacherName = 'teacher';
-      let teacherType: 'vacataire' | 'permanent' = 'vacataire';
-
+      const monthly: TeacherSalaryDetails[] = [];
+      let teacherName = 'professeur';
       for (const month of months) {
-        const details = await service.getExportTeacherPayload(job.data.teacherId, month);
-        teacherName = details.teacher.name;
-        teacherType = details.teacher.type;
-
-        allLines.push(`=== ${formatMonthLabel(month)} ===`);
-        allLines.push(...buildTeacherExportLines(details));
-        allLines.push('');
+        const payload = await service.getExportTeacherPayload(job.data.teacherId, month);
+        teacherName = payload.teacher.name;
+        monthly.push(toTeacherDetails(payload));
       }
 
-      const teacherSafe = toSafeFilePart(teacherName);
-      const fileName = `salary_teacher_${teacherSafe}_${rangeSafe}.pdf`;
-      const result = await writeSimplePdf({
-        title: 'Bilan Salaire Professeur (multi-periode)',
-        subtitle: `${teacherName} - ${teacherType} - job ${job.id ?? ''}`,
-        lines: allLines,
-        fileName,
+      const fileName = `bilan_salaire_${toSafeFilePart(teacherName)}_${rangeSafe}.pdf`;
+      const bytes = await renderTeacherMultiPeriodBilan(
         branding,
-      });
-
-      return {
-        ...result,
-        fileType: 'pdf',
-      };
+        job.data.periodFrom,
+        job.data.periodTo,
+        monthly
+      );
+      const result = await persistPdf(bytes, fileName);
+      return { ...result, fileType: 'pdf' };
     }
 
-    const teachers = new Map<string, { name: string; type: 'vacataire' | 'permanent' }>();
+    // Tous les profs : un PDF multi-période par prof, archivés en zip.
+    const teachers = new Map<string, { name: string }>();
     for (const month of months) {
       const summary = await service.getExportSchoolPayload(month);
       for (const item of summary.items) {
-        teachers.set(item.teacherId, { name: item.teacherName, type: item.teacherType });
+        teachers.set(item.teacherId, { name: item.teacherName });
       }
     }
 
     const entries: Array<{ fileName: string; bytes: Uint8Array }> = [];
-
     for (const [teacherId, teacher] of teachers.entries()) {
-      const lines: string[] = [];
-
+      const monthly: TeacherSalaryDetails[] = [];
       for (const month of months) {
-        const details = await service.getExportTeacherPayload(teacherId, month);
-        lines.push(`=== ${formatMonthLabel(month)} ===`);
-        lines.push(...buildTeacherExportLines(details));
-        lines.push('');
+        const payload = await service.getExportTeacherPayload(teacherId, month);
+        monthly.push(toTeacherDetails(payload));
       }
-
-      const teacherSafe = toSafeFilePart(teacher.name);
-      const entryFileName = `salary_teacher_${teacherSafe}_${rangeSafe}.pdf`;
-      const bytes = await createSimplePdfBytes({
-        title: 'Bilan Salaire Professeur (multi-periode)',
-        subtitle: `${teacher.name} - ${teacher.type} - job ${job.id ?? ''}`,
-        lines,
+      const entryFileName = `bilan_salaire_${toSafeFilePart(teacher.name)}_${rangeSafe}.pdf`;
+      const bytes = await renderTeacherMultiPeriodBilan(
         branding,
-      });
+        job.data.periodFrom,
+        job.data.periodTo,
+        monthly
+      );
       entries.push({ fileName: entryFileName, bytes });
     }
 
-    const zipFileName = `salary_bulk_${rangeSafe}.zip`;
-    const zipResult = await writeZipArchive({
-      fileName: zipFileName,
-      entries,
-    });
-
-    return {
-      ...zipResult,
-      fileType: 'zip',
-    };
+    const zipFileName = `bilans_salaires_${rangeSafe}.zip`;
+    const zipResult = await writeZipArchive({ fileName: zipFileName, entries });
+    return { ...zipResult, fileType: 'zip' };
   });
 };
 
@@ -660,3 +505,15 @@ export const createBillingPdfWorker = (
       concurrency: Number(process.env.BILLING_WORKER_CONCURRENCY ?? 2),
     }
   );
+
+/**
+ * Handle minimal de la queue PDF, injecté dans les controllers qui poussent des
+ * jobs d'export. Permet d'injecter une fausse queue en test (cf. billing.controller).
+ */
+export type PdfExportQueueHandle = {
+  add: (
+    name: string,
+    data: BillingPdfJobData,
+    options?: { removeOnComplete?: number; removeOnFail?: number }
+  ) => Promise<{ id?: string | number }>;
+};

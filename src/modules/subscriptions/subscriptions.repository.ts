@@ -45,6 +45,8 @@ type ParentListRow = {
   month_starts_at: string | null;
   month_created_at: string | null;
   month_days_remaining: number | null;
+  created_by: string | null;
+  created_by_name: string | null;
   students: Array<{ id: string; full_name: string }>;
 };
 
@@ -73,6 +75,7 @@ type SubscriptionRow = {
   created_at: string;
   cancelled_at: string | null;
   cancelled_by_name: string | null;
+  created_by_name: string | null;
 };
 
 type StudentRow = {
@@ -389,11 +392,13 @@ export class SubscriptionsRepository {
     search?: string;
     status?: SubscriptionStatus;
     month?: string;
+    createdBy?: string;
   }): Promise<{ rows: ParentListRow[]; total: number }> {
     const offset = (params.page - 1) * params.limit;
     const searchLike = params.search ? `%${params.search}%` : null;
     const statusFilter = params.status ?? null;
     const monthDate = params.month ? `${params.month}-01` : null;
+    const createdByFilter = params.createdBy ?? null;
     const today = todayInBusinessTimezone();
     const countResult = await this.tenantDb.execute<{ total: number }>(sql`
       WITH latest_sub AS (
@@ -401,7 +406,8 @@ export class SubscriptionsRepository {
           ps.parent_id,
           ps.status,
           ps.created_at,
-          ps.ends_at
+          ps.ends_at,
+          ps.created_by
         FROM parent_subscriptions ps
         ORDER BY ps.parent_id, ps.created_at DESC
       ),
@@ -451,7 +457,8 @@ export class SubscriptionsRepository {
           ps.ends_at,
           ps.total_amount_fcfa,
           ps.duration_months,
-          ps.created_at
+          ps.created_at,
+          ps.created_by
         FROM parent_subscriptions ps
         ORDER BY ps.parent_id, ps.created_at DESC
       ),
@@ -513,6 +520,8 @@ export class SubscriptionsRepository {
         mr.month_starts_at,
         mr.month_created_at,
         mr.month_days_remaining,
+        ls.created_by::text AS created_by,
+        (SELECT u.name FROM users u WHERE u.id = ls.created_by) AS created_by_name,
         COALESCE(
           (
             SELECT json_agg(json_build_object('id', s.id::text, 'full_name', CONCAT(s.first_name, ' ', s.last_name)))
@@ -529,6 +538,7 @@ export class SubscriptionsRepository {
       WHERE (${searchLike}::text IS NULL OR p.full_name ILIKE ${searchLike} OR p.phone ILIKE ${searchLike})
         AND (${statusFilter}::text IS NULL OR COALESCE(mr.month_status, ls.status)::text = ${statusFilter})
         AND (${monthDate}::date IS NULL OR mr.parent_id IS NOT NULL)
+        AND (${createdByFilter}::uuid IS NULL OR ls.created_by = ${createdByFilter}::uuid)
       ORDER BY p.created_at DESC
       LIMIT ${params.limit}
       OFFSET ${offset}
@@ -839,6 +849,16 @@ export class SubscriptionsRepository {
       `);
       return fallback.rows;
     }
+  }
+
+  async listSubscriptionCreators(): Promise<Array<{ id: string; name: string }>> {
+    const result = await this.tenantDb.execute<{ id: string; name: string }>(sql`
+      SELECT DISTINCT u.id::text AS id, u.name
+      FROM parent_subscriptions ps
+      INNER JOIN users u ON u.id = ps.created_by
+      ORDER BY u.name ASC
+    `);
+    return result.rows;
   }
 
   async getSubscriptionStudents(subscriptionId: string): Promise<StudentRow[]> {

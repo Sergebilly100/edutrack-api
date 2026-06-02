@@ -45,6 +45,17 @@ export const salaryBulkExportBodySchema = z
     path: ['periodFrom'],
   });
 
+export const paymentHistoryExportBodySchema = z
+  .object({
+    teacherId: z.string().uuid(),
+    periodFrom: z.string().regex(monthRegex),
+    periodTo: z.string().regex(monthRegex),
+  })
+  .refine((value) => value.periodFrom <= value.periodTo, {
+    message: 'periodFrom must be before or equal to periodTo',
+    path: ['periodFrom'],
+  });
+
 export const jobDownloadQuerySchema = z.object({
   expires: z.coerce.number().int().positive(),
   signature: z.string().trim().min(32).max(256),
@@ -59,6 +70,7 @@ export type SalaryJobParams = z.infer<typeof jobParamsSchema>;
 export type UpdateSalaryStatusBody = z.infer<typeof updateSalaryStatusBodySchema>;
 export type SalarySingleExportBody = z.infer<typeof salarySingleExportBodySchema>;
 export type SalaryBulkExportBody = z.infer<typeof salaryBulkExportBodySchema>;
+export type PaymentHistoryExportBody = z.infer<typeof paymentHistoryExportBodySchema>;
 export type JobDownloadQuery = z.infer<typeof jobDownloadQuerySchema>;
 
 export const recalculateSalaryBodySchema = z.object({

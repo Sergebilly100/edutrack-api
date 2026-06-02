@@ -1,9 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError, z } from 'zod';
-import ExcelJS from 'exceljs';
 
 import { withTenantSchema } from '../../shared/database/db.js';
 import { requireDirector, requireTeacher, requireTeacherOrDirector } from '../../shared/middleware/auth.middleware.js';
+import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
 
 import { AttendanceModuleError, buildAttendanceService } from './attendance.service.js';
 import {
@@ -120,7 +120,10 @@ const geoReviewBodySchema = z.object({
 });
 
 
-export default async function attendanceController(app: FastifyInstance): Promise<void> {
+export default async function attendanceController(
+  app: FastifyInstance,
+  options: { pdfQueue?: PdfExportQueueHandle } = {}
+): Promise<void> {
   app.post('/api/v1/attendance/check-in', {
     preHandler: requireTeacher,
     schema: {
@@ -426,67 +429,37 @@ export default async function attendanceController(app: FastifyInstance): Promis
     }
   });
 
+  // Bilan des heures d'un professeur (PDF asynchrone via la queue d'export).
+  // Remplace l'ancien export Excel synchrone : on enfile un job et le frontend
+  // récupère le PDF brandé via /api/v1/jobs/:jobId. Le nom du prof est résolu
+  // côté worker à partir des lignes (placeholder ici).
   app.get('/api/v1/attendance/history/export', { preHandler: requireDirector }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const query = historyExportQuerySchema.parse(request.query ?? {});
-      const rows = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-        const service = buildAttendanceService(tenantDb);
-        return service.exportTeacherHistory({
-          teacherId: query.teacherId,
-          from: query.date_from,
-          to: query.date_to,
-        });
-      });
 
-      const workbook = new ExcelJS.Workbook();
-      const sheet = workbook.addWorksheet('Heures enseignant');
-      sheet.columns = [
-        { header: 'Date', key: 'date', width: 12 },
-        { header: 'Enseignant', key: 'teacher', width: 24 },
-        { header: 'Matière', key: 'subject', width: 18 },
-        { header: 'Classe', key: 'class_name', width: 14 },
-        { header: 'Salle', key: 'room_name', width: 14 },
-        { header: 'Début', key: 'start_time', width: 10 },
-        { header: 'Fin', key: 'end_time', width: 10 },
-        { header: 'Statut', key: 'status', width: 12 },
-        { header: 'Retard (min)', key: 'late_minutes', width: 12 },
-        { header: 'Check-in', key: 'checked_in_at', width: 22 },
-        { header: 'Appel fait', key: 'rollcall', width: 12 },
-        { header: 'Présents', key: 'student_present', width: 10 },
-        { header: 'Absents', key: 'student_absent', width: 10 },
-        { header: 'Total élèves', key: 'student_total', width: 12 },
-      ];
-      sheet.getRow(1).font = { bold: true };
-
-      for (const row of rows) {
-        sheet.addRow({
-          date: row.date,
-          teacher: row.teacher_name,
-          subject: row.subject,
-          class_name: row.class_name,
-          room_name: row.room_name,
-          start_time: row.start_time,
-          end_time: row.end_time,
-          status: row.attendance_status ?? '-',
-          late_minutes: row.late_minutes ?? 0,
-          checked_in_at: row.checked_in_at ?? '',
-          rollcall: row.student_rollcall_done ? 'Oui' : 'Non',
-          student_present: row.student_present_count,
-          student_absent: row.student_absent_count,
-          student_total: row.student_total_count,
+      if (!options.pdfQueue) {
+        return reply.code(503).send({
+          error: 'Export queue unavailable',
+          code: 'EXPORT_QUEUE_UNAVAILABLE',
+          statusCode: 503,
         });
       }
 
-      const buffer = await workbook.xlsx.writeBuffer();
-      const fileName = `edutrack-heures-${query.teacherId}-${query.date_from}_${query.date_to}.xlsx`;
-      return reply
-        .header(
-          'Content-Type',
-          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-        .header('Content-Disposition', `attachment; filename="${fileName}"`)
-        .send(Buffer.from(buffer));
+      const job = await options.pdfQueue.add(
+        'attendance-hours-export',
+        {
+          type: 'attendance-hours-export',
+          schemaName: claims.schemaName,
+          teacherId: query.teacherId,
+          teacherName: 'professeur',
+          from: query.date_from,
+          to: query.date_to,
+        },
+        { removeOnComplete: 100, removeOnFail: 100 }
+      );
+
+      return reply.send({ jobId: job.id });
     } catch (error) {
       return handleError(request, reply, error);
     }

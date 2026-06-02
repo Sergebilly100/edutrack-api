@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc",
+    "build": "tsc && npm run copy-assets",
+    "copy-assets": "mkdir -p dist/shared/pdf/assets/fonts && cp src/shared/pdf/assets/fonts/*.ttf dist/shared/pdf/assets/fonts/",
     "start": "node dist/server.js",
     "test": "vitest",
     "test:unit": "vitest tests/unit",
@@ -33,6 +34,7 @@
     "@fastify/rate-limit": "^10.3.0",
     "@fastify/swagger": "^9.7.0",
     "@fastify/swagger-ui": "^5.2.6",
+    "@pdf-lib/fontkit": "^1.1.1",
     "@sentry/node": "^10.53.1",
     "archiver": "^7.0.1",
     "argon2": "^0.44.0",

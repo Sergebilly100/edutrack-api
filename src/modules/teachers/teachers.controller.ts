@@ -3,6 +3,7 @@ import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
 import { requirePermission } from '../../shared/middleware/auth.middleware.js';
+import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
 
 import { buildTeachersService, TeachersModuleError } from './teachers.service.js';
 import {
@@ -71,7 +72,10 @@ const toCreateInput = (payload: unknown): CreateTeacherInput => {
   };
 };
 
-export default async function teachersController(app: FastifyInstance): Promise<void> {
+export default async function teachersController(
+  app: FastifyInstance,
+  options: { pdfQueue?: PdfExportQueueHandle } = {}
+): Promise<void> {
   // ─── GET /api/v1/teachers ─────────────────────────────────────────────────
   app.get('/api/v1/teachers', { preHandler: requirePermission('teachers.view') }, async (request, reply) => {
     try {
@@ -111,6 +115,47 @@ export default async function teachersController(app: FastifyInstance): Promise<
       return handleError(request, reply, error);
     }
   });
+
+  // ─── GET /api/v1/teachers/attendance-stats/export ─────────────────────────
+  // Bilan de présence des professeurs (PDF asynchrone via la queue d'export).
+  // Remplace l'ancien export CSV navigateur.
+  app.get(
+    '/api/v1/teachers/attendance-stats/export',
+    { preHandler: requirePermission('teachers.view') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const query = teacherAttendanceStatsQuerySchema.parse(request.query ?? {});
+
+        if (!options.pdfQueue) {
+          return reply.code(503).send({
+            error: 'Export queue unavailable',
+            code: 'EXPORT_QUEUE_UNAVAILABLE',
+            statusCode: 503,
+          });
+        }
+
+        const job = await options.pdfQueue.add(
+          'teacher-attendance-export',
+          {
+            type: 'teacher-attendance-export',
+            schemaName: claims.schemaName,
+            from: query.from,
+            to: query.to,
+            subject: query.subject,
+            classId: query.class_id,
+            teacherId: query.teacher_id,
+            statusFilter: query.status_filter,
+          },
+          { removeOnComplete: 100, removeOnFail: 100 }
+        );
+
+        return reply.send({ jobId: job.id });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
 
   // ─── GET /api/v1/teachers/:id ─────────────────────────────────────────────
   // Route dédiée — retourne le prof même s'il est bloqué ou inactif.
