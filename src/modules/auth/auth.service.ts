@@ -8,6 +8,7 @@ import {
   bindKeycloakSubjectIfNeeded,
   getRefreshTokenStatus,
   invalidateRefreshTokenIfSupported,
+  revokeAllUserRefreshTokens,
   listActiveRefreshSessions,
   findUserByEmail,
   findUserByPhone,
@@ -27,6 +28,7 @@ import {
   verifyJwtRs256,
   type JwtPayload,
 } from '../../shared/auth/jwt.js';
+import { recordPasswordReset } from '../../shared/auth/token-version.js';
 
 type LoginInput = {
   identifier: string;
@@ -129,6 +131,7 @@ type ChangePasswordInput = {
   userId: string;
   currentPassword: string;
   newPassword: string;
+  schemaName: string;
 };
 
 type UpdateMeInput = {
@@ -738,6 +741,15 @@ export const changePassword = async (
 
   const passwordHash = await argon2.hash(input.newPassword);
   await updateUserPasswordHash(db, profile.userId, passwordHash);
+
+  // Aligné sur le reset admin (permissions.service.resetAdministrativeUserPassword) :
+  // après changement de mot de passe, toutes les autres sessions doivent tomber.
+  // - revoke_at invalide les access tokens déjà émis (iat < now), vérifié par
+  //   le middleware auth.
+  // - revokeAllUserRefreshTokens empêche la rotation des refresh tokens des
+  //   autres sessions (compromission suspectée).
+  await revokeAllUserRefreshTokens(db, profile.userId);
+  await recordPasswordReset(input.schemaName, profile.userId);
 };
 
 export const updateMe = async (db: TenantDb, input: UpdateMeInput) => {

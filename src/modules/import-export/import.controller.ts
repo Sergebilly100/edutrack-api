@@ -11,6 +11,7 @@ import {
   releaseTenantDb,
 } from '../../shared/middleware/tenant.middleware.js';
 
+import { SENSITIVE_ACTION_RATE_LIMIT } from '../../shared/utils/rate-limit.js';
 import { ImportModuleError, buildImportService } from './import.service.js';
 import { importTypeParamsSchema, type ImportType } from './import.types.js';
 
@@ -246,7 +247,11 @@ export default async function importExportController(app: FastifyInstance): Prom
   // la confirmation d'import est nécessaire pour les imports de planning, afin de s'assurer que l'utilisateur a bien pris connaissance des conflits potentiels détectés lors du dry-run.
   app.post(
     '/api/v1/import/:type/confirm',
-    { preHandler: [requireImportTypePermission, attachTenantDb] },
+    {
+      // Opération lourde + potentiels SMS en cascade → rate-limit dédié.
+      config: { rateLimit: SENSITIVE_ACTION_RATE_LIMIT },
+      preHandler: [requireImportTypePermission, attachTenantDb],
+    },
     async (request, reply) => {
       try {
         const { type } = importTypeParamsSchema.parse(request.params ?? {});

@@ -14,6 +14,7 @@ import {
   parentScheduleQuerySchema,
   parentStudentIdParamsSchema,
 } from './parent-portal.types.js';
+import { AUTH_BRUTEFORCE_RATE_LIMIT } from '../../shared/utils/rate-limit.js';
 import { ParentPortalError, buildParentPortalService } from './parent-portal.service.js';
 
 const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
@@ -41,8 +42,14 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
     });
   }
 
+  // Erreur inconnue : ne JAMAIS exposer error.message côté parent (détail
+  // interne / SQL). On logge le détail serveur, on renvoie un message générique.
+  reply.request.log.error(
+    { err: error instanceof Error ? error.message : 'unknown error' },
+    '[parent-portal] unhandled error'
+  );
   return reply.code(500).send({
-    error: error instanceof Error ? error.message : 'Internal server error',
+    error: 'Internal server error',
     code: 'INTERNAL_ERROR',
     statusCode: 500,
   });
@@ -145,7 +152,10 @@ export default async function parentPortalController(app: FastifyInstance): Prom
     }
   });
 
-  app.post('/api/v1/parent/auth/change-password', { preHandler: requireParent }, async (request, reply) => {
+  app.post('/api/v1/parent/auth/change-password', {
+    preHandler: requireParent,
+    config: { rateLimit: AUTH_BRUTEFORCE_RATE_LIMIT },
+  }, async (request, reply) => {
     try {
       const body = parentChangePasswordSchema.parse(request.body ?? {});
       const claims = request.claims!;

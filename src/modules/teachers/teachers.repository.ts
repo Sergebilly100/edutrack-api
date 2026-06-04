@@ -320,7 +320,14 @@ export class TeachersRepository {
       blockedAtSql = current.blocked_at === null ? sql`NULL` : sql`${current.blocked_at}`;
     }
     const subjectsArray = input.subjects ?? current.subjects ?? [];
-    const subjectsLiteral = sql.raw(`ARRAY[${subjectsArray.map((s) => `'${s.replace(/'/g, "''")}'`).join(',')}]::text[]`);
+    // Array littéral PG via sql.join paramétré (pattern prouvé : seed.ts /
+    // attendance.repository). Chaque élément est un placeholder bindé — pas
+    // d'échappement manuel de quotes, défense en profondeur vs SQLi.
+    // Tableau vide => `ARRAY[]::text[]`, valide en PG.
+    const subjectsLiteral = sql`ARRAY[${sql.join(
+      subjectsArray.map((s) => sql`${s}`),
+      sql`, `
+    )}]::text[]`;
     // undefined = conserver la valeur courante ; null/valeur = écraser.
     const nextMatricule = input.matricule === undefined ? current.matricule : input.matricule;
     const matriculeSql = nextMatricule === null ? sql`NULL` : sql`${nextMatricule}`;

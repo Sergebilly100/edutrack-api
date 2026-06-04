@@ -4,6 +4,7 @@ import { ZodError, z } from 'zod';
 import { withTenantSchema } from '../../shared/database/db.js';
 import { requireDirector, requireTeacher, requireTeacherOrDirector } from '../../shared/middleware/auth.middleware.js';
 import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
+import { SENSITIVE_ACTION_RATE_LIMIT } from '../../shared/utils/rate-limit.js';
 
 import { AttendanceModuleError, buildAttendanceService } from './attendance.service.js';
 import {
@@ -311,7 +312,11 @@ export default async function attendanceController(
   // ── NOUVEAU — appel élèves par le prof ────────────────────────────────────
   // POST /api/v1/attendance/students/bulk
   // body: { schedule_id, date, absent_student_ids[] }
-  app.post('/api/v1/attendance/students/bulk', { preHandler: requireTeacher }, async (request, reply) => {
+  app.post('/api/v1/attendance/students/bulk', {
+    // Déclenche des SMS parents en masse (coût réel) → rate-limit dédié.
+    config: { rateLimit: SENSITIVE_ACTION_RATE_LIMIT },
+    preHandler: requireTeacher,
+  }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const body = bulkStudentsBodySchema.parse(request.body ?? {});

@@ -48,9 +48,14 @@ type ServiceDependencies = {
 const DEFAULT_DEPENDENCIES: ServiceDependencies = {
   localStorageRoot: process.env.DOCUMENTS_LOCAL_STORAGE_ROOT ?? DEFAULT_LOCAL_STORAGE_ROOT,
   r2AccountId: process.env.R2_ACCOUNT_ID ?? '',
-  r2AccessKeyId: process.env.R2_ACCESS_KEY_ID ?? '',
-  r2SecretAccessKey: process.env.R2_SECRET_ACCESS_KEY ?? '',
-  r2Bucket: process.env.R2_BUCKET_NAME ?? '',
+  // Noms d'env alignés sur .env(.example) et shared/storage/r2.ts :
+  // R2_ACCESS_KEY / R2_SECRET_KEY / R2_BUCKET. Les anciens noms
+  // (R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET_NAME) n'étaient
+  // jamais peuplés → bascule silencieuse en stockage disque (PII perdue au
+  // redeploy sur FS éphémère).
+  r2AccessKeyId: process.env.R2_ACCESS_KEY ?? '',
+  r2SecretAccessKey: process.env.R2_SECRET_KEY ?? '',
+  r2Bucket: process.env.R2_BUCKET ?? '',
   r2Endpoint: process.env.R2_ENDPOINT,
 };
 

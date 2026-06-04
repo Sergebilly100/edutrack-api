@@ -410,6 +410,31 @@ export const revokeRefreshSessionById = async (
   return rows.length > 0;
 };
 
+/**
+ * Révoque TOUS les refresh tokens actifs d'un utilisateur (toutes sessions).
+ * Utilisé lors d'un changement de mot de passe self-service, aligné sur le
+ * reset admin (permissions.service) : après changement de mot de passe, aucune
+ * session existante ne doit survivre. Fail-silent si la table n'existe pas sur
+ * le tenant, comme le reste du module.
+ */
+export const revokeAllUserRefreshTokens = async (
+  db: QueryExecutor,
+  userId: string
+): Promise<void> => {
+  try {
+    await db.execute(sql`
+      UPDATE refresh_tokens
+      SET is_active = false,
+          updated_at = NOW(),
+          revoked_at = NOW()
+      WHERE user_id = ${userId}::uuid
+        AND is_active = true
+    `);
+  } catch {
+    // refresh_tokens table may not exist on all tenants — fail silently.
+  }
+};
+
 type InvalidateRefreshTokenInput = {
   refreshToken?: string;
   userId?: string;

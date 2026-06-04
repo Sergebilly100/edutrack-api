@@ -708,6 +708,15 @@ export default async function authController(app: FastifyInstance): Promise<void
 
   app.post(
     '/api/v1/auth/change-password',
+    {
+      // Brute-force du mot de passe actuel : même budget que le login.
+      config: {
+        rateLimit: {
+          max: LOGIN_RATE_LIMIT_MAX,
+          timeWindow: LOGIN_RATE_LIMIT_WINDOW,
+        },
+      },
+    },
     async (request, reply) => {
       try {
         const token = extractBearerToken(request);
@@ -722,6 +731,7 @@ export default async function authController(app: FastifyInstance): Promise<void
             userId: claims.sub,
             currentPassword: currentPassword!,
             newPassword: newPassword!,
+            schemaName: claims.schemaName,
           })
         );
 

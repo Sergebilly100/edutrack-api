@@ -13,6 +13,7 @@ import {
 } from '../../shared/middleware/auth.middleware.js';
 import type { NotificationType } from '../../shared/types/index.js';
 
+import { SENSITIVE_ACTION_RATE_LIMIT } from '../../shared/utils/rate-limit.js';
 import { defaultRepository } from './notifications.repository.js';
 import type { NotificationJobData } from './notifications.queue.js';
 
@@ -119,6 +120,8 @@ export default async function notificationsController(
   app.post(
     '/api/v1/notifications/:id/retry',
     {
+      // Met un SMS en queue (coût réel) → rate-limit dédié.
+      config: { rateLimit: SENSITIVE_ACTION_RATE_LIMIT },
       preHandler: async (request, reply) => {
         await authenticateRequest(request, reply);
         if (reply.sent) return;

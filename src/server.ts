@@ -176,7 +176,18 @@ app.register(cors, {
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 });
 app.register(helmet, {
-  contentSecurityPolicy: false,
+  // CSP restrictive : l'API ne sert que du JSON, donc aucun script/style/frame
+  // n'a à s'exécuter. `frame-ancestors 'none'` bloque le clickjacking.
+  // Swagger UI met sa propre CSP sur ses routes (`staticCSP: true`), donc cette
+  // politique globale ne casse pas /docs.
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'none'"],
+      frameAncestors: ["'none'"],
+      baseUri: ["'none'"],
+      formAction: ["'none'"],
+    },
+  },
   hsts: { maxAge: 31_536_000, includeSubDomains: true, preload: true },
   crossOriginResourcePolicy: { policy: 'same-site' },
   crossOriginOpenerPolicy: { policy: 'same-origin' },
@@ -275,25 +286,29 @@ app.addHook('onResponse', async (request, reply) => {
   );
 });
 
-if (isSentryEnabled()) {
-  app.setErrorHandler((rawError, request, reply) => {
-    const error = rawError as Error & { statusCode?: number; code?: string };
+// Enregistré INCONDITIONNELLEMENT : le masquage des 5xx en prod ne doit jamais
+// dépendre de la présence de Sentry. Sans ce handler, Fastify répondrait avec
+// son handler par défaut et fuiterait error.message / la stack sur toute
+// exception non gérée. Le reporting Sentry reste optionnel à l'intérieur.
+app.setErrorHandler((rawError, request, reply) => {
+  const error = rawError as Error & { statusCode?: number; code?: string };
+  if (isSentryEnabled()) {
     captureException(error, {
       schemaName: request.claims?.schemaName,
       userId: request.claims?.sub,
       tenantId: request.claims?.tenantId,
       route: request.routeOptions?.url ?? request.url,
     });
-    request.log.error({ err: error.message, url: request.url }, 'request_error');
-    if (reply.sent) return;
-    const statusCode = error.statusCode ?? 500;
-    reply.code(statusCode).send({
-      error: statusCode >= 500 ? 'Internal error' : error.message,
-      code: statusCode >= 500 ? 'INTERNAL' : (error.code ?? 'ERROR'),
-      statusCode,
-    });
+  }
+  request.log.error({ err: error.message, url: request.url }, 'request_error');
+  if (reply.sent) return;
+  const statusCode = error.statusCode ?? 500;
+  reply.code(statusCode).send({
+    error: statusCode >= 500 ? 'Internal error' : error.message,
+    code: statusCode >= 500 ? 'INTERNAL' : (error.code ?? 'ERROR'),
+    statusCode,
   });
-}
+});
 
 app.addHook('onClose', async () => {
   notificationsService.stop();
