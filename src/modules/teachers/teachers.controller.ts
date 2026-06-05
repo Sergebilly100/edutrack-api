@@ -1,8 +1,9 @@
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
-import { requirePermission } from '../../shared/middleware/auth.middleware.js';
+import { authenticateRequest, requirePermission } from '../../shared/middleware/auth.middleware.js';
+import type { PermissionKey } from '../../shared/types/index.js';
 import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
 
 import { buildTeachersService, TeachersModuleError } from './teachers.service.js';
@@ -72,6 +73,26 @@ const toCreateInput = (payload: unknown): CreateTeacherInput => {
   };
 };
 
+const requireAnyPermission = (permissions: readonly PermissionKey[]) => async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  await authenticateRequest(request, reply);
+  if (reply.sent) {
+    return;
+  }
+
+  if (permissions.some((permission) => request.permissions?.has(permission))) {
+    return;
+  }
+
+  return reply.code(403).send({
+    error: `Permission ${permissions.join(' or ')} required`,
+    code: 'FORBIDDEN',
+    statusCode: 403,
+  });
+};
+
+const requireTeacherPasswordReset = requireAnyPermission(['teachers.password.reset', 'teachers.edit']);
+const requireTeacherAttendanceAnalysis = requireAnyPermission(['teachers.attendance.view', 'attendance.view']);
+
 export default async function teachersController(
   app: FastifyInstance,
   options: { pdfQueue?: PdfExportQueueHandle } = {}
@@ -100,7 +121,7 @@ export default async function teachersController(
   });
 
   // ─── GET /api/v1/teachers/attendance-stats ───────────────────────────────
-  app.get('/api/v1/teachers/attendance-stats', { preHandler: requirePermission('teachers.view') }, async (request, reply) => {
+  app.get('/api/v1/teachers/attendance-stats', { preHandler: requireTeacherAttendanceAnalysis }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const query = teacherAttendanceStatsQuerySchema.parse(request.query ?? {});
@@ -121,7 +142,7 @@ export default async function teachersController(
   // Remplace l'ancien export CSV navigateur.
   app.get(
     '/api/v1/teachers/attendance-stats/export',
-    { preHandler: requirePermission('teachers.view') },
+    { preHandler: requireTeacherAttendanceAnalysis },
     async (request, reply) => {
       try {
         const claims = request.claims!;
@@ -255,7 +276,7 @@ export default async function teachersController(
   // Réinitialise le mot de passe du prof et envoie les credentials par email si possible.
   app.post(
     '/api/v1/teachers/:id/reset-password',
-    { preHandler: requirePermission('teachers.edit') },
+    { preHandler: requireTeacherPasswordReset },
     async (request, reply) => {
       try {
         const claims = request.claims!;
@@ -278,7 +299,7 @@ export default async function teachersController(
   // Body optionnel : { teacher_ids?: string[] } pour restreindre à un sous-ensemble.
   app.post(
     '/api/v1/teachers/send-credentials',
-    { preHandler: requirePermission('teachers.edit') },
+    { preHandler: requireTeacherPasswordReset },
     async (request, reply) => {
       try {
         const claims = request.claims!;

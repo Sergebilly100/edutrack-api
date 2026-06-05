@@ -5,7 +5,6 @@ import { withTenantSchema } from '../../shared/database/db.js';
 import {
   authenticateRequest,
   requireDirector,
-  requirePermission,
   requireTeacher,
 } from '../../shared/middleware/auth.middleware.js';
 import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
@@ -99,12 +98,39 @@ const requireTeacherOrAttendanceView = async (
     return;
   }
 
-  if (request.claims?.role === 'teacher' || request.permissions?.has('attendance.view')) {
+  if (
+    request.claims?.role === 'teacher' ||
+    request.permissions?.has('teachers.ranking.view') ||
+    request.permissions?.has('attendance.view')
+  ) {
     return;
   }
 
   reply.code(403).send({
     error: 'Permission attendance.view required',
+    code: 'FORBIDDEN',
+    statusCode: 403,
+  });
+};
+
+const requireTeacherAttendanceAnalysisView = async (
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> => {
+  await authenticateRequest(request, reply);
+  if (reply.sent) {
+    return;
+  }
+
+  if (
+    request.permissions?.has('teachers.attendance.view') ||
+    request.permissions?.has('attendance.view')
+  ) {
+    return;
+  }
+
+  reply.code(403).send({
+    error: 'Permission teachers.attendance.view required',
     code: 'FORBIDDEN',
     statusCode: 403,
   });
@@ -409,7 +435,7 @@ export default async function attendanceController(
     }
   });
 
-  app.get('/api/v1/attendance/teachers/:teacherId/monthly', { preHandler: requirePermission('attendance.view') }, async (request, reply) => {
+  app.get('/api/v1/attendance/teachers/:teacherId/monthly', { preHandler: requireTeacherAttendanceAnalysisView }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const params = teacherMonthlyParamsSchema.parse(request.params ?? {});

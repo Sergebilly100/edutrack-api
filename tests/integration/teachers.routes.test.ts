@@ -1,7 +1,7 @@
 import argon2 from 'argon2';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import { getAuthHeaders, queryTenant, request, tenantTable } from './setup.js';
+import { getAuthHeaders, getSeedContext, queryTenant, request, tenantTable } from './setup.js';
 
 // Insère un prof directement en DB (contourne la vérification de plan qui nécessite public.tenants)
 const seedTeacher = async (overrides: Record<string, unknown> = {}): Promise<{ teacherId: string; userId: string }> => {
@@ -29,6 +29,30 @@ const seedTeacher = async (overrides: Record<string, unknown> = {}): Promise<{ t
   if (!teacherId) throw new Error('Failed to seed teacher');
 
   return { teacherId, userId };
+};
+
+const grantStaffPermissions = async (permissions: string[]): Promise<void> => {
+  const context = getSeedContext();
+  const positionName = `Teacher perms ${Date.now()} ${Math.random().toString(36).slice(2, 8)}`;
+  const positions = await queryTenant<{ id: string }>(
+    `
+      INSERT INTO ${tenantTable('admin_positions')} (name, permissions, created_by)
+      VALUES ($1, $2::jsonb, $3)
+      RETURNING id
+    `,
+    [positionName, JSON.stringify(permissions), context.directorUserId]
+  );
+  const positionId = positions[0]?.id;
+  expect(positionId).toBeTruthy();
+
+  await queryTenant(
+    `
+      INSERT INTO ${tenantTable('position_assignments')} (user_id, position_id, assigned_by)
+      VALUES ($1, $2, $3)
+      ON CONFLICT DO NOTHING
+    `,
+    [context.staffUserId, positionId, context.directorUserId]
+  );
 };
 
 describe('teachers integration (real db)', () => {
@@ -218,6 +242,49 @@ describe('teachers integration (real db)', () => {
       expect(typeof response.body.attendance_rate).toBe('number');
       expect(typeof response.body.hours_worked).toBe('number');
       expect(typeof response.body.amount_due).toBe('number');
+    });
+  });
+
+  describe('permissions staff spécialisées', () => {
+    it('autorise l analyse de présence prof avec teachers.attendance.view', async () => {
+      await grantStaffPermissions(['teachers.attendance.view']);
+      const headers = await getAuthHeaders('staff');
+      const currentMonth = new Date().toISOString().slice(0, 7);
+
+      const response = await request()
+        .get(`/api/v1/teachers/attendance-stats?from=${currentMonth}-01&to=${currentMonth}-28`)
+        .set(headers);
+
+      expect(response.status).toBe(200);
+      expect(Array.isArray(response.body)).toBe(true);
+    });
+
+    it('refuse la réinitialisation mdp prof avec teachers.view seul', async () => {
+      await grantStaffPermissions(['teachers.view']);
+      const headers = await getAuthHeaders('staff');
+      const { teacherId } = await seedTeacher({ last_name: 'ResetForbidden' });
+
+      const response = await request()
+        .post(`/api/v1/teachers/${teacherId}/reset-password`)
+        .set(headers)
+        .send({});
+
+      expect(response.status).toBe(403);
+    });
+
+    it('autorise la réinitialisation mdp prof avec teachers.password.reset sans teachers.edit', async () => {
+      await grantStaffPermissions(['teachers.view', 'teachers.password.reset']);
+      const headers = await getAuthHeaders('staff');
+      const { teacherId } = await seedTeacher({ last_name: 'ResetByStaff' });
+
+      const response = await request()
+        .post(`/api/v1/teachers/${teacherId}/reset-password`)
+        .set(headers)
+        .send({});
+
+      expect(response.status).toBe(200);
+      expect(response.body.emailSent).toBe(false);
+      expect(typeof response.body.plainPassword).toBe('string');
     });
   });
 });

@@ -320,9 +320,9 @@ describe('billing integration (real db)', () => {
     });
   });
 
-  it('GET /api/v1/attendance/teachers/:teacherId/monthly autorise staff avec attendance.view', async () => {
+  it('GET /api/v1/attendance/teachers/:teacherId/monthly autorise staff avec teachers.attendance.view', async () => {
     const context = getSeedContext();
-    await grantStaffPermissions(['attendance.view', 'teachers.view']);
+    await grantStaffPermissions(['teachers.attendance.view', 'teachers.view']);
     const headers = await getAuthHeaders('staff');
 
     const response = await request()
@@ -340,8 +340,8 @@ describe('billing integration (real db)', () => {
     expect(Array.isArray(response.body.rows)).toBe(true);
   });
 
-  it('GET /api/v1/attendance/teacher-compliance autorise staff avec attendance.view', async () => {
-    await grantStaffPermissions(['attendance.view']);
+  it('GET /api/v1/attendance/teacher-compliance autorise staff avec teachers.ranking.view', async () => {
+    await grantStaffPermissions(['teachers.ranking.view']);
     const headers = await getAuthHeaders('staff');
 
     const response = await request()
