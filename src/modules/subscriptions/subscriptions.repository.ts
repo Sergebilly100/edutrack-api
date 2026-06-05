@@ -75,6 +75,7 @@ type SubscriptionRow = {
   created_at: string;
   cancelled_at: string | null;
   cancelled_by_name: string | null;
+  created_by: string | null;
   created_by_name: string | null;
 };
 
@@ -816,6 +817,13 @@ export class SubscriptionsRepository {
           renewed_count,
           created_at::text,
           cancelled_at::text,
+          created_by::text AS created_by,
+          (
+            SELECT u.name
+            FROM users u
+            WHERE u.id = parent_subscriptions.created_by
+            LIMIT 1
+          ) AS created_by_name,
           (
             SELECT u.name
             FROM users u
@@ -842,6 +850,13 @@ export class SubscriptionsRepository {
           renewed_count,
           created_at::text,
           NULL::text AS cancelled_at,
+          created_by::text AS created_by,
+          (
+            SELECT u.name
+            FROM users u
+            WHERE u.id = parent_subscriptions.created_by
+            LIMIT 1
+          ) AS created_by_name,
           NULL::text AS cancelled_by_name
         FROM parent_subscriptions
         WHERE parent_id = ${parentId}::uuid

@@ -489,6 +489,46 @@ afterEach(async () => {
   await truncateAttendanceTables();
 });
 
+// Filet de sécurité : les tests insèrent des lignes dans public.tenants (directement
+// ou via l'API createTenant) mais leur teardown ne fait souvent qu'un DROP SCHEMA,
+// laissant des lignes orphelines qui s'accumulent à chaque run. On purge ici TOUS les
+// schémas de test (school_test_* / school_d6_*) et leurs lignes enfants, en respectant
+// l'ordre des FK, sans jamais toucher au tenant réel (school_sainte_marie).
+const purgeOrphanTestTenants = async (): Promise<void> => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`
+      CREATE TEMP TABLE _orphan_test_tenant_ids ON COMMIT DROP AS
+        SELECT id FROM public.tenants
+        WHERE schema_name <> 'school_sainte_marie'
+          AND schema_name ~ '^school_(test|d6)_'
+    `);
+    // Enfants avant parents (6 FK vers public.tenants).
+    for (const table of [
+      'admin_access_log',
+      'audit_financial_events',
+      'school_sms_features',
+      'edutrack_commission_records',
+      'subscriptions',
+      'sms_templates',
+    ]) {
+      await client.query(
+        `DELETE FROM public.${table} WHERE tenant_id IN (SELECT id FROM _orphan_test_tenant_ids)`
+      );
+    }
+    await client.query(
+      `DELETE FROM public.tenants WHERE id IN (SELECT id FROM _orphan_test_tenant_ids)`
+    );
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 afterAll(async () => {
   if (app) {
     await app.close();
@@ -496,5 +536,6 @@ afterAll(async () => {
   }
 
   await pool.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(TEST_SCHEMA_NAME)} CASCADE`);
+  await purgeOrphanTestTenants();
   await pool.end();
 });

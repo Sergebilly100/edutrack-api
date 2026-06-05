@@ -27,6 +27,17 @@ const assertValidSchemaName = (schemaName: string): void => {
 
 const generateQrToken = (): string => randomBytes(32).toString('hex');
 
+// Extrait le nom (éventuellement qualifié par schéma) d'un `CREATE OR REPLACE VIEW`
+// déjà passé par la substitution de schéma, ex. `"school_x"."teacher_scan_compliance"`
+// ou `view_name`. Renvoie undefined si le statement n'est pas un CREATE OR REPLACE VIEW.
+const extractCreateOrReplaceViewName = (statement: string): string | undefined => {
+  const match =
+    /CREATE\s+OR\s+REPLACE\s+VIEW\s+((?:"[^"]+"|[a-zA-Z_][a-zA-Z0-9_]*)(?:\.(?:"[^"]+"|[a-zA-Z_][a-zA-Z0-9_]*))?)/i.exec(
+      statement
+    );
+  return match?.[1];
+};
+
 const runTenantMigrations = async (
   schemaName: string,
   injectedDatabaseUrl: string
@@ -64,6 +75,20 @@ const runTenantMigrations = async (
 
           if (pgError.code && duplicateCodes.has(pgError.code)) {
             continue;
+          }
+
+          // 42P16 "cannot drop columns from view" : se produit quand on rejoue les
+          // migrations sur un schéma existant et qu'un `CREATE OR REPLACE VIEW`
+          // redéfinit une vue avec des colonnes différentes (Postgres interdit le
+          // REPLACE qui retire/réordonne des colonnes). On droppe alors la vue puis
+          // on rejoue la définition — idempotent et sans effet sur un schéma neuf.
+          if (pgError.code === '42P16') {
+            const viewName = extractCreateOrReplaceViewName(statement);
+            if (viewName) {
+              await client.query(`DROP VIEW IF EXISTS ${viewName} CASCADE`);
+              await client.query(statement);
+              continue;
+            }
           }
 
           throw error;

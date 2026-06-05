@@ -7,7 +7,11 @@ import { db } from './db.js';
 import { createTenantSchema } from './tenant-init.js';
 
 const TENANT = {
-  name: 'Groupe Scolaire Sainte-Marie de Cocody',
+  // Nom de l'école de démonstration affiché dans toute l'interface.
+  name: "Collège Moderne d'Abidjan",
+  // Le subdomain et le schemaName restent stables : ils servent de tenant par défaut
+  // (AUTH_DEFAULT_TENANT_SCHEMA) dans le code et de cible aux suites E2E. On ne change
+  // que l'identité visible (nom, élèves, profs, parents).
   subdomain: 'sainte-marie',
   schemaName: 'school_sainte_marie',
   // "starter" requested by product spec is mapped to current enum value "essential".
@@ -184,6 +188,21 @@ const deterministicScore = (seed: string): number => {
 
 const deterministicQrToken = (seed: string): string => deterministicHex(seed, 64);
 
+// UUID déterministe (forme v4) dérivé d'un identifiant stable (email/téléphone).
+// But : conserver les MÊMES ids entre deux exécutions du seed pour que les sessions
+// déjà ouvertes (JWT dont le `sub` = user id) restent valides après un re-seed.
+const deterministicUuid = (seed: string): string => {
+  const hex = deterministicHex(`uuid:${seed}`, 32);
+  const variant = ((parseInt(hex[16] ?? '0', 16) & 0x3) | 0x8).toString(16);
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    `4${hex.slice(13, 16)}`,
+    `${variant}${hex.slice(17, 20)}`,
+    hex.slice(20, 32),
+  ].join('-');
+};
+
 const formatDate = (date: Date): string => {
   const year = date.getUTCFullYear();
   const month = `${date.getUTCMonth() + 1}`.padStart(2, '0');
@@ -253,7 +272,12 @@ const main = async (): Promise<void> => {
   const subscriptionUnitPriceFcfa = 1000;
   let superAdminIdForSmsFeature: string | null = null;
 
-  console.info('[seed] Creating tenant schema and applying tenant migrations...');
+  // Démo reproductible et NON destructive : on ne droppe pas le schéma. Les migrations
+  // sont rejouées de façon idempotente (runTenantMigrations gère le cas 42P16 des vues
+  // redéfinies), puis les données sont réinitialisées plus bas. Les lignes porteuses de
+  // session (users, parents) reçoivent des UUID DÉTERMINISTES (voir deterministicUuid)
+  // afin que re-seeder ne casse pas une session ouverte dans le navigateur.
+  console.info('[seed] Creating/updating tenant schema and applying tenant migrations...');
   await createTenantSchema(TENANT.schemaName);
 
   console.info('[seed] Upserting tenant in public schema...');
@@ -335,10 +359,11 @@ const main = async (): Promise<void> => {
     }
 
     const directorUser = await tx.execute<IdRow>(sql`
-      INSERT INTO users (role, name, phone, email, password_hash, is_active)
+      INSERT INTO users (id, role, name, phone, email, password_hash, is_active)
       VALUES (
+        ${deterministicUuid(DIRECTOR_EMAIL)}::uuid,
         'director',
-        'Directeur Sainte-Marie',
+        ${"Directeur Collège Moderne d'Abidjan"},
         '+225070999999',
         ${DIRECTOR_EMAIL},
         ${directorPasswordHash},
@@ -352,10 +377,11 @@ const main = async (): Promise<void> => {
     }
 
     const staffUser = await tx.execute<IdRow>(sql`
-      INSERT INTO users (role, name, phone, email, password_hash, is_active)
+      INSERT INTO users (id, role, name, phone, email, password_hash, is_active)
       VALUES (
+        ${deterministicUuid('secretariat@sainte-marie.ci')}::uuid,
         'staff',
-        'Secrétaire Sainte-Marie',
+        ${"Secrétaire Collège Moderne d'Abidjan"},
         '+225070888888',
         'secretariat@sainte-marie.ci',
         ${teacherPasswordHash},
@@ -370,8 +396,9 @@ const main = async (): Promise<void> => {
     }
 
     const superAdminUser = await tx.execute<IdRow>(sql`
-      INSERT INTO users (role, name, phone, email, password_hash, is_active)
+      INSERT INTO users (id, role, name, phone, email, password_hash, is_active)
       VALUES (
+        ${deterministicUuid(SUPER_ADMIN_EMAIL)}::uuid,
         'super_admin',
         'Super Admin EduTrack',
         '+225070777777',
@@ -390,8 +417,9 @@ const main = async (): Promise<void> => {
     console.info('[seed] Inserting teachers (vacataires) with stable check-in tokens...');
     for (const teacher of TEACHER_SEED) {
       const userResult = await tx.execute<IdRow>(sql`
-        INSERT INTO users (role, name, phone, email, password_hash, is_active)
+        INSERT INTO users (id, role, name, phone, email, password_hash, is_active)
         VALUES (
+          ${deterministicUuid(teacher.email)}::uuid,
           'teacher',
           ${teacher.fullName},
           ${teacher.phone},
@@ -492,9 +520,7 @@ const main = async (): Promise<void> => {
       ORDER BY t.created_at ASC
     `);
 
-    const firstTeacherId = teachersResult.rows[0]?.id;
-    const secondTeacherId = teachersResult.rows[1]?.id;
-    if (!firstTeacherId || !secondTeacherId) {
+    if (teachersResult.rows.length < 2) {
       throw new Error('[seed] Missing teachers required for salary records');
     }
 
@@ -525,71 +551,37 @@ const main = async (): Promise<void> => {
     const previousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const previousMonthStr = `${previousMonth.getFullYear()}-${String(previousMonth.getMonth() + 1).padStart(2, '0')}-01`;
 
-    await tx.execute(sql`
-      INSERT INTO salary_records (
-        teacher_id,
-        period_month,
-        hours_planned,
-        hours_done,
-        hourly_rate,
-        total_fcfa,
-        status,
-        notes,
-        paid_at,
-        paid_by
-      )
-      VALUES
-      -- Mois actuel
-      (
-        ${firstTeacherId},
-        ${currentMonth},
-        48.00,
-        45.50,
-        5000,
-        227500,
-        'pending',
-        'Bilan mois en cours',
-        NULL,
-        NULL
-      ),
-      (
-        ${secondTeacherId},
-        ${currentMonth},
-        42.00,
-        38.00,
-        4500,
-        171000,
-        'pending',
-        'Bilan mois en cours',
-        NULL,
-        NULL
-      ),
-      -- Mois précédent (payé)
-      (
-        ${firstTeacherId},
-        ${previousMonthStr},
-        44.00,
-        42.00,
-        5000,
-        210000,
-        'paid',
-        'Règlement validé',
-        NOW() - INTERVAL '7 days',
-        ${directorId}
-      ),
-      (
-        ${secondTeacherId},
-        ${previousMonthStr},
-        40.00,
-        40.00,
-        4500,
-        180000,
-        'paid',
-        'Règlement validé',
-        NOW() - INTERVAL '7 days',
-        ${directorId}
-      )
-    `);
+    // Fiches de salaire pour TOUS les professeurs (et non plus seulement 2) afin que le
+    // module Salaires de la démo soit complet et payable : chaque prof a une fiche
+    // "pending" pour le mois en cours et une fiche "paid" pour le mois précédent.
+    // hourly_rate provient de TEACHER_SEED (même ordre que teachersResult : created_at ASC).
+    for (const [teacherIndex, teacherRow] of teachersResult.rows.entries()) {
+      const seedTeacher = TEACHER_SEED[teacherIndex % TEACHER_SEED.length];
+      const hourlyRate = seedTeacher.hourlyRate;
+      // Heures déterministes mais variées d'un prof à l'autre.
+      const plannedCurrent = 40 + ((teacherIndex * 2) % 9); // 40..48
+      const doneCurrent = plannedCurrent - (2 + (teacherIndex % 3)); // quelques heures non faites
+      const plannedPrev = 40 + ((teacherIndex * 3) % 8);
+      const donePrev = plannedPrev - (teacherIndex % 2); // mois précédent quasi complet
+      const totalCurrent = Math.round(doneCurrent * hourlyRate);
+      const totalPrev = Math.round(donePrev * hourlyRate);
+
+      await tx.execute(sql`
+        INSERT INTO salary_records (
+          teacher_id, period_month, hours_planned, hours_done, hourly_rate,
+          total_fcfa, status, notes, paid_at, paid_by
+        )
+        VALUES
+        (
+          ${teacherRow.id}, ${currentMonth}, ${plannedCurrent}, ${doneCurrent}, ${hourlyRate},
+          ${totalCurrent}, 'pending', 'Bilan mois en cours', NULL, NULL
+        ),
+        (
+          ${teacherRow.id}, ${previousMonthStr}, ${plannedPrev}, ${donePrev}, ${hourlyRate},
+          ${totalPrev}, 'paid', 'Règlement validé', NOW() - INTERVAL '7 days', ${directorId}
+        )
+      `);
+    }
 
     const roomByName = new Map(roomsResult.rows.map((room) => [room.name, room.id]));
     const classByIndex = classesResult.rows;
@@ -657,8 +649,9 @@ const main = async (): Promise<void> => {
     }
 
     const parentOne = await tx.execute<ParentSeedRow>(sql`
-      INSERT INTO parents (full_name, phone, email, password_hash, is_active)
+      INSERT INTO parents (id, full_name, phone, email, password_hash, is_active)
       VALUES (
+        ${deterministicUuid('parent:2250701234567')}::uuid,
         'Awa Kouame',
         '2250701234567',
         'awa.kouame.parent@example.ci',
@@ -668,8 +661,9 @@ const main = async (): Promise<void> => {
       RETURNING id
     `);
     const parentTwo = await tx.execute<ParentSeedRow>(sql`
-      INSERT INTO parents (full_name, phone, email, password_hash, is_active)
+      INSERT INTO parents (id, full_name, phone, email, password_hash, is_active)
       VALUES (
+        ${deterministicUuid('parent:2250709876543')}::uuid,
         'Koffi Diallo',
         '2250709876543',
         'koffi.diallo.parent@example.ci',
@@ -679,8 +673,9 @@ const main = async (): Promise<void> => {
       RETURNING id
     `);
     const parentThree = await tx.execute<ParentSeedRow>(sql`
-      INSERT INTO parents (full_name, phone, email, password_hash, is_active)
+      INSERT INTO parents (id, full_name, phone, email, password_hash, is_active)
       VALUES (
+        ${deterministicUuid('parent:2250701123322')}::uuid,
         'Mariam Yao',
         '2250701123322',
         'mariam.yao.parent@example.ci',
@@ -1124,6 +1119,7 @@ const main = async (): Promise<void> => {
     INSERT INTO public.school_sms_features (
       tenant_id,
       is_enabled,
+      monetize_parent_alerts,
       commission_pct,
       sms_cap_per_student,
       sms_unit_price_fcfa,
@@ -1135,6 +1131,12 @@ const main = async (): Promise<void> => {
     )
     VALUES (
       ${tenantId},
+      true,
+      -- La fonctionnalité SMS est activée (is_enabled) ET monétisée auprès des parents.
+      -- monetize_parent_alerts pilote la visibilité des menus directeur "Abonnements" et
+      -- "Revenus abonnements" (cf. Sidebar/BottomNav/MobileDrawer + route guard côté web) :
+      -- sans ce flag à true, les données d'abonnement/paiement seedées plus haut seraient
+      -- invisibles dans l'UI.
       true,
       15.00,
       60,
@@ -1148,6 +1150,7 @@ const main = async (): Promise<void> => {
     ON CONFLICT (tenant_id)
     DO UPDATE SET
       is_enabled = EXCLUDED.is_enabled,
+      monetize_parent_alerts = EXCLUDED.monetize_parent_alerts,
       commission_pct = EXCLUDED.commission_pct,
       sms_cap_per_student = EXCLUDED.sms_cap_per_student,
       sms_unit_price_fcfa = EXCLUDED.sms_unit_price_fcfa,
@@ -1189,14 +1192,24 @@ const main = async (): Promise<void> => {
   `);
 
   console.info('[seed] Seed completed successfully');
+  console.info(`[seed] École: ${TENANT.name}`);
   console.info(`[seed] Tenant: ${TENANT.subdomain} (${TENANT.schemaName})`);
-  console.info(`[seed] Director login ready: ${DIRECTOR_EMAIL} / ${DEFAULT_PASSWORD}`);
+  console.info(`[seed] Directeur: ${DIRECTOR_EMAIL} / ${DEFAULT_PASSWORD}`);
+  console.info(`[seed] Secrétaire (staff): secretariat@sainte-marie.ci / ${DEFAULT_PASSWORD}`);
+  console.info(`[seed] Professeur: kouadio.nguessan@sainte-marie.ci / ${DEFAULT_PASSWORD}`);
+  console.info('[seed] Parent: +2250701234567 / 4567 (changement de mot de passe au 1er login)');
   console.info(
-    `[seed] Super admin login ready: ${SUPER_ADMIN_EMAIL} / ${DEFAULT_PASSWORD} (schema: ${TENANT.schemaName})`
+    `[seed] Super admin: ${SUPER_ADMIN_EMAIL} / ${DEFAULT_PASSWORD} (schema: ${TENANT.schemaName})`
   );
 };
 
-void main().catch((error) => {
-  console.error('[seed] Failed:', error);
-  process.exitCode = 1;
-});
+void main()
+  .then(() => {
+    // Le pool PG (db.ts) garde des connexions ouvertes (min: 4) qui maintiennent
+    // l'event loop actif : sans sortie explicite, `npm run db:seed` ne se termine jamais.
+    process.exit(0);
+  })
+  .catch((error) => {
+    console.error('[seed] Failed:', error);
+    process.exit(1);
+  });
