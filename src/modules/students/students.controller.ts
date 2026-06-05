@@ -131,7 +131,7 @@ export default async function studentsController(
   // Static route must be registered before /:id
   app.get(
     '/api/v1/students/absence-stats',
-    { preHandler: requirePermission('students.view') },
+    { preHandler: requirePermission('attendance.view') },
     async (request, reply) => {
       try {
         const claims = request.claims!;
@@ -152,7 +152,7 @@ export default async function studentsController(
   // Remplace l'ancien export CSV navigateur.
   app.get(
     '/api/v1/students/absence-stats/export',
-    { preHandler: requirePermission('students.view') },
+    { preHandler: requirePermission('attendance.view') },
     async (request, reply) => {
       try {
         const claims = request.claims!;
@@ -191,7 +191,7 @@ export default async function studentsController(
 
   app.get(
     '/api/v1/students/:studentId/absences',
-    { preHandler: requirePermission('students.view') },
+    { preHandler: requirePermission('attendance.view') },
     async (request, reply) => {
       try {
         const claims = request.claims!;

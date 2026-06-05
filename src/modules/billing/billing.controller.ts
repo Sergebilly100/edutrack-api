@@ -6,8 +6,9 @@ import path from 'node:path';
 import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
-import { requirePermission } from '../../shared/middleware/auth.middleware.js';
+import { authenticateRequest, requirePermission } from '../../shared/middleware/auth.middleware.js';
 import { presignDownload } from '../../shared/storage/r2.js';
+import type { PermissionKey } from '../../shared/types/index.js';
 import { buildDashboardRepository } from '../dashboard/dashboard.repository.js';
 
 import {
@@ -110,6 +111,7 @@ const buildSignedDownloadUrl = (
 
 type BillingPdfJobHandle = {
   id?: string | number;
+  data?: BillingPdfJobData;
   returnvalue?: unknown;
   failedReason?: string | null;
   getState: () => Promise<string>;
@@ -129,11 +131,12 @@ const createInMemoryBillingPdfQueue = (): BillingPdfQueueHandle => {
   const jobs = new Map<string, BillingPdfJobHandle>();
 
   return {
-    add: async () => {
+    add: async (_name, data) => {
       sequence += 1;
       const id = `memory-${sequence}`;
       const job: BillingPdfJobHandle = {
         id,
+        data,
         getState: async () => 'waiting',
       };
       jobs.set(id, job);
@@ -142,6 +145,93 @@ const createInMemoryBillingPdfQueue = (): BillingPdfQueueHandle => {
     getJob: async (jobId: string) => jobs.get(jobId) ?? null,
   };
 };
+
+const SALARY_EXPORT_JOB_TYPES = new Set<BillingPdfJobData['type']>([
+  'salary-export-teacher',
+  'salary-export-school',
+  'salary-export-bulk',
+  'salary-export-payment-history',
+]);
+
+const ATTENDANCE_EXPORT_JOB_TYPES = new Set<BillingPdfJobData['type']>([
+  'student-absences-export',
+  'teacher-attendance-export',
+]);
+
+const hasAnyPermission = (
+  permissions: ReadonlySet<PermissionKey> | undefined,
+  allowed: readonly PermissionKey[]
+): boolean => allowed.some((permission) => permissions?.has(permission));
+
+const canReadPdfJob = (
+  job: BillingPdfJobHandle,
+  request: FastifyRequest
+): boolean => {
+  const jobType = job.data?.type;
+
+  if (!jobType) {
+    return request.permissions?.has('salary.export') === true;
+  }
+
+  if (job.data?.schemaName !== request.claims?.schemaName) {
+    return false;
+  }
+
+  if (SALARY_EXPORT_JOB_TYPES.has(jobType)) {
+    return request.permissions?.has('salary.export') === true;
+  }
+
+  if (ATTENDANCE_EXPORT_JOB_TYPES.has(jobType)) {
+    return hasAnyPermission(request.permissions, ['attendance.view', 'teachers.attendance.view']);
+  }
+
+  if (jobType === 'attendance-hours-export') {
+    return request.claims?.role === 'director';
+  }
+
+  if (jobType === 'revenue-export') {
+    return request.permissions?.has('subscriptions.revenue') === true;
+  }
+
+  return false;
+};
+
+const requirePdfJobAccess =
+  (billingPdfQueue: BillingPdfQueueHandle) =>
+  async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    await authenticateRequest(request, reply);
+    if (reply.sent) {
+      return;
+    }
+
+    const params = jobParamsSchema.safeParse(request.params ?? {});
+    if (!params.success) {
+      reply.code(400).send({
+        error: 'Validation error',
+        code: 'BAD_REQUEST',
+        statusCode: 400,
+      });
+      return;
+    }
+
+    const job = await billingPdfQueue.getJob(params.data.jobId);
+    if (!job) {
+      reply.code(404).send({
+        error: 'Job not found',
+        code: 'JOB_NOT_FOUND',
+        statusCode: 404,
+      });
+      return;
+    }
+
+    if (!canReadPdfJob(job, request)) {
+      reply.code(403).send({
+        error: 'Forbidden',
+        code: 'FORBIDDEN',
+        statusCode: 403,
+      });
+    }
+  };
 
 const handleError = (
   request: FastifyRequest,
@@ -504,7 +594,7 @@ export default async function billingController(
     }
   );
 
-  app.get('/api/v1/jobs/:jobId', { preHandler: requirePermission('salary.export') }, async (request, reply) => {
+  app.get('/api/v1/jobs/:jobId', { preHandler: requirePdfJobAccess(billingPdfQueue) }, async (request, reply) => {
     try {
       const params = jobParamsSchema.parse(request.params ?? {});
       const job = await billingPdfQueue.getJob(params.jobId);
@@ -550,7 +640,7 @@ export default async function billingController(
     }
   });
 
-  app.get('/api/v1/jobs/:jobId/status', { preHandler: requirePermission('salary.export') }, async (request, reply) => {
+  app.get('/api/v1/jobs/:jobId/status', { preHandler: requirePdfJobAccess(billingPdfQueue) }, async (request, reply) => {
     try {
       const params = jobParamsSchema.parse(request.params ?? {});
       const job = await billingPdfQueue.getJob(params.jobId);
