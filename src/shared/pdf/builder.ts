@@ -61,7 +61,7 @@ const HEADER_BAND_HEIGHT = 96;
 const FOOTER_HEIGHT = 64;
 
 /**
- * Constructeur de PDF haut de gamme pour les bilans EduTrack.
+ * Constructeur de PDF haut de gamme pour les bilans IvoirEdu.
  *
  * Gère la pagination automatique, l'en-tête de marque répété, le pied de page
  * avec numérotation et bloc signature, et fournit des primitives soignées
@@ -95,8 +95,8 @@ export class PdfBuilder {
     const builder = new PdfBuilder(branding, meta);
     builder.pdf = await PDFDocument.create();
     builder.pdf.setTitle(`${meta.title} — ${branding.schoolName}`);
-    builder.pdf.setProducer('EduTrack CI');
-    builder.pdf.setCreator('EduTrack CI');
+    builder.pdf.setProducer('IvoirEdu');
+    builder.pdf.setCreator('IvoirEdu');
     builder.fonts = await embedFonts(builder.pdf);
 
     if (branding.logo) {
@@ -333,7 +333,7 @@ export class PdfBuilder {
       size: size.caption,
       color: color.faint,
     });
-    this.drawText(this.page, this.contentLeft, y - 18, 'Document généré par EduTrack CI', {
+    this.drawText(this.page, this.contentLeft, y - 18, 'Document généré par IvoirEdu', {
       font: this.fonts.regular,
       size: size.caption,
       color: color.faint,

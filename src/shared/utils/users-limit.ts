@@ -17,7 +17,7 @@ const getRows = <TRow>(result: unknown): TRow[] => {
 };
 
 export const buildUsersLimitReachedMessage = (currentCount: number, maxUsers: number): string => {
-  return `Limite d'utilisateurs atteinte (${currentCount}/${maxUsers}). Contactez EduTrack CI pour augmenter votre quota.`;
+  return `Limite d'utilisateurs atteinte (${currentCount}/${maxUsers}). Contactez IvoirEdu pour augmenter votre quota.`;
 };
 
 export const getPlanLimitsBySchemaName = async (schemaName: string): Promise<TenantLimitRow> => {

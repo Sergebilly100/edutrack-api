@@ -218,7 +218,7 @@ const processTeacherDailySummaryJob = async (
           deps
             .emailSender({
               to: context.directorEmail,
-              subject: `[EduTrack] Bilan présences du ${date} — ${tenant.schoolName}`,
+              subject: `[IvoirEdu] Bilan présences du ${date} — ${tenant.schoolName}`,
               text: emailText,
               type: 'teacher_absent_director',
               schemaName: tenant.schemaName,
@@ -314,7 +314,7 @@ const processValidationDailySummaryJob = async (
         return;
       }
 
-      const message = `[EduTrack] ${pendingCount} présence(s) en attente de validation. Consultez l'app.`;
+      const message = `[IvoirEdu] ${pendingCount} présence(s) en attente de validation. Consultez l'app.`;
       const tasks: Array<Promise<void>> = [];
       // SMS validations horaires en attente désactivé (décision produit 2026-05) — email + in-app uniquement.
       // if (row.director_phone) {
@@ -372,7 +372,7 @@ const processValidationDailySummaryJob = async (
           deps
             .emailSender({
               to: row.director_email,
-              subject: '[EduTrack] Validations horaires en attente',
+              subject: '[IvoirEdu] Validations horaires en attente',
               text: emailText,
               type: 'custom',
               schemaName: tenant.schemaName,

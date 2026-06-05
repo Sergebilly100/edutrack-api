@@ -1,7 +1,7 @@
 import { rgb, type RGB } from 'pdf-lib';
 
 /**
- * Design tokens du système de PDF EduTrack / IvoirEdu.
+ * Design tokens du système de PDF IvoirEdu.
  *
  * Source de vérité visuelle pour tous les bilans générés côté serveur.
  * Les couleurs reprennent le design system de l'app (AGENTS.md §2) afin que les

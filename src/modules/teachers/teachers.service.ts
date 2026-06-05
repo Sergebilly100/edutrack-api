@@ -269,7 +269,7 @@ export class TeachersService {
       return { emailSent: false, email: null, plainPassword: reset.plainPassword };
     }
 
-    const subject = "Vos identifiants EduTrack";
+    const subject = "Vos identifiants IvoirEdu";
     const text = buildCredentialsEmailText({
       fullName: reset.fullName,
       username: reset.username,
@@ -325,7 +325,7 @@ export class TeachersService {
         continue;
       }
 
-      const subject = "Vos identifiants EduTrack";
+      const subject = "Vos identifiants IvoirEdu";
       const text = buildCredentialsEmailText({
         fullName: reset.fullName,
         username: reset.username,
@@ -369,14 +369,14 @@ const buildCredentialsEmailText = (params: {
   return [
     `Bonjour ${params.fullName},`,
     ``,
-    `Voici vos identifiants de connexion EduTrack :`,
+    `Voici vos identifiants de connexion IvoirEdu :`,
     `  • Identifiant : ${params.username}`,
     `  • Mot de passe temporaire : ${params.plainPassword}`,
     ``,
     `Pour des raisons de sécurité, vous devrez changer ce mot de passe lors de votre prochaine connexion.`,
     ``,
     `À bientôt,`,
-    `L'équipe EduTrack`,
+    `L'équipe IvoirEdu`,
   ].join('\n');
 };
 

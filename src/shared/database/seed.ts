@@ -400,7 +400,7 @@ const main = async (): Promise<void> => {
       VALUES (
         ${deterministicUuid(SUPER_ADMIN_EMAIL)}::uuid,
         'super_admin',
-        'Super Admin EduTrack',
+        'Super Admin IvoirEdu',
         '+225070777777',
         ${SUPER_ADMIN_EMAIL},
         ${superAdminPasswordHash},

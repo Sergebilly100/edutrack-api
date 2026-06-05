@@ -154,7 +154,7 @@ export const appSettings = pgTable('app_settings', {
   smsApiKey: text('sms_api_key'),
   smsApiKeyLast4: varchar('sms_api_key_last4', { length: 4 }),
   smsApiKeyUpdatedAt: timestamp('sms_api_key_updated_at', { withTimezone: true, mode: 'date' }),
-  smsSenderId: varchar('sms_sender_id', { length: 20 }).notNull().default('EduTrack'),
+  smsSenderId: varchar('sms_sender_id', { length: 20 }).notNull().default('IvoirEdu'),
   smsFallbackSenderId: varchar('sms_fallback_sender_id', { length: 20 }),
   smsDefaultCountryCode: varchar('sms_default_country_code', { length: 8 }).notNull().default('+225'),
   smsAlertQuotaThresholdPct: integer('sms_alert_quota_threshold_pct').notNull().default(80),

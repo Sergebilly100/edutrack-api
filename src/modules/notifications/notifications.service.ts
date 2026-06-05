@@ -92,10 +92,10 @@ const SMS_TEMPLATE_STUDENT_ABSENT_TYPE = 'student_absent_parent';
 const SMS_TEMPLATE_PAYMENT_REMINDER_TYPE = 'payment_reminder';
 
 const DEFAULT_STUDENT_ABSENT_TEMPLATE =
-  'EduTrack: {studentFirstName} absent(e) en {subject} le {date}. Contact école: {schoolPhone}';
+  'IvoirEdu: {studentFirstName} absent(e) en {subject} le {date}. Contact école: {schoolPhone}';
 const DEFAULT_PAYMENT_REMINDER_TEMPLATE =
-  'EduTrack: relance paiement {schoolName}. Échéance {dueDate}, période {periodLabel}, reste {remainingAmountFcfa} FCFA.';
-const DEFAULT_STUDENT_ABSENT_EMAIL_SUBJECT = 'Absence {studentLabel} — EduTrack';
+  'IvoirEdu: relance paiement {schoolName}. Échéance {dueDate}, période {periodLabel}, reste {remainingAmountFcfa} FCFA.';
+const DEFAULT_STUDENT_ABSENT_EMAIL_SUBJECT = 'Absence {studentLabel} — IvoirEdu';
 const DEFAULT_STUDENT_LABEL = 'élève';
 const DEFAULT_STUDENT_ABSENT_EMAIL_TEMPLATE =
   '{studentFirstName} est absent(e) en {subject} le {date}. Contact école: {schoolPhone}.';
@@ -133,7 +133,7 @@ const loadSmsPlatformConfig = async (): Promise<SmsPlatformRuntimeConfig> => {
     provider: row?.sms_provider ?? 'mock',
     apiBaseUrl: row?.sms_api_base_url ?? null,
     apiKey: row?.sms_api_key ?? null,
-    senderId: row?.sms_sender_id ?? 'EduTrack',
+    senderId: row?.sms_sender_id ?? 'IvoirEdu',
     fallbackSenderId: row?.sms_fallback_sender_id ?? null,
     smsMaintenanceMode: row?.sms_maintenance_mode ?? false,
     smsMaintenanceMessage: row?.sms_maintenance_message ?? 'Service SMS en maintenance',
@@ -354,9 +354,9 @@ const resolveSmsmodeCredentials = (
     'https://rest.smsmode.com/sms/v1';
   const configuredSender = config.senderId.trim();
   const sender =
-    configuredSender && configuredSender !== 'EduTrack'
+    configuredSender && configuredSender !== 'IvoirEdu'
       ? configuredSender
-      : process.env.SMSMODE_SENDER?.trim() || configuredSender || 'EduTrack';
+      : process.env.SMSMODE_SENDER?.trim() || configuredSender || 'IvoirEdu';
   return { apiKey, sender, baseUrl };
 };
 
@@ -490,7 +490,7 @@ const sendBrevoEmail = async (params: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      sender: { name: 'EduTrack', email: from },
+      sender: { name: 'IvoirEdu', email: from },
       to: [{ email: params.to }],
       subject: params.subject,
       textContent: params.text,
@@ -875,7 +875,7 @@ export class NotificationsService {
         minute: '2-digit',
         timeZone: 'Africa/Abidjan',
       });
-      const message = `[EduTrack] ${payload.teacherName} a tenté de scanner un QR inconnu à ${scanTime}. Accès refusé.`;
+      const message = `[IvoirEdu] ${payload.teacherName} a tenté de scanner un QR inconnu à ${scanTime}. Accès refusé.`;
       const tasks: Array<Promise<void>> = [];
 
       if (director.directorPhone) {
@@ -1016,7 +1016,7 @@ export class NotificationsService {
       // SMS attendance_approved désactivé (décision produit 2026-05) — canal email + in-app uniquement.
       // Conservé en commentaire pour rétablissement rapide si besoin.
       // if (payload.teacherPhone) {
-      //   const smsMessage = `[EduTrack] Présence validée — ${payload.courseName} du ${payload.date}. ${validatedHoursLabel}. Consultez l'app pour le détail.`;
+      //   const smsMessage = `[IvoirEdu] Présence validée — ${payload.courseName} du ${payload.date}. ${validatedHoursLabel}. Consultez l'app pour le détail.`;
       //   const smsQueueRef = buildQueueRef(payload.schemaName, 'attendance_approved');
       //
       //   await this.deps.repository.insertNotificationLog(tenantDb, {
@@ -1052,7 +1052,7 @@ export class NotificationsService {
       // }
 
       if (payload.teacherEmail) {
-        const emailText = `Votre présence pour le cours ${payload.courseName} du ${payload.date} a été validée.\n${validatedHoursLabel}.\n\nRappel important : veillez à scanner exclusivement le QR code de la salle où vous êtes affecté(e). Tout scan d'un QR d'une autre salle peut entraîner une sanction.\n\nConsultez votre espace EduTrack pour le récapitulatif.`;
+        const emailText = `Votre présence pour le cours ${payload.courseName} du ${payload.date} a été validée.\n${validatedHoursLabel}.\n\nRappel important : veillez à scanner exclusivement le QR code de la salle où vous êtes affecté(e). Tout scan d'un QR d'une autre salle peut entraîner une sanction.\n\nConsultez votre espace IvoirEdu pour le récapitulatif.`;
         const emailQueueRef = buildQueueRef(payload.schemaName, 'attendance_approved');
 
         await this.deps.repository.insertNotificationLog(tenantDb, {
@@ -1072,7 +1072,7 @@ export class NotificationsService {
             toEmailJobData({
               queueRef: emailQueueRef,
               to: payload.teacherEmail,
-              subject: `[EduTrack] Présence validée — ${payload.courseName} du ${payload.date}`,
+              subject: `[IvoirEdu] Présence validée — ${payload.courseName} du ${payload.date}`,
               text: emailText,
               recipientPhone: payload.teacherPhone ?? '',
               notificationType: 'attendance_approved',
@@ -1107,8 +1107,8 @@ export class NotificationsService {
 
     const isSanction = payload.action === 'sanctioned';
     const message = isSanction
-      ? `[EduTrack] Sanction pour absence de scan de fin — ${payload.courseName} du ${payload.date}. Présentez-vous à l'administration.`
-      : `[EduTrack] Avertissement — scan de fin manquant pour ${payload.courseName} du ${payload.date}. Aucun impact sur votre salaire.`;
+      ? `[IvoirEdu] Sanction pour absence de scan de fin — ${payload.courseName} du ${payload.date}. Présentez-vous à l'administration.`
+      : `[IvoirEdu] Avertissement — scan de fin manquant pour ${payload.courseName} du ${payload.date}. Aucun impact sur votre salaire.`;
 
     const tasks: Array<Promise<void>> = [];
 
@@ -1190,7 +1190,7 @@ export class NotificationsService {
             toEmailJobData({
               queueRef: emailQueueRef,
               to: payload.teacherEmail,
-              subject: isSanction ? `[EduTrack] Sanction — ${payload.courseName} du ${payload.date}` : `[EduTrack] Avertissement — scan de fin manquant`,
+              subject: isSanction ? `[IvoirEdu] Sanction — ${payload.courseName} du ${payload.date}` : `[IvoirEdu] Avertissement — scan de fin manquant`,
               text: emailText,
               recipientPhone: payload.teacherPhone ?? '',
               notificationType: isSanction ? 'scan_end_sanction' : 'scan_end_warning',
@@ -1211,7 +1211,7 @@ export class NotificationsService {
     if (!payload.schemaName) return;
 
     // Message conservé pour le canal in-app (référencé par le UI prof) — pas d'envoi SMS.
-    void `[EduTrack] La sanction pour ${payload.courseName} du ${payload.date} a été annulée. Votre cours est de nouveau comptabilisé.`;
+    void `[IvoirEdu] La sanction pour ${payload.courseName} du ${payload.date} a été annulée. Votre cours est de nouveau comptabilisé.`;
     const tasks: Array<Promise<void>> = [];
 
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
@@ -1262,7 +1262,7 @@ export class NotificationsService {
             toEmailJobData({
               queueRef: emailQueueRef,
               to: payload.teacherEmail,
-              subject: `[EduTrack] Sanction annulée — ${payload.courseName} du ${payload.date}`,
+              subject: `[IvoirEdu] Sanction annulée — ${payload.courseName} du ${payload.date}`,
               text: emailText,
               recipientPhone: payload.teacherPhone ?? '',
               notificationType: 'scan_end_sanction_cancelled',
@@ -1282,7 +1282,7 @@ export class NotificationsService {
     if (!payload.teacherEmail && !payload.teacherPhone) return;
     if (!payload.schemaName) return;
 
-    void `[EduTrack] ${payload.missingCount} cours sans scan de fin pour ${payload.month}. Veuillez régulariser.`;
+    void `[IvoirEdu] ${payload.missingCount} cours sans scan de fin pour ${payload.month}. Veuillez régulariser.`;
     const tasks: Array<Promise<void>> = [];
 
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
@@ -1330,7 +1330,7 @@ export class NotificationsService {
             toEmailJobData({
               queueRef: emailQueueRef,
               to: payload.teacherEmail,
-              subject: `[EduTrack] Scans de fin manquants — ${payload.month}`,
+              subject: `[IvoirEdu] Scans de fin manquants — ${payload.month}`,
               text: emailText,
               recipientPhone: payload.teacherPhone ?? '',
               notificationType: 'scan_end_warning',
@@ -1844,7 +1844,7 @@ export class NotificationsService {
         toEmailJobData({
           queueRef: emailQueueRef,
           to: payload.directorEmail,
-          subject: `[EduTrack] Relance paiement — ${payload.schoolName}`,
+          subject: `[IvoirEdu] Relance paiement — ${payload.schoolName}`,
           text: emailText,
           recipientPhone: payload.directorPhone,
           notificationType: 'payment_reminder',
@@ -1861,7 +1861,7 @@ export class NotificationsService {
     });
   }
 
-  // Notifie le directeur quand l'admin EduTrack enregistre un versement "revenus abonnements".
+  // Notifie le directeur quand l'admin IvoirEdu enregistre un versement "revenus abonnements".
   // Canal in-app + email uniquement (jamais SMS).
   async handleSubscriptionRevenuePayout(payload: SubscriptionRevenuePayoutPayload): Promise<void> {
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
@@ -1878,7 +1878,7 @@ export class NotificationsService {
           ? `\nPériode couverte : du ${payload.periodFrom} au ${payload.periodTo}.`
           : '';
       const referenceLine = payload.reference ? `\nRéférence : ${payload.reference}.` : '';
-      const message = `Versement de ${formattedAmount} FCFA reçu le ${payload.paymentDate} pour votre abonnement EduTrack.${periodLine}${referenceLine}`;
+      const message = `Versement de ${formattedAmount} FCFA reçu le ${payload.paymentDate} pour votre abonnement IvoirEdu.${periodLine}${referenceLine}`;
 
       const inAppQueueRef = buildQueueRef(payload.schemaName, 'subscription_revenue_payout');
       await this.deps.repository.insertNotificationLog(tenantDb, {
@@ -1895,7 +1895,7 @@ export class NotificationsService {
         return;
       }
 
-      const emailText = `Bonjour,\n\nNous avons bien enregistré un versement de ${formattedAmount} FCFA pour l'abonnement de ${payload.schoolName}.\nDate du versement : ${payload.paymentDate}.${periodLine}${referenceLine}\n\nMerci pour votre confiance.\nL'équipe EduTrack`;
+      const emailText = `Bonjour,\n\nNous avons bien enregistré un versement de ${formattedAmount} FCFA pour l'abonnement de ${payload.schoolName}.\nDate du versement : ${payload.paymentDate}.${periodLine}${referenceLine}\n\nMerci pour votre confiance.\nL'équipe IvoirEdu`;
       const emailQueueRef = buildQueueRef(payload.schemaName, 'subscription_revenue_payout');
 
       await this.deps.repository.insertNotificationLog(tenantDb, {
@@ -1913,7 +1913,7 @@ export class NotificationsService {
         toEmailJobData({
           queueRef: emailQueueRef,
           to: director.directorEmail,
-          subject: `[EduTrack] Versement enregistré — ${payload.schoolName}`,
+          subject: `[IvoirEdu] Versement enregistré — ${payload.schoolName}`,
           text: emailText,
           recipientPhone: director.directorPhone ?? '',
           notificationType: 'subscription_revenue_payout',

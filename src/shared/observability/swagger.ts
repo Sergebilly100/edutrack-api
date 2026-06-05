@@ -17,7 +17,7 @@ export const registerSwagger = async (app: FastifyInstance): Promise<void> => {
   await app.register(fastifySwagger, {
     openapi: {
       info: {
-        title: 'EduTrack CI / IvoirEdu API',
+        title: 'IvoirEdu API',
         description:
           'Multi-tenant Fastify API for school attendance, billing, and notifications.',
         version: '1.0.0',

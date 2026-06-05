@@ -789,7 +789,7 @@ export class AttendanceRepository {
       LIMIT 1
     `);
     const director = getRows(result)[0];
-    const message = `[EduTrack] ${params.teacherName} a tenté de scanner un QR inconnu à ${params.timestamp}. Accès refusé.`;
+    const message = `[IvoirEdu] ${params.teacherName} a tenté de scanner un QR inconnu à ${params.timestamp}. Accès refusé.`;
 
     await this.db.execute(sql`
       INSERT INTO notifications_log (
