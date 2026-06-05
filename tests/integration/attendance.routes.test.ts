@@ -9,6 +9,10 @@ const mockClaims = {
 };
 
 vi.mock('../../src/shared/middleware/auth.middleware.js', () => ({
+  authenticateRequest: vi.fn(async (request: { claims: unknown; permissions: Set<string> }) => {
+    request.claims = mockClaims;
+    request.permissions = new Set(['attendance.view']);
+  }),
   requireTeacher: vi.fn(async (request: { claims: unknown }, _reply: unknown, done: () => void) => {
     request.claims = mockClaims;
     done();
@@ -18,6 +22,10 @@ vi.mock('../../src/shared/middleware/auth.middleware.js', () => ({
     done();
   }),
   requireTeacherOrDirector: vi.fn(async (request: { claims: unknown }, _reply: unknown, done: () => void) => {
+    request.claims = mockClaims;
+    done();
+  }),
+  requirePermission: vi.fn(() => async (request: { claims: unknown }, _reply: unknown, done: () => void) => {
     request.claims = mockClaims;
     done();
   }),

@@ -2,8 +2,14 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError, z } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
-import { requireDirector, requireTeacher, requireTeacherOrDirector } from '../../shared/middleware/auth.middleware.js';
+import {
+  authenticateRequest,
+  requireDirector,
+  requirePermission,
+  requireTeacher,
+} from '../../shared/middleware/auth.middleware.js';
 import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
+import { buildBillingService, BillingModuleError } from '../billing/billing.service.js';
 import { SENSITIVE_ACTION_RATE_LIMIT } from '../../shared/utils/rate-limit.js';
 
 import { AttendanceModuleError, buildAttendanceService } from './attendance.service.js';
@@ -30,6 +36,14 @@ const handleError = (
   }
 
   if (error instanceof AttendanceModuleError) {
+    return reply.code(error.statusCode).send({
+      error: error.message,
+      code: error.code,
+      statusCode: error.statusCode,
+    });
+  }
+
+  if (error instanceof BillingModuleError) {
     return reply.code(error.statusCode).send({
       error: error.message,
       code: error.code,
@@ -76,6 +90,26 @@ const handleError = (
   });
 };
 
+const requireTeacherOrAttendanceView = async (
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> => {
+  await authenticateRequest(request, reply);
+  if (reply.sent) {
+    return;
+  }
+
+  if (request.claims?.role === 'teacher' || request.permissions?.has('attendance.view')) {
+    return;
+  }
+
+  reply.code(403).send({
+    error: 'Permission attendance.view required',
+    code: 'FORBIDDEN',
+    statusCode: 403,
+  });
+};
+
 const attendanceHistoryQuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(30).default(7),
 });
@@ -110,6 +144,10 @@ const monthQuerySchema = z.object({
     .string()
     .regex(/^\d{4}-\d{2}$/)
     .default(() => new Date().toISOString().slice(0, 7)),
+});
+
+const teacherMonthlyParamsSchema = z.object({
+  teacherId: z.string().uuid(),
 });
 
 const geoReviewParamsSchema = z.object({
@@ -353,7 +391,7 @@ export default async function attendanceController(
   });
 
   // conformité des profs pour un mois donné, avec filtres de rôle et ID, utilisé par le classement de TeacherCompliancePage (taux de conformité prof)
-  app.get('/api/v1/attendance/teacher-compliance', { preHandler: requireTeacherOrDirector }, async (request, reply) => {
+  app.get('/api/v1/attendance/teacher-compliance', { preHandler: requireTeacherOrAttendanceView }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const query = monthQuerySchema.parse(request.query ?? {});
@@ -365,6 +403,22 @@ export default async function attendanceController(
           userId: claims.sub,
         });
       });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.get('/api/v1/attendance/teachers/:teacherId/monthly', { preHandler: requirePermission('attendance.view') }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const params = teacherMonthlyParamsSchema.parse(request.params ?? {});
+      const query = monthQuerySchema.parse(request.query ?? {});
+
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        return buildBillingService(tenantDb).getTeacherMonthlyAttendance(params.teacherId, query.month);
+      });
+
       return reply.send(result);
     } catch (error) {
       return handleError(request, reply, error);

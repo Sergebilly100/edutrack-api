@@ -213,6 +213,37 @@ export class BillingService {
     return monthToBounds(month);
   }
 
+  async getTeacherMonthlyAttendance(teacherId: string, month: string) {
+    const { monthStart, monthEnd } = monthToBounds(month);
+
+    const teacher = await this.repository.findTeacherById(teacherId);
+    if (!teacher) {
+      throw new BillingModuleError('Teacher not found', 404, 'TEACHER_NOT_FOUND');
+    }
+
+    const daily = await this.repository.listTeacherDailyBreakdown(teacherId, monthStart, monthEnd);
+    const rows = buildDailyRows(daily as DailyBreakdownRow[]);
+    const totals = rows.reduce(
+      (acc, row) => {
+        acc.hoursPlanned += row.hoursPlanned;
+        acc.hoursDone += row.hoursDone;
+        return acc;
+      },
+      { hoursPlanned: 0, hoursDone: 0 }
+    );
+
+    return {
+      month,
+      summary: {
+        hoursPlanned: roundHours(totals.hoursPlanned),
+        hoursDone: roundHours(totals.hoursDone),
+        totalFcfa: null,
+        status: 'attendance_only',
+      },
+      rows,
+    };
+  }
+
   async getSalarySummary(month: string) {
     const { monthStart, monthEnd } = monthToBounds(month);
     const [rows, lastComputedAt] = await Promise.all([

@@ -19,6 +19,30 @@ const insertTeacherAttendance = async (teacherId: string, scheduleId: string) =>
 
 const currentMonth = new Date().toISOString().slice(0, 7);
 
+const grantStaffPermissions = async (permissions: string[]): Promise<void> => {
+  const context = getSeedContext();
+  const positionName = `Staff access ${Date.now()} ${Math.random().toString(36).slice(2, 8)}`;
+  const positions = await queryTenant<{ id: string }>(
+    `
+      INSERT INTO ${tenantTable('admin_positions')} (name, permissions, created_by)
+      VALUES ($1, $2::jsonb, $3)
+      RETURNING id
+    `,
+    [positionName, JSON.stringify(permissions), context.directorUserId]
+  );
+  const positionId = positions[0]?.id;
+  expect(positionId).toBeTruthy();
+
+  await queryTenant(
+    `
+      INSERT INTO ${tenantTable('position_assignments')} (user_id, position_id, assigned_by)
+      VALUES ($1, $2, $3)
+      ON CONFLICT DO NOTHING
+    `,
+    [context.staffUserId, positionId, context.directorUserId]
+  );
+};
+
 describe('billing integration (real db)', () => {
   it('GET /api/v1/billing/salary/summary retourne 200', async () => {
     const headers = await getAuthHeaders('director');
@@ -294,6 +318,38 @@ describe('billing integration (real db)', () => {
       code: 'FORBIDDEN',
       statusCode: 403,
     });
+  });
+
+  it('GET /api/v1/attendance/teachers/:teacherId/monthly autorise staff avec attendance.view', async () => {
+    const context = getSeedContext();
+    await grantStaffPermissions(['attendance.view', 'teachers.view']);
+    const headers = await getAuthHeaders('staff');
+
+    const response = await request()
+      .get(`/api/v1/attendance/teachers/${context.teacherId}/monthly?month=${currentMonth}`)
+      .set(headers);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      month: currentMonth,
+      summary: {
+        totalFcfa: null,
+        status: 'attendance_only',
+      },
+    });
+    expect(Array.isArray(response.body.rows)).toBe(true);
+  });
+
+  it('GET /api/v1/attendance/teacher-compliance autorise staff avec attendance.view', async () => {
+    await grantStaffPermissions(['attendance.view']);
+    const headers = await getAuthHeaders('staff');
+
+    const response = await request()
+      .get(`/api/v1/attendance/teacher-compliance?month=${currentMonth}`)
+      .set(headers);
+
+    expect(response.status).toBe(200);
+    expect(Array.isArray(response.body)).toBe(true);
   });
 
   it('GET /api/v1/billing/salary/export/:teacherId retourne un job BullMQ', async () => {
