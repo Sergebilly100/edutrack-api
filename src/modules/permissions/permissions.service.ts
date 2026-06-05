@@ -29,8 +29,10 @@ const SMS_TEMPLATE_PERMISSION: PermissionKey = 'settings.sms_templates';
 const SUBSCRIPTION_PERMISSIONS = new Set<PermissionKey>([
   'subscriptions.view',
   'subscriptions.create',
+  'subscriptions.edit',
   'subscriptions.renew',
   'subscriptions.cancel',
+  'subscriptions.password.reset',
   'subscriptions.revenue',
 ]);
 

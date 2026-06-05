@@ -39,8 +39,10 @@ export const PERMISSION_KEYS = [
   'settings.sms_templates',
   'subscriptions.view',
   'subscriptions.create',
+  'subscriptions.edit',
   'subscriptions.renew',
   'subscriptions.cancel',
+  'subscriptions.password.reset',
   'subscriptions.revenue',
 ] as const satisfies readonly PermissionKey[];
 

@@ -383,6 +383,8 @@ describe('permissions.service resolveEffectivePermissions', () => {
     });
 
     expect(result).not.toContain('subscriptions.view');
+    expect(result).not.toContain('subscriptions.edit');
+    expect(result).not.toContain('subscriptions.password.reset');
     expect(result).not.toContain('subscriptions.revenue');
   });
 
@@ -399,6 +401,8 @@ describe('permissions.service resolveEffectivePermissions', () => {
     });
 
     expect(result).toContain('subscriptions.view');
+    expect(result).toContain('subscriptions.edit');
+    expect(result).toContain('subscriptions.password.reset');
     expect(result).toContain('subscriptions.revenue');
   });
 

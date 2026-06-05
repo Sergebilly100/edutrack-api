@@ -247,7 +247,7 @@ export default async function subscriptionsController(
 
   app.patch(
     '/api/v1/subscriptions/parents/:parentId/contact',
-    { preHandler: requirePermission('subscriptions.create') },
+    { preHandler: requirePermission('subscriptions.edit') },
     async (request, reply) => {
       try {
         const { parentId } = parentIdParamsSchema.parse(request.params ?? {});
@@ -291,7 +291,7 @@ export default async function subscriptionsController(
 
   app.post(
     '/api/v1/subscriptions/parents/:parentId/reset-password',
-    { preHandler: requirePermission('subscriptions.create') },
+    { preHandler: requirePermission('subscriptions.password.reset') },
     async (request, reply) => {
       try {
         const { parentId } = resetPasswordParamsSchema.parse(request.params ?? {});
