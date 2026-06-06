@@ -132,7 +132,13 @@ export const authenticateRequest = async (
     }
     throw error;
   }
-  if (revokeAt > 0 && iat < revokeAt) {
+  // `iat <= revokeAt` (et non `<`) : l'iat JWT est en secondes, donc un token
+  // émis DANS la même seconde que la révocation a iat == revokeAt et doit aussi
+  // tomber, sinon un token volé survit jusqu'à la fin de la seconde courante.
+  // Les credentials réémis pour la session courante après un changement de mdp
+  // sont signés avec iat > revokeAt (cf. signAccessTokenAfter dans auth.service),
+  // ils passent donc cette borne.
+  if (revokeAt > 0 && iat <= revokeAt) {
     unauthorized(reply, 'Session invalidée, veuillez vous reconnecter');
     return;
   }

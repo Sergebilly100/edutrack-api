@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
-import { requireDirector } from '../../shared/middleware/auth.middleware.js';
+import { requireDirectorOrSecretary } from '../../shared/middleware/auth.middleware.js';
 
 import { buildDashboardService } from './dashboard.service.js';
 import { dashboardStatsQuerySchema } from './dashboard.types.js';
@@ -35,9 +35,14 @@ const handleError = (
 export default async function dashboardController(app: FastifyInstance): Promise<void> {
   /**
    * GET /api/v1/dashboard/stats
-   * Retourne les 4 KPI cards du dashboard : présence profs, présence élèves, salaires, abonnements
+   * Retourne les 4 KPI cards du dashboard : présence profs, présence élèves, salaires, abonnements.
+   * Accessible au directeur ET au staff : le filtrage par carte (ex. masquage du
+   * montant salaire) est appliqué côté front selon les permissions du staff.
    */
-  app.get('/api/v1/dashboard/stats', { preHandler: requireDirector }, async (request, reply) => {
+  app.get(
+    '/api/v1/dashboard/stats',
+    { preHandler: requireDirectorOrSecretary },
+    async (request, reply) => {
     try {
       const claims = request.claims!;
       const query = dashboardStatsQuerySchema.parse(request.query ?? {});

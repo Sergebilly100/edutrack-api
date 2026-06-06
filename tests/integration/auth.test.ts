@@ -149,7 +149,18 @@ describe('auth integration (real db)', () => {
     });
 
     expect(changeResponse.status).toBe(200);
-    expect(changeResponse.body).toEqual({ message: 'Mot de passe mis à jour' });
+    expect(changeResponse.body).toMatchObject({ message: 'Mot de passe mis à jour' });
+    // Le changement de mdp réémet les credentials de la session courante :
+    // un accessToken frais doit être renvoyé et rester valide (non révoqué).
+    expect(changeResponse.body).toHaveProperty('accessToken');
+    expect(typeof changeResponse.body.accessToken).toBe('string');
+
+    // Le nouveau token doit passer le middleware (iat >= revoke_at posé juste avant).
+    const meWithNewToken = await request()
+      .get('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${changeResponse.body.accessToken}`)
+      .set('x-tenant-schema', TEST_SCHEMA_NAME);
+    expect(meWithNewToken.status).toBe(200);
 
     const loginWithNewPassword = await request().post('/api/v1/auth/login/teacher').set({
       'x-tenant-schema': TEST_SCHEMA_NAME,

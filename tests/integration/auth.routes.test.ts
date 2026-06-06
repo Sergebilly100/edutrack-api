@@ -302,11 +302,18 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('POST /api/v1/auth/change-password — bon mot de passe actuel → 200', async () => {
+  it('POST /api/v1/auth/change-password — bon mot de passe actuel → 200 + nouveau token', async () => {
     mocks.verifyAccessToken.mockResolvedValue({
       sub: 'director-1',
       role: 'director',
       schemaName: 'tenant_demo',
+    });
+    // Le service réémet les credentials de la session courante.
+    mocks.changePassword.mockResolvedValue({
+      accessToken: 'fresh-access-token',
+      tokenType: 'Bearer',
+      expiresIn: '15m',
+      user: { id: 'director-1', role: 'director', name: 'Directeur', phone: null, email: null },
     });
     const app = await buildApp();
 
@@ -321,7 +328,12 @@ describe('auth routes', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(parseBody(response.body)).toEqual({ message: 'Mot de passe mis à jour' });
+    const body = parseBody(response.body) as { message: string; accessToken: string };
+    expect(body.message).toBe('Mot de passe mis à jour');
+    expect(body.accessToken).toBe('fresh-access-token');
+    // Un nouveau refresh cookie doit être posé pour préserver la session.
+    expect(mocks.signRefreshToken).toHaveBeenCalledWith('director-1', 'tenant_demo');
+    expect(mocks.registerRefreshToken).toHaveBeenCalled();
     await app.close();
   });
 

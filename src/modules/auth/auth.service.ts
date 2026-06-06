@@ -28,7 +28,7 @@ import {
   verifyJwtRs256,
   type JwtPayload,
 } from '../../shared/auth/jwt.js';
-import { recordPasswordReset } from '../../shared/auth/token-version.js';
+import { recordPasswordReset, getRevokeAt } from '../../shared/auth/token-version.js';
 
 type LoginInput = {
   identifier: string;
@@ -303,6 +303,25 @@ export const signAccessToken = async (claims: AccessTokenClaims): Promise<string
     privateKeyPem: privateKey,
     expiresIn: expiry,
   });
+};
+
+/**
+ * Signe un access token dont l'`iat` est garanti strictement supérieur à
+ * `afterSeconds`. signJwtRs256 force iat = floor(now/1000) (résolution seconde) ;
+ * comme le middleware rejette désormais `iat <= revokeAt`, un token réémis dans
+ * la même seconde que la révocation serait rejeté. On attend donc au plus ~1s le
+ * passage à la seconde suivante. Utilisé uniquement après un changement de mot de
+ * passe (action rare), l'attente est sans impact UX notable.
+ */
+const signAccessTokenAfter = async (
+  claims: AccessTokenClaims,
+  afterSeconds: number
+): Promise<string> => {
+  while (Math.floor(Date.now() / 1000) <= afterSeconds) {
+    const msUntilNextSecond = 1000 - (Date.now() % 1000);
+    await new Promise((resolve) => setTimeout(resolve, msUntilNextSecond));
+  }
+  return signAccessToken(claims);
 };
 
 export const signRefreshToken = async (
@@ -724,7 +743,7 @@ export const logout = async (db: TenantDb, refreshToken?: string): Promise<void>
 export const changePassword = async (
   db: TenantDb,
   input: ChangePasswordInput
-): Promise<void> => {
+): Promise<LoginResult> => {
   if (isKeycloakAuthEnabled()) {
     throw new Error('Modification de mot de passe non autorisée pour ce rôle');
   }
@@ -750,6 +769,32 @@ export const changePassword = async (
   //   autres sessions (compromission suspectée).
   await revokeAllUserRefreshTokens(db, profile.userId);
   await recordPasswordReset(input.schemaName, profile.userId);
+
+  // La session COURANTE ne doit pas être cassée par son propre changement de
+  // mot de passe : on réémet un access token frais pour que l'utilisateur reste
+  // connecté sans erreur. Le contrôleur émet le nouveau refresh cookie. Sans
+  // cela, le front conservait l'ancien token invalidé → "Impossible de
+  // charger..." jusqu'au prochain login (bug du 1er changement de mdp).
+  //
+  // signAccessTokenAfter(revokeAt) garantit iat > revokeAt : le middleware
+  // rejette `iat <= revokeAt`, donc TOUS les anciens tokens (y compris ceux
+  // émis la même seconde) tombent, tandis que ce token réémis passe.
+  const revokeAt = await getRevokeAt(input.schemaName, profile.userId);
+  const refreshed = await findUserProfileById(db, profile.userId);
+  const current = refreshed ?? profile;
+  const claims = buildClaims(current, input.schemaName);
+  const accessToken = await signAccessTokenAfter(claims, revokeAt);
+  const positionNames =
+    normalizeRole(current.role) === 'staff'
+      ? await listAdministrativePositionNames(db, current.userId)
+      : [];
+
+  return {
+    accessToken,
+    tokenType: 'Bearer',
+    expiresIn: process.env.JWT_EXPIRY ?? '15m',
+    user: sanitizeProfile(current, positionNames),
+  };
 };
 
 export const updateMe = async (db: TenantDb, input: UpdateMeInput) => {

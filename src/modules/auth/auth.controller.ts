@@ -726,7 +726,7 @@ export default async function authController(app: FastifyInstance): Promise<void
         const currentPassword = body.current_password ?? body.currentPassword;
         const newPassword = body.new_password ?? body.newPassword;
 
-        await withTenantSchema(claims.schemaName, (tenantDb) =>
+        const result = await withTenantSchema(claims.schemaName, (tenantDb) =>
           changePassword(tenantDb, {
             userId: claims.sub,
             currentPassword: currentPassword!,
@@ -735,7 +735,26 @@ export default async function authController(app: FastifyInstance): Promise<void
           })
         );
 
-        return reply.code(200).send({ message: 'Mot de passe mis à jour' });
+        // changePassword a révoqué TOUTES les sessions (revoke_at + refresh tokens).
+        // On réémet ici les credentials de la session courante pour qu'elle survive :
+        // nouveau refresh cookie + accessToken frais renvoyé au front. Sans ça, le
+        // client gardait un token invalidé → erreurs de chargement post-changement.
+        const refreshToken = await signRefreshToken(claims.sub, claims.schemaName);
+        try {
+          const context = getClientContext(request);
+          await withTenantSchema(claims.schemaName, (tenantDb) =>
+            registerRefreshToken(tenantDb, refreshToken, context)
+          );
+        } catch (error) {
+          request.log.error(
+            { err: error instanceof Error ? error.message : 'unknown error', schemaName: claims.schemaName },
+            '[auth] unable to persist refresh token after password change'
+          );
+          throw new Error('Session initialization failed');
+        }
+        setRefreshCookie(reply, refreshToken);
+
+        return reply.code(200).send({ message: 'Mot de passe mis à jour', ...result });
       } catch (error) {
         if (error instanceof Error && error.message === 'Current password is incorrect') {
           return reply.code(401).send({ error: 'Mot de passe actuel incorrect' });

@@ -13,8 +13,14 @@ import type {
   UpdateTeacherInput,
 } from './teachers.types.js';
 
-export type QueryExecutor = {
+type SqlExecutor = {
   execute: (query: ReturnType<typeof sql>) => Promise<unknown>;
+};
+
+export type QueryExecutor = SqlExecutor & {
+  // Drizzle node-postgres expose transaction() : la callback reçoit un exécuteur
+  // lié au même client PG (BEGIN/COMMIT/ROLLBACK automatiques).
+  transaction: <T>(callback: (tx: SqlExecutor) => Promise<T>) => Promise<T>;
 };
 
 // Forme brute renvoyée par PostgreSQL (snake_case).
@@ -226,41 +232,57 @@ export class TeachersRepository {
     }
     const passwordHash = await argon2.hash(password);
 
-    const userResult = await this.db.execute(sql`
-      INSERT INTO users (role, name, phone, email, password_hash, is_active, must_change_password)
-      VALUES ('teacher', ${input.name}, ${input.phone}, ${input.email ?? null}, ${passwordHash}, true, true)
-      RETURNING id
-    `);
+    // Array littéral PG via sql.join paramétré (même pattern prouvé que
+    // updateTeacher / seed.ts). Interpoler ${input.subjects} directement produit
+    // un record `($1, $2)` rejeté par PG (`is of type record`) dès qu'il y a
+    // plusieurs matières. Tableau vide => `ARRAY[]::text[]`, valide en PG.
+    const subjectsLiteral = sql`ARRAY[${sql.join(
+      input.subjects.map((s) => sql`${s}`),
+      sql`, `
+    )}]::text[]`;
 
-    const user = getRows<IdRow>(userResult)[0];
-    if (!user) throw new Error('Failed to create teacher user');
+    // Les deux INSERT (users puis teachers) DOIVENT être atomiques : sans
+    // transaction, un échec sur l'INSERT teachers (ou matricule en doublon)
+    // laissait un user orphelin dont le téléphone/email bloquait toute
+    // recréation ultérieure via users_phone_unique / users_email_unique.
+    const teacher = await this.db.transaction(async (tx) => {
+      const userResult = await tx.execute(sql`
+        INSERT INTO users (role, name, phone, email, password_hash, is_active, must_change_password)
+        VALUES ('teacher', ${input.name}, ${input.phone}, ${input.email ?? null}, ${passwordHash}, true, true)
+        RETURNING id
+      `);
 
-    const teacherResult = await this.db.execute(sql`
-      INSERT INTO teachers (
-        user_id,
-        username,
-        matricule,
-        type,
-        subjects,
-        hourly_rate,
-        monthly_salary,
-        is_blocked
-      )
-      VALUES (
-        ${user.id},
-        ${username},
-        ${input.matricule ?? null},
-        ${input.type},
-        ${input.subjects},
-        ${input.hourly_rate},
-        ${input.monthly_salary},
-        false
-      )
-      RETURNING id
-    `);
+      const user = getRows<IdRow>(userResult)[0];
+      if (!user) throw new Error('Failed to create teacher user');
 
-    const teacher = getRows<IdRow>(teacherResult)[0];
-    if (!teacher) throw new Error('Failed to create teacher');
+      const teacherResult = await tx.execute(sql`
+        INSERT INTO teachers (
+          user_id,
+          username,
+          matricule,
+          type,
+          subjects,
+          hourly_rate,
+          monthly_salary,
+          is_blocked
+        )
+        VALUES (
+          ${user.id},
+          ${username},
+          ${input.matricule ?? null},
+          ${input.type},
+          ${subjectsLiteral},
+          ${input.hourly_rate},
+          ${input.monthly_salary},
+          false
+        )
+        RETURNING id
+      `);
+
+      const created = getRows<IdRow>(teacherResult)[0];
+      if (!created) throw new Error('Failed to create teacher');
+      return created;
+    });
 
     const created = await this.getTeacherById(teacher.id);
     if (!created) throw new Error('Failed to load created teacher');

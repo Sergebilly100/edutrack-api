@@ -21,11 +21,53 @@ export class TeachersModuleError extends Error {
   }
 }
 
+// Extrait les champs utiles d'une erreur PostgreSQL (driver pg / DrizzleQueryError).
+// L'erreur Drizzle enveloppe l'erreur pg d'origine dans `cause`, qui porte
+// code/constraint/detail. On regarde donc l'erreur ET sa cause.
+const extractDbError = (error: unknown): { code: string; constraint: string; detail: string } => {
+  const fromObject = (e: unknown) => {
+    if (typeof e !== 'object' || e === null) return null;
+    const { code, constraint, detail } = e as {
+      code?: unknown;
+      constraint?: unknown;
+      detail?: unknown;
+    };
+    if (code === undefined && constraint === undefined && detail === undefined) return null;
+    return {
+      code: code === undefined ? '' : String(code),
+      constraint: constraint === undefined ? '' : String(constraint),
+      detail: detail === undefined ? '' : String(detail),
+    };
+  };
+
+  const direct = fromObject(error);
+  if (direct && direct.code) return direct;
+
+  const cause = typeof error === 'object' && error !== null ? (error as { cause?: unknown }).cause : null;
+  return fromObject(cause) ?? direct ?? { code: '', constraint: '', detail: '' };
+};
+
 // Détecte une violation d'unicité PostgreSQL (code 23505) sur le matricule.
 const isMatriculeUniqueViolation = (error: unknown): boolean => {
-  if (typeof error !== 'object' || error === null) return false;
-  const { code, constraint } = error as { code?: unknown; constraint?: unknown };
-  return code === '23505' && typeof constraint === 'string' && constraint.includes('matricule');
+  const { code, constraint, detail } = extractDbError(error);
+  return code === '23505' && (constraint.includes('matricule') || detail.includes('(matricule)'));
+};
+
+// Traduit une collision phone/email (users_*_unique) en TeachersModuleError 409.
+// Le téléphone et l'email sont uniques au sein du schéma tenant, tous rôles
+// confondus (directeur, staff, autres profs). Retourne null si l'erreur n'est
+// pas une de ces collisions — l'appelant relance alors l'erreur d'origine.
+const toUserContactConflict = (error: unknown): TeachersModuleError | null => {
+  const { code, constraint, detail } = extractDbError(error);
+  if (code !== '23505') return null;
+
+  if (constraint.includes('users_phone_unique') || detail.includes('(phone)')) {
+    return new TeachersModuleError('Ce numéro de téléphone est déjà utilisé', 409, 'PHONE_ALREADY_EXISTS');
+  }
+  if (constraint.includes('users_email_unique') || detail.includes('(email)')) {
+    return new TeachersModuleError('Cet email est déjà utilisé', 409, 'EMAIL_ALREADY_EXISTS');
+  }
+  return null;
 };
 
 // DTO partagé pour toutes les réponses du module teachers.
@@ -151,6 +193,8 @@ export class TeachersService {
           'MATRICULE_ALREADY_EXISTS'
         );
       }
+      const contactConflict = toUserContactConflict(error);
+      if (contactConflict) throw contactConflict;
       throw error;
     }
   }
@@ -221,6 +265,8 @@ export class TeachersService {
           'MATRICULE_ALREADY_EXISTS'
         );
       }
+      const contactConflict = toUserContactConflict(error);
+      if (contactConflict) throw contactConflict;
       throw error;
     }
     if (!updated) {

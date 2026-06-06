@@ -1,6 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('../../src/shared/utils/users-limit.js', () => ({
+  getMaxUsersBySchemaName: vi.fn().mockResolvedValue(1000),
+}));
+
 import { TeachersModuleError, TeachersService } from '../../src/modules/teachers/teachers.service.js';
+
+// Simule une erreur PostgreSQL telle que renvoyée par le driver pg
+// (DrizzleQueryError enveloppe l'erreur pg d'origine dans `cause`).
+const makePgError = (constraint: string, detail: string) => {
+  const cause = Object.assign(new Error('duplicate key value'), {
+    code: '23505',
+    constraint,
+    detail,
+  });
+  return Object.assign(new Error('Failed query'), { cause });
+};
 
 const repository = {
   listTeachers: vi.fn(),
@@ -102,6 +117,75 @@ describe('teachers.service', () => {
     });
   });
 
+
+  // ── createTeacher ─────────────────────────────────────────────────────────
+
+  describe('createTeacher', () => {
+    const input = {
+      name: 'Sahi Armand',
+      first_name: 'Armand',
+      last_name: 'Sahi',
+      phone: '2250787380274',
+      email: 'sahi@example.com',
+      type: 'vacataire' as const,
+      subjects: ['Maths'],
+      hourly_rate: 5000,
+      monthly_salary: null,
+      matricule: null,
+    };
+
+    it('crée le professeur quand le dépôt réussit', async () => {
+      repository.countActiveUsers.mockResolvedValue(0);
+      repository.createTeacher.mockResolvedValue(baseTeacher);
+
+      const result = await service.createTeacher(input as never, { schemaName: 'school_test' });
+
+      expect(result.id).toBe('teacher-1');
+    });
+
+    it('mappe une collision de téléphone en 409 PHONE_ALREADY_EXISTS', async () => {
+      repository.countActiveUsers.mockResolvedValue(0);
+      repository.createTeacher.mockRejectedValue(
+        makePgError('users_phone_unique', 'Key (phone)=(2250787380274) already exists.')
+      );
+
+      await expect(
+        service.createTeacher(input as never, { schemaName: 'school_test' })
+      ).rejects.toMatchObject({ code: 'PHONE_ALREADY_EXISTS', statusCode: 409 });
+    });
+
+    it('mappe une collision d\'email en 409 EMAIL_ALREADY_EXISTS', async () => {
+      repository.countActiveUsers.mockResolvedValue(0);
+      repository.createTeacher.mockRejectedValue(
+        makePgError('users_email_unique', 'Key (email)=(sahi@example.com) already exists.')
+      );
+
+      await expect(
+        service.createTeacher(input as never, { schemaName: 'school_test' })
+      ).rejects.toMatchObject({ code: 'EMAIL_ALREADY_EXISTS', statusCode: 409 });
+    });
+
+    it('mappe une collision de matricule en 409 MATRICULE_ALREADY_EXISTS', async () => {
+      repository.countActiveUsers.mockResolvedValue(0);
+      repository.createTeacher.mockRejectedValue(
+        makePgError('teachers_matricule_unique', 'Key (matricule)=(M-001) already exists.')
+      );
+
+      await expect(
+        service.createTeacher(input as never, { schemaName: 'school_test' })
+      ).rejects.toMatchObject({ code: 'MATRICULE_ALREADY_EXISTS', statusCode: 409 });
+    });
+
+    it('relance une erreur DB non gérée sans la transformer en 409', async () => {
+      repository.countActiveUsers.mockResolvedValue(0);
+      const dbDown = new Error('connection refused');
+      repository.createTeacher.mockRejectedValue(dbDown);
+
+      await expect(
+        service.createTeacher(input as never, { schemaName: 'school_test' })
+      ).rejects.toBe(dbDown);
+    });
+  });
 
   // ── updateTeacher ─────────────────────────────────────────────────────────
 
