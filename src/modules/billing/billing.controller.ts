@@ -267,7 +267,7 @@ const handleError = (
 
 export default async function billingController(
   app: FastifyInstance,
-  // La queue est injectée depuis server.ts — testable, pas de doublon Redis
+  // La queue est injectée depuis server.ts - testable, pas de doublon Redis
   options: { billingPdfQueue?: BillingPdfQueueHandle } = {}
 ): Promise<void> {
   // Toutes les références à billingPdfQueue dans le corps utilisent options.billingPdfQueue
@@ -727,7 +727,7 @@ export default async function billingController(
       }
 
       // R2 path: redirect to a short-lived presigned URL. The signed URL stays
-      // valid for 5 min — long enough for the browser to follow the redirect but
+      // valid for 5 min - long enough for the browser to follow the redirect but
       // short enough that leaked Referer/log entries decay quickly.
       if (result.r2Key) {
         const extension = path.extname(result.fileName).toLowerCase();

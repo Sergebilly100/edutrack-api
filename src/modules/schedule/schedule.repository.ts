@@ -1144,7 +1144,7 @@ export const findOrCreateTimeSlot = async (
   // Note : la table time_slots a une contrainte UNIQUE sur `label`.
   // On utilise start_time + end_time comme clé naturelle de déduplication.
   // Si un label identique existe déjà avec des horaires différents, on le
-  // distingue en suffixant — mais en pratique "08:00 – 09:30" est unique.
+  // distingue en suffixant - mais en pratique "08:00 – 09:30" est unique.
   const result = await db.execute<{
     id: string;
     label: string;

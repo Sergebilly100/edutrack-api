@@ -9,7 +9,7 @@ import type { PDFDocument, PDFFont } from 'pdf-lib';
  * Chargement des polices Noto Sans embarquées.
  *
  * Noto Sans couvre l'intégralité des accents français (é è à ç œ), le symbole
- * € et les caractères de séparation — contrairement aux StandardFonts pdf-lib
+ * € et les caractères de séparation - contrairement aux StandardFonts pdf-lib
  * (WinAnsi) qui rendent mal certains glyphes. C'est ce qui garantit un rendu
  * digne d'une institution.
  *

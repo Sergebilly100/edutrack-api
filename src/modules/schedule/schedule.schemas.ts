@@ -2,10 +2,10 @@ import { z } from 'zod';
 
 const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Invalid date format');
 
-// FIX BUG 3 — Format "HH:MM" strict
+// FIX BUG 3 - Format "HH:MM" strict
 const timeStringSchema = z
   .string()
-  .regex(/^\d{2}:\d{2}$/, 'Invalid time format — expected HH:MM');
+  .regex(/^\d{2}:\d{2}$/, 'Invalid time format - expected HH:MM');
 
 export const periodPayloadSchema = z
   .object({
@@ -53,7 +53,7 @@ export const periodDuplicatePayloadSchema = z
   });
 
 /**
- * FIX BUG 3 — schedulePayloadSchema accepte désormais deux formes :
+ * FIX BUG 3 - schedulePayloadSchema accepte désormais deux formes :
  *
  * Forme A (backward compat) : time_slot_id fourni → on l'utilise directement.
  * Forme B (nouveau)          : start_time + end_time fournis → résolution côté service.
@@ -66,9 +66,9 @@ export const schedulePayloadSchema = z
     teacher_id: z.string().uuid(),
     class_id: z.string().uuid(),
     room_id: z.string().uuid(),
-    // Optionnel — si absent, start_time + end_time sont requis
+    // Optionnel - si absent, start_time + end_time sont requis
     time_slot_id: z.string().uuid().optional(),
-    // FIX BUG 3 — Horaires libres
+    // FIX BUG 3 - Horaires libres
     start_time: timeStringSchema.optional(),
     end_time: timeStringSchema.optional(),
     day_of_week: z.number().int().min(1).max(6),

@@ -47,7 +47,7 @@ export type TenantDb = NodePgDatabase<Record<string, unknown>>;
 
 // Tables cœur attendues dans tout schéma tenant correctement provisionné.
 // Sert de garde avant d'exécuter un job tenant (cron) : un schéma orphelin —
-// ligne résiduelle dans public.tenants dont le schéma PG a été supprimé — ne
+// ligne résiduelle dans public.tenants dont le schéma PG a été supprimé - ne
 // doit pas faire planter le worker en boucle.
 const REQUIRED_TENANT_TABLES = ['schedule_periods', 'schedules', 'attendances_teacher'] as const;
 

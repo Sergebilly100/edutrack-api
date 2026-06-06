@@ -7,7 +7,7 @@ import type { FastifyInstance } from 'fastify';
  * option (when present); routes that still parse with `schema.parse(request.body)`
  * are listed but their request/response shapes are unknown. Migrate routes
  * to the Fastify `schema:` option (using `fastify-type-provider-zod`) to enrich
- * the doc — the swagger plugin picks up the schema automatically.
+ * the doc - the swagger plugin picks up the schema automatically.
  *
  * The UI is mounted at `/docs` and gated on NODE_ENV != 'production' to avoid
  * leaking the API surface publicly. In production, only the JSON spec is exposed

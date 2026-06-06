@@ -555,7 +555,7 @@ export class AttendanceRepository {
     `);
   }
 
-  // ── NOUVEAU — statuts de pointage prof pour une date (TeacherSchedulePage) ──
+  // ── NOUVEAU - statuts de pointage prof pour une date (TeacherSchedulePage) ──
   async getTeacherAttendanceByDate(params: {
     teacherId: string;
     date: string;
@@ -819,7 +819,7 @@ export class AttendanceRepository {
     `);
   }
 
-  // ── NOUVEAU — appel élèves en masse par le prof ───────────────────────────
+  // ── NOUVEAU - appel élèves en masse par le prof ───────────────────────────
   async bulkUpsertStudentAttendance(params: {
     scheduleId: string;
     date: string;
@@ -837,11 +837,11 @@ export class AttendanceRepository {
       absentSet.has(id) ? ATTENDANCE_STATUS.ABSENT : ATTENDANCE_STATUS.PRESENT
     );
 
-    // Construction des array literals via sql.join — pattern obligatoire avec
+    // Construction des array literals via sql.join - pattern obligatoire avec
     // drizzle + node-postgres pour les arrays passés à `unnest()`. Si on
     // interpole directement `${jsArray}::uuid[]`, drizzle expand chaque élément
     // en placeholder séparé, ce qui transforme l'array JS en un tuple PG
-    // (`($1, $2, …)::uuid[]`) — PG refuse alors avec "function unnest(record,
+    // (`($1, $2, …)::uuid[]`) - PG refuse alors avec "function unnest(record,
     // record) does not exist". Le ARRAY[...]::T[] est interprété comme un
     // littéral array correct.
     //
@@ -851,7 +851,7 @@ export class AttendanceRepository {
     // type text") → 500 sur tout pointage élève.
     //
     // unnest(arr1, arr2) (forme multi-arguments) garantit l'alignement
-    // ligne-à-ligne entre student_id et status — sans risque de produit
+    // ligne-à-ligne entre student_id et status - sans risque de produit
     // cartésien comme avec deux `unnest()` séparés dans le SELECT.
     const studentIdsArray = sql`ARRAY[${sql.join(
       studentIds.map((id) => sql`${id}::uuid`),
@@ -978,7 +978,7 @@ export class AttendanceRepository {
     }));
   }
 
-  // ── NOUVEAU — liste des IDs élèves d'une classe ───────────────────────────
+  // ── NOUVEAU - liste des IDs élèves d'une classe ───────────────────────────
   async listStudentsByClass(classId: string): Promise<StudentIdRow[]> {
     const result = await this.db.execute<StudentIdRow>(sql`
       SELECT id::text AS id

@@ -56,7 +56,7 @@ const isMatriculeUniqueViolation = (error: unknown): boolean => {
 // Traduit une collision phone/email (users_*_unique) en TeachersModuleError 409.
 // Le téléphone et l'email sont uniques au sein du schéma tenant, tous rôles
 // confondus (directeur, staff, autres profs). Retourne null si l'erreur n'est
-// pas une de ces collisions — l'appelant relance alors l'erreur d'origine.
+// pas une de ces collisions - l'appelant relance alors l'erreur d'origine.
 const toUserContactConflict = (error: unknown): TeachersModuleError | null => {
   const { code, constraint, detail } = extractDbError(error);
   if (code !== '23505') return null;

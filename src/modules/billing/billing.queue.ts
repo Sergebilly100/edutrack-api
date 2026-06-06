@@ -141,7 +141,7 @@ const writeZipArchive = async (params: {
   const generatedAt = new Date().toISOString();
 
   if (isR2Configured()) {
-    // Build the archive in-memory then upload — avoids needing disk space at all.
+    // Build the archive in-memory then upload - avoids needing disk space at all.
     const archiveBuffer = await new Promise<Buffer>((resolve, reject) => {
       const chunks: Buffer[] = [];
       const archive = archiver('zip', { zlib: { level: 9 } });

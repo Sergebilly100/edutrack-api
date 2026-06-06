@@ -431,7 +431,7 @@ export const revokeAllUserRefreshTokens = async (
         AND is_active = true
     `);
   } catch {
-    // refresh_tokens table may not exist on all tenants — fail silently.
+    // refresh_tokens table may not exist on all tenants - fail silently.
   }
 };
 

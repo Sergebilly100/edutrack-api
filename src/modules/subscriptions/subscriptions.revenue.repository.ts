@@ -12,7 +12,8 @@ export function buildSubscriptionsRevenueRepository(db: TenantDb) {
    */
   async function getRevenueStatsForMonth(month: string, tenantId: string) {
     const monthStart = `${month}-01`;
-    const monthEnd = `${month}-31`;
+    const [yearRaw, monthRaw] = month.split('-');
+    const monthEnd = new Date(Date.UTC(Number(yearRaw), Number(monthRaw), 0)).toISOString().slice(0, 10);
 
     // Abonnements actifs ce mois
     const activeSubs = await db

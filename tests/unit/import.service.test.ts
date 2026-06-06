@@ -118,10 +118,10 @@ afterEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// Students — dry-run
+// Students - dry-run
 // ---------------------------------------------------------------------------
 
-describe('import.service — students dry-run', () => {
+describe('import.service - students dry-run', () => {
   it('20 lignes valides → valid=20, errors=[], preview=5', async () => {
     const service = new ImportService(repository);
     const rows = Array.from({ length: 20 }, (_, i) => ({
@@ -225,10 +225,10 @@ describe('import.service — students dry-run', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Students — confirm
+// Students - confirm
 // ---------------------------------------------------------------------------
 
-describe('import.service — students confirm', () => {
+describe('import.service - students confirm', () => {
   it('20 lignes valides → imported=20, upsertStudent appelé 20 fois', async () => {
     const service = new ImportService(repository);
     const rows = Array.from({ length: 20 }, (_, i) => ({
@@ -294,10 +294,10 @@ describe('import.service — students confirm', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Teachers — dry-run
+// Teachers - dry-run
 // ---------------------------------------------------------------------------
 
-describe('import.service — teachers dry-run', () => {
+describe('import.service - teachers dry-run', () => {
   it('5 lignes valides vacataire → valid=5, errors=[]', async () => {
     repository.listTeacherDirectory.mockResolvedValueOnce([]);
     const service = new ImportService(repository);
@@ -365,10 +365,10 @@ describe('import.service — teachers dry-run', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Teachers — confirm
+// Teachers - confirm
 // ---------------------------------------------------------------------------
 
-describe('import.service — teachers confirm', () => {
+describe('import.service - teachers confirm', () => {
   it('collision username → upsertTeacher appelé 2 fois avec usernames distincts', async () => {
     repository.listTeacherDirectory.mockResolvedValue([]);
     const service = new ImportService(repository);
@@ -437,10 +437,10 @@ describe('import.service — teachers confirm', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Schedule — dry-run
+// Schedule - dry-run
 // ---------------------------------------------------------------------------
 
-describe('import.service — schedule dry-run', () => {
+describe('import.service - schedule dry-run', () => {
   it('activePeriodId=null → IMPORT_NO_ACTIVE_PERIOD', async () => {
     repository.findActiveSchedulePeriodId.mockResolvedValueOnce(null);
     const service = new ImportService(repository);
@@ -519,10 +519,10 @@ describe('import.service — schedule dry-run', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Schedule — confirm
+// Schedule - confirm
 // ---------------------------------------------------------------------------
 
-describe('import.service — schedule confirm', () => {
+describe('import.service - schedule confirm', () => {
   it('3 lignes valides → imported=3, updated=0', async () => {
     const service = new ImportService(repository);
     const rows = [
@@ -632,10 +632,10 @@ describe('import.service — schedule confirm', () => {
 });
 
 // ---------------------------------------------------------------------------
-// parseDateToIso — edge cases
+// parseDateToIso - edge cases
 // ---------------------------------------------------------------------------
 
-describe('import.service — parseDateToIso (via dry-run students)', () => {
+describe('import.service - parseDateToIso (via dry-run students)', () => {
   it('format JJ/MM/AAAA accepté', async () => {
     const service = new ImportService(repository);
     const rows = [

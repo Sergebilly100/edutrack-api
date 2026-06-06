@@ -379,6 +379,23 @@ export default async function subscriptionsController(
     }
   );
 
+  app.get(
+    '/api/v1/subscriptions/revenue/commission/overdue-alerts',
+    { preHandler: requirePermission('subscriptions.revenue') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          const service = new SubscriptionsService(new SubscriptionsRepository(tenantDb));
+          return service.commissionOverdueAlerts(claims.schemaName);
+        });
+        return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
   app.post(
     '/api/v1/subscriptions/revenue/commission/record-payment',
     { preHandler: requirePermission('subscriptions.revenue') },

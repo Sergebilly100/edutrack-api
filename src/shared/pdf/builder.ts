@@ -94,7 +94,7 @@ export class PdfBuilder {
   ): Promise<PdfBuilder> {
     const builder = new PdfBuilder(branding, meta);
     builder.pdf = await PDFDocument.create();
-    builder.pdf.setTitle(`${meta.title} — ${branding.schoolName}`);
+    builder.pdf.setTitle(`${meta.title} - ${branding.schoolName}`);
     builder.pdf.setProducer('IvoirEdu');
     builder.pdf.setCreator('IvoirEdu');
     builder.fonts = await embedFonts(builder.pdf);
@@ -400,7 +400,7 @@ export class PdfBuilder {
 
   /**
    * Rangée de cartes KPI (chiffre-clé + libellé). 2 à 4 cartes par rangée.
-   * La donnée importante est grande (kpiValue), le libellé discret — cf. AGENTS.md §3.
+   * La donnée importante est grande (kpiValue), le libellé discret - cf. AGENTS.md §3.
    */
   kpiRow(
     cards: Array<{ label: string; value: string; accent?: RGB; valueColor?: RGB }>
@@ -671,7 +671,7 @@ export class PdfBuilder {
     drawSlot(this.contentLeft, 'Cachet de l’établissement');
     drawSlot(
       this.contentLeft + colW + 40,
-      `Signature — ${this.branding.signatoryTitle ?? 'Directeur'}`
+      `Signature - ${this.branding.signatoryTitle ?? 'Directeur'}`
     );
     this.cursorY = lineY - 18;
   }

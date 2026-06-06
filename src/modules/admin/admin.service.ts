@@ -584,7 +584,7 @@ const getTenantOverviewMetrics = async (
 };
 
 // ────────────────────────────────────────────────────────────────────────
-// SECTION — TENANTS (CRUD, stats)
+// SECTION - TENANTS (CRUD, stats)
 // ────────────────────────────────────────────────────────────────────────
 
 export const listTenants = async (
@@ -1206,7 +1206,7 @@ const getSchoolSubscriptionSnapshot = async (
 };
 
 // ────────────────────────────────────────────────────────────────────────
-// SECTION — SCHOOLS (CRUD, users, config)
+// SECTION - SCHOOLS (CRUD, users, config)
 // ────────────────────────────────────────────────────────────────────────
 
 export const createSchool = async (
@@ -1667,7 +1667,7 @@ export const updateSchoolConfig = async (
 };
 
 // ────────────────────────────────────────────────────────────────────────
-// SECTION — METRICS & REVENUE
+// SECTION - METRICS & REVENUE
 // ────────────────────────────────────────────────────────────────────────
 
 export const getAdminMetrics = async (publicDb: TenantDb): Promise<AdminMetricsResult> => {
@@ -1885,7 +1885,7 @@ export const getRevenueSummary = async (publicDb: TenantDb): Promise<RevenueSumm
 };
 
 // ────────────────────────────────────────────────────────────────────────
-// SECTION — PLANS CATALOG
+// SECTION - PLANS CATALOG
 // ────────────────────────────────────────────────────────────────────────
 
 export const listPlanCatalog = async (publicDb: TenantDb): Promise<PlanCatalogItem[]> => {
@@ -1941,7 +1941,7 @@ export const updatePlanCatalog = async (
 };
 
 // ────────────────────────────────────────────────────────────────────────
-// SECTION — PAYMENTS
+// SECTION - PAYMENTS
 // ────────────────────────────────────────────────────────────────────────
 
 export const listSchoolPayments = async (
@@ -2211,7 +2211,7 @@ export const sendSchoolPaymentReminder = async (
 };
 
 // ────────────────────────────────────────────────────────────────────────
-// SECTION — SMS DASHBOARD, TEMPLATES, PROVIDER CONFIG
+// SECTION - SMS DASHBOARD, TEMPLATES, PROVIDER CONFIG
 // ────────────────────────────────────────────────────────────────────────
 
 export const getSmsDashboard = async (publicDb: TenantDb): Promise<SmsDashboardResult> => {
@@ -2602,7 +2602,7 @@ const ensureSchoolSmsFeatureMonetizationColumn = async (publicDb: TenantDb): Pro
 };
 
 // ────────────────────────────────────────────────────────────────────────
-// SECTION — SCHOOL-LEVEL SMS FEATURE + COMMISSIONS
+// SECTION - SCHOOL-LEVEL SMS FEATURE + COMMISSIONS
 // ────────────────────────────────────────────────────────────────────────
 
 export const activateSchoolSmsFeature = async (
@@ -3321,7 +3321,7 @@ export {
 } from './admin.maintenance.service.js';
 
 // ────────────────────────────────────────────────────────────────────────
-// SECTION — IMPERSONATION
+// SECTION - IMPERSONATION
 // ────────────────────────────────────────────────────────────────────────
 
 export const createImpersonationToken = async (

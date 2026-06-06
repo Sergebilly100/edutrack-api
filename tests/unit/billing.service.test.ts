@@ -298,9 +298,9 @@ describe('BillingService', () => {
     });
   });
 
-  // ── updateSalaryRecordStatus — permanent ─────────────────────────────────
+  // ── updateSalaryRecordStatus - permanent ─────────────────────────────────
 
-  describe('updateSalaryRecordStatus — permanent', () => {
+  describe('updateSalaryRecordStatus - permanent', () => {
     const actor = { userId: 'director-1', role: 'director' as const };
 
     it('rejette si acteur non director', async () => {
@@ -355,9 +355,9 @@ describe('BillingService', () => {
     });
   });
 
-  // ── updateSalaryRecordStatus — vacataire ──────────────────────────────────
+  // ── updateSalaryRecordStatus - vacataire ──────────────────────────────────
 
-  describe('updateSalaryRecordStatus — vacataire', () => {
+  describe('updateSalaryRecordStatus - vacataire', () => {
     const actor = { userId: 'director-1', role: 'director' as const, schemaName: 'school_test' };
 
     it('rejette si hoursToPay manquant pour vacataire', async () => {

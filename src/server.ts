@@ -363,7 +363,7 @@ const start = async (): Promise<void> => {
       );
       app.log.warn(
         { fallbackSchema },
-        '[absence-marking] no active/trial tenants found — registered fallback scheduler only'
+        '[absence-marking] no active/trial tenants found - registered fallback scheduler only'
       );
     } else {
       for (const tenant of activeTenants) {

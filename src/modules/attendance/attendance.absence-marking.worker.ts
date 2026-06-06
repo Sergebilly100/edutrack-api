@@ -5,7 +5,7 @@ import { buildAttendanceService } from './attendance.service.js';
 /**
  * Marque comme absents tous les enseignants n'ayant pas pointé après la fin
  * de leur créneau + 15 min. Appelé via un job BullMQ cron (toutes les 15 min
- * pendant les heures scolaires) — jamais depuis un GET HTTP.
+ * pendant les heures scolaires) - jamais depuis un GET HTTP.
  *
  * Garde défensive : un schéma tenant non provisionné (ligne orpheline dans
  * public.tenants dont le schéma PG n'existe pas / n'est pas migré) est ignoré
@@ -18,7 +18,7 @@ export const runAbsenceMarkingForSchema = async (params: {
   if (!(await schemaIsProvisioned(params.schemaName))) {
     logger.warn(
       { schemaName: params.schemaName },
-      '[absence-marking] schéma tenant non provisionné — job ignoré'
+      '[absence-marking] schéma tenant non provisionné - job ignoré'
     );
     return { marked: 0, skipped: true };
   }

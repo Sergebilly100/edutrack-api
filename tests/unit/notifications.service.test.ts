@@ -366,10 +366,10 @@ describe('handleTeacherQrAlert', () => {
 });
 
 // =====================================================================
-//  handleStudentAbsent — feature non-monétisée (free)
+//  handleStudentAbsent - feature non-monétisée (free)
 // =====================================================================
 
-describe('handleStudentAbsent — feature activée, non-monétisée', () => {
+describe('handleStudentAbsent - feature activée, non-monétisée', () => {
   it('queue le SMS parent et loggue queued', async () => {
     const service = makeService();
     await service.handleStudentAbsent(baseStudentPayload);
@@ -473,10 +473,10 @@ describe('handleStudentAbsent — feature activée, non-monétisée', () => {
 });
 
 // =====================================================================
-//  handleStudentAbsent — feature désactivée
+//  handleStudentAbsent - feature désactivée
 // =====================================================================
 
-describe('handleStudentAbsent — feature désactivée', () => {
+describe('handleStudentAbsent - feature désactivée', () => {
   it("loggue skipped_feature_disabled et n'envoie pas de SMS", async () => {
     vi.spyOn(SubscriptionsRepository.prototype, 'getSmsFeatureByTenantId').mockResolvedValue({
       ...makeEnabledFeature(),
@@ -509,10 +509,10 @@ describe('handleStudentAbsent — feature désactivée', () => {
 });
 
 // =====================================================================
-//  handleStudentAbsent — feature monétisée
+//  handleStudentAbsent - feature monétisée
 // =====================================================================
 
-describe('handleStudentAbsent — feature monétisée', () => {
+describe('handleStudentAbsent - feature monétisée', () => {
   beforeEach(() => {
     vi.spyOn(SubscriptionsRepository.prototype, 'getSmsFeatureByTenantId').mockResolvedValue(
       makeEnabledFeature({ monetize: true, smsCap: 5 })
@@ -674,7 +674,7 @@ describe('handleSubscriptionExpired', () => {
       expect.objectContaining({
         type: 'send-email',
         to: 'directeur@test.ci',
-        subject: '[IvoirEdu] Relance paiement — Sainte Marie',
+        subject: '[IvoirEdu] Relance paiement - Sainte Marie',
         notificationType: 'payment_reminder',
       }),
       expect.any(Object)
@@ -713,10 +713,10 @@ describe('handleSubscriptionExpired', () => {
 });
 
 // =====================================================================
-//  handleStudentAbsent — propagation tenant.student_label (P2-05 palier D)
+//  handleStudentAbsent - propagation tenant.student_label (P2-05 palier D)
 // =====================================================================
 
-describe('handleStudentAbsent — student_label propagation', () => {
+describe('handleStudentAbsent - student_label propagation', () => {
   const tenantLabelRow = (label: string | null) => ({ rows: [{ student_label: label }] });
   const customSmsTemplateRow = (template: string) => ({ rows: [{ message_template: template }] });
   const tenantIdRow = { rows: [{ id: 'tenant-1' }] };
@@ -766,7 +766,7 @@ describe('handleStudentAbsent — student_label propagation', () => {
     expect((smsCall?.[1] as { message: string }).message).not.toContain('{studentLabel}');
     expect(emailCall?.[1]).toEqual(
       expect.objectContaining({
-        subject: 'Absence Étudiant(e) — IvoirEdu',
+        subject: 'Absence Étudiant(e) - IvoirEdu',
       })
     );
   });
@@ -793,7 +793,7 @@ describe('handleStudentAbsent — student_label propagation', () => {
 
     expect(emailCall?.[1]).toEqual(
       expect.objectContaining({
-        subject: 'Absence élève — IvoirEdu',
+        subject: 'Absence élève - IvoirEdu',
       })
     );
   });

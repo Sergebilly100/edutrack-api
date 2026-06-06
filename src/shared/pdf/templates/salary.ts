@@ -14,7 +14,7 @@ import {
 } from '../format.js';
 
 /**
- * Payloads issus de BillingService — typés en `structural` pour éviter un
+ * Payloads issus de BillingService - typés en `structural` pour éviter un
  * import croisé de module (cf. AGENTS.md : pas d'import entre modules). On ne
  * dépend que de la forme des données, pas du module billing.
  */

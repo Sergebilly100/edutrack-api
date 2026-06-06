@@ -410,7 +410,7 @@ export class AttendanceService {
     }
 
     // roomMismatch : la salle scannée correspond-elle à la salle prévue dans l'EDT ?
-    // Cette valeur est indépendante du scan de début — elle reflète la conformité EDT.
+    // Cette valeur est indépendante du scan de début - elle reflète la conformité EDT.
     const plannedValidation = validateRoomScan({
       scannedRoomToken: input.qrToken,
       expectedRoomToken: schedule.plannedRoomToken,
@@ -575,7 +575,7 @@ export class AttendanceService {
     return { date, items };
   }
 
-  // ── NOUVEAU — statuts de pointage pour une date (TeacherSchedulePage) ──────
+  // ── NOUVEAU - statuts de pointage pour une date (TeacherSchedulePage) ──────
   async getTeacherAttendanceByDate(
     input: { date: string },
     context: ServiceContext
@@ -624,7 +624,7 @@ export class AttendanceService {
     return scheduleForWeek;
   }
 
-  // ── NOUVEAU — appel élèves par le prof ────────────────────────────────────
+  // ── NOUVEAU - appel élèves par le prof ────────────────────────────────────
   async submitStudentAttendance(
     input: {
       scheduleId: string;
@@ -651,7 +651,7 @@ export class AttendanceService {
     const allStudents = await this.repository.listStudentsByClass(schedule.classId ?? '');
 
     if (allStudents.length === 0) {
-      // Pas d'élèves dans la classe — on accepte quand même (classe vide ou pas encore importée)
+      // Pas d'élèves dans la classe - on accepte quand même (classe vide ou pas encore importée)
       return { upsertedCount: 0 };
     }
 

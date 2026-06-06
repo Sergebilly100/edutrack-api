@@ -12,7 +12,7 @@ export const ATTENDANCE_STATUS = {
 export type AttendanceStatusValue =
   (typeof ATTENDANCE_STATUS)[keyof typeof ATTENDANCE_STATUS];
 
-/** Statuts de présence élève — 'excused' reste valide (justification parent). */
+/** Statuts de présence élève - 'excused' reste valide (justification parent). */
 export const STUDENT_ATTENDANCE_STATUS = {
   PRESENT: 'present',
   ABSENT: 'absent',

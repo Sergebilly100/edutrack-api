@@ -68,7 +68,7 @@ describe('Attendance Routes Integration', () => {
         },
       });
 
-      // Avec le mock auth, les claims sont injectés — la validation Zod passe,
+      // Avec le mock auth, les claims sont injectés - la validation Zod passe,
       // le handler échoue sur withTenantSchema (non mocké) → 500 ou autre
       // On vérifie juste que la route répond (pas 404)
       expect(response.statusCode).not.toBe(404);

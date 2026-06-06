@@ -895,8 +895,8 @@ export class ValidationsRepository {
   }): Promise<void> {
     const isSanction = params.action === 'sanctioned';
     const message = isSanction
-      ? `Sanction pour absence de scan de fin — ${params.courseName} du ${params.date}. Motif : ${params.reason}. Présentez-vous à l'administration pour justification.`
-      : `Avertissement pour absence de scan de fin — ${params.courseName} du ${params.date}. Motif : ${params.reason}. Aucun impact sur votre salaire ce mois.`;
+      ? `Sanction pour absence de scan de fin - ${params.courseName} du ${params.date}. Motif : ${params.reason}. Présentez-vous à l'administration pour justification.`
+      : `Avertissement pour absence de scan de fin - ${params.courseName} du ${params.date}. Motif : ${params.reason}. Aucun impact sur votre salaire ce mois.`;
     await this.db.execute(sql`
       INSERT INTO notifications_log (
         type, channel, recipient_id, recipient_phone, recipient_email, message, status, metadata

@@ -566,7 +566,7 @@ export class PermissionsRepository {
           AND is_active = true
       `);
     } catch {
-      // refresh_tokens table may not exist on all tenants — fail silently.
+      // refresh_tokens table may not exist on all tenants - fail silently.
     }
   }
 

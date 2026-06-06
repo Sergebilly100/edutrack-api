@@ -755,7 +755,7 @@ export class StudentsRepository {
       sql`, `
     );
 
-    // FIX B4: preserve 'excused' status — never downgrade it back to 'absent'
+    // FIX B4: preserve 'excused' status - never downgrade it back to 'absent'
     const result = await this.db.execute(sql`
       INSERT INTO attendances_student (student_id, schedule_id, date, status, marked_by)
       VALUES ${values}

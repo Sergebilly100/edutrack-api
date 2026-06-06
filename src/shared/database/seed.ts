@@ -719,7 +719,8 @@ const main = async (): Promise<void> => {
         status,
         auto_renew_alert,
         renewed_count,
-        created_by
+        created_by,
+        created_at
       )
       VALUES (
         ${parentOneId},
@@ -732,7 +733,8 @@ const main = async (): Promise<void> => {
         'active',
         false,
         0,
-        ${directorId}
+        ${directorId},
+        ${activeStartOne}::timestamptz
       )
       RETURNING id
     `);
@@ -749,7 +751,8 @@ const main = async (): Promise<void> => {
         status,
         auto_renew_alert,
         renewed_count,
-        created_by
+        created_by,
+        created_at
       )
       VALUES (
         ${parentTwoId},
@@ -762,7 +765,8 @@ const main = async (): Promise<void> => {
         'active',
         true,
         0,
-        ${staffId}
+        ${staffId},
+        ${activeStartTwo}::timestamptz
       )
       RETURNING id
     `);
@@ -779,7 +783,8 @@ const main = async (): Promise<void> => {
         status,
         auto_renew_alert,
         renewed_count,
-        created_by
+        created_by,
+        created_at
       )
       VALUES (
         ${parentThreeId},
@@ -792,7 +797,8 @@ const main = async (): Promise<void> => {
         'expired',
         false,
         0,
-        ${directorId}
+        ${directorId},
+        ${expiredStart}::timestamptz
       )
       RETURNING id
     `);
@@ -826,8 +832,9 @@ const main = async (): Promise<void> => {
     await tx.execute(sql`
       INSERT INTO subscription_payments (subscription_id, amount_fcfa, payment_method, paid_at, recorded_by, notes)
       VALUES
-      (${subOneId}, ${subOneTotal}, 'cash', NOW() - INTERVAL '1 day', ${staffId}, 'Paiement comptant souscription parent'),
-      (${subTwoId}, ${subTwoTotal}, 'momo_mtn', NOW() - INTERVAL '7 day', ${directorId}, 'Paiement MTN MoMo souscription parent')
+      (${subOneId}, ${subOneTotal}, 'cash', ${activeStartOne}::timestamptz, ${staffId}, 'Paiement comptant souscription parent'),
+      (${subTwoId}, ${subTwoTotal}, 'momo_mtn', ${activeStartTwo}::timestamptz, ${directorId}, 'Paiement MTN MoMo souscription parent'),
+      (${subExpiredId}, ${subExpiredTotal}, 'cash', ${expiredStart}::timestamptz, ${directorId}, 'Paiement comptant souscription expirée')
     `);
 
     const currentMonthSms = formatDate(new Date()).slice(0, 7);

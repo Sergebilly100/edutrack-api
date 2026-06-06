@@ -9,7 +9,7 @@ import {
   formatSalaryStatus,
 } from '../../src/shared/pdf/format.js';
 
-describe('pdf/format — montants & heures', () => {
+describe('pdf/format - montants & heures', () => {
   it('formate les FCFA avec séparateurs de milliers', () => {
     expect(formatFcfa(1739500)).toBe('1 739 500 FCFA');
     expect(formatFcfa(0)).toBe('0 FCFA');
@@ -27,7 +27,7 @@ describe('pdf/format — montants & heures', () => {
   });
 });
 
-describe('pdf/format — période de couverture', () => {
+describe('pdf/format - période de couverture', () => {
   it('même année → « Janvier – Avril 2026 »', () => {
     expect(formatPeriodCoverage('2026-01', '2026-04')).toBe('Janvier – Avril 2026');
   });
@@ -49,7 +49,7 @@ describe('pdf/format — période de couverture', () => {
   });
 });
 
-describe('pdf/format — statuts', () => {
+describe('pdf/format - statuts', () => {
   it('traduit les statuts de salaire', () => {
     expect(formatSalaryStatus('paid')).toBe('Payé');
     expect(formatSalaryStatus('pending')).toBe('En attente');

@@ -160,7 +160,7 @@ export type MissingEndScanSession = {
   /**
    * True si l'estimation suggère un cours court (estimation < durée prévue - tolérance).
    * N'a de sens qu'en hypothèse "le prof a réellement enseigné jusqu'à l'heure de fin
-   * du créneau" — c'est la borne supérieure de ce qui a pu être fait sans scan de fin.
+   * du créneau" - c'est la borne supérieure de ce qui a pu être fait sans scan de fin.
    */
   likelyShortHours: boolean;
 };

@@ -74,7 +74,7 @@ const detectImageFormat = (bytes: Uint8Array, contentType?: string): 'png' | 'jp
 
 /**
  * Charge un logo depuis une data-URI ou une URL HTTP(S), avec retry (backoff
- * exponentiel) et détection de format. Renvoie null en cas d'échec — le builder
+ * exponentiel) et détection de format. Renvoie null en cas d'échec - le builder
  * affiche alors un cartouche avec les initiales de l'école.
  */
 export const loadLogo = async (

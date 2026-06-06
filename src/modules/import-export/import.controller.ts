@@ -155,7 +155,7 @@ const requireAnyImportPermission = async (
   request: FastifyRequest,
   reply: FastifyReply
 ): Promise<void> => {
-  // authenticateRequest is called inside requirePermission — reuse it to populate
+  // authenticateRequest is called inside requirePermission - reuse it to populate
   // request.permissions without sending a 403 for the specific permission yet.
   const { authenticateRequest } = await import('../../shared/middleware/auth.middleware.js');
   await authenticateRequest(request, reply);

@@ -51,7 +51,7 @@ const paramsIdSchema = z.object({
 });
 
 /**
- * BUG 1 — Schéma de validation du querystring `?date=YYYY-MM-DD`.
+ * BUG 1 - Schéma de validation du querystring `?date=YYYY-MM-DD`.
  * Sans ce schéma, `request.query` est typé `unknown` et la valeur ignorée.
  */
 const dateQuerySchema = z.object({
@@ -186,7 +186,7 @@ const handleError = (
 };
 
 /**
- * BUG 1 — Résout la date à utiliser pour les requêtes de planning.
+ * BUG 1 - Résout la date à utiliser pour les requêtes de planning.
  *
  * Priorité : querystring `?date=YYYY-MM-DD` > date du jour.
  * Le frontend envoie toujours le lundi de la semaine sélectionnée,
@@ -335,7 +335,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     async (request, reply) => {
       try {
         await ensureScheduleTemporalColumns(ensureTenantDb(request));
-        // BUG 1 — Utiliser la date du querystring si fournie
+        // BUG 1 - Utiliser la date du querystring si fournie
         const date = resolveDateParam(request.query);
         const active = await getActiveSchedulesForDate(ensureTenantDb(request), date);
         return reply.send(active);
@@ -351,7 +351,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     async (request, reply) => {
       try {
         await ensureScheduleTemporalColumns(ensureTenantDb(request));
-        // BUG 1 — La clé du bug : `new Date()` ignorait le `?date=` du frontend.
+        // BUG 1 - La clé du bug : `new Date()` ignorait le `?date=` du frontend.
         // Le frontend envoie le lundi de la semaine sélectionnée.
         // Le service résout ensuite la période active pour CETTE date,
         // pas pour aujourd'hui. Sans ça, naviguer sur n'importe quelle semaine
@@ -392,7 +392,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
         if (!teacherId) {
           throw new Error('Teacher profile not found');
         }
-        // /teacher/me retourne toujours les cours du jour — pas de ?date= ici
+        // /teacher/me retourne toujours les cours du jour - pas de ?date= ici
         const payload = await getActiveSchedulesForDate(tenantDb, new Date(), teacherId);
         return reply.send(payload);
       } catch (error) {
@@ -597,7 +597,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           return reply.send({ schedule: updated });
         }
 
-        // Défaut : 'this_and_following' — comportement historique.
+        // Défaut : 'this_and_following' - comportement historique.
         const hasPastOccurrences = await hasScheduleOccurrenceBeforeDate(db, id, effectiveFrom);
 
         if (hasPastOccurrences) {

@@ -9,7 +9,7 @@ import {
 /**
  * Détail d'une séance enseignée, tel que produit par
  * `attendanceService.exportTeacherHistory` (forme structurelle, pas d'import
- * croisé de module — cf. AGENTS.md).
+ * croisé de module - cf. AGENTS.md).
  */
 export type TeacherHoursRow = {
   date: string;

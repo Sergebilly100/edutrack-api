@@ -706,7 +706,7 @@ export class BillingService {
 
     if (recordedPayment) {
       // Déclenche un recalcul async du salary_record en lisant l'état courant
-      // des pointages (validations, sanctions, annulations) — voir
+      // des pointages (validations, sanctions, annulations) - voir
       // registerSalaryEventListeners dans salaries.service.ts.
       emit('salary.payment_recorded', {
         tenantId: input.actor.tenantId ?? '',

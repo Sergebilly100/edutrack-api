@@ -179,7 +179,7 @@ export default async function teachersController(
   );
 
   // ─── GET /api/v1/teachers/:id ─────────────────────────────────────────────
-  // Route dédiée — retourne le prof même s'il est bloqué ou inactif.
+  // Route dédiée - retourne le prof même s'il est bloqué ou inactif.
   // Évite le pagination-scan côté frontend et le TEACHER_NOT_FOUND spurieux
   // qui déclenchait le toast d'erreur après un blocage réussi.
   app.get('/api/v1/teachers/:id', { preHandler: requirePermission('teachers.view') }, async (request, reply) => {

@@ -26,7 +26,7 @@ export class SalariesService {
    * Recalcule le salary_record d'un prof pour un mois en lisant l'état courant
    * de attendances_teacher, y compris end_scan_action_cancelled_at.
    *
-   * Ce recalcul repart des données brutes — il ne persiste pas de snapshot :
+   * Ce recalcul repart des données brutes - il ne persiste pas de snapshot :
    * - Si une sanction a été annulée (end_scan_action_cancelled_at IS NOT NULL),
    *   la session est réintégrée au calcul.
    * - Si validation_status = 'approved', validated_hours est utilisé tel quel.

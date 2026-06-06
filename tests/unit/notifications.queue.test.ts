@@ -141,7 +141,7 @@ describe('notifications.queue', () => {
     );
 
     expect(mocks.withTenantSchema).toHaveBeenCalledTimes(2);
-    // SMS bilan désactivé (décision produit 2026-05) — seul l'email part.
+    // SMS bilan désactivé (décision produit 2026-05) - seul l'email part.
     expect(repository.insertNotificationLog).toHaveBeenCalledTimes(1);
     expect(repository.insertNotificationLog).toHaveBeenCalledWith(
       tenantDb,
@@ -199,7 +199,7 @@ describe('notifications.queue', () => {
     expect(emailSender).toHaveBeenCalledWith(
       expect.objectContaining({
         to: 'directeur@test.ci',
-        subject: '[IvoirEdu] Bilan présences du 2026-05-02 — Sainte Marie',
+        subject: '[IvoirEdu] Bilan présences du 2026-05-02 - Sainte Marie',
         type: 'teacher_absent_director',
       })
     );

@@ -19,7 +19,7 @@ export type StudentAbsenceRow = {
 };
 
 export type StudentAbsencesPayload = {
-  /** Libellé de l'entité élève (« Élève » / « Apprenant »…) — multi-tenant. */
+  /** Libellé de l'entité élève (« Élève » / « Apprenant »…) - multi-tenant. */
   studentLabel: string;
   /** Bornes de période au format ISO date (YYYY-MM-DD). */
   from: string;

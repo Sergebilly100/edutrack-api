@@ -1,5 +1,5 @@
 /**
- * P2-04 smoke test — validates R2 credentials end-to-end without touching billing.
+ * P2-04 smoke test - validates R2 credentials end-to-end without touching billing.
  *
  * 1. Upload a 64-byte buffer to a throwaway key under `smoke-tests/`
  * 2. Generate a 60-second presigned URL
@@ -53,7 +53,7 @@ const main = async (): Promise<void> => {
   await deleteFromR2(key);
   console.log('  ✓ deleted');
 
-  console.log('\n✓ P2-04 smoke test passed — R2 is wired correctly');
+  console.log('\n✓ P2-04 smoke test passed - R2 is wired correctly');
 };
 
 main().catch((error) => {

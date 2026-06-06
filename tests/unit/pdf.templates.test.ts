@@ -55,7 +55,7 @@ const teacher = (rows: number): TeacherSalaryDetails => ({
   })),
 });
 
-describe('pdf/templates — bilan salaire professeur', () => {
+describe('pdf/templates - bilan salaire professeur', () => {
   it('produit un PDF valide avec quelques séances', async () => {
     const pages = await isValidPdf(await renderTeacherSalaryBilan(branding, teacher(12)));
     expect(pages).toBeGreaterThanOrEqual(1);
@@ -74,7 +74,7 @@ describe('pdf/templates — bilan salaire professeur', () => {
   });
 });
 
-describe('pdf/templates — bilan école & multi-période', () => {
+describe('pdf/templates - bilan école & multi-période', () => {
   it('bilan école avec de nombreux professeurs', async () => {
     const summary: SchoolSalarySummary = {
       month: '2026-05',
@@ -112,7 +112,7 @@ describe('pdf/templates — bilan école & multi-période', () => {
   });
 });
 
-describe('pdf/templates — branding logo', () => {
+describe('pdf/templates - branding logo', () => {
   // PNG bleu 64×64 valide (encodé en base64) pour exercer l'embed du logo.
   const LOGO_PNG_B64 =
     'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAEklEQVR4nGNQTX79Hx9mGBkKAFT4nIFZlBMAAAAAAElFTkSuQmCC';
@@ -129,7 +129,7 @@ describe('pdf/templates — branding logo', () => {
   });
 });
 
-describe('pdf/templates — historique des paiements', () => {
+describe('pdf/templates - historique des paiements', () => {
   it('produit un PDF valide avec période de couverture', async () => {
     const pages = await isValidPdf(
       await renderPaymentHistory(branding, {

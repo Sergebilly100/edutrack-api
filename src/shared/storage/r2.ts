@@ -12,7 +12,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
  * - `uploadToR2` keeps its legacy signature: returns a public CDN URL built from R2_PUBLIC_URL
  *   (used by logo upload).
  * - `uploadBuffer` is a lower-level helper that just writes the object and returns the key
- *   (used by salary PDF export — downloads always go through presigned URLs, no public URL needed).
+ *   (used by salary PDF export - downloads always go through presigned URLs, no public URL needed).
  * - `presignDownload` returns a short-lived signed URL the client can fetch directly.
  * - `isR2Configured` is the gate that callers use to decide between R2 and local-fs.
  *
@@ -59,7 +59,7 @@ export type UploadResult = {
 
 /**
  * Uploads a file buffer to R2 and returns a public URL.
- * Throws if R2_PUBLIC_URL is not configured — use `uploadBuffer` for private exports.
+ * Throws if R2_PUBLIC_URL is not configured - use `uploadBuffer` for private exports.
  */
 export const uploadToR2 = async (
   key: string,
@@ -86,7 +86,7 @@ export const uploadToR2 = async (
 };
 
 /**
- * Lower-level upload — returns the object key. Use with `presignDownload` to deliver the file.
+ * Lower-level upload - returns the object key. Use with `presignDownload` to deliver the file.
  */
 export const uploadBuffer = async (
   key: string,

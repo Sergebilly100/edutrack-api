@@ -149,7 +149,7 @@ const processTeacherDailySummaryJob = async (
       });
       const tasks: Array<Promise<void>> = [];
 
-      // SMS bilan journalier directeur désactivé (décision produit 2026-05) — email + in-app uniquement.
+      // SMS bilan journalier directeur désactivé (décision produit 2026-05) - email + in-app uniquement.
       // Conservé en commentaire pour rétablissement rapide.
       // if (context.directorPhone) {
       //   const queueRef = buildQueueRef(tenant.schemaName, 'teacher_absent_director', date, 'sms');
@@ -218,7 +218,7 @@ const processTeacherDailySummaryJob = async (
           deps
             .emailSender({
               to: context.directorEmail,
-              subject: `[IvoirEdu] Bilan présences du ${date} — ${tenant.schoolName}`,
+              subject: `[IvoirEdu] Bilan présences du ${date} - ${tenant.schoolName}`,
               text: emailText,
               type: 'teacher_absent_director',
               schemaName: tenant.schemaName,
@@ -316,7 +316,7 @@ const processValidationDailySummaryJob = async (
 
       const message = `[IvoirEdu] ${pendingCount} présence(s) en attente de validation. Consultez l'app.`;
       const tasks: Array<Promise<void>> = [];
-      // SMS validations horaires en attente désactivé (décision produit 2026-05) — email + in-app uniquement.
+      // SMS validations horaires en attente désactivé (décision produit 2026-05) - email + in-app uniquement.
       // if (row.director_phone) {
       //   const queueRef = buildQueueRef(tenant.schemaName, 'custom', date, 'sms');
       //

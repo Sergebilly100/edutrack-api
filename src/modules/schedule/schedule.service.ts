@@ -21,7 +21,7 @@ import {
   type SchedulePeriod,
   type TeacherCatalogItem,
   type TimeSlotCatalogItem,
-  // FIX BUG 3 — Nouvelles fonctions repository à ajouter (voir note ci-dessous)
+  // FIX BUG 3 - Nouvelles fonctions repository à ajouter (voir note ci-dessous)
   findOrCreateTimeSlot,
 } from './schedule.repository.js';
 
@@ -50,7 +50,7 @@ export type DuplicatePeriodInput = {
 };
 
 /**
- * FIX BUG 3 — Input étendu pour la création d'un créneau avec horaires libres.
+ * FIX BUG 3 - Input étendu pour la création d'un créneau avec horaires libres.
  *
  * Deux modes exclusifs :
  * - `timeSlotId` renseigné → on utilise ce time_slot directement (backward compat)
@@ -290,7 +290,7 @@ export const createRoomWithQrToken = async (
 };
 
 /**
- * FIX BUG 3 — Crée un créneau avec résolution automatique du time_slot.
+ * FIX BUG 3 - Crée un créneau avec résolution automatique du time_slot.
  *
  * Si `timeSlotId` est fourni → utilisation directe.
  * Sinon, on résout via `startTime` + `endTime` :

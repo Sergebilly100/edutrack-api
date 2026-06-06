@@ -68,7 +68,7 @@ export default async function studentsController(
         const claims = request.claims!;
         const query = studentsListQuerySchema.parse(request.query ?? {});
 
-        // FIX AXE2: permission check extracted from controller logic — teachers
+        // FIX AXE2: permission check extracted from controller logic - teachers
         // always need a class_id to scope their access; others need students.view
         if (claims.role !== 'teacher' && !request.permissions?.has('students.view')) {
           return reply.code(403).send({

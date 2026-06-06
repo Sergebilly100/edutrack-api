@@ -6,7 +6,7 @@ export type QRScanPayload = {
   qr_token: string;
   scan_type: QRScanType;
   schedule_id: string;
-  // scanned_at intentionally omitted — timestamp generated server-side only
+  // scanned_at intentionally omitted - timestamp generated server-side only
 };
 
 export type SchedulePeriod = {

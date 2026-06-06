@@ -81,7 +81,7 @@ const runTenantMigrations = async (
           // migrations sur un schéma existant et qu'un `CREATE OR REPLACE VIEW`
           // redéfinit une vue avec des colonnes différentes (Postgres interdit le
           // REPLACE qui retire/réordonne des colonnes). On droppe alors la vue puis
-          // on rejoue la définition — idempotent et sans effet sur un schéma neuf.
+          // on rejoue la définition - idempotent et sans effet sur un schéma neuf.
           if (pgError.code === '42P16') {
             const viewName = extractCreateOrReplaceViewName(statement);
             if (viewName) {

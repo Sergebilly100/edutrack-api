@@ -62,7 +62,7 @@ type TeacherDailyRow = {
 type SalaryRecordRow = {
   id: string;
   teacher_id: string;
-  // 'vacataire' | 'permanent' — champ canonique pour la logique métier
+  // 'vacataire' | 'permanent' - champ canonique pour la logique métier
   teacher_type: 'vacataire' | 'permanent';
   period_month: string;
   hours_planned: string | number;

@@ -37,7 +37,7 @@ const revokeAtKey = (schemaName: string, userId: string): string =>
  * Returns the revocation timestamp for this user (0 if none recorded).
  * JWT tokens with iat < this value must be rejected.
  *
- * Throws TokenRevocationUnavailableError if Redis is unreachable — the caller
+ * Throws TokenRevocationUnavailableError if Redis is unreachable - the caller
  * must convert that into a 503 so a stolen token cannot survive a Redis outage.
  */
 export const getRevokeAt = async (schemaName: string, userId: string): Promise<number> => {

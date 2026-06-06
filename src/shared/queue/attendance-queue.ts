@@ -3,7 +3,7 @@ import { qrAlertQueue } from './queue.js';
 /**
  * CONFORMITÉ FIX : Déplacé depuis attendance.scheduler.ts
  *
- * Évite l'import croisé entre modules — ce helper appartient à shared/
+ * Évite l'import croisé entre modules - ce helper appartient à shared/
  * car il manipule une queue partagée (qrAlertQueue)
  */
 

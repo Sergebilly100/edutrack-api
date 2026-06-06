@@ -55,7 +55,7 @@ export const renderTeacherAttendanceReport = async (
 ): Promise<Uint8Array> => {
   const coverage = formatPeriodCoverage(payload.from.slice(0, 7), payload.to.slice(0, 7));
   const builder = await PdfBuilder.create(branding, {
-    title: 'Bilan de présence — professeurs',
+    title: 'Bilan de présence - professeurs',
     subtitle: coverage,
   });
   const t = builder.t;

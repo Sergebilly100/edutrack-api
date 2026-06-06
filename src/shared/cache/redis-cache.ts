@@ -3,10 +3,10 @@ import { Redis } from 'ioredis';
 /**
  * Fail-open Redis cache wrapper.
  *
- * Reads return `undefined` on any error (missing key, malformed JSON, Redis down) — the
+ * Reads return `undefined` on any error (missing key, malformed JSON, Redis down) - the
  * caller falls back to the source of truth. Writes are best-effort and swallowed on error.
  * This is the correct mode for non-authoritative caches: a cache outage degrades latency,
- * never correctness. (Token revocation, which IS authoritative, must NOT use this — see
+ * never correctness. (Token revocation, which IS authoritative, must NOT use this - see
  * `token-version.ts` which fails-closed by design.)
  */
 
@@ -35,7 +35,7 @@ export const cacheSet = async <T>(key: string, value: T, ttlSeconds: number): Pr
   try {
     await getRedis().set(key, JSON.stringify(value), 'EX', ttlSeconds);
   } catch {
-    // swallow — cache write failure must not break the request path
+    // swallow - cache write failure must not break the request path
   }
 };
 

@@ -507,6 +507,30 @@ export class SubscriptionsService {
     return this.repository.listCommissionPaymentsForMonth({ tenantId, month });
   }
 
+  async commissionOverdueAlerts(schemaName: string) {
+    const tenantId = await this.repository.getTenantIdBySchemaName(schemaName);
+    if (!tenantId) {
+      throw new SubscriptionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
+    }
+    const now = new Date();
+    const currentMonth = monthKeyInBusinessTimezone(now);
+    // Vérifie les 12 derniers mois (hors mois courant)
+    const history = await this.repository.listRevenueHistory({ tenantId, months: 13 });
+    const overdueMonths = history.filter(
+      (row) => row.month < currentMonth && row.commission_remaining_fcfa > 0
+    );
+    return {
+      count: overdueMonths.length,
+      totalRemainingFcfa: overdueMonths.reduce((sum, row) => sum + row.commission_remaining_fcfa, 0),
+      months: overdueMonths.map((row) => ({
+        month: row.month,
+        remainingFcfa: row.commission_remaining_fcfa,
+        collectedFcfa: row.total_collected_fcfa,
+        paymentStatus: row.payment_status,
+      })),
+    };
+  }
+
   async revenueSubscriptionDetails(schemaName: string, month: string) {
     const tenantId = await this.repository.getTenantIdBySchemaName(schemaName);
     if (!tenantId) {

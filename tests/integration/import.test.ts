@@ -59,8 +59,8 @@ const uniquePrefix = () => `int_${Date.now()}_${Math.random().toString(36).slice
 // Students
 // ---------------------------------------------------------------------------
 
-describe('import integration — students', () => {
-  it('POST /api/v1/import/students/dry-run — 10 lignes valides → valid=10, errors=[]', async () => {
+describe('import integration - students', () => {
+  it('POST /api/v1/import/students/dry-run - 10 lignes valides → valid=10, errors=[]', async () => {
     const headers = await getAuthHeaders('director');
     const { className } = getSeedContext();
     const rows = Array.from({ length: 10 }, (_, i) => ({
@@ -79,7 +79,7 @@ describe('import integration — students', () => {
     expect(res.body).toMatchObject({ valid: 10, errors: [] });
   });
 
-  it('POST /api/v1/import/students/dry-run — 3 lignes invalides → bons numéros de ligne', async () => {
+  it('POST /api/v1/import/students/dry-run - 3 lignes invalides → bons numéros de ligne', async () => {
     const headers = await getAuthHeaders('director');
     const { className } = getSeedContext();
     const rows = [
@@ -104,7 +104,7 @@ describe('import integration — students', () => {
     );
   });
 
-  it('POST /api/v1/import/students/confirm — persiste 10 élèves en DB', async () => {
+  it('POST /api/v1/import/students/confirm - persiste 10 élèves en DB', async () => {
     const headers = await getAuthHeaders('director');
     const { className } = getSeedContext();
     const prefix = uniquePrefix();
@@ -129,7 +129,7 @@ describe('import integration — students', () => {
     expect(Number(count)).toBe(10);
   });
 
-  it('POST /api/v1/import/students/confirm — idempotent (rejeu → pas de doublons)', async () => {
+  it('POST /api/v1/import/students/confirm - idempotent (rejeu → pas de doublons)', async () => {
     const headers = await getAuthHeaders('director');
     const { className } = getSeedContext();
     const prefix = uniquePrefix();
@@ -154,7 +154,7 @@ describe('import integration — students', () => {
     expect(Number(count)).toBe(5);
   });
 
-  it('POST /api/v1/import/students/confirm — mode replace désactive les absents', async () => {
+  it('POST /api/v1/import/students/confirm - mode replace désactive les absents', async () => {
     const headers = await getAuthHeaders('director');
     const { className } = getSeedContext();
     const prefix = uniquePrefix();
@@ -186,7 +186,7 @@ describe('import integration — students', () => {
     expect(Number(active_count)).toBe(1);
   });
 
-  it('POST /api/v1/import/students/dry-run — teacher sans permission → 403', async () => {
+  it('POST /api/v1/import/students/dry-run - teacher sans permission → 403', async () => {
     const headers = await getAuthHeaders('teacher');
     const { className } = getSeedContext();
 
@@ -203,8 +203,8 @@ describe('import integration — students', () => {
 // Teachers
 // ---------------------------------------------------------------------------
 
-describe('import integration — teachers', () => {
-  it('POST /api/v1/import/teachers/dry-run — valide → valid=1, errors=[]', async () => {
+describe('import integration - teachers', () => {
+  it('POST /api/v1/import/teachers/dry-run - valide → valid=1, errors=[]', async () => {
     const headers = await getAuthHeaders('director');
 
     const rows = [
@@ -221,7 +221,7 @@ describe('import integration — teachers', () => {
     expect(res.body.errors).toHaveLength(0);
   });
 
-  it('POST /api/v1/import/teachers/confirm — persiste un prof en DB', async () => {
+  it('POST /api/v1/import/teachers/confirm - persiste un prof en DB', async () => {
     const headers = await getAuthHeaders('director');
     const prefix = uniquePrefix();
 
@@ -255,7 +255,7 @@ describe('import integration — teachers', () => {
     expect(Number(count)).toBeGreaterThanOrEqual(1);
   });
 
-  it('POST /api/v1/import/teachers/dry-run — type invalide → erreur', async () => {
+  it('POST /api/v1/import/teachers/dry-run - type invalide → erreur', async () => {
     const headers = await getAuthHeaders('director');
 
     const rows = [
@@ -278,8 +278,8 @@ describe('import integration — teachers', () => {
 // Schedule
 // ---------------------------------------------------------------------------
 
-describe('import integration — schedule', () => {
-  it('POST /api/v1/import/schedule/dry-run — valide avec période → valid=1, errors=[]', async () => {
+describe('import integration - schedule', () => {
+  it('POST /api/v1/import/schedule/dry-run - valide avec période → valid=1, errors=[]', async () => {
     const headers = await getAuthHeaders('director');
     const { className } = getSeedContext();
     const context = getSeedContext();
@@ -319,7 +319,7 @@ describe('import integration — schedule', () => {
     expect(res.body.errors).toHaveLength(0);
   });
 
-  it('POST /api/v1/import/schedule/confirm — sans conflictAcknowledged + conflit → 400 IMPORT_CONFLICT_ACK_REQUIRED', async () => {
+  it('POST /api/v1/import/schedule/confirm - sans conflictAcknowledged + conflit → 400 IMPORT_CONFLICT_ACK_REQUIRED', async () => {
     const headers = await getAuthHeaders('director');
     const { className } = getSeedContext();
     const context = getSeedContext();
@@ -355,7 +355,7 @@ describe('import integration — schedule', () => {
     );
     expect(firstRes.status).toBe(200);
 
-    // Second import on same period — conflict, no ack
+    // Second import on same period - conflict, no ack
     const conflictRes = await attachSchedule(
       request()
         .post('/api/v1/import/schedule/confirm')
@@ -375,8 +375,8 @@ describe('import integration — schedule', () => {
 // History
 // ---------------------------------------------------------------------------
 
-describe('import integration — history', () => {
-  it('GET /api/v1/import/history — retourne les imports confirmés', async () => {
+describe('import integration - history', () => {
+  it('GET /api/v1/import/history - retourne les imports confirmés', async () => {
     const headers = await getAuthHeaders('director');
     const { className } = getSeedContext();
     const prefix = uniquePrefix();
@@ -400,7 +400,7 @@ describe('import integration — history', () => {
     });
   });
 
-  it('GET /api/v1/import/history — teacher sans permission → 403', async () => {
+  it('GET /api/v1/import/history - teacher sans permission → 403', async () => {
     const headers = await getAuthHeaders('teacher');
 
     const res = await request().get('/api/v1/import/history').set(headers);
@@ -408,7 +408,7 @@ describe('import integration — history', () => {
     expect(res.status).toBe(403);
   });
 
-  it('GET /api/v1/import/history — limit=5 respecté', async () => {
+  it('GET /api/v1/import/history - limit=5 respecté', async () => {
     const headers = await getAuthHeaders('director');
 
     const res = await request().get('/api/v1/import/history?limit=5').set(headers);
@@ -422,8 +422,8 @@ describe('import integration — history', () => {
 // Template download
 // ---------------------------------------------------------------------------
 
-describe('import integration — template', () => {
-  it('GET /api/v1/import/students/template — retourne 200 ou 404 selon présence du fichier', async () => {
+describe('import integration - template', () => {
+  it('GET /api/v1/import/students/template - retourne 200 ou 404 selon présence du fichier', async () => {
     const headers = await getAuthHeaders('director');
 
     const res = await request().get('/api/v1/import/students/template').set(headers);
@@ -438,7 +438,7 @@ describe('import integration — template', () => {
     }
   });
 
-  it('GET /api/v1/import/invalid/template — type invalide → 400', async () => {
+  it('GET /api/v1/import/invalid/template - type invalide → 400', async () => {
     const headers = await getAuthHeaders('director');
 
     const res = await request().get('/api/v1/import/invalid/template').set(headers);

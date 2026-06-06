@@ -13,7 +13,7 @@ import {
 type TenantRow = { id: string };
 type SubRow = { id: string };
 
-describe('subscriptions — isolation inter-tenant', () => {
+describe('subscriptions - isolation inter-tenant', () => {
   let tenantId = '';
   let parentId = '';
   let subscriptionId = '';

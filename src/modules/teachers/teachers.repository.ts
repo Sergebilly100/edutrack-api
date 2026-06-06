@@ -125,7 +125,7 @@ const makeWhereClause = (conditions: ReturnType<typeof sql>[]): ReturnType<typeo
   return sql`WHERE ${sql.join(conditions, sql` AND `)}`;
 };
 
-// Fragment SELECT partagé — liste tous les champs utiles de teachers + users.
+// Fragment SELECT partagé - liste tous les champs utiles de teachers + users.
 // Centralise la sélection pour éviter toute désynchronisation entre les méthodes.
 const TEACHER_SELECT = sql`
   SELECT
@@ -194,7 +194,7 @@ export class TeachersRepository {
     };
   }
 
-  // Route dédiée — ne dépend pas du filtre is_active, retourne toujours le prof
+  // Route dédiée - ne dépend pas du filtre is_active, retourne toujours le prof
   // qu'il soit actif ou bloqué. Indispensable pour rafraîchir la page de détail
   // après un blocage sans déclencher TEACHER_NOT_FOUND.
   async getTeacherById(teacherId: string): Promise<TeacherRow | null> {
@@ -227,7 +227,7 @@ export class TeachersRepository {
       : generateInitialPassword(10);
     if (!configuredPassword || configuredPassword.length < 8) {
       logger.warn(
-        '[teachers] IMPORT_TEACHER_DEFAULT_PASSWORD is missing or too short — generated a random 10-char password for teacher creation'
+        '[teachers] IMPORT_TEACHER_DEFAULT_PASSWORD is missing or too short - generated a random 10-char password for teacher creation'
       );
     }
     const passwordHash = await argon2.hash(password);
@@ -343,7 +343,7 @@ export class TeachersRepository {
     }
     const subjectsArray = input.subjects ?? current.subjects ?? [];
     // Array littéral PG via sql.join paramétré (pattern prouvé : seed.ts /
-    // attendance.repository). Chaque élément est un placeholder bindé — pas
+    // attendance.repository). Chaque élément est un placeholder bindé - pas
     // d'échappement manuel de quotes, défense en profondeur vs SQLi.
     // Tableau vide => `ARRAY[]::text[]`, valide en PG.
     const subjectsLiteral = sql`ARRAY[${sql.join(

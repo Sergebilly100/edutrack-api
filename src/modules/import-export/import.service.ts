@@ -384,7 +384,7 @@ const normalizeSubjectsForCompare = (subjects: string[]): string =>
     .join(',');
 
 // ---------------------------------------------------------------------------
-// Identity key helpers — single source of truth for deduplication
+// Identity key helpers - single source of truth for deduplication
 // ---------------------------------------------------------------------------
 
 // buildStudentIdentityKey construit une clé d'identité pour un étudiant à partir de ses données. 

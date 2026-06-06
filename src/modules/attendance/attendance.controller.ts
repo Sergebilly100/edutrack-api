@@ -51,7 +51,7 @@ const handleError = (
   }
 
   // On log le détail PG (code, detail, hint, position, query) pour diagnostiquer
-  // les 500 sans devoir attacher un debugger — utile sur le 500 récurrent du
+  // les 500 sans devoir attacher un debugger - utile sur le 500 récurrent du
   // pointage élève (cast enum / search_path / FK manquante / search_path KO).
   const pgError = error as {
     code?: string;
@@ -351,7 +351,7 @@ export default async function attendanceController(
     }
   });
 
-  // ── NOUVEAU — statuts de pointage du prof pour une date ───────────────────
+  // ── NOUVEAU - statuts de pointage du prof pour une date ───────────────────
   // Utilisé par TeacherSchedulePage pour afficher les badges de présence
   // GET /api/v1/attendance/teacher/me?date=YYYY-MM-DD
   app.get('/api/v1/attendance/teacher/me', { preHandler: requireTeacher }, async (request, reply) => {
@@ -373,7 +373,7 @@ export default async function attendanceController(
     }
   });
 
-  // ── NOUVEAU — appel élèves par le prof ────────────────────────────────────
+  // ── NOUVEAU - appel élèves par le prof ────────────────────────────────────
   // POST /api/v1/attendance/students/bulk
   // body: { schedule_id, date, absent_student_ids[] }
   app.post('/api/v1/attendance/students/bulk', {
@@ -560,7 +560,7 @@ export default async function attendanceController(
 
           // date = n'importe quel jour de la semaine affichée côté frontend
           // (on utilise typiquement le lundi de la semaine, mais n'importe quel
-          //  jour de cette semaine convient — le backend retourne tous les day_of_week)
+          //  jour de cette semaine convient - le backend retourne tous les day_of_week)
           const query = weekScheduleQuerySchema.parse(request.query ?? {})
 
           const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {

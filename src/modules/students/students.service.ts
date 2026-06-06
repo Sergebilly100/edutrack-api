@@ -237,7 +237,7 @@ export class StudentsService {
         });
         emittedEvents += 1;
       } catch {
-        // Log but do not abort — remaining SMS must still be enqueued
+        // Log but do not abort - remaining SMS must still be enqueued
       }
     }
 

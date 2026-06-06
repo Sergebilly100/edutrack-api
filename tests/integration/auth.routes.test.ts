@@ -134,7 +134,7 @@ beforeEach(() => {
 });
 
 describe('auth routes', () => {
-  it('POST /api/v1/auth/login/teacher — 200 + cookie refresh_token', async () => {
+  it('POST /api/v1/auth/login/teacher - 200 + cookie refresh_token', async () => {
     const app = await buildApp();
 
     const response = await app.inject({
@@ -149,7 +149,7 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('POST /api/v1/auth/login/teacher — mauvais mot de passe → 401', async () => {
+  it('POST /api/v1/auth/login/teacher - mauvais mot de passe → 401', async () => {
     mocks.login.mockRejectedValue(new Error('Invalid credentials'));
     const app = await buildApp();
 
@@ -164,7 +164,7 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('POST /api/v1/auth/login/teacher — header x-tenant-schema absent (fallback host) → 200', async () => {
+  it('POST /api/v1/auth/login/teacher - header x-tenant-schema absent (fallback host) → 200', async () => {
     const app = await buildApp();
 
     const response = await app.inject({
@@ -178,7 +178,7 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('POST /api/v1/auth/login/teacher — header x-tenant-schema invalide → 400', async () => {
+  it('POST /api/v1/auth/login/teacher - header x-tenant-schema invalide → 400', async () => {
     const app = await buildApp();
 
     const response = await app.inject({
@@ -192,7 +192,7 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('POST /api/v1/auth/login/teacher — body invalide → 400 Validation error', async () => {
+  it('POST /api/v1/auth/login/teacher - body invalide → 400 Validation error', async () => {
     const app = await buildApp();
 
     const response = await app.inject({
@@ -208,7 +208,7 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('GET /api/v1/auth/me — token valide → 200', async () => {
+  it('GET /api/v1/auth/me - token valide → 200', async () => {
     const app = await buildApp();
 
     const response = await app.inject({
@@ -221,7 +221,7 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('GET /api/v1/auth/me — sans Authorization → 401', async () => {
+  it('GET /api/v1/auth/me - sans Authorization → 401', async () => {
     const app = await buildApp();
 
     const response = await app.inject({
@@ -233,7 +233,7 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('GET /api/v1/auth/me — token malformé → 401', async () => {
+  it('GET /api/v1/auth/me - token malformé → 401', async () => {
     const app = await buildApp();
 
     const response = await app.inject({
@@ -246,7 +246,7 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('POST /api/v1/auth/refresh — cookie valide → 200 + accessToken', async () => {
+  it('POST /api/v1/auth/refresh - cookie valide → 200 + accessToken', async () => {
     const app = await buildApp();
 
     const response = await app.inject({
@@ -261,7 +261,7 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('POST /api/v1/auth/refresh — body refreshToken valide → 200 + accessToken', async () => {
+  it('POST /api/v1/auth/refresh - body refreshToken valide → 200 + accessToken', async () => {
     const app = await buildApp();
 
     const response = await app.inject({
@@ -276,7 +276,7 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('POST /api/v1/auth/refresh — sans cookie → 401', async () => {
+  it('POST /api/v1/auth/refresh - sans cookie → 401', async () => {
     const app = await buildApp();
 
     const response = await app.inject({
@@ -288,7 +288,7 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('POST /api/v1/auth/logout — retourne success true', async () => {
+  it('POST /api/v1/auth/logout - retourne success true', async () => {
     const app = await buildApp();
 
     const response = await app.inject({
@@ -302,7 +302,7 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('POST /api/v1/auth/change-password — bon mot de passe actuel → 200 + nouveau token', async () => {
+  it('POST /api/v1/auth/change-password - bon mot de passe actuel → 200 + nouveau token', async () => {
     mocks.verifyAccessToken.mockResolvedValue({
       sub: 'director-1',
       role: 'director',
@@ -337,7 +337,7 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('POST /api/v1/auth/change-password — mauvais mot de passe actuel → 401', async () => {
+  it('POST /api/v1/auth/change-password - mauvais mot de passe actuel → 401', async () => {
     mocks.verifyAccessToken.mockResolvedValue({
       sub: 'director-1',
       role: 'director',
@@ -361,7 +361,7 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('GET /api/v1/auth/sessions — retourne la liste des sessions', async () => {
+  it('GET /api/v1/auth/sessions - retourne la liste des sessions', async () => {
     const app = await buildApp();
 
     const response = await app.inject({
@@ -390,7 +390,7 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('DELETE /api/v1/auth/sessions/:sessionId — revoke une session utilisateur', async () => {
+  it('DELETE /api/v1/auth/sessions/:sessionId - revoke une session utilisateur', async () => {
     const app = await buildApp();
 
     const response = await app.inject({
