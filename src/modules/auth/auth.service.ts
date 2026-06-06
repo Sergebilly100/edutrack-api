@@ -458,14 +458,6 @@ export const assertParentPortalEnabled = async (
   }
 };
 
-export const assertSuperAdminDomain = (
-  user: { role: UserRole },
-  isSuperAdminDomain: boolean
-): void => {
-  if (isSuperAdminDomain && user.role !== 'super_admin') {
-    throw new Error('Only super admin can sign in from this domain');
-  }
-};
 
 export const login = async (db: TenantDb, input: LoginInput): Promise<LoginResult> => {
   const authUser = await (async () => {

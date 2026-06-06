@@ -21,8 +21,10 @@ type SeedContext = {
   teacherPassword: string;
   directorUserId: string;
   staffUserId: string;
+  superAdminUserId: string;
   directorPassword: string;
   staffPassword: string;
+  superAdminPassword: string;
   validRoomToken: string;
 };
 
@@ -83,8 +85,14 @@ export const queryTenant = async <TRow extends QueryResultRow = QueryResultRow>(
   text: string,
   values: unknown[] = []
 ): Promise<TRow[]> => {
-  const result = await pool.query<TRow>(text, values);
-  return result.rows;
+  const client = await pool.connect();
+  try {
+    await client.query(`SET search_path TO ${quoteIdentifier(TEST_SCHEMA_NAME)}, public`);
+    const result = await client.query<TRow>(text, values);
+    return result.rows;
+  } finally {
+    client.release();
+  }
 };
 
 export const queryPublic = async <TRow extends QueryResultRow = QueryResultRow>(
@@ -143,14 +151,23 @@ const getLoginCredentials = (
     };
   }
 
+  if (role === 'super_admin') {
+    return {
+      identifier: 'superadmin.integration@edutrack.local',
+      password: context.superAdminPassword,
+    };
+  }
+
   throw new Error(`[integration] Unsupported role for tenant auth: ${role}`);
 };
 
 export const getToken = async (role: TestRole): Promise<string> => {
   const context = getContext();
   const credentials = getLoginCredentials(role, context);
+  const loginEndpoint =
+    role === 'super_admin' ? '/api/v1/auth/login/admin' : '/api/v1/auth/login/teacher';
   const loginResponse = await request()
-    .post('/api/v1/auth/login/teacher')
+    .post(loginEndpoint)
     .set('x-tenant-schema', TEST_SCHEMA_NAME)
     .send(credentials);
 
@@ -203,9 +220,11 @@ const seedTenantData = async (): Promise<SeedContext> => {
   const teacherPassword = 'edutrack2024';
   const directorPassword = 'director2024';
   const staffPassword = 'staff2024';
+  const superAdminPassword = 'SuperAdmin!2024';
   const teacherPasswordHash = await argon2.hash(teacherPassword);
   const directorPasswordHash = await argon2.hash(directorPassword);
   const staffPasswordHash = await argon2.hash(staffPassword);
+  const superAdminPasswordHash = await argon2.hash(superAdminPassword);
 
   const now = new Date();
   const validFrom = formatDate(addDays(now, -7));
@@ -259,10 +278,20 @@ const seedTenantData = async (): Promise<SeedContext> => {
       [staffPasswordHash]
     );
 
+    const superAdminResult = await client.query<{ id: string }>(
+      `
+        INSERT INTO users (role, name, phone, email, password_hash, is_active)
+        VALUES ('super_admin', 'Integration SuperAdmin', null, 'superadmin.integration@edutrack.local', $1, true)
+        RETURNING id
+      `,
+      [superAdminPasswordHash]
+    );
+
     const teacherUserId = teacherUserResult.rows[0]?.id;
     const directorUserId = directorResult.rows[0]?.id;
     const staffUserId = staffResult.rows[0]?.id;
-    if (!teacherUserId || !directorUserId || !staffUserId) {
+    const superAdminUserId = superAdminResult.rows[0]?.id;
+    if (!teacherUserId || !directorUserId || !staffUserId || !superAdminUserId) {
       throw new Error('[integration] Failed to seed users');
     }
 
@@ -373,8 +402,10 @@ const seedTenantData = async (): Promise<SeedContext> => {
       teacherPassword,
       directorUserId,
       staffUserId,
+      superAdminUserId,
       directorPassword,
       staffPassword,
+      superAdminPassword,
       validRoomToken: room.qr_token,
     };
   } catch (error) {

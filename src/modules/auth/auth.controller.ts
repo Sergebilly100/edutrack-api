@@ -7,7 +7,6 @@ import { getRowsUntyped as getRows } from '../../shared/utils/db-helpers.js';
 import { cached } from '../../shared/cache/redis-cache.js';
 import {
   assertParentPortalEnabled,
-  assertSuperAdminDomain,
   changePassword,
   getMe,
   login,
@@ -105,6 +104,8 @@ const SCHEMA_NAME_REGEX = /^[a-z][a-z0-9_]{2,63}$/;
 const SUBDOMAIN_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const DEFAULT_LOCAL_SCHEMA =
   (process.env.AUTH_DEFAULT_TENANT_SCHEMA ?? 'school_sainte_marie').trim();
+const ADMIN_SCHEMA =
+  (process.env.AUTH_ADMIN_SCHEMA ?? DEFAULT_LOCAL_SCHEMA).trim();
 const LOGIN_RATE_LIMIT_MAX = (() => {
   const parsed = Number.parseInt(process.env.AUTH_LOGIN_RATE_LIMIT_MAX ?? '', 10);
   if (Number.isFinite(parsed) && parsed > 0) {
@@ -143,19 +144,6 @@ const parseSubdomain = (hostname: string): string | null => {
   }
 
   return firstLabel;
-};
-
-const shouldRestrictToSuperAdmin = (request: FastifyRequest): boolean => {
-  const hostname = extractHostname(request);
-  if (!hostname) {
-    return false;
-  }
-
-  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
-    return false;
-  }
-
-  return parseSubdomain(hostname) === null;
 };
 
 const resolveSchemaBySubdomain = async (subdomain: string): Promise<string | null> => {
@@ -448,7 +436,14 @@ export default async function authController(app: FastifyInstance): Promise<void
           throw loginErr;
         }
 
-        assertSuperAdminDomain(result.user, shouldRestrictToSuperAdmin(request));
+        if (result.user.role === 'super_admin') {
+          return reply.code(403).send({
+            error: 'Utilisez /api/v1/auth/login/admin pour vous connecter en tant que super administrateur.',
+            code: 'USE_ADMIN_LOGIN',
+            statusCode: 403,
+          });
+        }
+
         await clearFailedLogins(schemaName, body.identifier);
 
         const refreshToken = await signRefreshToken(result.user.id, schemaName);
@@ -461,6 +456,89 @@ export default async function authController(app: FastifyInstance): Promise<void
           request.log.error(
             { err: error instanceof Error ? error.message : 'unknown error', schemaName },
             '[auth] unable to persist refresh token at login'
+          );
+          throw new Error('Session initialization failed');
+        }
+        setRefreshCookie(reply, refreshToken);
+
+        return reply.send(result);
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/auth/login/admin',
+    {
+      config: {
+        rateLimit: {
+          max: LOGIN_RATE_LIMIT_MAX,
+          timeWindow: LOGIN_RATE_LIMIT_WINDOW,
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const body = loginSchema.parse(request.body);
+
+        const lockState = await isLoginLocked(ADMIN_SCHEMA, body.identifier);
+        if (lockState.locked) {
+          return reply.code(429).send({
+            error: 'Trop de tentatives échouées. Réessayez plus tard.',
+            code: 'ACCOUNT_LOCKED',
+            statusCode: 429,
+            retryAfterSeconds: lockState.remainingSeconds,
+          });
+        }
+
+        let result;
+        try {
+          result = await withTenantSchema(ADMIN_SCHEMA, (tenantDb) =>
+            login(tenantDb, {
+              identifier: body.identifier,
+              password: body.password,
+              schemaName: ADMIN_SCHEMA,
+            })
+          );
+        } catch (loginErr) {
+          const isCredentialsError =
+            loginErr instanceof Error && loginErr.message === 'Invalid credentials';
+          if (!isCredentialsError) {
+            throw loginErr;
+          }
+          const { lockedSeconds } = await recordFailedLogin(ADMIN_SCHEMA, body.identifier);
+          if (lockedSeconds > 0) {
+            return reply.code(429).send({
+              error: 'Trop de tentatives échouées. Réessayez plus tard.',
+              code: 'ACCOUNT_LOCKED',
+              statusCode: 429,
+              retryAfterSeconds: lockedSeconds,
+            });
+          }
+          throw loginErr;
+        }
+
+        if (result.user.role !== 'super_admin') {
+          return reply.code(403).send({
+            error: 'Accès réservé aux super administrateurs.',
+            code: 'FORBIDDEN',
+            statusCode: 403,
+          });
+        }
+
+        await clearFailedLogins(ADMIN_SCHEMA, body.identifier);
+
+        const refreshToken = await signRefreshToken(result.user.id, ADMIN_SCHEMA);
+        try {
+          const context = getClientContext(request);
+          await withTenantSchema(ADMIN_SCHEMA, (tenantDb) =>
+            registerRefreshToken(tenantDb, refreshToken, context)
+          );
+        } catch (error) {
+          request.log.error(
+            { err: error instanceof Error ? error.message : 'unknown error', schemaName: ADMIN_SCHEMA },
+            '[auth] unable to persist refresh token at admin login'
           );
           throw new Error('Session initialization failed');
         }
