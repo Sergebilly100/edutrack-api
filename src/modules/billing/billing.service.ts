@@ -246,10 +246,23 @@ export class BillingService {
 
   async getSalarySummary(month: string) {
     const { monthStart, monthEnd } = monthToBounds(month);
-    const [rows, lastComputedAt] = await Promise.all([
+    const [allRows, lastComputedAt] = await Promise.all([
       this.repository.listTeacherMonthlyMetrics(monthStart, monthEnd),
       this.repository.getLastComputedDate(monthStart),
     ]);
+
+    // Un enseignant n'apparaît dans le résumé du mois que s'il était réellement
+    // en service : heures planifiées ou effectuées > 0. Sans activité, le mois
+    // "n'existe pas" pour lui (même règle que computeSalaryRecords). On conserve
+    // toutefois toute ligne déjà matérialisée (fiche existante ou paiement),
+    // pour ne jamais masquer un salaire calculé ou versé.
+    const rows = allRows.filter((row) => {
+      const hoursPlanned = BillingRepository.toNumber(row.hours_planned);
+      const hoursDone = BillingRepository.toNumber(row.hours_done);
+      const hasActivity = hoursPlanned > 0 || hoursDone > 0;
+      const hasMaterializedRecord = row.salary_record_id !== null || row.paid_at !== null;
+      return hasActivity || hasMaterializedRecord;
+    });
 
     const items = rows.map((row) => {
       const hoursPlanned = BillingRepository.toNumber(row.hours_planned);
@@ -499,6 +512,13 @@ export class BillingService {
 
       // Skip vacataire avec 0 heure faite ET 0 heure prévue = ce mois n'existe pas pour lui
       if (row.teacher_type !== 'permanent' && hoursPlanned <= 0 && hoursDone <= 0) {
+        continue;
+      }
+
+      // Skip permanent sans aucune heure planifiée = il n'était pas en service ce mois-là.
+      // Le forfait mensuel n'est dû que si le prof avait un emploi du temps actif.
+      // Évite des fiches "fantômes" non soldées sur des mois sans activité.
+      if (row.teacher_type === 'permanent' && hoursPlanned <= 0) {
         continue;
       }
 

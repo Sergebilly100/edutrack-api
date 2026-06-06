@@ -195,6 +195,37 @@ describe('BillingService', () => {
 
       expect(result.items[0]?.status).toBe('nothing_to_pay');
     });
+
+    it('exclut un permanent sans activité ni fiche (mois où il n\'est pas en service)', async () => {
+      repository.listTeacherMonthlyMetrics.mockResolvedValue([
+        makePermanentMetricRow({
+          hours_planned: '0',
+          hours_done: '0',
+          salary_record_id: null,
+          paid_at: null,
+        }),
+      ]);
+      repository.getLastComputedDate.mockResolvedValue(null);
+
+      const result = await service.getSalarySummary('2026-04');
+
+      expect(result.items).toHaveLength(0);
+    });
+
+    it('conserve un prof sans activité mais avec une fiche déjà matérialisée', async () => {
+      repository.listTeacherMonthlyMetrics.mockResolvedValue([
+        makePermanentMetricRow({
+          hours_planned: '0',
+          hours_done: '0',
+          salary_record_id: 'record-1',
+        }),
+      ]);
+      repository.getLastComputedDate.mockResolvedValue(null);
+
+      const result = await service.getSalarySummary('2026-04');
+
+      expect(result.items).toHaveLength(1);
+    });
   });
 
   // ── computeSalaryRecords ──────────────────────────────────────────────────
@@ -210,6 +241,32 @@ describe('BillingService', () => {
       await service.computeSalaryRecords('2026-04');
 
       expect(repository.batchUpsertSalaryRecords).toHaveBeenCalledWith([]);
+    });
+
+    it('ignore un permanent sans heures planifiées (pas en service ce mois)', async () => {
+      repository.listTeacherMonthlyMetrics.mockResolvedValue([
+        makePermanentMetricRow({ hours_planned: '0', hours_done: '0' }),
+      ]);
+      repository.hasSalaryStatusValue.mockResolvedValue(true);
+      repository.batchUpsertSalaryRecords.mockResolvedValue(0);
+
+      await service.computeSalaryRecords('2026-04');
+
+      expect(repository.batchUpsertSalaryRecords).toHaveBeenCalledWith([]);
+    });
+
+    it('crée une fiche permanent dès que des heures sont planifiées', async () => {
+      repository.listTeacherMonthlyMetrics.mockResolvedValue([
+        makePermanentMetricRow({ hours_planned: '6', hours_done: '0' }),
+      ]);
+      repository.hasSalaryStatusValue.mockResolvedValue(true);
+      repository.batchUpsertSalaryRecords.mockResolvedValue(1);
+
+      await service.computeSalaryRecords('2026-04');
+
+      const upsertCall = repository.batchUpsertSalaryRecords.mock.calls[0]?.[0];
+      expect(upsertCall).toHaveLength(1);
+      expect(upsertCall[0].totalFcfa).toBe(350000);
     });
 
     it('ignore un vacataire sans taux horaire', async () => {
