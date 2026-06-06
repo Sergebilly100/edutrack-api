@@ -1219,9 +1219,11 @@ export class BillingRepository {
         COUNT(*)::int AS records_count,
         SUM(remaining_fcfa)::int AS total_remaining_fcfa
       FROM record_remaining
-      WHERE
-        (status IN ('pending'::salary_status, 'disputed'::salary_status) AND remaining_fcfa > 0)
-        OR (status = 'paid'::salary_status AND remaining_fcfa > 0)
+      -- Une fiche 'paid' est soldée par décision du directeur : le reliquat
+      -- théorique (ex: vacataire payé à l'heure effectuée) n'est PAS une dette.
+      -- Seules les fiches 'pending'/'disputed' avec un restant > 0 sont des impayés.
+      WHERE status IN ('pending'::salary_status, 'disputed'::salary_status)
+        AND remaining_fcfa > 0
       GROUP BY period_month
       HAVING SUM(remaining_fcfa) > 0
       ORDER BY period_month ASC
