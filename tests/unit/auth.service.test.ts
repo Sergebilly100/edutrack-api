@@ -5,16 +5,23 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   verify: vi.fn(),
+  hash: vi.fn(),
   findUserByPhone: vi.fn(),
   findUserByUsername: vi.fn(),
   findUserByEmail: vi.fn(),
   findUserProfileById: vi.fn(),
   updateLastLoginAt: vi.fn(),
+  updateUserPasswordHash: vi.fn(),
+  revokeAllUserRefreshTokens: vi.fn(),
+  listAdministrativePositionNames: vi.fn(),
+  recordPasswordReset: vi.fn(),
+  getRevokeAt: vi.fn(),
 }));
 
 vi.mock('argon2', () => ({
   default: {
     verify: mocks.verify,
+    hash: mocks.hash,
   },
 }));
 
@@ -24,9 +31,18 @@ vi.mock('../../src/modules/auth/auth.repository.js', () => ({
   findUserByEmail: mocks.findUserByEmail,
   findUserProfileById: mocks.findUserProfileById,
   updateLastLoginAt: mocks.updateLastLoginAt,
+  updateUserPasswordHash: mocks.updateUserPasswordHash,
+  revokeAllUserRefreshTokens: mocks.revokeAllUserRefreshTokens,
+  listAdministrativePositionNames: mocks.listAdministrativePositionNames,
+}));
+
+vi.mock('../../src/shared/auth/token-version.js', () => ({
+  recordPasswordReset: mocks.recordPasswordReset,
+  getRevokeAt: mocks.getRevokeAt,
 }));
 
 import {
+  changePassword,
   getMe,
   getMeFromToken,
   login,
@@ -270,5 +286,89 @@ describe('auth.service', () => {
         username: 'diallo.ibra',
       },
     });
+  });
+});
+
+describe('changePassword()', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.updateUserPasswordHash.mockResolvedValue(undefined);
+    mocks.revokeAllUserRefreshTokens.mockResolvedValue(undefined);
+    mocks.listAdministrativePositionNames.mockResolvedValue([]);
+    mocks.recordPasswordReset.mockResolvedValue(undefined);
+    // revokeAt dans le passé → signAccessTokenAfter passe immédiatement
+    mocks.getRevokeAt.mockResolvedValue(0);
+  });
+
+  it('rejette si le mot de passe actuel est incorrect', async () => {
+    mocks.findUserProfileById.mockResolvedValue(activeDirector);
+    mocks.verify.mockResolvedValue(false);
+
+    await expect(
+      changePassword(db, {
+        userId: 'user-1',
+        currentPassword: 'mauvais',
+        newPassword: 'NouveauMdp1!',
+        schemaName: 'school_test',
+      })
+    ).rejects.toThrow('Current password is incorrect');
+
+    expect(mocks.updateUserPasswordHash).not.toHaveBeenCalled();
+    expect(mocks.revokeAllUserRefreshTokens).not.toHaveBeenCalled();
+  });
+
+  it("rejette si l'utilisateur n'existe pas", async () => {
+    mocks.findUserProfileById.mockResolvedValue(null);
+
+    await expect(
+      changePassword(db, {
+        userId: 'inexistant',
+        currentPassword: 'Test1234!',
+        newPassword: 'Nouveau1!',
+        schemaName: 'school_test',
+      })
+    ).rejects.toThrow('Invalid credentials');
+  });
+
+  it('retourne un nouveau accessToken valide après le changement', async () => {
+    mocks.findUserProfileById.mockResolvedValue(activeDirector);
+    mocks.verify.mockResolvedValue(true);
+    mocks.hash.mockResolvedValue('new-hash');
+
+    const result = await changePassword(db, {
+      userId: 'user-1',
+      currentPassword: 'AncienMdp1!',
+      newPassword: 'NouveauMdp1!',
+      schemaName: 'school_test',
+    });
+
+    expect(result.accessToken).toBeTruthy();
+    expect(result.user.id).toBe('user-1');
+    expect(mocks.updateUserPasswordHash).toHaveBeenCalledWith(db, 'user-1', 'new-hash');
+    expect(mocks.revokeAllUserRefreshTokens).toHaveBeenCalledWith(db, 'user-1');
+    expect(mocks.recordPasswordReset).toHaveBeenCalledWith('school_test', 'user-1');
+
+    // Le token émis doit être vérifiable
+    const claims = await verifyAccessToken(result.accessToken);
+    expect(claims.sub).toBe('user-1');
+    expect(claims.role).toBe('director');
+  });
+
+  it('le token émis a un iat strictement supérieur à revokeAt', async () => {
+    const revokeAt = Math.floor(Date.now() / 1000) - 2;
+    mocks.getRevokeAt.mockResolvedValue(revokeAt);
+    mocks.findUserProfileById.mockResolvedValue(activeDirector);
+    mocks.verify.mockResolvedValue(true);
+    mocks.hash.mockResolvedValue('new-hash');
+
+    const result = await changePassword(db, {
+      userId: 'user-1',
+      currentPassword: 'AncienMdp1!',
+      newPassword: 'NouveauMdp1!',
+      schemaName: 'school_test',
+    });
+
+    const claims = await verifyAccessToken(result.accessToken);
+    expect(claims.iat).toBeGreaterThan(revokeAt);
   });
 });

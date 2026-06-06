@@ -289,4 +289,76 @@ describe('multi-tenant isolation hardening', () => {
     expect(response.body.data.every((student: { id: string }) => student.id !== parentBStudentId)).toBe(true);
     expect(JSON.stringify(response.body)).not.toContain('BStudent');
   });
+
+  it('Les présences du tenant A ne sont pas visibles par le tenant B', async () => {
+    const context = getSeedContext();
+    const today = new Date().toISOString().slice(0, 10);
+
+    await queryTenant(
+      `
+        INSERT INTO ${tenantTable('attendances_teacher')} (teacher_id, schedule_id, date, status)
+        VALUES ($1::uuid, $2::uuid, $3::date, 'present')
+        ON CONFLICT DO NOTHING
+      `,
+      [context.teacherId, context.scheduleId, today]
+    );
+
+    const tokenB = await import('../../src/modules/auth/auth.service.js').then(({ signAccessToken }) =>
+      signAccessToken({ sub: 'any-id', role: 'director', schemaName: tenantBSchema, tenantId: tenantBId })
+    );
+
+    const response = await request()
+      .get('/api/v1/attendance/teacher/me')
+      .set('authorization', `Bearer ${tokenB}`)
+      .set('x-tenant-schema', tenantBSchema)
+      .query({ date: today });
+
+    // Le prof n'existe pas dans le tenant B → pas de données tenant A exposées
+    expect(response.status).not.toBe(200);
+    const body = JSON.stringify(response.body);
+    expect(body).not.toContain(context.teacherId);
+  });
+
+  it('Les salles du tenant A ne sont pas listées pour le tenant B', async () => {
+    // Le directeur du tenant A via son token + son schema doit voir ses salles
+    const headersA = await getAuthHeaders('director');
+    const responseA = await request()
+      .get('/api/v1/rooms')
+      .set(headersA);
+
+    expect(responseA.status).toBe(200);
+    const roomsA: Array<{ id: string }> = responseA.body.rooms ?? [];
+
+    // Le tenant B a été créé via createTenantSchema → il a des salles par défaut mais pas celles du tenant A
+    const tenantBRooms = await queryPublic<{ id: string }>(
+      `SELECT id::text AS id FROM ${tenantTableForSchema(tenantBSchema, 'rooms')}`
+    );
+    const tenantBRoomIds = new Set(tenantBRooms.map((r) => r.id));
+
+    // Aucune salle retournée pour tenant A ne doit se trouver dans tenant B
+    for (const room of roomsA) {
+      expect(tenantBRoomIds.has(room.id)).toBe(false);
+    }
+  });
+
+  it('Les périodes EDT du tenant A sont isolées du tenant B', async () => {
+    // Récupérer les périodes du tenant A via l'auth directeur A
+    const headersA = await getAuthHeaders('director');
+    const responseA = await request()
+      .get('/api/v1/schedule/periods')
+      .set(headersA);
+
+    expect(responseA.status).toBe(200);
+    const periodsA: Array<{ id: string }> = responseA.body.periods ?? [];
+
+    // Les périodes du tenant B ne doivent pas inclure celles du tenant A
+    const tenantBPeriods = await queryPublic<{ id: string }>(
+      `SELECT id::text AS id FROM ${tenantTableForSchema(tenantBSchema, 'schedule_periods')}`
+    );
+    const tenantBPeriodIds = new Set(tenantBPeriods.map((p) => p.id));
+
+    for (const period of periodsA) {
+      expect(tenantBPeriodIds.has(period.id)).toBe(false);
+    }
+  });
 });

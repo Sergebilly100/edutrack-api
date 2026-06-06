@@ -22,14 +22,9 @@ export const buildUsersLimitReachedMessage = (currentCount: number, maxUsers: nu
 
 export const getPlanLimitsBySchemaName = async (schemaName: string): Promise<TenantLimitRow> => {
   const result = await db.execute<TenantLimitRow>(sql`
-    SELECT pc.max_users, pc.max_admin_positions
-    FROM public.plan_catalog pc
-    WHERE pc.plan = (
-      SELECT plan
-      FROM public.tenants
-      WHERE schema_name = ${schemaName}
-      LIMIT 1
-    )
+    SELECT max_users, max_admin_positions
+    FROM public.tenants
+    WHERE schema_name = ${schemaName}
     LIMIT 1
   `);
 

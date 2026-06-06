@@ -674,7 +674,7 @@ describe('handleSubscriptionExpired', () => {
       expect.objectContaining({
         type: 'send-email',
         to: 'directeur@test.ci',
-        subject: '[EduTrack] Relance paiement — Sainte Marie',
+        subject: '[IvoirEdu] Relance paiement — Sainte Marie',
         notificationType: 'payment_reminder',
       }),
       expect.any(Object)
@@ -766,7 +766,7 @@ describe('handleStudentAbsent — student_label propagation', () => {
     expect((smsCall?.[1] as { message: string }).message).not.toContain('{studentLabel}');
     expect(emailCall?.[1]).toEqual(
       expect.objectContaining({
-        subject: 'Absence Étudiant(e) — EduTrack',
+        subject: 'Absence Étudiant(e) — IvoirEdu',
       })
     );
   });
@@ -793,7 +793,7 @@ describe('handleStudentAbsent — student_label propagation', () => {
 
     expect(emailCall?.[1]).toEqual(
       expect.objectContaining({
-        subject: 'Absence élève — EduTrack',
+        subject: 'Absence élève — IvoirEdu',
       })
     );
   });

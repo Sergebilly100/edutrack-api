@@ -199,7 +199,7 @@ describe('notifications.queue', () => {
     expect(emailSender).toHaveBeenCalledWith(
       expect.objectContaining({
         to: 'directeur@test.ci',
-        subject: '[EduTrack] Bilan présences du 2026-05-02 — Sainte Marie',
+        subject: '[IvoirEdu] Bilan présences du 2026-05-02 — Sainte Marie',
         type: 'teacher_absent_director',
       })
     );
