@@ -161,6 +161,7 @@ export class BillingRepository {
         INNER JOIN schedules s
           ON s.schedule_period_id = sp.id
          AND s.is_active = true
+         AND (s.start_date IS NULL OR s.start_date <= md.d)
          AND (s.end_date IS NULL OR s.end_date > md.d)
          AND s.day_of_week = EXTRACT(ISODOW FROM md.d)::int
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id
@@ -386,6 +387,7 @@ export class BillingRepository {
       INNER JOIN schedules s
         ON s.schedule_period_id = sp.id
        AND s.is_active = true
+       AND (s.start_date IS NULL OR s.start_date <= md.d)
        AND (s.end_date IS NULL OR s.end_date > md.d)
        AND s.day_of_week = EXTRACT(ISODOW FROM md.d)::int
        AND s.teacher_id = ${teacherId}

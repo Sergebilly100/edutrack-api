@@ -376,6 +376,7 @@ export class StudentsRepository {
         WHERE t.user_id = ${input.teacherUserId}
           AND s.class_id = ${input.classId}
           AND s.is_active = true
+          AND (s.start_date IS NULL OR s.start_date <= ${input.date}::date)
           AND (s.end_date IS NULL OR s.end_date >= ${input.date}::date)
           AND sp.is_active = true
           AND sp.valid_from <= ${input.date}::date
@@ -999,6 +1000,7 @@ export class StudentsRepository {
           ON s.schedule_period_id = ap.id
          AND s.day_of_week = EXTRACT(ISODOW FROM d.date)::int
          AND s.is_active = true
+         AND (s.start_date IS NULL OR s.start_date <= d.date)
          AND (s.end_date IS NULL OR s.end_date >= d.date)
         ${subjectScheduledFilter}
         GROUP BY s.class_id

@@ -91,6 +91,7 @@ export class RoomsRepository {
       LEFT JOIN schedules s
         ON s.room_id = r.id
        AND s.is_active = true
+       AND (s.start_date IS NULL OR s.start_date <= ${date}::date)
        AND (s.end_date IS NULL OR s.end_date > ${date}::date)
        AND s.schedule_period_id = ap.id
       LEFT JOIN attendances_teacher at
