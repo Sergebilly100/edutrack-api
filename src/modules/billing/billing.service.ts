@@ -106,9 +106,17 @@ const computeTeacherFinancials = (
       if (row.attendanceStatus === 'absent') {
         acc.absenceHours += row.hoursPlanned;
       }
+      // Heures encore à venir = heures PLANIFIÉES des séances pas encore passées.
+      // Une séance déjà passée (present/late/excused/absent) ne laisse aucune
+      // heure restante, quelle que soit la durée réellement effectuée/validée :
+      // un cours de 2h fait en 30 min reste un cours consommé (0h restante),
+      // on ne soustrait donc pas les heures faites.
+      if (row.attendanceStatus === 'not_marked') {
+        acc.futurePlannedHours += row.hoursPlanned;
+      }
       return acc;
     },
-    { hoursPlanned: 0, hoursDone: 0, absenceHours: 0 }
+    { hoursPlanned: 0, hoursDone: 0, absenceHours: 0, futurePlannedHours: 0 }
   );
 
   const hourlyRate = teacher.hourly_rate;
@@ -129,9 +137,7 @@ const computeTeacherFinancials = (
       ? roundHours(Math.max(0, hoursDoneSincePaid))
       : 0;
   const absenceHours = roundHours(totals.absenceHours);
-  const remainingPlannedHours = roundHours(
-    Math.max(0, totals.hoursPlanned - totals.hoursDone - totals.absenceHours)
-  );
+  const remainingPlannedHours = roundHours(Math.max(0, totals.futurePlannedHours));
   const currentEarnedAmount =
     teacher.teacher_type === 'permanent'
       ? teacher.monthly_salary

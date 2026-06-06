@@ -76,6 +76,38 @@ const makeSalaryPayment = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const makeDailyRow = (overrides: Record<string, unknown> = {}) => ({
+  date: '2026-04-15',
+  schedule_id: 'sched-1',
+  class_name: '6e A',
+  subject: 'Maths',
+  day_of_week: 3,
+  slot_label: '08:00-10:00',
+  start_time: '08:00:00',
+  end_time: '10:00:00',
+  attendance_status: null,
+  checked_in_at: null,
+  room_scan_end_at: null,
+  late_minutes: null,
+  room_mismatch: null,
+  has_rollcall: null,
+  hours_planned: '2',
+  hours_done: '0',
+  ...overrides,
+});
+
+const isoDaysFromNow = (days: number): string =>
+  new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+const makeTeacherEntity = (overrides: Record<string, unknown> = {}) => ({
+  teacher_id: 'teacher-1',
+  teacher_name: 'M. Koné',
+  teacher_type: 'permanent' as const,
+  hourly_rate: null,
+  monthly_salary: 300000,
+  ...overrides,
+});
+
 const repository = {
   listTeacherMonthlyMetrics: vi.fn(),
   getLastComputedDate: vi.fn(),
@@ -225,6 +257,95 @@ describe('BillingService', () => {
       const result = await service.getSalarySummary('2026-04');
 
       expect(result.items).toHaveLength(1);
+    });
+  });
+
+  // ── getTeacherSalaryDetails : remainingPlannedHours ───────────────────────
+
+  describe('getTeacherSalaryDetails - heures restantes prévues', () => {
+    const setupDetails = (teacherType: 'permanent' | 'vacataire', daily: unknown[]) => {
+      repository.findTeacherById.mockResolvedValue(
+        makeTeacherEntity(
+          teacherType === 'vacataire'
+            ? { teacher_type: 'vacataire', hourly_rate: 5000, monthly_salary: null }
+            : {}
+        )
+      );
+      repository.listTeacherMonthlyMetrics.mockResolvedValue([
+        teacherType === 'vacataire'
+          ? makeMetricRow({ hours_planned: '4', hours_done: '0.5', salary_record_id: null })
+          : makePermanentMetricRow({ hours_planned: '4', hours_done: '0.5', salary_record_id: null }),
+      ]);
+      repository.listTeacherDailyBreakdown.mockResolvedValue(daily);
+      repository.getSalaryRecordById.mockResolvedValue(null);
+      repository.listPaymentsForRecord.mockResolvedValue([]);
+      repository.getSalaryPaymentsSummary.mockResolvedValue({
+        paid_hours: 0,
+        paid_amount: 0,
+        payments_count: 0,
+        last_paid_at: null,
+      });
+    };
+
+    it('permanent : un cours passé à durée réduite ne laisse aucune heure restante', async () => {
+      // Cours passé de 2h fait en 30 min (validé) + cours futur de 2h non marqué.
+      // Restant attendu = 2h (le futur uniquement), PAS 3.5h.
+      setupDetails('permanent', [
+        makeDailyRow({
+          date: isoDaysFromNow(-7),
+          attendance_status: 'present',
+          hours_planned: '2',
+          hours_done: '0.5',
+        }),
+        makeDailyRow({
+          schedule_id: 'sched-2',
+          date: isoDaysFromNow(7),
+          attendance_status: null,
+          hours_planned: '2',
+          hours_done: '0',
+        }),
+      ]);
+
+      const result = await service.getTeacherSalaryDetails('teacher-1', '2026-04');
+
+      expect(result.summary.remainingPlannedHours).toBe(2);
+    });
+
+    it('vacataire : même règle, le cours passé consommé ne réduit pas le restant prévu', async () => {
+      setupDetails('vacataire', [
+        makeDailyRow({
+          date: isoDaysFromNow(-7),
+          attendance_status: 'present',
+          hours_planned: '2',
+          hours_done: '0.5',
+        }),
+        makeDailyRow({
+          schedule_id: 'sched-2',
+          date: isoDaysFromNow(7),
+          attendance_status: null,
+          hours_planned: '2',
+          hours_done: '0',
+        }),
+      ]);
+
+      const result = await service.getTeacherSalaryDetails('teacher-1', '2026-04');
+
+      expect(result.summary.remainingPlannedHours).toBe(2);
+    });
+
+    it('aucune séance future = 0 heure restante prévue', async () => {
+      setupDetails('permanent', [
+        makeDailyRow({
+          date: isoDaysFromNow(-7),
+          attendance_status: 'present',
+          hours_planned: '2',
+          hours_done: '0.5',
+        }),
+      ]);
+
+      const result = await service.getTeacherSalaryDetails('teacher-1', '2026-04');
+
+      expect(result.summary.remainingPlannedHours).toBe(0);
     });
   });
 
