@@ -12,6 +12,7 @@ import { ValidationModuleError, buildValidationsService } from './validations.se
 import {
   approveValidationBodySchema,
   attendanceIdParamsSchema,
+  bulkValidateBodySchema,
   bulkWarnEndScansBodySchema,
   cancelEndScanSanctionBodySchema,
   endScanActionBodySchema,
@@ -168,6 +169,32 @@ export default async function validationsController(app: FastifyInstance): Promi
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
         const service = buildValidationsService(tenantDb);
         return service.listMissingEndScans(query.month);
+      });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.post('/api/v1/validations/bulk', { preHandler: requirePermission('validations.approve') }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const body = bulkValidateBodySchema.parse(request.body ?? {});
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildValidationsService(tenantDb);
+        return service.bulkValidate(
+          {
+            action: body.action,
+            items: body.items.map((i) => ({ attendanceId: i.attendance_id, validatedHours: i.validated_hours })),
+            reason: body.reason,
+          },
+          {
+            schemaName: claims.schemaName,
+            tenantId: claims.tenantId,
+            userId: claims.sub,
+            role: claims.role,
+          }
+        );
       });
       return reply.send(result);
     } catch (error) {

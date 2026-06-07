@@ -110,6 +110,7 @@ type SchoolLookupRow = {
   logo_url: string | null;
   created_at: Date;
   updated_at: Date;
+  plan_monthly_price_fcfa: number;
 };
 
 type SchoolPlanRow = {
@@ -146,6 +147,7 @@ type SchoolListRow = {
 type RevenueSummaryRow = {
   month: string;
   mrr_fcfa: number;
+  collected_fcfa: number;
   new_fcfa: number;
   churn_fcfa: number;
 };
@@ -153,10 +155,16 @@ type RevenueSummaryRow = {
 type RevenueSchoolRow = {
   tenant_id: string;
   school: string;
-  plan: TenantListItem['plan'];
-  status: TenantListItem['status'];
-  amount_per_month: number;
-  last_due_date: string | null;
+  plan: string;
+  status: string;
+  mrr_fcfa: number;
+  plan_price_fcfa: number;
+  effective_mrr: number;
+  collected_this_year: number;
+  overdue_months: number;
+  overdue_fcfa: number;
+  last_payment_at: string | null;
+  last_payment_amount: number;
   payment_mode: string | null;
 };
 
@@ -1464,8 +1472,10 @@ export const getSchoolDetails = async (
       t.active_school_year,
       t.logo_url,
       t.created_at,
-      t.updated_at
+      t.updated_at,
+      COALESCE(pc.monthly_price_fcfa, 0) AS plan_monthly_price_fcfa
     FROM public.tenants t
+    LEFT JOIN public.plan_catalog pc ON pc.plan = t.plan
     WHERE t.id = ${tenantId}
     LIMIT 1
   `);
@@ -1511,6 +1521,7 @@ export const getSchoolDetails = async (
       studentsCount: usage.studentsCount,
       attendanceRecords30d: usage.attendanceRecords30d,
       mrrFcfa: subscription.mrrFcfa,
+      planMonthlyPriceFcfa: parseNumeric(tenant.plan_monthly_price_fcfa),
       subscriptionStartedAt: subscription.subscriptionStartedAt,
       currentPeriodStart: subscription.currentPeriodStart,
       currentPeriodEnd: subscription.currentPeriodEnd,
@@ -1523,6 +1534,39 @@ export const getSchoolDetails = async (
     },
     connectionHistory30d,
   };
+};
+
+export const updateSchoolSubscription = async (
+  publicDb: TenantDb,
+  tenantId: string,
+  payload: { mrr_fcfa?: number; billing_cycle?: 'monthly' | 'annual' }
+): Promise<void> => {
+  // Crée la subscription si elle n'existe pas encore
+  const existing = await publicDb.execute<{ id: string }>(sql`
+    SELECT id FROM public.subscriptions WHERE tenant_id = ${tenantId} ORDER BY created_at DESC LIMIT 1
+  `);
+  const row = getRows<{ id: string }>(existing)[0];
+
+  if (!row) {
+    const now = new Date();
+    const nextMonth = new Date(now);
+    nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1);
+    await publicDb.execute(sql`
+      INSERT INTO public.subscriptions (tenant_id, status, mrr_fcfa, billing_cycle, current_period_start, current_period_end)
+      VALUES (${tenantId}, 'active', ${payload.mrr_fcfa ?? 0}, ${payload.billing_cycle ?? 'monthly'}, ${now}, ${nextMonth})
+    `);
+  } else {
+    if (payload.mrr_fcfa !== undefined) {
+      await publicDb.execute(sql`
+        UPDATE public.subscriptions SET mrr_fcfa = ${payload.mrr_fcfa} WHERE id = ${row.id}
+      `);
+    }
+    if (payload.billing_cycle !== undefined) {
+      await publicDb.execute(sql`
+        UPDATE public.subscriptions SET billing_cycle = ${payload.billing_cycle} WHERE id = ${row.id}
+      `);
+    }
+  }
 };
 
 export const getSchoolUsers = async (
@@ -1789,97 +1833,249 @@ export const getRevenueSummary = async (publicDb: TenantDb): Promise<RevenueSumm
   await ensureAdminPublicInfrastructure(publicDb);
 
   const [mrrResult, monthlyResult, schoolsResult, cardsResult] = await Promise.all([
+    // MRR total (somme des MRR configurés sur les souscriptions actives)
     publicDb.execute<{ total_mrr: number }>(sql`
       SELECT COALESCE(SUM(s.mrr_fcfa), 0)::int AS total_mrr
       FROM public.subscriptions s
       WHERE s.status IN ('active', 'past_due')
     `),
+    // Historique mensuel sur 12 mois : encaissements réels (payment_events) + MRR cumulé
     publicDb.execute<RevenueSummaryRow>(sql`
       WITH months AS (
         SELECT to_char(date_trunc('month', CURRENT_DATE) - (gs || ' months')::interval, 'YYYY-MM') AS month_key
         FROM generate_series(11, 0, -1) gs
       ),
-      metrics AS (
+      collected AS (
         SELECT
           to_char(date_trunc('month', pe.created_at), 'YYYY-MM') AS month_key,
-          COALESCE(SUM(CASE WHEN pe.status = 'success' THEN pe.amount_fcfa ELSE 0 END), 0)::int AS mrr_fcfa,
-          COALESCE(SUM(CASE WHEN pe.status = 'success' THEN pe.amount_fcfa ELSE 0 END), 0)::int AS new_fcfa,
-          COALESCE(SUM(CASE WHEN pe.status = 'failed' THEN pe.amount_fcfa ELSE 0 END), 0)::int AS churn_fcfa
+          COALESCE(SUM(pe.amount_fcfa), 0)::int AS collected_fcfa
         FROM public.payment_events pe
         WHERE pe.created_at >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months'
         GROUP BY 1
+      ),
+      mrr_snap AS (
+        SELECT
+          to_char(date_trunc('month', CURRENT_DATE) - (gs || ' months')::interval, 'YYYY-MM') AS month_key,
+          (
+            SELECT COALESCE(SUM(s2.mrr_fcfa), 0)::int
+            FROM public.subscriptions s2
+            WHERE s2.status IN ('active', 'past_due')
+              AND s2.created_at <= (date_trunc('month', CURRENT_DATE) - (gs || ' months')::interval + INTERVAL '1 month - 1 day')
+          ) AS mrr_fcfa
+        FROM generate_series(11, 0, -1) gs
       )
       SELECT
         m.month_key AS month,
-        COALESCE(mt.mrr_fcfa, 0)::int AS mrr_fcfa,
-        COALESCE(mt.new_fcfa, 0)::int AS new_fcfa,
-        COALESCE(mt.churn_fcfa, 0)::int AS churn_fcfa
+        COALESCE(ms.mrr_fcfa, 0)::int AS mrr_fcfa,
+        COALESCE(c.collected_fcfa, 0)::int AS collected_fcfa,
+        COALESCE(c.collected_fcfa, 0)::int AS new_fcfa,
+        0::int AS churn_fcfa
       FROM months m
-      LEFT JOIN metrics mt ON mt.month_key = m.month_key
+      LEFT JOIN collected c ON c.month_key = m.month_key
+      LEFT JOIN mrr_snap ms ON ms.month_key = m.month_key
       ORDER BY m.month_key ASC
     `),
+    // Tableau par école : effective MRR (configuré ou plan catalog), encaissé cette année, mois impayés, retard FCFA
     publicDb.execute<RevenueSchoolRow>(sql`
+      WITH sy_start AS (
+        SELECT CASE
+          WHEN EXTRACT(MONTH FROM CURRENT_DATE) >= 9
+            THEN make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int, 9, 1)
+          ELSE make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int - 1, 9, 1)
+        END AS v
+      ),
+      effective_mrr AS (
+        -- MRR réel configuré, sinon prix du plan catalog
+        SELECT
+          t.id AS tenant_id,
+          COALESCE(
+            NULLIF(s.mrr_fcfa, 0),
+            pc.monthly_price_fcfa,
+            0
+          )::int AS effective_mrr,
+          s.mrr_fcfa::int AS raw_mrr,
+          COALESCE(pc.monthly_price_fcfa, 0)::int AS plan_price,
+          s.momo_phone
+        FROM public.tenants t
+        LEFT JOIN LATERAL (
+          SELECT mrr_fcfa, momo_phone
+          FROM public.subscriptions
+          WHERE tenant_id = t.id AND status IN ('active', 'past_due')
+          ORDER BY created_at DESC LIMIT 1
+        ) s ON true
+        LEFT JOIN public.plan_catalog pc ON pc.plan = t.plan
+      ),
+      payments_ytd AS (
+        SELECT
+          s.tenant_id,
+          COALESCE(SUM(pe.amount_fcfa), 0)::int AS collected_this_year,
+          MAX(pe.created_at)::text AS last_payment_at,
+          (
+            SELECT pe2.amount_fcfa FROM public.payment_events pe2
+            JOIN public.subscriptions s2 ON s2.id = pe2.subscription_id
+            WHERE s2.tenant_id = s.tenant_id
+            ORDER BY pe2.created_at DESC LIMIT 1
+          ) AS last_payment_amount
+        FROM public.payment_events pe
+        JOIN public.subscriptions s ON s.id = pe.subscription_id
+        WHERE pe.created_at >= (SELECT v FROM sy_start)
+        GROUP BY s.tenant_id
+      ),
+      overdue_data AS (
+        -- Mois passés sans paiement couvrant ce mois (utilise effective MRR)
+        SELECT
+          em.tenant_id,
+          COUNT(*)::int AS overdue_months,
+          (COUNT(*) * em.effective_mrr)::int AS overdue_fcfa
+        FROM effective_mrr em
+        JOIN public.subscriptions sub ON sub.tenant_id = em.tenant_id
+          AND sub.status IN ('active', 'past_due')
+        CROSS JOIN generate_series(
+          (SELECT v FROM sy_start),
+          date_trunc('month', CURRENT_DATE - INTERVAL '1 day')::date,
+          '1 month'::interval
+        ) AS gs(month_start)
+        WHERE em.effective_mrr > 0
+          AND NOT EXISTS (
+            SELECT 1 FROM public.payment_events pe
+            WHERE pe.subscription_id = sub.id
+              AND pe.period_from IS NOT NULL
+              AND pe.period_from <= (gs.month_start + INTERVAL '1 month - 1 day')::date
+              AND pe.period_to   >= gs.month_start
+          )
+        GROUP BY em.tenant_id, em.effective_mrr
+      )
       SELECT
-        t.id AS tenant_id,
+        t.id::text AS tenant_id,
         t.name AS school,
-        t.plan,
-        t.status,
-        COALESCE(s.mrr_fcfa, 0)::int AS amount_per_month,
-        s.current_period_end::text AS last_due_date,
-        COALESCE(s.momo_phone, 'manual') AS payment_mode
+        t.plan::text AS plan,
+        t.status::text AS status,
+        em.raw_mrr AS mrr_fcfa,
+        em.plan_price AS plan_price_fcfa,
+        em.effective_mrr,
+        COALESCE(py.collected_this_year, 0)::int AS collected_this_year,
+        COALESCE(od.overdue_months, 0)::int AS overdue_months,
+        COALESCE(od.overdue_fcfa, 0)::int AS overdue_fcfa,
+        py.last_payment_at,
+        COALESCE(py.last_payment_amount, 0)::int AS last_payment_amount,
+        CASE
+          WHEN em.momo_phone IS NOT NULL AND em.momo_phone != '' THEN 'MoMo'
+          ELSE 'Manuel'
+        END AS payment_mode
       FROM public.tenants t
-      LEFT JOIN LATERAL (
-        SELECT mrr_fcfa, current_period_end, momo_phone
-        FROM public.subscriptions
-        WHERE tenant_id = t.id
-        ORDER BY created_at DESC
-        LIMIT 1
-      ) s ON true
-      ORDER BY t.name ASC
+      JOIN effective_mrr em ON em.tenant_id = t.id
+      LEFT JOIN payments_ytd py ON py.tenant_id = t.id
+      LEFT JOIN overdue_data od ON od.tenant_id = t.id
+      ORDER BY od.overdue_months DESC NULLS LAST, t.name ASC
     `),
+    // KPIs globaux
     publicDb.execute<{
       new_subscriptions: number;
       churn: number;
+      collected_this_month: number;
+      collected_this_year: number;
+      schools_with_overdue: number;
+      total_overdue_fcfa: number;
     }>(sql`
+      WITH sy_start AS (
+        SELECT CASE
+          WHEN EXTRACT(MONTH FROM CURRENT_DATE) >= 9
+            THEN make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int, 9, 1)
+          ELSE make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int - 1, 9, 1)
+        END AS v
+      ),
+      overdue_summary AS (
+        SELECT
+          COUNT(DISTINCT sub.tenant_id)::int AS schools_count,
+          SUM(
+            COALESCE(NULLIF(sub.mrr_fcfa,0), pc.monthly_price_fcfa, 0) *
+            (
+              SELECT COUNT(*) FROM generate_series(
+                (SELECT v FROM sy_start),
+                date_trunc('month', CURRENT_DATE - INTERVAL '1 day')::date,
+                '1 month'::interval
+              ) AS gsi(ms)
+              WHERE NOT EXISTS (
+                SELECT 1 FROM public.payment_events pe2
+                WHERE pe2.subscription_id = sub.id
+                  AND pe2.period_from IS NOT NULL
+                  AND pe2.period_from <= (gsi.ms + INTERVAL '1 month - 1 day')::date
+                  AND pe2.period_to   >= gsi.ms
+              )
+            )
+          )::int AS total_overdue_fcfa
+        FROM public.subscriptions sub
+        LEFT JOIN public.plan_catalog pc ON pc.plan = (
+          SELECT t2.plan FROM public.tenants t2 WHERE t2.id = sub.tenant_id
+        )
+        WHERE sub.status IN ('active', 'past_due')
+          AND COALESCE(NULLIF(sub.mrr_fcfa,0), pc.monthly_price_fcfa, 0) > 0
+      )
       SELECT
         (
-          SELECT COUNT(*)::int
-          FROM public.subscriptions s
+          SELECT COUNT(*)::int FROM public.subscriptions s
           WHERE date_trunc('month', s.created_at) = date_trunc('month', CURRENT_DATE)
         ) AS new_subscriptions,
         (
-          SELECT COUNT(*)::int
-          FROM public.subscriptions s
+          SELECT COUNT(*)::int FROM public.subscriptions s
           WHERE s.status = 'cancelled'
             AND date_trunc('month', s.created_at) = date_trunc('month', CURRENT_DATE)
-        ) AS churn
+        ) AS churn,
+        (
+          SELECT COALESCE(SUM(pe.amount_fcfa), 0)::int FROM public.payment_events pe
+          WHERE date_trunc('month', pe.created_at) = date_trunc('month', CURRENT_DATE)
+        ) AS collected_this_month,
+        (
+          SELECT COALESCE(SUM(pe.amount_fcfa), 0)::int FROM public.payment_events pe
+          WHERE pe.created_at >= (SELECT v FROM sy_start)
+        ) AS collected_this_year,
+        COALESCE((SELECT schools_count FROM overdue_summary), 0) AS schools_with_overdue,
+        COALESCE((SELECT total_overdue_fcfa FROM overdue_summary), 0) AS total_overdue_fcfa
     `),
   ]);
 
   const mrr = parseNumeric(getRows<{ total_mrr: number }>(mrrResult)[0]?.total_mrr);
-  const cards = getRows<{ new_subscriptions: number; churn: number }>(cardsResult)[0];
+  const cards = getRows<{
+    new_subscriptions: number;
+    churn: number;
+    collected_this_month: number;
+    collected_this_year: number;
+    schools_with_overdue: number;
+    total_overdue_fcfa: number;
+  }>(cardsResult)[0];
 
   return {
     cards: {
       mrrTotalFcfa: mrr,
       arrFcfa: mrr * 12,
+      totalCollectedThisYearFcfa: parseNumeric(cards?.collected_this_year),
+      totalCollectedThisMonthFcfa: parseNumeric(cards?.collected_this_month),
+      schoolsWithOverdue: parseNumeric(cards?.schools_with_overdue),
+      totalOverdueFcfa: parseNumeric(cards?.total_overdue_fcfa),
       newSubscriptionsThisMonth: parseNumeric(cards?.new_subscriptions),
       churnThisMonth: parseNumeric(cards?.churn),
     },
     monthly: getRows<RevenueSummaryRow>(monthlyResult).map((row) => ({
       month: row.month,
       mrr_fcfa: parseNumeric(row.mrr_fcfa),
+      collected_fcfa: parseNumeric(row.collected_fcfa),
       new_fcfa: parseNumeric(row.new_fcfa),
       churn_fcfa: parseNumeric(row.churn_fcfa),
     })),
     schools: getRows<RevenueSchoolRow>(schoolsResult).map((row) => ({
       tenantId: row.tenant_id,
       school: row.school,
-      plan: row.plan,
-      status: row.status,
-      amountPerMonth: parseNumeric(row.amount_per_month),
-      lastDueDate: row.last_due_date,
-      paymentMode: row.payment_mode,
+      plan: row.plan as TenantListItem['plan'],
+      status: row.status as TenantListItem['status'],
+      mrrFcfa: parseNumeric(row.mrr_fcfa),
+      planPriceFcfa: parseNumeric(row.plan_price_fcfa),
+      effectiveMrr: parseNumeric(row.effective_mrr),
+      collectedThisYearFcfa: parseNumeric(row.collected_this_year),
+      overdueMonths: parseNumeric(row.overdue_months),
+      overdueFcfa: parseNumeric(row.overdue_fcfa),
+      lastPaymentDate: row.last_payment_at ?? null,
+      lastPaymentAmount: parseNumeric(row.last_payment_amount),
+      paymentMode: row.payment_mode ?? null,
     })),
   };
 };
@@ -1955,6 +2151,8 @@ export const listSchoolPayments = async (
     provider: string;
     reference: string | null;
     status: string;
+    periodFrom: string | null;
+    periodTo: string | null;
   }>
 > => {
   const result = await publicDb.execute<{
@@ -1964,6 +2162,8 @@ export const listSchoolPayments = async (
     provider: string;
     provider_ref: string | null;
     status: string;
+    period_from: string | null;
+    period_to: string | null;
   }>(sql`
     SELECT
       pe.id::text AS id,
@@ -1971,7 +2171,9 @@ export const listSchoolPayments = async (
       pe.amount_fcfa,
       pe.provider::text AS provider,
       pe.provider_ref,
-      pe.status::text AS status
+      pe.status::text AS status,
+      pe.period_from::text AS period_from,
+      pe.period_to::text AS period_to
     FROM public.payment_events pe
     INNER JOIN public.subscriptions s ON s.id = pe.subscription_id
     WHERE s.tenant_id = ${tenantId}
@@ -1986,6 +2188,8 @@ export const listSchoolPayments = async (
     provider: string;
     provider_ref: string | null;
     status: string;
+    period_from: string | null;
+    period_to: string | null;
   }>(result).map((row) => ({
     id: row.id,
     date: row.date,
@@ -1993,6 +2197,8 @@ export const listSchoolPayments = async (
     provider: row.provider,
     reference: row.provider_ref,
     status: row.status,
+    periodFrom: row.period_from ?? null,
+    periodTo: row.period_to ?? null,
   }));
 };
 
@@ -2106,14 +2312,16 @@ export const addManualPayment = async (
   }
 
   await publicDb.execute(sql`
-    INSERT INTO public.payment_events (subscription_id, amount_fcfa, provider, provider_ref, status, created_at)
+    INSERT INTO public.payment_events (subscription_id, amount_fcfa, provider, provider_ref, status, created_at, period_from, period_to)
     VALUES (
       ${subscriptionId},
       ${payload.amount_fcfa},
       ${payload.provider},
       ${payload.reference ?? null},
       'success',
-      ${payload.date}
+      ${payload.date},
+      ${payload.period_from ?? null},
+      ${payload.period_to ?? null}
     )
   `);
 
@@ -3066,6 +3274,8 @@ export const listSchoolCommissionPayments = async (
     payment_method: string | null;
     notes: string | null;
     created_at: string;
+    payload_before: unknown;
+    payload_after: unknown;
   }>(sql`
     SELECT
       id::text AS id,
@@ -3077,7 +3287,7 @@ export const listSchoolCommissionPayments = async (
       payload_before,
       payload_after
     FROM public.audit_financial_events
-    WHERE action = 'admin.record_commission_received'
+    WHERE action IN ('admin.record_commission_received', 'subscriptions.record_commission_payment')
       AND tenant_id = ${tenantId}::uuid
       AND LEFT(COALESCE(payload_after->>'period_month', ''), 7) = ${targetMonth}
     ORDER BY created_at DESC
@@ -3089,8 +3299,8 @@ export const listSchoolCommissionPayments = async (
     payment_method: string | null;
     notes: string | null;
     created_at: string;
-    payload_before?: unknown;
-    payload_after?: unknown;
+    payload_before: unknown;
+    payload_after: unknown;
   }>(result);
 
   const mapped = rows.map((row) => {
@@ -3114,6 +3324,41 @@ export const listSchoolCommissionPayments = async (
       amount_fcfa: fallbackAmount,
     };
   });
+
+  // Si aucun événement d'audit trouvé pour ce mois, fallback sur edutrack_commission_records
+  // (cas des reversements importés ou enregistrés avant la mise en place de l'audit trail)
+  if (mapped.length === 0) {
+    const monthDate = `${targetMonth}-01`;
+    const fallbackResult = await publicDb.execute<{
+      period_month: string;
+      amount_fcfa: number;
+      created_at: string;
+    }>(sql`
+      SELECT
+        period_month::text AS period_month,
+        commission_paid_fcfa::int AS amount_fcfa,
+        COALESCE(last_payment_at, updated_at)::text AS created_at
+      FROM public.edutrack_commission_records
+      WHERE tenant_id = ${tenantId}::uuid
+        AND period_month = ${monthDate}::date
+        AND commission_paid_fcfa > 0
+      LIMIT 1
+    `);
+    const fallbackRow = getRows<{ period_month: string; amount_fcfa: number; created_at: string }>(fallbackResult)[0];
+    if (fallbackRow) {
+      return [
+        {
+          id: `fallback-${tenantId}-${targetMonth}`,
+          period_month: fallbackRow.period_month.slice(0, 7),
+          amount_fcfa: fallbackRow.amount_fcfa,
+          payment_method: null,
+          notes: 'Historique importé (reversement cumulé)',
+          created_at: fallbackRow.created_at,
+        },
+      ];
+    }
+    return [];
+  }
 
   const ascByCreatedAt = [...rows].sort(
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
@@ -3247,41 +3492,75 @@ export const getSmsFeatureGlobalStats = async (
     tenant_id: string;
     subscriptions_active: number;
     total_collected_fcfa: number;
-    sms_sent_this_month: number;
+    commission_pct: number;
+    commission_due_fcfa: number;
+    commission_paid_fcfa: number;
     commission_remaining_fcfa: number;
+    // Cumul depuis sept (année scolaire)
+    collected_ytd_fcfa: number;
+    commission_ytd_fcfa: number;
+    // SMS abonnements parents ce mois
+    sms_sent_this_month: number;
     is_overdue: boolean;
     last_payment_at: string | null;
   }>
 > => {
-  const rows = await publicDb.execute<{ tenant_id: string; school_name: string; schema_name: string }>(sql`
-    SELECT t.id::text AS tenant_id, t.name AS school_name, t.schema_name
+  const rows = await publicDb.execute<{ tenant_id: string; school_name: string; schema_name: string; commission_pct: string | number }>(sql`
+    SELECT t.id::text AS tenant_id, t.name AS school_name, t.schema_name,
+           COALESCE(f.commission_pct, ${EDUTRACK_COMMISSION_PCT}) AS commission_pct
     FROM public.tenants t
     INNER JOIN public.school_sms_features f ON f.tenant_id = t.id
     WHERE f.is_enabled = true
     ORDER BY t.name ASC
   `);
 
-  const schools = getRows<{ tenant_id: string; school_name: string; schema_name: string }>(rows);
+  const schools = getRows<{ tenant_id: string; school_name: string; schema_name: string; commission_pct: string | number }>(rows);
   const targetMonth = month ?? monthFromDate(new Date());
+
+  // Année scolaire courante : sept → août
+  const now = new Date();
+  const syYear = now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1;
+  const syStartMonth = `${syYear}-09`;
+
   const resolved = await Promise.all(
     schools.map(async (school) => {
+      const commissionPct = parseNumeric(school.commission_pct);
       try {
         const metrics = await withTenantSchema(school.schema_name, async (tenantDb) => {
           const repo = new SubscriptionsRepository(tenantDb);
+
+          // Stats du mois ciblé
           const summary = await repo.getRevenueSummary({ tenantId: school.tenant_id, month: targetMonth });
-          const due = Math.round((summary.total_collected_fcfa * EDUTRACK_COMMISSION_PCT) / 100);
+          const due = Math.round((summary.total_collected_fcfa * commissionPct) / 100);
+
+          // Cumul annuel : encaissé depuis début d'année scolaire jusqu'au mois ciblé inclus
+          const ytdResult = await tenantDb.execute<{ total: string | number }>(sql`
+            SELECT COALESCE(SUM(sp.amount_fcfa), 0) AS total
+            FROM subscription_payments sp
+            WHERE DATE_TRUNC('month', sp.paid_at) >= ${syStartMonth + '-01'}::date
+              AND DATE_TRUNC('month', sp.paid_at) <= ${targetMonth + '-01'}::date
+          `);
+          const collectedYtd = Math.round(parseNumeric(getRows<{ total: string | number }>(ytdResult)[0]?.total ?? 0));
+
+          // SMS envoyés via abonnements parents (sms_usage_log = SMS de notification absence)
           const smsResult = await tenantDb.execute<{ total: string | number }>(sql`
             SELECT COALESCE(SUM(sms_sent_count), 0) AS total
             FROM sms_usage_log
             WHERE month = ${targetMonth}
           `);
+
           return {
             subscriptions_active: summary.subscriptions_active_count,
             total_collected_fcfa: summary.total_collected_fcfa,
-            sms_sent_this_month: Math.round(parseNumeric(getRows<{ total: string | number }>(smsResult)[0]?.total ?? 0)),
+            commission_due_fcfa: due,
+            commission_paid_fcfa: summary.commission_paid_fcfa,
             commission_remaining_fcfa: Math.max(0, due - summary.commission_paid_fcfa),
+            collected_ytd_fcfa: collectedYtd,
+            commission_ytd_fcfa: Math.round((collectedYtd * commissionPct) / 100),
+            sms_sent_this_month: Math.round(parseNumeric(getRows<{ total: string | number }>(smsResult)[0]?.total ?? 0)),
           };
         });
+
         const monthDate = `${targetMonth}-01`;
         const lastPaymentResult = await publicDb.execute<{ last_payment_at: string | null }>(sql`
           SELECT last_payment_at::text
@@ -3291,15 +3570,19 @@ export const getSmsFeatureGlobalStats = async (
           LIMIT 1
         `);
         const lastPaymentAt = lastPaymentResult.rows[0]?.last_payment_at ?? null;
-        const remaining = metrics.commission_remaining_fcfa;
         return {
           school_name: school.school_name,
           tenant_id: school.tenant_id,
           subscriptions_active: metrics.subscriptions_active,
           total_collected_fcfa: metrics.total_collected_fcfa,
+          commission_pct: commissionPct,
+          commission_due_fcfa: metrics.commission_due_fcfa,
+          commission_paid_fcfa: metrics.commission_paid_fcfa,
+          commission_remaining_fcfa: metrics.commission_remaining_fcfa,
+          collected_ytd_fcfa: metrics.collected_ytd_fcfa,
+          commission_ytd_fcfa: metrics.commission_ytd_fcfa,
           sms_sent_this_month: metrics.sms_sent_this_month,
-          commission_remaining_fcfa: remaining,
-          is_overdue: remaining > 0,
+          is_overdue: metrics.commission_remaining_fcfa > 0,
           last_payment_at: lastPaymentAt,
         };
       } catch {

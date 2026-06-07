@@ -84,14 +84,6 @@ export const revenuePaymentsQuerySchema = z.object({
   month: z.string().regex(/^\d{4}-\d{2}$/),
 });
 
-export const commissionRecordPaymentBodySchema = z.object({
-  period_month: z.string().regex(/^\d{4}-\d{2}$/),
-  amount_fcfa: z.coerce.number().int().positive(),
-  payment_method: z.enum(['cash', 'momo_mtn', 'momo_orange', 'bank_transfer']).optional(),
-  notes: z.string().trim().max(500).optional(),
-  idempotency_key: z.string().uuid(),
-});
-
 export const updateSmsPriceBodySchema = z.object({
   sms_unit_price_fcfa: z.coerce.number().int().min(1).max(50000),
 });

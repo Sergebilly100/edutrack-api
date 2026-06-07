@@ -1472,7 +1472,8 @@ export class SubscriptionsRepository {
     return results.map((summary, i) => {
       const month = months[i]!;
       const due = Math.round((summary.total_collected_fcfa * COMMISSION_PCT) / 100);
-      const remaining = Math.max(0, due - summary.commission_paid_fcfa);
+      // Pas de commission due si rien n'a été collecté ce mois
+      const remaining = summary.total_collected_fcfa > 0 ? Math.max(0, due - summary.commission_paid_fcfa) : 0;
       return {
         month,
         subscriptions_active_count: summary.subscriptions_active_count,
@@ -1482,7 +1483,7 @@ export class SubscriptionsRepository {
         commission_due_fcfa: due,
         commission_paid_fcfa: summary.commission_paid_fcfa,
         commission_remaining_fcfa: remaining,
-        payment_status: remaining === 0 ? 'paid' : summary.commission_paid_fcfa > 0 ? 'partial' : 'pending',
+        payment_status: summary.total_collected_fcfa === 0 ? 'paid' : remaining === 0 ? 'paid' : summary.commission_paid_fcfa > 0 ? 'partial' : 'pending',
       } as const;
     });
   }

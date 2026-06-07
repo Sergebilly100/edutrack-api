@@ -12,7 +12,6 @@ import { SubscriptionsModuleError, SubscriptionsService } from './subscriptions.
 import {
   cancelSubscriptionBodySchema,
   cancelSubscriptionParamsSchema,
-  commissionRecordPaymentBodySchema,
   createParentSubscriptionBodySchema,
   listParentsQuerySchema,
   parentIdParamsSchema,
@@ -388,33 +387,6 @@ export default async function subscriptionsController(
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
           const service = new SubscriptionsService(new SubscriptionsRepository(tenantDb));
           return service.commissionOverdueAlerts(claims.schemaName);
-        });
-        return reply.send(result);
-      } catch (error) {
-        return handleError(request, reply, error);
-      }
-    }
-  );
-
-  app.post(
-    '/api/v1/subscriptions/revenue/commission/record-payment',
-    { preHandler: requirePermission('subscriptions.revenue') },
-    async (request, reply) => {
-      try {
-        const body = commissionRecordPaymentBodySchema.parse(request.body ?? {});
-        const claims = request.claims!;
-        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-          const service = new SubscriptionsService(new SubscriptionsRepository(tenantDb));
-          return service.recordCommissionPayment({
-            schemaName: claims.schemaName,
-            periodMonth: body.period_month,
-            amountFcfa: body.amount_fcfa,
-            paymentMethod: body.payment_method,
-            notes: body.notes,
-            idempotencyKey: body.idempotency_key,
-            actorId: claims.sub,
-            actorRole: claims.role,
-          });
         });
         return reply.send(result);
       } catch (error) {

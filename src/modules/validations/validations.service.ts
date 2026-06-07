@@ -1,6 +1,6 @@
 import { ValidationsRepository } from './validations.repository.js';
 import { emit } from '../../shared/events/event-bus.js';
-import type { EndScanAction, MissingEndScanTeacher, PendingValidationCount, PendingValidationGroups, TeacherNotificationItem, ValidationHistoryPage } from './validations.types.js';
+import type { BulkValidateAction, BulkValidateItem, BulkValidateResult, EndScanAction, MissingEndScanTeacher, PendingValidationCount, PendingValidationGroups, TeacherNotificationItem, ValidationHistoryPage } from './validations.types.js';
 
 export class ValidationModuleError extends Error {
   constructor(
@@ -139,6 +139,32 @@ export class ValidationsService {
     });
 
     return { success: true };
+  }
+
+  async bulkValidate(
+    input: { action: BulkValidateAction; items: BulkValidateItem[]; reason?: string },
+    context: ServiceContext
+  ): Promise<BulkValidateResult> {
+    const result: BulkValidateResult = { success: 0, failed: 0, errors: [] };
+
+    for (const item of input.items) {
+      try {
+        if (input.action === 'approve') {
+          await this.approve({ attendanceId: item.attendanceId, validatedHours: item.validatedHours }, context);
+        } else {
+          await this.reject({ attendanceId: item.attendanceId, reason: input.reason ?? 'Rejet groupé' }, context);
+        }
+        result.success += 1;
+      } catch (error) {
+        result.failed += 1;
+        result.errors.push({
+          attendanceId: item.attendanceId,
+          error: error instanceof Error ? error.message : 'Erreur inconnue',
+        });
+      }
+    }
+
+    return result;
   }
 
   listValidationHistory(params: {

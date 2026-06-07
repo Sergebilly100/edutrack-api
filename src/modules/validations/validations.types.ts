@@ -86,6 +86,30 @@ export const cancelEndScanSanctionBodySchema = z.object({
   reason: z.string().trim().min(3).max(500),
 });
 
+export const bulkValidateBodySchema = z.object({
+  action: z.enum(['approve', 'reject']),
+  items: z.array(
+    z.object({
+      attendance_id: z.string().uuid(),
+      validated_hours: z.number().min(0).max(24).optional(),
+    })
+  ).min(1).max(100),
+  reason: z.string().trim().min(3).max(500).optional(),
+});
+
+export type BulkValidateAction = 'approve' | 'reject';
+
+export type BulkValidateItem = {
+  attendanceId: string;
+  validatedHours?: number;
+};
+
+export type BulkValidateResult = {
+  success: number;
+  failed: number;
+  errors: Array<{ attendanceId: string; error: string }>;
+};
+
 export const notificationIdParamsSchema = z.object({
   notificationId: z.string().uuid(),
 });

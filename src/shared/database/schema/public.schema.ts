@@ -119,6 +119,8 @@ export const paymentEvents = pgTable('payment_events', {
   provider: paymentProviderEnum('provider').notNull(),
   providerRef: varchar('provider_ref', { length: 255 }),
   status: paymentStatusEnum('status').notNull(),
+  periodFrom: date('period_from'),
+  periodTo: date('period_to'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
     .notNull()
     .defaultNow(),

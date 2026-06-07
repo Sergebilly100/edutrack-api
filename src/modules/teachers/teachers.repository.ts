@@ -163,6 +163,7 @@ export class TeachersRepository {
       SELECT COUNT(*) AS count
       FROM users
       WHERE is_active = true
+        AND role = 'teacher'
     `);
     const [row] = getRows<CountRow>(result);
     return toTotal({ total: row?.count ?? 0 });

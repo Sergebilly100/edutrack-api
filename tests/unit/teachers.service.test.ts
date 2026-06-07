@@ -185,6 +185,27 @@ describe('teachers.service', () => {
         service.createTeacher(input as never, { schemaName: 'school_test' })
       ).rejects.toBe(dbDown);
     });
+
+    it('lève PLAN_LIMIT_REACHED quand le nombre de profs atteint max_users', async () => {
+      // countActiveUsers retourne le nombre de teachers uniquement (après fix)
+      repository.countActiveUsers.mockResolvedValue(1000); // max mocké = 1000 en tête de fichier
+      // getMaxUsersBySchemaName est mocké à 1000 → 1000 >= 1000 → bloqué
+
+      await expect(
+        service.createTeacher(input as never, { schemaName: 'school_test' })
+      ).rejects.toMatchObject({ code: 'PLAN_LIMIT_REACHED', statusCode: 403 });
+    });
+
+    it('autorise la création même si beaucoup de staff, tant que les profs sont sous le quota', async () => {
+      // Seul countActiveUsers (teachers) compte pour la limite profs
+      // Si le repo retourne 0 teachers actifs, la création passe même avec 50 staff
+      repository.countActiveUsers.mockResolvedValue(0);
+      repository.createTeacher.mockResolvedValue(baseTeacher);
+
+      const result = await service.createTeacher(input as never, { schemaName: 'school_test' });
+
+      expect(result.id).toBe('teacher-1');
+    });
   });
 
   // ── updateTeacher ─────────────────────────────────────────────────────────

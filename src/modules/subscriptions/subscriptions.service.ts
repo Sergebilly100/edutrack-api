@@ -517,7 +517,7 @@ export class SubscriptionsService {
     // Vérifie les 12 derniers mois (hors mois courant)
     const history = await this.repository.listRevenueHistory({ tenantId, months: 13 });
     const overdueMonths = history.filter(
-      (row) => row.month < currentMonth && row.commission_remaining_fcfa > 0
+      (row) => row.month < currentMonth && row.commission_remaining_fcfa > 0 && row.total_collected_fcfa > 0
     );
     return {
       count: overdueMonths.length,
@@ -537,52 +537,6 @@ export class SubscriptionsService {
       throw new SubscriptionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
     }
     return this.repository.listRevenueSubscriptionDetails(month);
-  }
-
-  async recordCommissionPayment(input: {
-    schemaName: string;
-    periodMonth: string;
-    amountFcfa: number;
-    paymentMethod?: 'cash' | 'momo_mtn' | 'momo_orange' | 'bank_transfer';
-    notes?: string;
-    idempotencyKey: string;
-    actorId: string;
-    actorRole: string;
-  }) {
-    const tenantId = await this.repository.getTenantIdBySchemaName(input.schemaName);
-    if (!tenantId) {
-      throw new SubscriptionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
-    }
-    const action = 'subscriptions.record_commission_payment';
-    const replay = await this.repository.findFinancialAuditReplay<{
-      success: boolean;
-      idempotency_replayed?: boolean;
-    }>({
-      tenantId,
-      action,
-      idempotencyKey: input.idempotencyKey,
-    });
-    if (replay) {
-      return { ...replay, idempotency_replayed: true };
-    }
-
-    const commissionPct = EDUTRACK_COMMISSION_PCT;
-    const summary = await this.revenueSummary(input.schemaName, input.periodMonth);
-    const result = await this.repository.runCommissionPaymentWithAudit({
-      tenantId,
-      periodMonth: input.periodMonth,
-      amountFcfa: input.amountFcfa,
-      paymentMethod: input.paymentMethod,
-      notes: input.notes,
-      commissionPct,
-      dueFcfa: summary.commission_due_fcfa,
-      action,
-      idempotencyKey: input.idempotencyKey,
-      actorId: input.actorId,
-      actorRole: input.actorRole,
-    });
-
-    return { success: true, idempotency_replayed: result.replayed };
   }
 
   async runDailyMaintenance(): Promise<{ expired: number; alerts: number }> {

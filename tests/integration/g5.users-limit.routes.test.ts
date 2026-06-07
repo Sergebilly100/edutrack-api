@@ -19,21 +19,15 @@ describe('G5 users limit enforcement', () => {
     );
   };
 
-  it('POST /api/v1/teachers refuse la création du 21e utilisateur sur plan pro (max=20)', async () => {
+  it('POST /api/v1/teachers refuse la création quand le quota de profs est atteint', async () => {
     const headers = await getAuthHeaders('director');
-    await ensureTenantRow(20);
+    // max_users=2 → seed contient déjà 1 teacher; on en insère 1 de plus = quota plein
+    await ensureTenantRow(2);
 
     await queryTenant(
       `
         INSERT INTO ${tenantTable('users')} (role, name, phone, email, password_hash, is_active)
-        SELECT
-          'staff',
-          'Quota User ' || gs,
-          NULL,
-          'quota' || gs || '@test.local',
-          'not-used',
-          true
-        FROM generate_series(1, 17) AS gs
+        VALUES ('teacher', 'Quota Teacher', NULL, 'quota.teacher@test.local', 'not-used', true)
       `,
       []
     );
@@ -54,6 +48,42 @@ describe('G5 users limit enforcement', () => {
       code: 'PLAN_LIMIT_REACHED',
       statusCode: 403,
     });
+  });
+
+  it('POST /api/v1/teachers accepte la création quand staff supplémentaires n\'affectent pas le quota profs', async () => {
+    const headers = await getAuthHeaders('director');
+    // Les tests précédents ont pu ajouter des teachers — on fixe max_users suffisamment haut (20)
+    // pour qu'il reste de la place, puis on vérifie que les staff n'affectent pas le quota profs.
+    await ensureTenantRow(20);
+
+    await queryTenant(
+      `
+        INSERT INTO ${tenantTable('users')} (role, name, phone, email, password_hash, is_active)
+        SELECT
+          'staff',
+          'Extra Staff ' || gs,
+          NULL,
+          'extra.staff' || gs || '@test.local',
+          'not-used',
+          true
+        FROM generate_series(1, 10) AS gs
+      `,
+      []
+    );
+
+    const response = await request()
+      .post('/api/v1/teachers')
+      .set(headers)
+      .send({
+        first_name: 'Prof',
+        last_name: 'OK',
+        type: 'vacataire',
+        subjects: ['Français'],
+        hourly_rate: 3000,
+      });
+
+    // 201 : quota profs (20) non atteint ; les 10 staff insérés n'ont pas d'impact
+    expect(response.status).toBe(201);
   });
 
   it('POST /api/v1/permissions/positions/:id/assign refuse un utilisateur non administratif', async () => {

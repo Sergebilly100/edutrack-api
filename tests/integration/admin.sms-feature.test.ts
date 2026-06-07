@@ -138,4 +138,101 @@ describe('admin sms-feature integration', () => {
     expect(Array.isArray(response.body.items)).toBe(true);
     expect(response.body.items.some((item: { tenant_id: string }) => item.tenant_id === tenantId)).toBe(true);
   }, 15000);
+
+  it('GET commission-payments retourne les reversements admin.record_commission_received', async () => {
+    const month = new Date().toISOString().slice(0, 7);
+
+    // On s'assure qu'un reversement admin existe pour ce mois
+    await request()
+      .post(`/api/v1/admin/schools/${tenantId}/sms-feature/sync-commission?month=${month}`)
+      .set('authorization', `Bearer ${adminToken}`);
+    await request()
+      .post(`/api/v1/admin/schools/${tenantId}/sms-feature/record-commission-received`)
+      .set('authorization', `Bearer ${adminToken}`)
+      .send({
+        period_month: month,
+        amount_fcfa: 500,
+        notes: 'test admin payment',
+        idempotency_key: '22222222-2222-4222-8222-222222222222',
+      });
+
+    const response = await request()
+      .get(`/api/v1/admin/schools/${tenantId}/sms-feature/payments?month=${month}`)
+      .set('authorization', `Bearer ${adminToken}`);
+
+    expect(response.status).toBe(200);
+    expect(Array.isArray(response.body.items)).toBe(true);
+    const entry = (response.body.items as Array<{ amount_fcfa: number; notes: string | null }>)
+      .find((r) => r.notes === 'test admin payment');
+    expect(entry).toBeDefined();
+    expect(entry?.amount_fcfa).toBe(500);
+  });
+
+  it('GET commission-payments remonte aussi les reversements subscriptions.record_commission_payment', async () => {
+    const month = new Date().toISOString().slice(0, 7);
+
+    // Insère directement un audit event avec action=subscriptions.record_commission_payment
+    // pour simuler un reversement enregistré côté directeur école
+    await queryPublic(
+      `
+        INSERT INTO public.audit_financial_events
+          (tenant_id, actor_id, actor_role, action, idempotency_key, payload_before, payload_after)
+        VALUES (
+          $1::uuid,
+          $2::uuid,
+          'director',
+          'subscriptions.record_commission_payment',
+          '33333333-3333-4333-8333-333333333333'::uuid,
+          '{"commission_paid_fcfa": 0}'::jsonb,
+          jsonb_build_object(
+            'period_month', $3::text,
+            'amount_fcfa', 300,
+            'payment_method', 'momo_mtn',
+            'notes', 'reversement directeur'
+          )
+        )
+        ON CONFLICT (action, tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
+      `,
+      [tenantId, getSeedContext().directorUserId, `${month}-01`]
+    );
+
+    const response = await request()
+      .get(`/api/v1/admin/schools/${tenantId}/sms-feature/payments?month=${month}`)
+      .set('authorization', `Bearer ${adminToken}`);
+
+    expect(response.status).toBe(200);
+    expect(Array.isArray(response.body.items)).toBe(true);
+    const entry = (response.body.items as Array<{ amount_fcfa: number; notes: string | null }>)
+      .find((r) => r.notes === 'reversement directeur');
+    expect(entry).toBeDefined();
+    expect(entry?.amount_fcfa).toBe(300);
+  });
+
+  it('GET commission-payments utilise le fallback edutrack_commission_records si aucun audit event', async () => {
+    const fallbackMonth = '2024-03';
+
+    // Insère un enregistrement dans edutrack_commission_records sans événement audit correspondant
+    await queryPublic(
+      `
+        INSERT INTO public.edutrack_commission_records
+          (tenant_id, period_month, commission_due_fcfa, commission_paid_fcfa, commission_pct)
+        VALUES ($1::uuid, $2::date, 45, 45, 15.00)
+        ON CONFLICT (tenant_id, period_month) DO UPDATE
+          SET commission_paid_fcfa = 45
+      `,
+      [tenantId, `${fallbackMonth}-01`]
+    );
+
+    const response = await request()
+      .get(`/api/v1/admin/schools/${tenantId}/sms-feature/payments?month=${fallbackMonth}`)
+      .set('authorization', `Bearer ${adminToken}`);
+
+    expect(response.status).toBe(200);
+    expect(Array.isArray(response.body.items)).toBe(true);
+    const entries = response.body.items as Array<{ amount_fcfa: number; notes: string | null; id: string }>;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.amount_fcfa).toBe(45);
+    expect(entries[0]?.notes).toContain('Historique importé');
+    expect(entries[0]?.id).toMatch(/^fallback-/);
+  });
 });

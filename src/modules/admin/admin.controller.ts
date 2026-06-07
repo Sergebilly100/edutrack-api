@@ -19,6 +19,7 @@ import {
   updateSmsPlatformConfigBodySchema,
   updateSmsTemplateBodySchema,
   updateSchoolConfigBodySchema,
+  updateSchoolSubscriptionBodySchema,
   updateTenantBodySchema,
   updateTenantParamsSchema,
   updatePlanCatalogBodySchema,
@@ -59,6 +60,7 @@ import {
   updateSmsPlatformConfig,
   upsertSmsTemplate,
   updateSchoolConfig,
+  updateSchoolSubscription,
   updateSchoolSmsFeatureConfig,
   updateTenant,
 } from './admin.service.js';
@@ -276,6 +278,21 @@ export default async function adminController(
         const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
         const payload = updateSchoolConfigBodySchema.parse(request.body);
         await updateSchoolConfig(ensurePublicDb(request), tenantId, payload);
+        return reply.send({ success: true });
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.patch(
+    '/api/v1/admin/schools/:tenantId/subscription',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+        const payload = updateSchoolSubscriptionBodySchema.parse(request.body);
+        await updateSchoolSubscription(ensurePublicDb(request), tenantId, payload);
         return reply.send({ success: true });
       } catch (error) {
         return handleError(reply, error);
