@@ -20,6 +20,7 @@ initSentry();
 
 import adminController from './modules/admin/admin.controller.js';
 import attendanceController from './modules/attendance/attendance.controller.js';
+import { emitStudentAbsent } from './modules/attendance/attendance.events.js';
 import { runAttendanceMissingQrScanHandler } from './modules/attendance/attendance.worker-handler.js';
 import { runAbsenceMarkingForSchema } from './modules/attendance/attendance.absence-marking.worker.js';
 import { geoAutoApproveWorker, scheduleGeoAutoApprove } from './modules/attendance/attendance.geo-auto-approve.worker.js';
@@ -75,6 +76,18 @@ const notificationsWorker = createNotificationsWorker(sharedRedis, {
   repository: defaultRepository,
   smsSender: defaultSmsSender,
   emailSender: defaultEmailSender,
+  onDeferredStudentAbsent: (data) => emitStudentAbsent({
+    tenantId: data.tenantId,
+    schemaName: data.schemaName,
+    studentId: data.studentId,
+    scheduleId: data.scheduleId,
+    studentFirstName: data.studentFirstName,
+    parentPhone: data.parentPhone,
+    parentEmail: data.parentEmail,
+    subject: data.subject,
+    date: data.date,
+    schoolPhone: data.schoolPhone,
+  }),
 });
 
 attachFailedHandler(notificationsWorker, 'notifications-sms', { deadLetterQueue, logger: app.log });
@@ -232,7 +245,7 @@ app.addHook('onRequest', async (request, reply) => {
 
 app.register(authController);
 app.register(adminController, { deadLetterQueue });
-app.register(attendanceController, { pdfQueue: billingPdfQueue });
+app.register(attendanceController, { pdfQueue: billingPdfQueue, notifQueue: notificationsQueue });
 app.register(dashboardController);
 app.register(notificationsController, { smsQueue: notificationsQueue });
 app.register(billingController, { billingPdfQueue })

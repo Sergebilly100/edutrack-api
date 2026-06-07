@@ -990,6 +990,21 @@ export class AttendanceRepository {
     return getRows(result);
   }
 
+  /** Retourne les IDs des élèves marqués absents pour un schedule+date donné */
+  async listAbsentStudentsForSchedule(params: {
+    scheduleId: string;
+    date: string;
+  }): Promise<string[]> {
+    const result = await this.db.execute<{ student_id: string }>(sql`
+      SELECT student_id::text AS student_id
+      FROM attendances_student
+      WHERE schedule_id = ${params.scheduleId}::uuid
+        AND date = ${params.date}::date
+        AND status = 'absent'
+    `);
+    return getRows(result).map((r) => r.student_id);
+  }
+
   async getWeekScheduleForTeacher(userId: string, date: string): Promise<WeekScheduleRow[]> {
     const result = await this.db.execute<WeekScheduleRow>(sql`
           WITH week_ctx AS (

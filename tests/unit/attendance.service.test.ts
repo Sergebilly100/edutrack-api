@@ -32,12 +32,14 @@ const repository = {
   findRoomByToken: vi.fn(),
   ensureAttendanceRecord: vi.fn(),
   recordQrScan: vi.fn(),
+  getStartScanRoomToken: vi.fn(),
   listActiveAttendanceForTeacher: vi.fn(),
   listMissingQrScans: vi.fn(),
   markQrAlertSent: vi.fn(),
   listStudentsByClass: vi.fn(),
   bulkUpsertStudentAttendance: vi.fn(),
   listStudentAbsenceNotificationCandidates: vi.fn(),
+  listAbsentStudentsForSchedule: vi.fn(),
 };
 
 beforeEach(() => {
@@ -265,7 +267,9 @@ describe('attendance.service', () => {
     });
   });
 
-  it('submitStudentAttendance() émet student.absent uniquement pour les absences à notifier', async () => {
+  it('submitStudentAttendance() émet student.absent uniquement pour les absences à notifier (sans queue)', async () => {
+    // Temps fixé AVANT la fin du créneau 09:00 + 15 min → pas de ROLLCALL_WINDOW_CLOSED
+    vi.setSystemTime(new Date('2026-04-14T08:30:00.000Z'));
     repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1' });
     repository.findScheduleContextForTeacher.mockResolvedValue({
       scheduleId: 'schedule-1',
@@ -309,7 +313,8 @@ describe('attendance.service', () => {
       { schemaName: 'school_sainte_marie', userId: 'user-1' }
     );
 
-    expect(result).toEqual({ upsertedCount: 3 });
+    expect(result).toMatchObject({ upsertedCount: 3, isLocked: false });
+    expect(result.notifSendAfter).toBeGreaterThan(Date.now());
     expect(repository.bulkUpsertStudentAttendance).toHaveBeenCalledWith({
       scheduleId: 'schedule-1',
       date: '2026-04-14',
@@ -323,6 +328,7 @@ describe('attendance.service', () => {
       date: '2026-04-14',
       absentStudentIds: ['student-1', 'student-2'],
     });
+    // Sans queue → émission immédiate
     expect(eventMocks.emitStudentAbsent).toHaveBeenCalledTimes(1);
     expect(eventMocks.emitStudentAbsent).toHaveBeenCalledWith({
       tenantId: 'tenant-1',
@@ -335,5 +341,157 @@ describe('attendance.service', () => {
       date: '2026-04-14',
       schoolPhone: '2250700000099',
     });
+  });
+
+  it('submitStudentAttendance() lève ROLLCALL_WINDOW_CLOSED si délai dépassé', async () => {
+    // Temps fixé APRÈS fin du créneau 09:00 + 15 min
+    vi.setSystemTime(new Date('2026-04-14T09:20:00.000Z'));
+    repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1' });
+    repository.findScheduleContextForTeacher.mockResolvedValue({
+      scheduleId: 'schedule-1',
+      teacherId: 'teacher-1',
+      teacherName: 'Teacher 1',
+      classId: 'class-1',
+      className: '3eme A',
+      subject: 'Maths',
+      plannedRoomId: 'room-1',
+      plannedRoomName: 'A1',
+      plannedRoomToken: 'expected-token',
+      timeSlotId: 'slot-1',
+      slotLabel: '07h30-09h00',
+      slotStartTime: '07:30:00',
+      slotEndTime: '09:00:00',
+    });
+
+    const service = new AttendanceService(repository as never);
+    await expect(
+      service.submitStudentAttendance(
+        { scheduleId: 'schedule-1', date: '2026-04-14', absentStudentIds: [] },
+        { schemaName: 'school_sainte_marie', userId: 'user-1' }
+      )
+    ).rejects.toMatchObject({ code: 'ROLLCALL_WINDOW_CLOSED', statusCode: 409 });
+    expect(repository.bulkUpsertStudentAttendance).not.toHaveBeenCalled();
+    expect(eventMocks.emitStudentAbsent).not.toHaveBeenCalled();
+  });
+
+  it('submitStudentAttendance() avec queue : enfile un job différé pour chaque absent candidat', async () => {
+    vi.setSystemTime(new Date('2026-04-14T08:30:00.000Z'));
+    repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1' });
+    repository.findScheduleContextForTeacher.mockResolvedValue({
+      scheduleId: 'schedule-1',
+      teacherId: 'teacher-1',
+      teacherName: 'Teacher 1',
+      classId: 'class-1',
+      className: '3eme A',
+      subject: 'Maths',
+      plannedRoomId: 'room-1',
+      plannedRoomName: 'A1',
+      plannedRoomToken: 'expected-token',
+      timeSlotId: 'slot-1',
+      slotLabel: '07h30-09h00',
+      slotStartTime: '07:30:00',
+      slotEndTime: '09:00:00',
+    });
+    repository.listStudentsByClass.mockResolvedValue([
+      { id: 'student-1' },
+      { id: 'student-2' },
+    ]);
+    repository.bulkUpsertStudentAttendance.mockResolvedValue({ upsertedCount: 2 });
+    repository.listStudentAbsenceNotificationCandidates.mockResolvedValue([
+      {
+        tenantId: 'tenant-1',
+        studentId: 'student-1',
+        studentFirstName: 'Awa',
+        parentPhone: '2250700000001',
+        parentEmail: null,
+        subject: 'Maths',
+        schoolPhone: '2250700000099',
+      },
+    ]);
+
+    const notifQueue = {
+      remove: vi.fn().mockResolvedValue(undefined),
+      add: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const service = new AttendanceService(repository as never, notifQueue as never);
+    const result = await service.submitStudentAttendance(
+      {
+        scheduleId: 'schedule-1',
+        date: '2026-04-14',
+        absentStudentIds: ['student-1'],
+      },
+      { schemaName: 'school_sainte_marie', userId: 'user-1' }
+    );
+
+    expect(result).toMatchObject({ upsertedCount: 2, isLocked: false });
+    // Pas d'émission directe — tout passe par la queue
+    expect(eventMocks.emitStudentAbsent).not.toHaveBeenCalled();
+    // Le job différé est ajouté pour l'absent candidat
+    expect(notifQueue.add).toHaveBeenCalledWith(
+      'deferred-student-absent',
+      expect.objectContaining({
+        type: 'deferred-student-absent',
+        schemaName: 'school_sainte_marie',
+        studentId: 'student-1',
+        scheduleId: 'schedule-1',
+      }),
+      expect.objectContaining({
+        jobId: expect.stringContaining('deferred-absent:school_sainte_marie:schedule-1:student-1'),
+        delay: expect.any(Number),
+      })
+    );
+    // Annulation du job du présent (student-2)
+    expect(notifQueue.remove).toHaveBeenCalledWith(
+      expect.stringContaining('student-2')
+    );
+  });
+
+  it('qrScan() scanType=end avec queue : changeDelay(0) pour chaque job absent', async () => {
+    vi.setSystemTime(new Date('2026-04-14T09:05:00.000Z'));
+    repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1' });
+    repository.findScheduleContextForTeacher.mockResolvedValue({
+      scheduleId: 'schedule-1',
+      teacherId: 'teacher-1',
+      teacherName: 'Teacher 1',
+      className: '3eme A',
+      subject: 'Maths',
+      plannedRoomId: 'room-1',
+      plannedRoomName: 'A1',
+      plannedRoomToken: 'correct-token',
+      timeSlotId: 'slot-1',
+      slotLabel: '07h30-09h00',
+      slotStartTime: '07:30:00',
+      slotEndTime: '09:00:00',
+    });
+    repository.findRoomByToken.mockResolvedValue({ id: 'room-1' });
+    repository.ensureAttendanceRecord.mockResolvedValue(undefined);
+    repository.recordQrScan.mockResolvedValue(undefined);
+    repository.getStartScanRoomToken.mockResolvedValue(null); // pas de scan de début → validation dégradée
+    repository.listAbsentStudentsForSchedule.mockResolvedValue(['student-1', 'student-2']);
+
+    const mockJob = { changeDelay: vi.fn().mockResolvedValue(undefined) };
+    const notifQueue = {
+      getJob: vi.fn().mockResolvedValue(mockJob),
+    };
+
+    const service = new AttendanceService(repository as never, notifQueue as never);
+    await service.qrScan(
+      {
+        qrToken: 'correct-token',
+        scanType: 'end',
+        scheduleId: 'schedule-1',
+        date: '2026-04-14',
+      },
+      { schemaName: 'school_sainte_marie', userId: 'user-1' }
+    );
+
+    expect(repository.listAbsentStudentsForSchedule).toHaveBeenCalledWith({
+      scheduleId: 'schedule-1',
+      date: '2026-04-14',
+    });
+    expect(notifQueue.getJob).toHaveBeenCalledTimes(2);
+    expect(mockJob.changeDelay).toHaveBeenCalledTimes(2);
+    expect(mockJob.changeDelay).toHaveBeenCalledWith(0);
   });
 });

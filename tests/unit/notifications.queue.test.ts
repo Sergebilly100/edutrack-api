@@ -12,7 +12,10 @@ vi.mock('../../src/shared/database/db.js', () => ({
   withTenantSchema: mocks.withTenantSchema,
 }));
 
-import { processNotificationJob } from '../../src/modules/notifications/notifications.queue.js';
+import {
+  processNotificationJob,
+  buildDeferredAbsentJobId,
+} from '../../src/modules/notifications/notifications.queue.js';
 
 const tenantDb = { execute: vi.fn() };
 
@@ -210,5 +213,66 @@ describe('notifications.queue', () => {
         providerRef: 'email-provider-1',
       })
     );
+  });
+
+  it('buildDeferredAbsentJobId() produit un ID déterministe', () => {
+    const id1 = buildDeferredAbsentJobId('school_abc', 'sched-1', 'stu-1', '2026-06-07');
+    const id2 = buildDeferredAbsentJobId('school_abc', 'sched-1', 'stu-1', '2026-06-07');
+    expect(id1).toBe(id2);
+    expect(id1).toBe('deferred-absent:school_abc:sched-1:stu-1:2026-06-07');
+  });
+
+  it('buildDeferredAbsentJobId() produit des IDs distincts pour des étudiants différents', () => {
+    const id1 = buildDeferredAbsentJobId('school_abc', 'sched-1', 'stu-1', '2026-06-07');
+    const id2 = buildDeferredAbsentJobId('school_abc', 'sched-1', 'stu-2', '2026-06-07');
+    expect(id1).not.toBe(id2);
+  });
+
+  it('processNotificationJob() appelle onDeferredStudentAbsent pour deferred-student-absent', async () => {
+    const onDeferredStudentAbsent = vi.fn();
+    const payload = {
+      type: 'deferred-student-absent' as const,
+      schemaName: 'school_sainte_marie',
+      tenantId: 'tenant-1',
+      studentId: 'student-1',
+      scheduleId: 'schedule-1',
+      studentFirstName: 'Awa',
+      parentPhone: '2250700000001',
+      subject: 'Maths',
+      date: '2026-06-07',
+      schoolPhone: '2250700000099',
+    };
+
+    await processNotificationJob(payload, {
+      repository,
+      smsSender,
+      emailSender,
+      onDeferredStudentAbsent,
+    });
+
+    expect(onDeferredStudentAbsent).toHaveBeenCalledOnce();
+    expect(onDeferredStudentAbsent).toHaveBeenCalledWith(payload);
+    expect(smsSender).not.toHaveBeenCalled();
+  });
+
+  it('processNotificationJob() fonctionne sans onDeferredStudentAbsent (callback optionnel)', async () => {
+    await expect(
+      processNotificationJob(
+        {
+          type: 'deferred-student-absent' as const,
+          schemaName: 'school_sainte_marie',
+          tenantId: 'tenant-1',
+          studentId: 'student-1',
+          scheduleId: 'schedule-1',
+          studentFirstName: 'Awa',
+          parentPhone: '2250700000001',
+          subject: 'Maths',
+          date: '2026-06-07',
+          schoolPhone: '2250700000099',
+        },
+        { repository, smsSender, emailSender }
+      )
+    ).resolves.not.toThrow();
+    expect(smsSender).not.toHaveBeenCalled();
   });
 });

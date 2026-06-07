@@ -1,3 +1,4 @@
+import type { Queue } from 'bullmq';
 import {
   emitStudentAbsent,
   emitTeacherCheckedIn,
@@ -8,6 +9,11 @@ import {
 } from './attendance.events.js';
 import { AttendanceRepository } from './attendance.repository.js';
 import type { ActiveAttendanceItem, CheckInResult } from './attendance.types.js';
+import {
+  buildDeferredAbsentJobId,
+  type DeferredStudentAbsentJobData,
+  type NotificationJobData,
+} from '../notifications/notifications.queue.js';
 import { logger } from '../../shared/observability/logger.js';
 import { calculateAttendanceStatus, validateRoomScan } from '../../shared/utils/attendance.js';
 import { ATTENDANCE_STATUS, CHECKED_IN_VIA } from '../../shared/constants/index.js';
@@ -126,8 +132,14 @@ const resolveActualOccurredAt = (clientTimestamp: string | undefined): Date => {
   return parsed;
 };
 
+/** Délai après la fin du cours avant d'envoyer les notifications SMS parents */
+const ABSENT_NOTIF_DELAY_AFTER_END_MS = 15 * 60 * 1000; // 15 minutes
+
 export class AttendanceService {
-  constructor(private readonly repository: AttendanceRepository) {}
+  constructor(
+    private readonly repository: AttendanceRepository,
+    private readonly notifQueue?: Queue<NotificationJobData>
+  ) {}
 
   async checkIn(
     input: {
@@ -472,6 +484,28 @@ export class AttendanceService {
       });
     }
 
+    // Scan de fin de cours : forcer l'envoi immédiat des notifications différées
+    if (input.scanType === 'end' && this.notifQueue) {
+      const absentStudents = await this.repository.listAbsentStudentsForSchedule({
+        scheduleId: schedule.scheduleId,
+        date,
+      });
+      await Promise.allSettled(
+        absentStudents.map(async (studentId) => {
+          const jobId = buildDeferredAbsentJobId(
+            context.schemaName,
+            schedule.scheduleId,
+            studentId,
+            date
+          );
+          const job = await this.notifQueue!.getJob(jobId);
+          if (job) {
+            await job.changeDelay(0).catch(() => { /* job déjà parti ou terminé */ });
+          }
+        })
+      );
+    }
+
     return {
       valid: validation.valid,
       roomMismatch,
@@ -624,6 +658,16 @@ export class AttendanceService {
     return scheduleForWeek;
   }
 
+  // ── Calcul du délai avant envoi notification absence élève ─────────────────
+  // Retourne le timestamp UTC (ms) à partir duquel les notifs peuvent partir :
+  // fin du cours + ABSENT_NOTIF_DELAY_AFTER_END_MS.
+  private computeNotifSendAfterMs(date: string, slotEndTime: string): number {
+    // slotEndTime est au format "HH:MM", date au format "YYYY-MM-DD"
+    const [hours, minutes] = slotEndTime.split(':').map(Number);
+    const endOfClass = new Date(`${date}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`);
+    return endOfClass.getTime() + ABSENT_NOTIF_DELAY_AFTER_END_MS;
+  }
+
   // ── NOUVEAU - appel élèves par le prof ────────────────────────────────────
   async submitStudentAttendance(
     input: {
@@ -632,7 +676,7 @@ export class AttendanceService {
       absentStudentIds: string[];
     },
     context: ServiceContext
-  ): Promise<{ upsertedCount: number }> {
+  ): Promise<{ upsertedCount: number; notifSendAfter: number; isLocked: boolean }> {
     const teacher = await this.repository.findTeacherByUserId(context.userId);
     if (!teacher) {
       throw new AttendanceModuleError('Teacher profile not found', 404, 'TEACHER_NOT_FOUND');
@@ -647,16 +691,28 @@ export class AttendanceService {
       throw new AttendanceModuleError('Schedule not found', 404, 'SCHEDULE_NOT_FOUND');
     }
 
+    const notifSendAfter = this.computeNotifSendAfterMs(input.date, schedule.slotEndTime);
+    const nowMs = Date.now();
+
+    // Si la deadline est dépassée, le pointage est verrouillé — on refuse la re-soumission
+    if (nowMs >= notifSendAfter) {
+      throw new AttendanceModuleError(
+        'Rollcall submission window has closed',
+        409,
+        'ROLLCALL_WINDOW_CLOSED'
+      );
+    }
+
     // Récupérer la liste complète des élèves de la classe
     const allStudents = await this.repository.listStudentsByClass(schedule.classId ?? '');
 
     if (allStudents.length === 0) {
-      // Pas d'élèves dans la classe - on accepte quand même (classe vide ou pas encore importée)
-      return { upsertedCount: 0 };
+      return { upsertedCount: 0, notifSendAfter, isLocked: false };
     }
 
     const allStudentIds = allStudents.map((s) => s.id);
     const validatedAbsentIds = input.absentStudentIds.filter((id) => allStudentIds.includes(id));
+    const validatedPresentIds = allStudentIds.filter((id) => !validatedAbsentIds.includes(id));
 
     const result = await this.repository.bulkUpsertStudentAttendance({
       scheduleId: input.scheduleId,
@@ -666,31 +722,98 @@ export class AttendanceService {
       allStudentIds,
     });
 
-    // Envoyer les notifications pour les élèves marqués absents
-    const notificationCandidates =
-      await this.repository.listStudentAbsenceNotificationCandidates({
-        schemaName: context.schemaName,
-        scheduleId: input.scheduleId,
-        date: input.date,
-        absentStudentIds: validatedAbsentIds,
-      });
+    // ── Gestion des jobs différés ──────────────────────────────────────────
+    if (this.notifQueue) {
+      // 1. Annuler les jobs différés des élèves qui sont désormais PRÉSENTS
+      //    (peut arriver lors d'une re-soumission)
+      await Promise.allSettled(
+        validatedPresentIds.map((studentId) => {
+          const jobId = buildDeferredAbsentJobId(
+            context.schemaName,
+            input.scheduleId,
+            studentId,
+            input.date
+          );
+          return this.notifQueue!.remove(jobId).catch(() => { /* job absent ou déjà parti */ });
+        })
+      );
 
-    for (const student of notificationCandidates) {
-      emitStudentAbsent({
-        tenantId: student.tenantId,
-        schemaName: context.schemaName,
-        studentId: student.studentId,
-        scheduleId: input.scheduleId,
-        studentFirstName: student.studentFirstName,
-        parentPhone: student.parentPhone,
-        parentEmail: student.parentEmail,
-        subject: student.subject,
-        date: input.date,
-        schoolPhone: student.schoolPhone ?? DEFAULT_SCHOOL_PHONE,
-      });
+      // 2. Enqueue les jobs différés pour les élèves ABSENTS (candidats à notif)
+      const notificationCandidates =
+        await this.repository.listStudentAbsenceNotificationCandidates({
+          schemaName: context.schemaName,
+          scheduleId: input.scheduleId,
+          date: input.date,
+          absentStudentIds: validatedAbsentIds,
+        });
+
+      const delayMs = Math.max(0, notifSendAfter - Date.now());
+
+      await Promise.allSettled(
+        notificationCandidates.map((student) => {
+          const jobId = buildDeferredAbsentJobId(
+            context.schemaName,
+            input.scheduleId,
+            student.studentId,
+            input.date
+          );
+          const jobData: DeferredStudentAbsentJobData = {
+            type: 'deferred-student-absent',
+            schemaName: context.schemaName,
+            tenantId: student.tenantId,
+            studentId: student.studentId,
+            scheduleId: input.scheduleId,
+            studentFirstName: student.studentFirstName,
+            parentPhone: student.parentPhone,
+            parentEmail: student.parentEmail,
+            subject: student.subject,
+            date: input.date,
+            schoolPhone: student.schoolPhone ?? DEFAULT_SCHOOL_PHONE,
+          };
+          // `add` avec jobId déterministe : si le job existe déjà (re-soumission),
+          // BullMQ le met à jour (updateData) grâce à l'option `conflict: 'replace'`.
+          // Pour les versions antérieures de BullMQ sans cette option, on remove + add.
+          return this.notifQueue!.remove(jobId)
+            .catch(() => { /* ignoré si job absent */ })
+            .then(() =>
+              this.notifQueue!.add('deferred-student-absent', jobData, {
+                jobId,
+                delay: delayMs,
+                attempts: 3,
+                backoff: { type: 'exponential', delay: 5_000 },
+                removeOnComplete: true,
+                removeOnFail: { count: 100 },
+              })
+            );
+        })
+      );
+    } else {
+      // Fallback sans queue : comportement synchrone immédiat (dev / tests)
+      const notificationCandidates =
+        await this.repository.listStudentAbsenceNotificationCandidates({
+          schemaName: context.schemaName,
+          scheduleId: input.scheduleId,
+          date: input.date,
+          absentStudentIds: validatedAbsentIds,
+        });
+
+      for (const student of notificationCandidates) {
+        emitStudentAbsent({
+          tenantId: student.tenantId,
+          schemaName: context.schemaName,
+          studentId: student.studentId,
+          scheduleId: input.scheduleId,
+          studentFirstName: student.studentFirstName,
+          parentPhone: student.parentPhone,
+          parentEmail: student.parentEmail,
+          subject: student.subject,
+          date: input.date,
+          schoolPhone: student.schoolPhone ?? DEFAULT_SCHOOL_PHONE,
+        });
+      }
     }
 
-    return result;
+    return { upsertedCount: result.upsertedCount, notifSendAfter, isLocked: false };
   }
 
   async detectMissingQrScans(context: { schemaName: string; date?: string }): Promise<number> {
@@ -937,5 +1060,6 @@ export class AttendanceService {
 }
 
 export const buildAttendanceService = (
-  db: ConstructorParameters<typeof AttendanceRepository>[0]
-): AttendanceService => new AttendanceService(new AttendanceRepository(db));
+  db: ConstructorParameters<typeof AttendanceRepository>[0],
+  notifQueue?: Queue<NotificationJobData>
+): AttendanceService => new AttendanceService(new AttendanceRepository(db), notifQueue);

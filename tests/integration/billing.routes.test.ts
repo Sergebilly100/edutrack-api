@@ -405,4 +405,85 @@ describe('billing integration (real db)', () => {
       status: expect.stringMatching(/pending|processing|done/),
     });
   });
+
+  it('POST /api/v1/billing/salary/bulk-mark-paid marque plusieurs fiches payées', async () => {
+    const headers = await getAuthHeaders('director');
+
+    // Calculer les fiches du mois courant
+    await request()
+      .post(`/api/v1/billing/salary/compute?month=${currentMonth}`)
+      .set(headers);
+
+    // Récupérer des fiches existantes vacataires
+    const records = await queryTenant<{ id: string; hours_done: number; hourly_rate: number }>(
+      `
+        SELECT sr.id, sr.hours_done, sr.hourly_rate
+        FROM ${tenantTable('salary_records')} sr
+        JOIN ${tenantTable('teachers')} t ON t.id = sr.teacher_id
+        WHERE sr.period_month = $1::date
+          AND t.type = 'vacataire'
+          AND sr.status = 'pending'
+        LIMIT 2
+      `,
+      [`${currentMonth}-01`]
+    );
+
+    if (records.length === 0) {
+      return; // Pas de vacataires dans ce jeu de données — test ignoré
+    }
+
+    // Préparer les items
+    const items = records.map((r) => ({
+      recordId: r.id,
+      hoursToPay: Math.max(0.01, Number(r.hours_done ?? 0)),
+    }));
+
+    const response = await request()
+      .post('/api/v1/billing/salary/bulk-mark-paid')
+      .set(headers)
+      .send({ items, notes: 'Paiement groupé test' });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveProperty('paid');
+    expect(response.body).toHaveProperty('skipped');
+    expect(response.body).toHaveProperty('results');
+    expect(response.body.paid + response.body.skipped).toBe(items.length);
+  });
+
+  it('POST /api/v1/billing/salary/bulk-mark-paid retourne 400 si items vide', async () => {
+    const headers = await getAuthHeaders('director');
+
+    const response = await request()
+      .post('/api/v1/billing/salary/bulk-mark-paid')
+      .set(headers)
+      .send({ items: [] });
+
+    expect(response.status).toBe(400);
+  });
+
+  it('POST /api/v1/billing/salary/bulk-mark-paid retourne 400 si recordId invalide (non-uuid)', async () => {
+    const headers = await getAuthHeaders('director');
+
+    const response = await request()
+      .post('/api/v1/billing/salary/bulk-mark-paid')
+      .set(headers)
+      .send({
+        items: [{ recordId: 'not-a-uuid', hoursToPay: 2 }],
+      });
+
+    expect(response.status).toBe(400);
+  });
+
+  it('POST /api/v1/billing/salary/bulk-mark-paid retourne 403 pour un prof', async () => {
+    const headers = await getAuthHeaders('teacher');
+
+    const response = await request()
+      .post('/api/v1/billing/salary/bulk-mark-paid')
+      .set(headers)
+      .send({
+        items: [{ recordId: '00000000-0000-0000-0000-000000000000', hoursToPay: 1 }],
+      });
+
+    expect(response.status).toBe(403);
+  });
 });

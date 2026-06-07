@@ -82,16 +82,42 @@ export type ValidationDailySummaryJobData = {
   date?: string;
 };
 
+/** Job différé : émis par attendance.service après l'appel élèves, déclenche l'event student.absent après le délai */
+export type DeferredStudentAbsentJobData = {
+  type: 'deferred-student-absent';
+  schemaName: string;
+  tenantId: string;
+  studentId: string;
+  scheduleId: string;
+  studentFirstName: string;
+  parentPhone: string;
+  parentEmail?: string | null;
+  subject: string;
+  date: string;
+  schoolPhone: string;
+};
+
 export type NotificationJobData =
   | NotificationSmsJobData
   | NotificationEmailJobData
   | TeacherDailySummaryJobData
-  | ValidationDailySummaryJobData;
+  | ValidationDailySummaryJobData
+  | DeferredStudentAbsentJobData;
 
-type NotificationsWorkerDeps = {
+/** ID déterministe pour les jobs d'absence différée — permet l'annulation/mise à jour */
+export const buildDeferredAbsentJobId = (
+  schemaName: string,
+  scheduleId: string,
+  studentId: string,
+  date: string
+): string => `deferred-absent:${schemaName}:${scheduleId}:${studentId}:${date}`;
+
+export type NotificationsWorkerDeps = {
   repository: NotificationsRepository;
   smsSender: SmsSender;
   emailSender: EmailSender;
+  /** Appelé quand un job deferred-student-absent arrive à maturité */
+  onDeferredStudentAbsent?: (payload: DeferredStudentAbsentJobData) => void;
 };
 
 const currentBusinessDate = (): string => new Date().toISOString().slice(0, 10);
@@ -416,6 +442,11 @@ export const processNotificationJob = async (
 
   if (data.type === 'validation-daily-summary-all') {
     await processValidationDailySummaryJob(data, deps);
+    return;
+  }
+
+  if (data.type === 'deferred-student-absent') {
+    deps.onDeferredStudentAbsent?.(data);
     return;
   }
 

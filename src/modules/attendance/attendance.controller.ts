@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError, z } from 'zod';
+import type { Queue } from 'bullmq';
 
 import { withTenantSchema } from '../../shared/database/db.js';
 import {
@@ -10,6 +11,7 @@ import {
 import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
 import { buildBillingService, BillingModuleError } from '../billing/billing.service.js';
 import { SENSITIVE_ACTION_RATE_LIMIT } from '../../shared/utils/rate-limit.js';
+import type { NotificationJobData } from '../notifications/notifications.queue.js';
 
 import { AttendanceModuleError, buildAttendanceService } from './attendance.service.js';
 import {
@@ -187,7 +189,7 @@ const geoReviewBodySchema = z.object({
 
 export default async function attendanceController(
   app: FastifyInstance,
-  options: { pdfQueue?: PdfExportQueueHandle } = {}
+  options: { pdfQueue?: PdfExportQueueHandle; notifQueue?: Queue<NotificationJobData> } = {}
 ): Promise<void> {
   app.post('/api/v1/attendance/check-in', {
     preHandler: requireTeacher,
@@ -272,7 +274,7 @@ export default async function attendanceController(
       const body = qrScanBodySchema.parse(request.body ?? {});
 
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-        const service = buildAttendanceService(tenantDb);
+        const service = buildAttendanceService(tenantDb, options.notifQueue);
         return service.qrScan(
           {
             qrToken: body.qr_token,
@@ -386,7 +388,7 @@ export default async function attendanceController(
       const body = bulkStudentsBodySchema.parse(request.body ?? {});
 
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-        const service = buildAttendanceService(tenantDb);
+        const service = buildAttendanceService(tenantDb, options.notifQueue);
         return service.submitStudentAttendance(
           {
             scheduleId: body.schedule_id,

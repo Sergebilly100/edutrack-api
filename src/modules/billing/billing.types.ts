@@ -78,3 +78,18 @@ export const recalculateSalaryBodySchema = z.object({
   teacher_id: z.string().uuid().optional(),
 });
 
+export const bulkMarkPaidBodySchema = z.object({
+  items: z
+    .array(
+      z.object({
+        recordId: z.string().uuid(),
+        hoursToPay: z.number().positive().max(744),
+      })
+    )
+    .min(1)
+    .max(100),
+  notes: z.string().trim().max(2000).optional(),
+});
+
+export type BulkMarkPaidBody = z.infer<typeof bulkMarkPaidBodySchema>;
+

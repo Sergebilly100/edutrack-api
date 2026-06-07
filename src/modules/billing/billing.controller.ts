@@ -29,6 +29,7 @@ import {
   teacherParamsSchema,
   updateSalaryStatusBodySchema,
   recalculateSalaryBodySchema,
+  bulkMarkPaidBodySchema,
 } from './billing.types.js';
 import { SalariesModuleError, buildSalariesService } from '../salaries/salaries.service.js';
 
@@ -441,6 +442,52 @@ export default async function billingController(
         });
 
         return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/billing/salary/bulk-mark-paid',
+    { preHandler: requirePermission('salary.mark_paid') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const body = bulkMarkPaidBodySchema.parse(request.body ?? {});
+        const actor = {
+          userId: claims.sub,
+          role: claims.role as 'director' | 'staff' | 'teacher' | 'super_admin',
+          schemaName: claims.schemaName,
+          tenantId: claims.tenantId,
+        };
+
+        const results = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          const service = buildBillingService(tenantDb);
+          const outcomes: { recordId: string; status: 'ok' | 'skipped'; reason?: string }[] = [];
+
+          for (const item of body.items) {
+            try {
+              await service.updateSalaryRecordStatus({
+                recordId: item.recordId,
+                status: 'paid',
+                notes: body.notes,
+                hoursToPay: item.hoursToPay,
+                actor,
+              });
+              outcomes.push({ recordId: item.recordId, status: 'ok' });
+            } catch (err) {
+              const code = err instanceof BillingModuleError ? err.code : 'UNKNOWN';
+              outcomes.push({ recordId: item.recordId, status: 'skipped', reason: code });
+            }
+          }
+
+          return outcomes;
+        });
+
+        const paid = results.filter((r) => r.status === 'ok').length;
+        const skipped = results.filter((r) => r.status === 'skipped').length;
+        return reply.send({ paid, skipped, results });
       } catch (error) {
         return handleError(request, reply, error);
       }
