@@ -28,6 +28,12 @@ export class SubscriptionsModuleError extends Error {
 }
 const EDUTRACK_COMMISSION_PCT = 15;
 
+// Fenêtre pendant laquelle un abonnement peut être annulé (et donc remboursé
+// intégralement). Passé ce délai, l'annulation est refusée : la fenêtre sert à
+// corriger une erreur de saisie, pas à rembourser un service déjà consommé.
+const CANCELLATION_WINDOW_DAYS = 7;
+const CANCELLATION_WINDOW_MS = CANCELLATION_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
 export class SubscriptionsService {
   constructor(private readonly repository: SubscriptionsRepository) {}
 
@@ -283,13 +289,40 @@ export class SubscriptionsService {
       throw new SubscriptionsModuleError('Parent not found', 404, 'PARENT_NOT_FOUND');
     }
     const subscriptions = await this.repository.getParentSubscriptions(parentId);
-    const subscriptionsWithDetails = await Promise.all(
-      subscriptions.map(async (item) => ({
-        ...item,
-        students: await this.repository.getSubscriptionStudents(item.id),
-        payments: await this.repository.getSubscriptionPayments(item.id),
-      }))
-    );
+    const subscriptionIds = subscriptions.map((item) => item.id);
+
+    // Batch : 2 requêtes au total (au lieu de 2 par abonnement → N+1).
+    const [allStudents, allPayments] = await Promise.all([
+      this.repository.getSubscriptionStudentsForIds(subscriptionIds),
+      this.repository.getSubscriptionPaymentsForIds(subscriptionIds),
+    ]);
+
+    const studentsBySub = new Map<string, typeof allStudents>();
+    for (const row of allStudents) {
+      const list = studentsBySub.get(row.subscription_id) ?? [];
+      list.push(row);
+      studentsBySub.set(row.subscription_id, list);
+    }
+    const paymentsBySub = new Map<string, typeof allPayments>();
+    for (const row of allPayments) {
+      const list = paymentsBySub.get(row.subscription_id) ?? [];
+      list.push(row);
+      paymentsBySub.set(row.subscription_id, list);
+    }
+
+    // On retire la clé de regroupement subscription_id avant de renvoyer, pour
+    // conserver exactement la forme historique (StudentRow / PaymentRow).
+    const stripSubId = <T extends { subscription_id: string }>(rows: T[]): Omit<T, 'subscription_id'>[] =>
+      rows.map(({ subscription_id, ...rest }) => {
+        void subscription_id;
+        return rest;
+      });
+
+    const subscriptionsWithDetails = subscriptions.map((item) => ({
+      ...item,
+      students: stripSubId(studentsBySub.get(item.id) ?? []),
+      payments: stripSubId(paymentsBySub.get(item.id) ?? []),
+    }));
     return { parent, subscriptions: subscriptionsWithDetails };
   }
 
@@ -402,19 +435,56 @@ export class SubscriptionsService {
     return { parent: updated };
   }
 
-  async cancelSubscription(subscriptionId: string, parentId: string, actorUserId: string): Promise<void> {
-    const subscription = await this.repository.getSubscriptionById(subscriptionId);
+  async cancelSubscription(input: {
+    subscriptionId: string;
+    parentId: string;
+    actorUserId: string;
+    actorRole: string;
+    schemaName: string;
+    reason: string;
+  }): Promise<void> {
+    const subscription = await this.repository.getSubscriptionById(input.subscriptionId);
     if (!subscription) {
       throw new SubscriptionsModuleError('Subscription not found', 404, 'SUBSCRIPTION_NOT_FOUND');
     }
-    if (subscription.parent_id !== parentId) {
+    if (subscription.parent_id !== input.parentId) {
       throw new SubscriptionsModuleError('Subscription does not belong to this parent', 403, 'SUBSCRIPTION_OWNERSHIP_MISMATCH');
     }
     if (subscription.status === 'cancelled') {
       throw new SubscriptionsModuleError('Subscription is already cancelled', 409, 'SUBSCRIPTION_ALREADY_CANCELLED');
     }
-    const resolvedActorId = await this.resolveActorUserId(actorUserId);
-    await this.repository.updateSubscriptionStatus(subscriptionId, 'cancelled', resolvedActorId);
+
+    // Fenêtre d'annulation : uniquement dans les 7 jours suivant la souscription.
+    // Au-delà, l'annulation (et donc le remboursement) est impossible.
+    const ageMs = Date.now() - new Date(subscription.created_at).getTime();
+    if (ageMs >= CANCELLATION_WINDOW_MS) {
+      throw new SubscriptionsModuleError(
+        `L'annulation n'est possible que dans les ${CANCELLATION_WINDOW_DAYS} jours suivant la souscription`,
+        409,
+        'CANCELLATION_WINDOW_CLOSED'
+      );
+    }
+
+    const resolvedActorId = await this.resolveActorUserId(input.actorUserId);
+    // L'audit (public.audit_financial_events) et le changement de statut (schéma
+    // tenant) sont sur deux schémas distincts : on ne peut pas les englober dans
+    // une transaction unique simplement. On écrit donc l'audit AVANT le passage en
+    // 'cancelled'. Ainsi, si l'audit échoue, le statut n'a pas changé et l'action
+    // peut être rejouée à l'identique (la garde ALREADY_CANCELLED n'a pas encore
+    // basculé). Une fois l'audit en base, on bascule le statut : le passage en
+    // 'cancelled' exclut l'abonnement du collecté et de la commission
+    // (cf. getRevenueSummary, WHERE status <> 'cancelled'), rendant le
+    // remboursement intégral effectif sans écriture monétaire.
+    await this.repository.auditSubscriptionCancellation({
+      schemaName: input.schemaName,
+      actorId: resolvedActorId,
+      actorRole: input.actorRole,
+      subscriptionId: input.subscriptionId,
+      reason: input.reason,
+      refundedAmountFcfa: subscription.total_amount_fcfa,
+      withinWindow: true,
+    });
+    await this.repository.updateSubscriptionStatus(input.subscriptionId, 'cancelled', resolvedActorId);
   }
 
   async getSchoolSmsFeatureSettings(schemaName: string) {

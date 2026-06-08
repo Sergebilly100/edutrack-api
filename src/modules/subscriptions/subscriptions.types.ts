@@ -70,7 +70,8 @@ export const cancelSubscriptionParamsSchema = z.object({
 });
 
 export const cancelSubscriptionBodySchema = z.object({
-  reason: z.string().trim().max(500).optional(),
+  // Motif obligatoire : toute annulation doit être justifiée (traçabilité audit).
+  reason: z.string().trim().min(1, "Le motif d'annulation est obligatoire").max(500),
 });
 
 export const revenueSummaryQuerySchema = z.object({

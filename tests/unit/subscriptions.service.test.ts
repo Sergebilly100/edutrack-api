@@ -22,6 +22,7 @@ const buildRepositoryMock = () => ({
   getSubscriptionStudents: vi.fn(),
   getSubscriptionById: vi.fn(),
   updateSubscriptionStatus: vi.fn(),
+  auditSubscriptionCancellation: vi.fn(),
   updateParentPassword: vi.fn(),
   getRevenueSummary: vi.fn(),
   listRevenueHistory: vi.fn(),
@@ -247,45 +248,88 @@ describe('subscriptions.service', () => {
   });
 
   describe('cancelSubscription', () => {
+    const recentCreatedAt = new Date().toISOString();
+    const oldCreatedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+    const baseInput = {
+      subscriptionId: 'sub-1',
+      parentId: 'parent-1',
+      actorUserId: 'actor-1',
+      actorRole: 'staff',
+      schemaName: 'school_test',
+      reason: "Erreur de saisie",
+    };
+
     it('lève SUBSCRIPTION_NOT_FOUND si abonnement inexistant', async () => {
       const repository = buildRepositoryMock();
       repository.getSubscriptionById.mockResolvedValue(null);
 
       const service = new SubscriptionsService(repository as never);
       await expect(
-        service.cancelSubscription('unknown-sub-id', 'parent-1', 'actor-1')
+        service.cancelSubscription({ ...baseInput, subscriptionId: 'unknown-sub-id' })
       ).rejects.toMatchObject({ code: 'SUBSCRIPTION_NOT_FOUND' });
     });
 
     it('lève SUBSCRIPTION_OWNERSHIP_MISMATCH si parentId ne correspond pas', async () => {
       const repository = buildRepositoryMock();
-      repository.getSubscriptionById.mockResolvedValue({ id: 'sub-1', parent_id: 'other-parent', status: 'active' });
+      repository.getSubscriptionById.mockResolvedValue({
+        id: 'sub-1', parent_id: 'other-parent', status: 'active',
+        created_at: recentCreatedAt, total_amount_fcfa: 4000,
+      });
 
       const service = new SubscriptionsService(repository as never);
       await expect(
-        service.cancelSubscription('sub-1', 'wrong-parent', 'actor-1')
+        service.cancelSubscription({ ...baseInput, parentId: 'wrong-parent' })
       ).rejects.toMatchObject({ code: 'SUBSCRIPTION_OWNERSHIP_MISMATCH' });
     });
 
     it('lève SUBSCRIPTION_ALREADY_CANCELLED si déjà annulée', async () => {
       const repository = buildRepositoryMock();
-      repository.getSubscriptionById.mockResolvedValue({ id: 'sub-1', parent_id: 'parent-1', status: 'cancelled' });
+      repository.getSubscriptionById.mockResolvedValue({
+        id: 'sub-1', parent_id: 'parent-1', status: 'cancelled',
+        created_at: recentCreatedAt, total_amount_fcfa: 4000,
+      });
 
       const service = new SubscriptionsService(repository as never);
       await expect(
-        service.cancelSubscription('sub-1', 'parent-1', 'actor-1')
+        service.cancelSubscription(baseInput)
       ).rejects.toMatchObject({ code: 'SUBSCRIPTION_ALREADY_CANCELLED' });
     });
 
-    it('met à jour le statut si abonnement valide', async () => {
+    it('lève CANCELLATION_WINDOW_CLOSED au-delà de 7 jours', async () => {
       const repository = buildRepositoryMock();
-      repository.getSubscriptionById.mockResolvedValue({ id: 'sub-1', parent_id: 'parent-1', status: 'active' });
-      repository.updateSubscriptionStatus.mockResolvedValue(undefined);
+      repository.getSubscriptionById.mockResolvedValue({
+        id: 'sub-1', parent_id: 'parent-1', status: 'active',
+        created_at: oldCreatedAt, total_amount_fcfa: 4000,
+      });
 
       const service = new SubscriptionsService(repository as never);
-      await service.cancelSubscription('sub-1', 'parent-1', 'actor-1');
+      await expect(
+        service.cancelSubscription(baseInput)
+      ).rejects.toMatchObject({ code: 'CANCELLATION_WINDOW_CLOSED', statusCode: 409 });
+      expect(repository.updateSubscriptionStatus).not.toHaveBeenCalled();
+    });
+
+    it('annule + audite dans la fenêtre de 7 jours', async () => {
+      const repository = buildRepositoryMock();
+      repository.getSubscriptionById.mockResolvedValue({
+        id: 'sub-1', parent_id: 'parent-1', status: 'active',
+        created_at: recentCreatedAt, total_amount_fcfa: 4000,
+      });
+      repository.updateSubscriptionStatus.mockResolvedValue(undefined);
+      repository.auditSubscriptionCancellation.mockResolvedValue(undefined);
+
+      const service = new SubscriptionsService(repository as never);
+      await service.cancelSubscription(baseInput);
 
       expect(repository.updateSubscriptionStatus).toHaveBeenCalledWith('sub-1', 'cancelled', 'resolved-actor-1');
+      expect(repository.auditSubscriptionCancellation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          subscriptionId: 'sub-1',
+          reason: 'Erreur de saisie',
+          refundedAmountFcfa: 4000,
+          withinWindow: true,
+        })
+      );
     });
   });
 

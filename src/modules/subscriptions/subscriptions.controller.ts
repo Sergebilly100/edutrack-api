@@ -275,11 +275,18 @@ export default async function subscriptionsController(
     async (request, reply) => {
       try {
         const { parentId, subscriptionId } = cancelSubscriptionParamsSchema.parse(request.params ?? {});
-        cancelSubscriptionBodySchema.parse(request.body ?? {});
+        const body = cancelSubscriptionBodySchema.parse(request.body ?? {});
         const claims = request.claims!;
         await withTenantSchema(claims.schemaName, async (tenantDb) => {
           const service = new SubscriptionsService(new SubscriptionsRepository(tenantDb));
-          await service.cancelSubscription(subscriptionId, parentId, claims.sub);
+          await service.cancelSubscription({
+            subscriptionId,
+            parentId,
+            actorUserId: claims.sub,
+            actorRole: claims.role,
+            schemaName: claims.schemaName,
+            reason: body.reason,
+          });
         });
         return reply.send({ success: true });
       } catch (error) {

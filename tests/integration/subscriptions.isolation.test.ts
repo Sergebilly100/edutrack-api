@@ -131,7 +131,7 @@ describe('subscriptions - isolation inter-tenant', () => {
     const response = await request()
       .patch(`/api/v1/subscriptions/parents/${otherParentId}/subscription/${subscriptionId}/cancel`)
       .set(headers)
-      .send({});
+      .send({ reason: 'Erreur de saisie' });
 
     expect(response.status).toBe(403);
     expect(response.body.code).toBe('SUBSCRIPTION_OWNERSHIP_MISMATCH');

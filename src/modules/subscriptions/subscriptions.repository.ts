@@ -908,6 +908,49 @@ export class SubscriptionsRepository {
     return result.rows;
   }
 
+  // Variantes batch : récupèrent élèves/paiements pour PLUSIEURS abonnements en
+  // une seule requête (évite le N+1 de getParentDetails). Chaque ligne porte son
+  // subscription_id pour le regroupement côté service.
+  async getSubscriptionStudentsForIds(
+    subscriptionIds: string[]
+  ): Promise<Array<StudentRow & { subscription_id: string }>> {
+    if (subscriptionIds.length === 0) return [];
+    const result = await this.tenantDb.execute<StudentRow & { subscription_id: string }>(sql`
+      SELECT
+        psl.subscription_id::text AS subscription_id,
+        s.id::text AS id,
+        CONCAT(s.first_name, ' ', s.last_name) AS full_name,
+        c.name AS class_name,
+        s.matricule::text AS registration_number
+      FROM parent_student_links psl
+      INNER JOIN students s ON s.id = psl.student_id
+      LEFT JOIN classes c ON c.id = s.class_id
+      WHERE psl.subscription_id = ANY(${subscriptionIds}::uuid[])
+      ORDER BY s.last_name, s.first_name
+    `);
+    return result.rows;
+  }
+
+  async getSubscriptionPaymentsForIds(
+    subscriptionIds: string[]
+  ): Promise<Array<PaymentRow & { subscription_id: string }>> {
+    if (subscriptionIds.length === 0) return [];
+    const result = await this.tenantDb.execute<PaymentRow & { subscription_id: string }>(sql`
+      SELECT
+        subscription_id::text AS subscription_id,
+        id::text,
+        amount_fcfa,
+        payment_method,
+        paid_at::text,
+        created_at::text,
+        notes
+      FROM subscription_payments
+      WHERE subscription_id = ANY(${subscriptionIds}::uuid[])
+      ORDER BY paid_at DESC
+    `);
+    return result.rows;
+  }
+
   async getLatestSubscription(parentId: string): Promise<SubscriptionRow | null> {
     const result = await this.tenantDb.execute<SubscriptionRow>(sql`
       SELECT
@@ -1014,9 +1057,80 @@ export class SubscriptionsRepository {
     `);
   }
 
-  async getSubscriptionById(subscriptionId: string): Promise<{ id: string; parent_id: string; status: SubscriptionStatus } | null> {
-    const result = await this.tenantDb.execute<{ id: string; parent_id: string; status: SubscriptionStatus }>(sql`
-      SELECT id::text, parent_id::text, status::text AS status
+  async auditSubscriptionCancellation(params: {
+    schemaName: string;
+    actorId: string;
+    actorRole: string;
+    subscriptionId: string;
+    reason: string;
+    refundedAmountFcfa: number;
+    withinWindow: boolean;
+  }): Promise<void> {
+    const actorResult = await this.tenantDb.execute<{ actor_name: string | null; actor_position: string | null }>(sql`
+      SELECT
+        u.name AS actor_name,
+        (
+          SELECT p.name
+          FROM position_assignments pa
+          INNER JOIN admin_positions p ON p.id = pa.position_id
+          WHERE pa.user_id = u.id
+          ORDER BY pa.created_at DESC
+          LIMIT 1
+        ) AS actor_position
+      FROM users u
+      WHERE u.id = ${params.actorId}::uuid
+      LIMIT 1
+    `);
+    const actor = actorResult.rows[0] ?? { actor_name: null, actor_position: null };
+    await publicDb.execute(sql`
+      INSERT INTO public.audit_financial_events (
+        tenant_id,
+        actor_id,
+        actor_role,
+        action,
+        payload_before,
+        payload_after
+      )
+      SELECT
+        t.id,
+        ${params.actorId}::uuid,
+        ${actor.actor_position ?? params.actorRole},
+        'subscription.cancelled',
+        ${JSON.stringify({ subscriptionId: params.subscriptionId })}::jsonb,
+        ${JSON.stringify({
+          subscriptionId: params.subscriptionId,
+          reason: params.reason,
+          refundedAmountFcfa: params.refundedAmountFcfa,
+          withinWindow: params.withinWindow,
+          actorName: actor.actor_name,
+          actorRole: actor.actor_position ?? params.actorRole,
+        })}::jsonb
+      FROM public.tenants t
+      WHERE t.schema_name = ${params.schemaName}
+      LIMIT 1
+    `);
+  }
+
+  async getSubscriptionById(subscriptionId: string): Promise<{
+    id: string;
+    parent_id: string;
+    status: SubscriptionStatus;
+    created_at: string;
+    total_amount_fcfa: number;
+  } | null> {
+    const result = await this.tenantDb.execute<{
+      id: string;
+      parent_id: string;
+      status: SubscriptionStatus;
+      created_at: string;
+      total_amount_fcfa: number;
+    }>(sql`
+      SELECT
+        id::text,
+        parent_id::text,
+        status::text AS status,
+        created_at::text AS created_at,
+        total_amount_fcfa
       FROM parent_subscriptions
       WHERE id = ${subscriptionId}::uuid
       LIMIT 1
