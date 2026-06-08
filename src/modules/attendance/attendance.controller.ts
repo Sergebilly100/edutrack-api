@@ -174,6 +174,11 @@ const monthQuerySchema = z.object({
     .default(() => new Date().toISOString().slice(0, 7)),
 });
 
+const rollCallQuerySchema = z.object({
+  schedule_id: z.string().uuid(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must use YYYY-MM-DD format'),
+});
+
 const teacherMonthlyParamsSchema = z.object({
   teacherId: z.string().uuid(),
 });
@@ -395,6 +400,27 @@ export default async function attendanceController(
             date: body.date,
             absentStudentIds: body.absent_student_ids,
           },
+          { schemaName: claims.schemaName, userId: claims.sub }
+        );
+      });
+
+      return reply.send({ data: result });
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  // ── Statuts de présence des élèves d'un cours (pré-remplir l'appel rouvert) ──
+  // GET /api/v1/attendance/students/roll-call?schedule_id=…&date=YYYY-MM-DD
+  app.get('/api/v1/attendance/students/roll-call', { preHandler: requireTeacher }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const query = rollCallQuerySchema.parse(request.query ?? {});
+
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildAttendanceService(tenantDb);
+        return service.getStudentRollCall(
+          { scheduleId: query.schedule_id, date: query.date },
           { schemaName: claims.schemaName, userId: claims.sub }
         );
       });

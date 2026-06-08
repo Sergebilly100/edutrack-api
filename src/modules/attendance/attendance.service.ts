@@ -828,6 +828,30 @@ export class AttendanceService {
     return { upsertedCount: result.upsertedCount, notifSendAfter, isLocked: false };
   }
 
+  // Statuts de présence des élèves d'un cours pour un jour, pour pré-remplir
+  // l'appel quand le prof le rouvre afin de corriger (élève absent → présent).
+  async getStudentRollCall(
+    input: { scheduleId: string; date: string },
+    context: ServiceContext
+  ): Promise<Array<{ student_id: string; status: 'present' | 'absent' | 'excused' | 'unmarked' }>> {
+    const teacher = await this.repository.findTeacherByUserId(context.userId);
+    if (!teacher) {
+      throw new AttendanceModuleError('Teacher profile not found', 404, 'TEACHER_NOT_FOUND');
+    }
+    const schedule = await this.repository.findScheduleContextForTeacher(
+      input.scheduleId,
+      teacher.id
+    );
+    if (!schedule) {
+      throw new AttendanceModuleError('Schedule not found', 404, 'SCHEDULE_NOT_FOUND');
+    }
+    return this.repository.listStudentRollCallForSchedule({
+      classId: schedule.classId ?? '',
+      scheduleId: schedule.scheduleId,
+      date: input.date,
+    });
+  }
+
   async detectMissingQrScans(context: { schemaName: string; date?: string }): Promise<number> {
     const date = context.date ?? currentDateIso();
     const missing = await this.repository.listMissingQrScans({ date });

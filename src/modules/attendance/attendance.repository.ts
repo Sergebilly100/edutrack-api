@@ -995,6 +995,36 @@ export class AttendanceRepository {
     return getRows(result);
   }
 
+  /**
+   * Statut de présence de chaque élève (actif) de la classe pour un schedule+date.
+   * Sert à pré-remplir l'appel quand le prof le rouvre pour corriger. `unmarked`
+   * si l'élève n'a pas de ligne attendances_student ce jour-là.
+   */
+  async listStudentRollCallForSchedule(params: {
+    classId: string;
+    scheduleId: string;
+    date: string;
+  }): Promise<Array<{ student_id: string; status: 'present' | 'absent' | 'excused' | 'unmarked' }>> {
+    const result = await this.db.execute<{
+      student_id: string;
+      status: 'present' | 'absent' | 'excused' | 'unmarked';
+    }>(sql`
+      SELECT
+        st.id::text AS student_id,
+        COALESCE(ast.status::text, 'unmarked') AS status
+      FROM students st
+      LEFT JOIN attendances_student ast
+        ON ast.student_id = st.id
+       AND ast.schedule_id = ${params.scheduleId}::uuid
+       AND ast.date = ${params.date}::date
+      WHERE st.class_id = ${params.classId}
+        AND st.is_active = true
+      ORDER BY st.last_name ASC, st.first_name ASC
+    `);
+
+    return getRows(result);
+  }
+
   /** Retourne les IDs des élèves marqués absents pour un schedule+date donné */
   async listAbsentStudentsForSchedule(params: {
     scheduleId: string;

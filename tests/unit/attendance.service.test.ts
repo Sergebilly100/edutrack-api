@@ -46,6 +46,7 @@ const repository = {
   listAbsentStudentsForSchedule: vi.fn(),
   getTeacherAttendance: vi.fn(),
   checkOut: vi.fn(),
+  listStudentRollCallForSchedule: vi.fn(),
 };
 
 beforeEach(() => {
@@ -634,5 +635,36 @@ describe('attendance.service', () => {
     expect(repository.checkOut).toHaveBeenCalledWith(
       expect.objectContaining({ actualMinutes: 90 })
     );
+  });
+
+  it('getStudentRollCall() retourne les statuts élèves pour pré-remplir l\'appel rouvert', async () => {
+    repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1' });
+    repository.findScheduleContextForTeacher.mockResolvedValue({
+      scheduleId: 'schedule-1',
+      teacherId: 'teacher-1',
+      classId: 'class-1',
+      slotStartTime: '07:30:00',
+      slotEndTime: '09:00:00',
+    });
+    repository.listStudentRollCallForSchedule.mockResolvedValue([
+      { student_id: 'stu-1', status: 'absent' },
+      { student_id: 'stu-2', status: 'present' },
+      { student_id: 'stu-3', status: 'unmarked' },
+    ]);
+
+    const service = new AttendanceService(repository as never);
+    const result = await service.getStudentRollCall(
+      { scheduleId: 'schedule-1', date: '2026-04-14' },
+      { schemaName: 'school_sainte_marie', userId: 'user-1' }
+    );
+
+    expect(result).toHaveLength(3);
+    expect(result.find((r) => r.student_id === 'stu-1')?.status).toBe('absent');
+    // scoping prof : la classe vient du schedule résolu pour CE prof
+    expect(repository.listStudentRollCallForSchedule).toHaveBeenCalledWith({
+      classId: 'class-1',
+      scheduleId: 'schedule-1',
+      date: '2026-04-14',
+    });
   });
 });
