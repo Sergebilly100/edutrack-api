@@ -673,10 +673,12 @@ export class AttendanceService {
   // ── Calcul du délai avant envoi notification absence élève ─────────────────
   // Retourne le timestamp UTC (ms) à partir duquel les notifs peuvent partir :
   // fin du cours + ABSENT_NOTIF_DELAY_AFTER_END_MS.
-  private computeNotifSendAfterMs(date: string, slotEndTime: string): number {
+private computeNotifSendAfterMs(date: string, slotEndTime: string): number {
     // slotEndTime est au format "HH:MM", date au format "YYYY-MM-DD"
     const [hours, minutes] = slotEndTime.split(':').map(Number);
-    const endOfClass = new Date(`${date}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`);
+    
+    // Ajout du suffixe 'Z' pour forcer l'interprétation en UTC (ISO 8601)
+    const endOfClass = new Date(`${date}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00Z`);
     return endOfClass.getTime() + ABSENT_NOTIF_DELAY_AFTER_END_MS;
   }
 

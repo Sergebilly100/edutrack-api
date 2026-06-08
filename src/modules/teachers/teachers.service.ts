@@ -331,7 +331,8 @@ export class TeachersService {
         schemaName: 'public',
       });
       if (result.status === 'sent') {
-        return { emailSent: true, email: reset.email };
+        // TOUJOURS retourner plainPassword pour transmission manuelle si besoin
+        return { emailSent: true, email: reset.email, plainPassword: reset.plainPassword };
       }
       logger.warn({ teacherId, error: result.errorMessage }, '[teachers] credentials email failed');
       return { emailSent: false, email: reset.email, plainPassword: reset.plainPassword };

@@ -437,11 +437,15 @@ export class AttendanceRepository {
         status = EXCLUDED.status,
         checked_in_at = EXCLUDED.checked_in_at,
         late_minutes = EXCLUDED.late_minutes,
-        checkin_latitude = EXCLUDED.checkin_latitude,
-        checkin_longitude = EXCLUDED.checkin_longitude,
-        checkin_accuracy = EXCLUDED.checkin_accuracy,
-        checkin_distance = EXCLUDED.checkin_distance,
-        geo_status = EXCLUDED.geo_status,
+        checkin_latitude = COALESCE(EXCLUDED.checkin_latitude, attendances_teacher.checkin_latitude),
+        checkin_longitude = COALESCE(EXCLUDED.checkin_longitude, attendances_teacher.checkin_longitude),
+        checkin_accuracy = COALESCE(EXCLUDED.checkin_accuracy, attendances_teacher.checkin_accuracy),
+        checkin_distance = COALESCE(EXCLUDED.checkin_distance, attendances_teacher.checkin_distance),
+        geo_status = CASE
+          WHEN EXCLUDED.geo_status = 'not_checked' AND attendances_teacher.geo_status IS NOT NULL
+            THEN attendances_teacher.geo_status
+          ELSE EXCLUDED.geo_status
+        END,
         validation_status = EXCLUDED.validation_status
       RETURNING id, status, late_minutes, checked_in_at::text, checked_out_at::text
     `);
@@ -627,10 +631,14 @@ export class AttendanceRepository {
       SET
         checked_out_at = ${params.checkedOutAtIso}::timestamptz,
         actual_minutes = ${params.actualMinutes},
-        checkout_latitude = ${params.checkoutLatitude ?? null}::numeric,
-        checkout_longitude = ${params.checkoutLongitude ?? null}::numeric,
-        checkout_accuracy = ${params.checkoutAccuracy ?? null}::numeric,
-        checkout_geo_status = ${params.checkoutGeoStatus},
+        checkout_latitude = COALESCE(${params.checkoutLatitude ?? null}::numeric, checkout_latitude),
+        checkout_longitude = COALESCE(${params.checkoutLongitude ?? null}::numeric, checkout_longitude),
+        checkout_accuracy = COALESCE(${params.checkoutAccuracy ?? null}::numeric, checkout_accuracy),
+        checkout_geo_status = CASE
+          WHEN ${params.checkoutGeoStatus} = 'not_checked' AND checkout_geo_status IS NOT NULL
+            THEN checkout_geo_status
+          ELSE ${params.checkoutGeoStatus}
+        END,
         validation_status = CASE
           WHEN validation_status = 'pending' AND geo_status = 'suspicious'
             THEN validation_status
