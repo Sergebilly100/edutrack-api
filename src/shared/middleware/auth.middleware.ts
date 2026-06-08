@@ -294,6 +294,29 @@ export const requireDirector = async (
   request.claims = claims;
 };
 
+export const requireSuperAdmin = async (
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> => {
+  await authenticateRequest(request, reply);
+  if (reply.sent) {
+    return;
+  }
+
+  const claims = request.auth;
+  if (!claims) {
+    unauthorized(reply, 'Unauthorized');
+    return;
+  }
+
+  if (claims.role !== 'super_admin') {
+    forbidden(reply, 'Super admin required');
+    return;
+  }
+
+  request.claims = claims;
+};
+
 export const requirePermission =
   (permission: PermissionKey) =>
   async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {

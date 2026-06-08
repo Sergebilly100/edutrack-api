@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   withTenantSchema: vi.fn(),
   requirePermission: vi.fn(),
-  requireTeacherOrDirectorOrSecretary: vi.fn(),
+  authenticateRequest: vi.fn(),
   buildStudentsService: vi.fn(),
   service: {
     listStudents: vi.fn(),
@@ -28,7 +28,7 @@ vi.mock('../../src/shared/database/db.js', () => ({
 
 vi.mock('../../src/shared/middleware/auth.middleware.js', () => ({
   requirePermission: mocks.requirePermission,
-  requireTeacherOrDirectorOrSecretary: mocks.requireTeacherOrDirectorOrSecretary,
+  authenticateRequest: mocks.authenticateRequest,
 }));
 
 vi.mock('../../src/modules/students/students.service.js', () => ({
@@ -67,11 +67,9 @@ const attachClaims = (
     const r = request.headers['x-test-role'];
     return typeof r === 'string' && r.length > 0 ? r : 'director';
   })();
-  if (!['teacher', 'director', 'staff'].includes(role)) {
-    reply.code(403).send({ error: 'Forbidden', code: 'FORBIDDEN', statusCode: 403 });
-    return false;
-  }
-  request.claims = { sub: 'user-1', role, schemaName: 'school_test' };
+  const claims = { sub: 'user-1', role, schemaName: 'school_test' };
+  request.claims = claims;
+  (request as Record<string, unknown>)['auth'] = claims;
   return true;
 };
 
@@ -100,7 +98,10 @@ beforeEach(() => {
     };
   });
 
-  mocks.requireTeacherOrDirectorOrSecretary.mockImplementation(async (request: never, reply: never) => {
+  // Reproduit authenticateRequest : pose auth + claims + permissions, sans
+  // restreindre le rôle (la restriction est portée par requireStudentsListAccess
+  // dans le controller).
+  mocks.authenticateRequest.mockImplementation(async (request: never, reply: never) => {
     if (!attachClaims(request, reply)) return;
     const rawPermissions = (request as Record<string, unknown>)['headers'] as Record<string, unknown>;
     const header = rawPermissions['x-test-permissions'];
@@ -167,9 +168,10 @@ describe('GET /api/v1/students', () => {
 
   it('retourne 403 pour un rôle non autorisé', async () => {
     const app = await buildApp();
+    // super_admin sans permission students.view : refusé par requireStudentsListAccess.
     const response = await app.inject({
       method: 'GET', url: '/api/v1/students',
-      headers: { authorization: 'Bearer token', 'x-test-role': 'super_admin' },
+      headers: { authorization: 'Bearer token', 'x-test-role': 'super_admin', 'x-test-permissions': 'none' },
     });
     expect(response.statusCode).toBe(403);
     await app.close();

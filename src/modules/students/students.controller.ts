@@ -1,13 +1,52 @@
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 
 import { z } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
 import {
-  requireTeacherOrDirectorOrSecretary,
+  authenticateRequest,
   requirePermission,
 } from '../../shared/middleware/auth.middleware.js';
+
+const forbidden = (reply: FastifyReply, message: string, code = 'FORBIDDEN'): FastifyReply =>
+  reply.code(403).send({ error: message, code, statusCode: 403 });
+
+/**
+ * Garde d'accès à la liste des élèves. Porte la règle qui était auparavant
+ * dissimulée dans le handler (donc non testable) :
+ *  - un prof DOIT fournir un class_id (son accès est toujours scopé à une classe) ;
+ *  - tout autre rôle DOIT détenir la permission students.view.
+ * Le scoping fin du prof à SA classe (teacherCanAccessClass) reste dans le
+ * handler car il requiert un accès DB tenant.
+ */
+const requireStudentsListAccess = async (
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> => {
+  await authenticateRequest(request, reply);
+  if (reply.sent) {
+    return;
+  }
+
+  const claims = request.auth;
+  if (!claims) {
+    forbidden(reply, 'Unauthorized', 'UNAUTHORIZED');
+    return;
+  }
+
+  if (claims.role === 'teacher') {
+    const classId = (request.query as { class_id?: string } | undefined)?.class_id;
+    if (!classId) {
+      forbidden(reply, 'Teacher must provide class_id');
+    }
+    return;
+  }
+
+  if (!request.permissions?.has('students.view')) {
+    forbidden(reply, 'Permission students.view required');
+  }
+};
 import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
 
 import { StudentsModuleError, buildStudentsService } from './students.service.js';
@@ -62,29 +101,11 @@ export default async function studentsController(
 
   app.get(
     '/api/v1/students',
-    { preHandler: requireTeacherOrDirectorOrSecretary },
+    { preHandler: requireStudentsListAccess },
     async (request, reply) => {
       try {
         const claims = request.claims!;
         const query = studentsListQuerySchema.parse(request.query ?? {});
-
-        // FIX AXE2: permission check extracted from controller logic - teachers
-        // always need a class_id to scope their access; others need students.view
-        if (claims.role !== 'teacher' && !request.permissions?.has('students.view')) {
-          return reply.code(403).send({
-            error: 'Permission students.view required',
-            code: 'FORBIDDEN',
-            statusCode: 403,
-          });
-        }
-
-        if (claims.role === 'teacher' && !query.class_id) {
-          return reply.code(403).send({
-            error: 'Teacher must provide class_id',
-            code: 'FORBIDDEN',
-            statusCode: 403,
-          });
-        }
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
           const service = buildStudentsService(tenantDb);

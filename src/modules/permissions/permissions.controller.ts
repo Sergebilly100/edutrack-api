@@ -6,6 +6,7 @@ import { withTenantSchema } from '../../shared/database/db.js';
 import {
   authenticateRequest,
   requirePermission,
+  requireSuperAdmin,
 } from '../../shared/middleware/auth.middleware.js';
 import { uploadToR2 } from '../../shared/storage/r2.js';
 
@@ -183,17 +184,13 @@ export default async function permissionsController(app: FastifyInstance): Promi
 
   app.patch(
     '/api/v1/permissions/config/limits',
-    { preHandler: requirePermission('settings.school') },
+    // Limite plateforme : réservée au super-admin. La règle est portée par le
+    // guard (et non par un check dans le handler) pour qu'elle soit alignée avec
+    // ce que l'Ut expose - un directeur ne doit pas voir un bouton qui renvoie 403.
+    { preHandler: requireSuperAdmin },
     async (request, reply) => {
       try {
         const claims = request.claims!;
-if (claims.role !== 'super_admin') {
-          throw new PermissionsModuleError(
-            'Only super admin can update limits',
-            403,
-            'FORBIDDEN'
-          );
-        }
         const body = updateLimitsBodySchema.parse(request.body ?? {});
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {

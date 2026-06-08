@@ -596,14 +596,9 @@ export class BillingService {
     /** True quand la mutation provient d'une synchronisation offline (PWA). */
     fromOfflineSync?: boolean;
   }) {
-    if (input.status === 'paid' && input.actor.role !== 'director') {
-      throw new BillingModuleError(
-        'Only director can mark salary as paid',
-        403,
-        'DIRECTOR_REQUIRED_FOR_PAID'
-      );
-    }
-
+    // Le droit de marquer un salaire « payé » est porté par la permission
+    // salary.mark_paid (guard du controller), seule autorité. Pas de restriction
+    // de rôle supplémentaire ici : tout détenteur de la permission peut décaisser.
     const existing = await this.repository.getSalaryRecordById(input.recordId);
     if (!existing) {
       throw new BillingModuleError('Salary record not found', 404, 'SALARY_RECORD_NOT_FOUND');

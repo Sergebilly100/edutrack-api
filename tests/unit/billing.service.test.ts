@@ -481,14 +481,26 @@ describe('BillingService', () => {
   describe('updateSalaryRecordStatus - permanent', () => {
     const actor = { userId: 'director-1', role: 'director' as const };
 
-    it('rejette si acteur non director', async () => {
-      await expect(
-        service.updateSalaryRecordStatus({
-          recordId: 'record-1',
-          status: 'paid',
-          actor: { userId: 'staff-1', role: 'staff' },
-        })
-      ).rejects.toMatchObject({ code: 'DIRECTOR_REQUIRED_FOR_PAID', statusCode: 403 });
+    it('autorise un staff détenteur de la permission à marquer payé (plus de restriction de rôle)', async () => {
+      // Décision P2.2 : le droit de payer est porté par la permission
+      // salary.mark_paid (guard du controller), pas par le rôle director. Le
+      // service ne doit donc plus rejeter un staff sur la seule base du rôle.
+      repository.getSalaryRecordById.mockResolvedValue(
+        makeSalaryRecord({ teacher_type: 'permanent', total_fcfa: 350000 })
+      );
+      repository.getSalaryPaymentsSummary.mockResolvedValue(makePaymentSummary());
+      repository.createSalaryPayment.mockResolvedValue({ id: 'pay-1' });
+      repository.updateSalaryRecordAfterPayment.mockResolvedValue(
+        makeSalaryRecord({ teacher_type: 'permanent', status: 'paid', total_fcfa: 350000 })
+      );
+
+      const result = await service.updateSalaryRecordStatus({
+        recordId: 'record-1',
+        status: 'paid',
+        actor: { userId: 'staff-1', role: 'staff', schemaName: 'school_test' },
+      });
+
+      expect(result.record.status).toBe('paid');
     });
 
     it("rejette si le record n'existe pas", async () => {
