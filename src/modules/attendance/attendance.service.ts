@@ -436,9 +436,12 @@ export class AttendanceService {
     // Pour le scan de fin, la VALIDATION qui décide d'enregistrer la fin du cours
     // est la cohérence début↔fin : le prof doit scanner la même salle qu'au début
     // (même s'il fait cours hors de la salle prévue dans l'EDT — cas courant).
-    // `roomMismatch` (vs EDT) ne sert qu'à l'information « salle correcte/incorrecte »
-    // et à l'alerte directeur ; il ne doit PAS bloquer le scan de fin.
-    // Si aucun scan de début n'existe (skip), on accepte (cas dégradé).
+    // On compare UNIQUEMENT les tokens de salle (début vs fin), SANS la contrainte
+    // de fenêtre horaire : un scan de fin se fait à la fin du créneau (voire un peu
+    // après), donc appliquer la fenêtre temporelle bloquerait quasiment tous les
+    // scans de fin. `roomMismatch` (vs EDT) ne sert qu'à l'info « salle correcte/
+    // incorrecte » et à l'alerte directeur. Si aucun scan de début (skip), on
+    // accepte (cas dégradé).
     let validation = plannedValidation;
     let endScanMismatch = false;
     if (input.scanType === 'end') {
@@ -448,15 +451,8 @@ export class AttendanceService {
         date,
       });
       if (startScanToken) {
-        validation = validateRoomScan({
-          scannedRoomToken: input.qrToken,
-          expectedRoomToken: startScanToken,
-          scheduleDate: date,
-          slotStartTime: schedule.slotStartTime,
-          slotEndTime: schedule.slotEndTime,
-          scanTime: scannedAt,
-        });
-        endScanMismatch = !validation.valid;
+        endScanMismatch = input.qrToken !== startScanToken;
+        validation = { valid: !endScanMismatch, alertType: validation.alertType };
       }
     }
 

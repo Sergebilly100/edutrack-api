@@ -218,10 +218,12 @@ describe('attendance.service', () => {
   });
 
   it('qrScan() scanType=end dans une salle ≠ EDT mais cohérente avec le début → accepté (room_scan_end_at posé)', async () => {
-    // Régression : le scan de fin était bloqué sur la base de l'écart EDT au lieu
-    // de la cohérence début↔fin. Un prof qui fait cours hors de la salle prévue
-    // mais scanne la même salle au début et à la fin doit pouvoir clôturer.
-    vi.setSystemTime(new Date('2026-04-14T08:55:00.000Z'));
+    // Régression : le scan de fin était bloqué (1) sur l'écart EDT, puis (2) sur la
+    // fenêtre horaire. Un prof qui fait cours hors de la salle prévue mais scanne la
+    // même salle au début et à la fin doit pouvoir clôturer — y compris APRÈS l'heure
+    // de fin du créneau (cas normal : on scanne la fin une fois le cours terminé).
+    // 09:20 > slotEnd 09:00 → hors fenêtre horaire, mais doit quand même être accepté.
+    vi.setSystemTime(new Date('2026-04-14T09:20:00.000Z'));
     repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1' });
     repository.findScheduleContextForTeacher.mockResolvedValue({
       scheduleId: 'schedule-1',
