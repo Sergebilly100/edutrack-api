@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { ZodError } from 'zod';
+import { sql } from 'drizzle-orm';
 
-import { withTenantSchema } from '../../shared/database/db.js';
+import { db, withTenantSchema } from '../../shared/database/db.js';
 import {
   checkStudentAccess,
   ParentAccessError,
@@ -147,6 +148,22 @@ export default async function parentPortalController(app: FastifyInstance): Prom
       });
 
       return reply.send(result);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/parent/school-config', { preHandler: requireParent }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const result = await db.execute<{ active_school_year: string | null }>(sql`
+        SELECT active_school_year
+        FROM public.tenants
+        WHERE schema_name = ${claims.schemaName}
+        LIMIT 1
+      `);
+      const row = result.rows[0];
+      return reply.send({ activeSchoolYear: row?.active_school_year ?? null });
     } catch (error) {
       return handleError(reply, error);
     }
