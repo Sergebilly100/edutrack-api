@@ -915,6 +915,13 @@ export class SubscriptionsRepository {
     subscriptionIds: string[]
   ): Promise<Array<StudentRow & { subscription_id: string }>> {
     if (subscriptionIds.length === 0) return [];
+    // sql.join génère une vraie liste IN (...) : un placeholder par id. Drizzle ne
+    // sérialise PAS un tableau JS en array PG dans un `sql` brut (il l'éclate en
+    // ($1,$2)), d'où l'échec de ANY(...::uuid[]). On passe donc par IN + sql.join.
+    const idList = sql.join(
+      subscriptionIds.map((id) => sql`${id}::uuid`),
+      sql`, `
+    );
     const result = await this.tenantDb.execute<StudentRow & { subscription_id: string }>(sql`
       SELECT
         psl.subscription_id::text AS subscription_id,
@@ -925,7 +932,7 @@ export class SubscriptionsRepository {
       FROM parent_student_links psl
       INNER JOIN students s ON s.id = psl.student_id
       LEFT JOIN classes c ON c.id = s.class_id
-      WHERE psl.subscription_id = ANY(${subscriptionIds}::uuid[])
+      WHERE psl.subscription_id IN (${idList})
       ORDER BY s.last_name, s.first_name
     `);
     return result.rows;
@@ -935,6 +942,10 @@ export class SubscriptionsRepository {
     subscriptionIds: string[]
   ): Promise<Array<PaymentRow & { subscription_id: string }>> {
     if (subscriptionIds.length === 0) return [];
+    const idList = sql.join(
+      subscriptionIds.map((id) => sql`${id}::uuid`),
+      sql`, `
+    );
     const result = await this.tenantDb.execute<PaymentRow & { subscription_id: string }>(sql`
       SELECT
         subscription_id::text AS subscription_id,
@@ -945,7 +956,7 @@ export class SubscriptionsRepository {
         created_at::text,
         notes
       FROM subscription_payments
-      WHERE subscription_id = ANY(${subscriptionIds}::uuid[])
+      WHERE subscription_id IN (${idList})
       ORDER BY paid_at DESC
     `);
     return result.rows;

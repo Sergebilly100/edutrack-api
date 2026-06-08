@@ -186,6 +186,24 @@ describe('subscriptions integration (real db)', () => {
     expect(response.status).toBe(409);
   });
 
+  it('GET /api/v1/subscriptions/parents/:id retourne le dossier (abos + élèves + paiements)', async () => {
+    // Régression : getParentDetails utilisait ANY(...::uuid[]) qui échoue avec
+    // Drizzle ("cannot cast type record to uuid[]") → dossier parent inaffichable.
+    const headers = await getAuthHeaders('director');
+    const response = await request()
+      .get(`/api/v1/subscriptions/parents/${createdParentId}`)
+      .set(headers);
+
+    expect(response.status).toBe(200);
+    expect(response.body.parent?.id).toBe(createdParentId);
+    expect(Array.isArray(response.body.subscriptions)).toBe(true);
+    expect(response.body.subscriptions.length).toBeGreaterThan(0);
+    // students/payments doivent être présents et regroupés par abonnement
+    expect(Array.isArray(response.body.subscriptions[0].students)).toBe(true);
+    expect(Array.isArray(response.body.subscriptions[0].payments)).toBe(true);
+    expect(response.body.subscriptions[0].students.length).toBeGreaterThan(0);
+  });
+
   it('POST /api/v1/subscriptions/parents/:id/renew crée une nouvelle souscription', async () => {
     const headers = await getAuthHeaders('director');
     const previous = await queryTenant<{ ends_at: string }>(
