@@ -255,6 +255,44 @@ describe('import integration - teachers', () => {
     expect(Number(count)).toBeGreaterThanOrEqual(1);
   });
 
+  it('POST /api/v1/import/teachers/confirm - prof importé doit changer son mot de passe', async () => {
+    // Sécurité : le mot de passe d'import est partagé, le prof doit donc être
+    // forcé de le changer à la première connexion (must_change_password = true).
+    const headers = await getAuthHeaders('director');
+    const prefix = uniquePrefix();
+
+    const rows = [
+      {
+        'Nom*': prefix,
+        'Prénom*': 'Securite',
+        'Type*': 'vacataire',
+        'Matières*': 'Physique',
+        'Taux horaire FCFA': '4000',
+      },
+    ];
+
+    const res = await attachTeachers(
+      request().post('/api/v1/import/teachers/confirm').set(headers),
+      rows
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.imported).toBe(1);
+
+    const [{ must_change_password: mustChange }] = await queryTenant<{
+      must_change_password: boolean;
+    }>(
+      `
+        SELECT u.must_change_password
+        FROM ${tenantTable('teachers')} t
+        INNER JOIN ${tenantTable('users')} u ON u.id = t.user_id
+        WHERE u.name = $1
+      `,
+      [`Securite ${prefix}`]
+    );
+    expect(mustChange).toBe(true);
+  });
+
   it('POST /api/v1/import/teachers/dry-run - type invalide → erreur', async () => {
     const headers = await getAuthHeaders('director');
 

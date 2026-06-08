@@ -551,6 +551,11 @@ export const defaultImportRepository: ImportRepository = {
     // dans la table teachers (qui référence la table users via user_id).
     // si plusieurs lignes du fichier d'import font référence au même enseignant (même username), cela ne posera pas de problème car la requête d'insertion dans users est protégée 
     // par une contrainte d'unicité sur le champ username, et nous faisons un upsert basé sur ce champ.
+    // Sécurité : les profs importés partagent le même mot de passe par défaut
+    // (IMPORT_TEACHER_DEFAULT_PASSWORD). On force must_change_password = true pour
+    // qu'aucun compte ne reste accessible avec ce mot de passe partagé après la
+    // première connexion (cf. même pattern parents subscriptions.repository.ts +
+    // régénération credentials teachers.repository.ts).
     const userResult = await db.execute(sql`
       INSERT INTO users (
         role,
@@ -558,7 +563,8 @@ export const defaultImportRepository: ImportRepository = {
         phone,
         email,
         password_hash,
-        is_active
+        is_active,
+        must_change_password
       )
       VALUES (
         'teacher',
@@ -566,6 +572,7 @@ export const defaultImportRepository: ImportRepository = {
         null,
         null,
         ${params.passwordHash},
+        true,
         true
       )
       RETURNING id
