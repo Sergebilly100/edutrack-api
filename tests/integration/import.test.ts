@@ -343,12 +343,23 @@ describe('import integration - schedule', () => {
       },
     ];
 
+    // Dates relatives à aujourd'hui : le lundi de la semaine PROCHAINE (toujours
+    // futur), sinon le validateur rejette le créneau passé (test sinon fragile
+    // avec des dates codées en dur qui deviennent passées avec le temps).
+    const nextMonday = new Date();
+    nextMonday.setUTCHours(0, 0, 0, 0);
+    const daysUntilNextMonday = ((8 - nextMonday.getUTCDay()) % 7) || 7;
+    nextMonday.setUTCDate(nextMonday.getUTCDate() + daysUntilNextMonday);
+    const followingMonday = new Date(nextMonday);
+    followingMonday.setUTCDate(followingMonday.getUTCDate() + 7);
+    const toIso = (d: Date) => d.toISOString().slice(0, 10);
+
     const res = await attachSchedule(
       request()
         .post('/api/v1/import/schedule/dry-run')
         .set(headers)
-        .field('week_start', '2026-06-01')
-        .field('week_end', '2026-06-08'),
+        .field('week_start', toIso(nextMonday))
+        .field('week_end', toIso(followingMonday)),
       rows
     );
 
