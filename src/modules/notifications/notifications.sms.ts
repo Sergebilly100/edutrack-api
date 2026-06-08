@@ -95,7 +95,7 @@ export const renderSmsTemplate = (
 
 export const buildTeacherLateSms = (params: TeacherLateSmsParams): string => {
   return limitSmsLength(
-    `IvoirEdu:${safeText(params.teacherName)} en retard de ${params.lateMinutes}min - ${safeText(params.subject)} (${safeText(params.className)}, ${safeText(params.slotLabel)}). ${safeText(params.date)}`
+    `IvoirEdu: ${safeText(params.teacherName)} en retard de ${params.lateMinutes}min - ${safeText(params.subject)} (${safeText(params.className)}, ${safeText(params.slotLabel)}). ${safeText(params.date)}`
   );
 };
 
@@ -109,26 +109,26 @@ export const buildTeacherQrAlertSms = (
   if (alertType === 'teacher_qr_mismatch') {
     const mismatchParams = params as TeacherQrMismatchSmsParams;
     return limitSmsLength(
-      `IvoirEdu:${safeText(mismatchParams.teacherName)} a scanné salle ${safeText(mismatchParams.scannedRoom)} au lieu de ${safeText(mismatchParams.expectedRoom)} - ${safeText(mismatchParams.subject)} ${safeText(mismatchParams.slotLabel)}`
+      `IvoirEdu: ${safeText(mismatchParams.teacherName)} a scanné salle ${safeText(mismatchParams.scannedRoom)} au lieu de ${safeText(mismatchParams.expectedRoom)} - ${safeText(mismatchParams.subject)} ${safeText(mismatchParams.slotLabel)}`
     );
   }
 
   if (alertType === 'teacher_qr_missing_scan') {
     const missingParams = params as TeacherQrMissingScanSmsParams;
     return limitSmsLength(
-      `IvoirEdu:${safeText(missingParams.teacherName)} n'a pas scanné le QR de sa salle - ${safeText(missingParams.subject)} (${safeText(missingParams.className)}) ${safeText(missingParams.slotLabel)}`
+      `IvoirEdu: ${safeText(missingParams.teacherName)} n'a pas scanné le QR de sa salle - ${safeText(missingParams.subject)} (${safeText(missingParams.className)}) ${safeText(missingParams.slotLabel)}`
     );
   }
 
   const outOfTimeParams = params as TeacherQrOutOfTimeSmsParams;
   return limitSmsLength(
-    `IvoirEdu:Scan QR hors horaire par ${safeText(outOfTimeParams.teacherName)} - ${safeText(outOfTimeParams.subject)} ${safeText(outOfTimeParams.date)} ${safeText(outOfTimeParams.slotLabel)}`
+    `IvoirEdu: Scan QR hors horaire par ${safeText(outOfTimeParams.teacherName)} - ${safeText(outOfTimeParams.subject)} ${safeText(outOfTimeParams.date)} ${safeText(outOfTimeParams.slotLabel)}`
   );
 };
 
 export const buildStudentAbsentSms = (params: StudentAbsentSmsParams): string => {
   return limitSmsLength(
-    `IvoirEdu:${safeText(params.studentFirstName)} absent(e) en ${safeText(params.subject)} le ${safeText(params.date)}. Contact école: ${safeText(params.schoolPhone)}`
+    `IvoirEdu: ${safeText(params.studentFirstName)} absent(e) en ${safeText(params.subject)} le ${safeText(params.date)}. Contact école: ${safeText(params.schoolPhone)}`
   );
 };
 
@@ -138,13 +138,13 @@ export const buildPaymentReminderSms = (params: PaymentReminderSmsParams): strin
   }).format(Math.max(0, params.remainingAmountFcfa));
 
   return limitSmsLength(
-    `IvoirEdu:relance paiement ${safeText(params.schoolName)}. Échéance ${safeText(params.dueDate)}, période ${safeText(params.periodLabel)}, reste ${amount} FCFA.`
+    `IvoirEdu: relance paiement ${safeText(params.schoolName)}. Échéance ${safeText(params.dueDate)}, période ${safeText(params.periodLabel)}, reste ${amount} FCFA.`
   );
 };
 
 export const buildTeacherDailySummarySms = (params: TeacherDailySummarySmsParams): string => {
   return limitSmsLength(
-    `IvoirEdu:Point profs ${safeText(params.date)} - ${params.absentCount} absent(s), ${params.lateCount} retard(s), ${params.presentCount}/${params.totalCourses} cours assures. Voir dashboard.`
+    `IvoirEdu: Point profs ${safeText(params.date)} - ${params.absentCount} absent(s), ${params.lateCount} retard(s), ${params.presentCount}/${params.totalCourses} cours assures. Voir dashboard.`
   );
 };
 
