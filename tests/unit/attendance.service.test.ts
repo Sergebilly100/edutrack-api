@@ -532,7 +532,7 @@ describe('attendance.service', () => {
         scheduleId: 'schedule-1',
       }),
       expect.objectContaining({
-        jobId: expect.stringContaining('deferred-absent:school_sainte_marie:schedule-1:student-1'),
+        jobId: expect.stringContaining('deferred-absent__school_sainte_marie__schedule-1__student-1'),
         delay: expect.any(Number),
       })
     );

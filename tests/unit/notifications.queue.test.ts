@@ -219,7 +219,14 @@ describe('notifications.queue', () => {
     const id1 = buildDeferredAbsentJobId('school_abc', 'sched-1', 'stu-1', '2026-06-07');
     const id2 = buildDeferredAbsentJobId('school_abc', 'sched-1', 'stu-1', '2026-06-07');
     expect(id1).toBe(id2);
-    expect(id1).toBe('deferred-absent:school_abc:sched-1:stu-1:2026-06-07');
+    expect(id1).toBe('deferred-absent__school_abc__sched-1__stu-1__2026-06-07');
+  });
+
+  it('buildDeferredAbsentJobId() ne contient pas ":" (interdit par BullMQ pour un jobId custom)', () => {
+    // Régression critique : un jobId avec ':' fait échouer queue.add (avalé par
+    // Promise.allSettled) → aucun job différé → aucune notification d'absence.
+    const id = buildDeferredAbsentJobId('school_abc', 'sched-1', 'stu-1', '2026-06-07');
+    expect(id).not.toContain(':');
   });
 
   it('buildDeferredAbsentJobId() produit des IDs distincts pour des étudiants différents', () => {

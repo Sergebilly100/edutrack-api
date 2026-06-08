@@ -105,12 +105,16 @@ export type NotificationJobData =
   | DeferredStudentAbsentJobData;
 
 /** ID déterministe pour les jobs d'absence différée — permet l'annulation/mise à jour */
+// IMPORTANT : un jobId custom BullMQ NE PEUT PAS contenir ':' (BullMQ lève
+// « Custom Id cannot contain : »). On utilise donc '__' comme séparateur. Avec
+// ':', notifQueue.add(...) échouait silencieusement (avalé par Promise.allSettled)
+// → aucun job différé créé → aucune notification d'absence envoyée.
 export const buildDeferredAbsentJobId = (
   schemaName: string,
   scheduleId: string,
   studentId: string,
   date: string
-): string => `deferred-absent:${schemaName}:${scheduleId}:${studentId}:${date}`;
+): string => `deferred-absent__${schemaName}__${scheduleId}__${studentId}__${date}`;
 
 export type NotificationsWorkerDeps = {
   repository: NotificationsRepository;
