@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   ensureScheduleTemporalColumns: vi.fn(),
   listSchedulePeriods: vi.fn(),
   findTeacherIdByUserId: vi.fn(),
+  findSchedulePeriodById: vi.fn(),
+  createSchedule: vi.fn(),
 }));
 
 vi.mock('../../src/shared/middleware/auth.middleware.js', () => ({
@@ -57,9 +59,9 @@ vi.mock('../../src/modules/schedule/schedule.repository.js', async () => ({
   listActiveSchedulePeriods: vi.fn().mockResolvedValue([]),
   ensureScheduleTemporalColumns: mocks.ensureScheduleTemporalColumns,
   findTeacherIdByUserId: mocks.findTeacherIdByUserId,
-  findSchedulePeriodById: vi.fn().mockResolvedValue(null),
-  findTimeSlotById: vi.fn().mockResolvedValue(null),
-  createSchedule: vi.fn().mockResolvedValue({ id: 'schedule-id' }),
+  findSchedulePeriodById: mocks.findSchedulePeriodById,
+  findTimeSlotById: vi.fn().mockResolvedValue({ id: 'timeslot-id', startTime: '08:00', endTime: '09:00' }),
+  createSchedule: mocks.createSchedule,
   updateSchedule: vi.fn().mockResolvedValue(null),
   deleteScheduleById: vi.fn().mockResolvedValue({ deleted: true }),
   hasAnyAttendanceForSchedule: vi.fn().mockResolvedValue(false),
@@ -137,6 +139,15 @@ beforeEach(() => {
   mocks.ensureScheduleTemporalColumns.mockResolvedValue(undefined);
   mocks.findTeacherIdByUserId.mockResolvedValue('teacher-id');
   mocks.listSchedulePeriods.mockResolvedValue([]);
+  // Période active par défaut couvrant le 2nd semestre (mode snake_case côté repo).
+  mocks.findSchedulePeriodById.mockResolvedValue({
+    id: PERIOD_ID,
+    name: 'T2',
+    valid_from: '2099-01-05',
+    valid_to: '2099-06-30',
+    is_active: true,
+  });
+  mocks.createSchedule.mockResolvedValue({ id: 'schedule-id' });
 
   mocks.getActiveSchedulesForDate.mockResolvedValue({
     date: '2026-05-09',
@@ -315,6 +326,40 @@ describe('POST /api/v1/schedule/periods/:id/duplicate', () => {
     });
 
     expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+});
+
+describe('POST /api/v1/schedule - couverture de période', () => {
+  const validUuid = (n: string) => `${n.repeat(8)}-${n.repeat(4)}-4${n.repeat(3)}-8${n.repeat(3)}-${n.repeat(12)}`;
+  const basePayload = {
+    schedule_period_id: PERIOD_ID,
+    teacher_id: validUuid('1'),
+    class_id: validUuid('2'),
+    room_id: validUuid('3'),
+    time_slot_id: validUuid('4'),
+    day_of_week: 2,
+    subject: 'Mathématiques',
+  };
+
+  it('refuse un créneau dont la date est hors de la période → 400 SCHEDULE_DATE_OUTSIDE_PERIOD', async () => {
+    // findSchedulePeriodById renvoie une période 2099-01-05 → 2099-06-30 (cf. beforeEach).
+    // On vise une date après valid_to : la création doit être bloquée avant tout
+    // le reste (évite le cours fantôme invisible).
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/schedule',
+      payload: {
+        ...basePayload,
+        recurrence: 'one_shot',
+        effective_from: '2099-09-15',
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body).code).toBe('SCHEDULE_DATE_OUTSIDE_PERIOD');
+    expect(mocks.createSchedule).not.toHaveBeenCalled();
     await app.close();
   });
 });

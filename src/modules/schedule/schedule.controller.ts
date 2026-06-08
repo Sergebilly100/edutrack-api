@@ -141,6 +141,13 @@ const handleError = (
   if (message === 'Schedule must target a future date/time') {
     return reply.code(400).send({ error: message, code: 'BAD_REQUEST', statusCode: 400 });
   }
+  if (message === 'Schedule date is outside the selected period') {
+    return reply.code(400).send({
+      error: message,
+      code: 'SCHEDULE_DATE_OUTSIDE_PERIOD',
+      statusCode: 400,
+    });
+  }
   if (message === 'Cannot apply schedule changes to a past date') {
     return reply.code(409).send({
       error: message,
@@ -206,6 +213,26 @@ const getTodayIso = (): string => new Date().toISOString().slice(0, 10);
 
 const isIsoDateBefore = (leftIsoDate: string, rightIsoDate: string): boolean =>
   leftIsoDate < rightIsoDate;
+
+// Defense-in-depth : un créneau doit tomber dans la plage de validité de sa
+// période. Sans cette garde, un cours créé hors période n'apparaît jamais dans
+// la grille (qui ne lit que la période couvrant la semaine) → cours "fantôme".
+// La validation existe côté UI mais ne doit pas être la seule (appels API directs).
+const assertEffectiveDateWithinPeriod = async (
+  db: NonNullable<FastifyRequest['db']>,
+  params: { schedulePeriodId: string; effectiveFrom: string }
+): Promise<void> => {
+  const period = await findSchedulePeriodById(db, params.schedulePeriodId);
+  if (!period) {
+    throw new Error('Schedule period not found');
+  }
+  if (
+    isIsoDateBefore(params.effectiveFrom, period.valid_from) ||
+    isIsoDateBefore(period.valid_to, params.effectiveFrom)
+  ) {
+    throw new Error('Schedule date is outside the selected period');
+  }
+};
 
 const assertScheduleTargetsFutureDateTime = async (
   db: NonNullable<FastifyRequest['db']>,
@@ -417,6 +444,18 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           throw new Error('Cannot apply schedule changes to a past date');
         }
 
+        // On ne valide la couverture que si l'utilisateur a fourni une date
+        // explicite (cas one_shot / date précise). Sans date fournie,
+        // effective_from défaute à aujourd'hui avec la sémantique « à partir de
+        // maintenant » et l'effet réel est déjà borné à la période côté repo —
+        // bloquer ici casserait la modification d'un créneau d'une période future.
+        if (body.effective_from) {
+          await assertEffectiveDateWithinPeriod(db, {
+            schedulePeriodId: body.schedule_period_id,
+            effectiveFrom: body.effective_from,
+          });
+        }
+
         const timeSlotId = await resolveTimeSlotId(db, {
           timeSlotId: body.time_slot_id,
           startTime: body.start_time,
@@ -494,6 +533,18 @@ export default async function scheduleController(app: FastifyInstance): Promise<
 
         if (isIsoDateBefore(effectiveFrom, today)) {
           throw new Error('Cannot apply schedule changes to a past date');
+        }
+
+        // On ne valide la couverture que si l'utilisateur a fourni une date
+        // explicite (cas one_shot / date précise). Sans date fournie,
+        // effective_from défaute à aujourd'hui avec la sémantique « à partir de
+        // maintenant » et l'effet réel est déjà borné à la période côté repo —
+        // bloquer ici casserait la modification d'un créneau d'une période future.
+        if (body.effective_from) {
+          await assertEffectiveDateWithinPeriod(db, {
+            schedulePeriodId: body.schedule_period_id,
+            effectiveFrom: body.effective_from,
+          });
         }
 
         const timeSlotId = await resolveTimeSlotId(db, {
