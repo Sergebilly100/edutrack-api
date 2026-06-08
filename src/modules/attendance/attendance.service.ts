@@ -433,10 +433,14 @@ export class AttendanceService {
     });
     const roomMismatch = !plannedValidation.valid;
 
-    // Pour le scan de fin, la cohérence début↔fin est vérifiée séparément :
-    // le scan doit correspondre à la salle dans laquelle le cours a débuté.
-    // Si aucun scan de début n'existe, on accepte (cas dégradé).
+    // Pour le scan de fin, la VALIDATION qui décide d'enregistrer la fin du cours
+    // est la cohérence début↔fin : le prof doit scanner la même salle qu'au début
+    // (même s'il fait cours hors de la salle prévue dans l'EDT — cas courant).
+    // `roomMismatch` (vs EDT) ne sert qu'à l'information « salle correcte/incorrecte »
+    // et à l'alerte directeur ; il ne doit PAS bloquer le scan de fin.
+    // Si aucun scan de début n'existe (skip), on accepte (cas dégradé).
     let validation = plannedValidation;
+    let endScanMismatch = false;
     if (input.scanType === 'end') {
       const startScanToken = await this.repository.getStartScanRoomToken({
         teacherId: teacher.id,
@@ -452,6 +456,7 @@ export class AttendanceService {
           slotEndTime: schedule.slotEndTime,
           scanTime: scannedAt,
         });
+        endScanMismatch = !validation.valid;
       }
     }
 
@@ -461,6 +466,8 @@ export class AttendanceService {
       date,
     });
 
+    // Au scan de fin : `endScanMismatch` (cohérence début↔fin) décide d'écrire
+    // room_scan_end_at. Au scan de début : `roomMismatch` (EDT) est conservé tel quel.
     await this.repository.recordQrScan({
       teacherId: teacher.id,
       scheduleId: schedule.scheduleId,
@@ -468,6 +475,7 @@ export class AttendanceService {
       scanType: input.scanType,
       scannedRoomId: scannedRoom?.id ?? null,
       roomMismatch,
+      endScanMismatch,
       qrAlertSent: roomMismatch,
       scannedAtIso: toIso(scannedAt),
     });
@@ -508,7 +516,10 @@ export class AttendanceService {
 
     return {
       valid: validation.valid,
-      roomMismatch,
+      // Au scan de fin, le front utilise roomMismatch pour décider d'accepter le
+      // QR : on renvoie l'incohérence début↔fin (endScanMismatch), pas l'écart EDT,
+      // pour ne pas refuser à tort un cours fait dans une salle ≠ EDT mais cohérent.
+      roomMismatch: input.scanType === 'end' ? endScanMismatch : roomMismatch,
       alertType: plannedValidation.alertType,
     };
   }

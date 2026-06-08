@@ -507,6 +507,8 @@ export class AttendanceRepository {
     scanType: 'start' | 'end';
     scannedRoomId: string | null;
     roomMismatch: boolean;
+    /** Au scan de fin : incohérence début↔fin (salle ≠ celle scannée au début). */
+    endScanMismatch?: boolean;
     qrAlertSent: boolean;
     scannedAtIso: string;
   }): Promise<void> {
@@ -526,14 +528,17 @@ export class AttendanceRepository {
       return;
     }
 
-    // Un scan de fin invalide (mauvaise salle) n'ouvre pas le checkout :
-    // room_scan_end_at reste NULL pour bloquer le checkOut tant que la bonne salle n'est pas scannée.
+    // Scan de fin : ce qui bloque l'enregistrement de room_scan_end_at, c'est la
+    // COHÉRENCE début↔fin (endScanMismatch), pas l'écart à l'EDT. Un prof qui fait
+    // cours dans une salle ≠ EDT mais scanne la même salle au début et à la fin doit
+    // pouvoir clôturer. room_mismatch (EDT, info/alerte) n'est pas réécrit ici pour
+    // préserver la valeur posée au scan de début.
+    const endMismatch = params.endScanMismatch ?? false;
     await this.db.execute(sql`
       UPDATE attendances_teacher
       SET
         room_scanned_id = COALESCE(${params.scannedRoomId}, room_scanned_id),
-        room_scan_end_at = CASE WHEN ${params.roomMismatch} THEN NULL ELSE ${params.scannedAtIso}::timestamptz END,
-        room_mismatch = ${params.roomMismatch},
+        room_scan_end_at = CASE WHEN ${endMismatch} THEN NULL ELSE ${params.scannedAtIso}::timestamptz END,
         qr_alert_sent = ${params.qrAlertSent}
       WHERE teacher_id = ${params.teacherId}
         AND schedule_id = ${params.scheduleId}

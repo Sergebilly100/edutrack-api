@@ -217,6 +217,93 @@ describe('attendance.service', () => {
     );
   });
 
+  it('qrScan() scanType=end dans une salle ≠ EDT mais cohérente avec le début → accepté (room_scan_end_at posé)', async () => {
+    // Régression : le scan de fin était bloqué sur la base de l'écart EDT au lieu
+    // de la cohérence début↔fin. Un prof qui fait cours hors de la salle prévue
+    // mais scanne la même salle au début et à la fin doit pouvoir clôturer.
+    vi.setSystemTime(new Date('2026-04-14T08:55:00.000Z'));
+    repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1' });
+    repository.findScheduleContextForTeacher.mockResolvedValue({
+      scheduleId: 'schedule-1',
+      teacherId: 'teacher-1',
+      teacherName: 'Teacher 1',
+      className: '3eme A',
+      subject: 'Maths',
+      plannedRoomId: 'room-1',
+      plannedRoomName: 'A1',
+      plannedRoomToken: 'edt-room-token', // salle PRÉVUE dans l'EDT
+      timeSlotId: 'slot-1',
+      slotLabel: '07h30-09h00',
+      slotStartTime: '07:30:00',
+      slotEndTime: '09:00:00',
+    });
+    // Le prof a fait cours dans la salle B (≠ EDT) : début scanné en 'actual-room-token'
+    repository.findRoomByToken.mockResolvedValue({ id: 'room-2' });
+    repository.getStartScanRoomToken.mockResolvedValue('actual-room-token');
+    repository.ensureAttendanceRecord.mockResolvedValue(undefined);
+    repository.recordQrScan.mockResolvedValue(undefined);
+
+    const service = new AttendanceService(repository as never);
+    const result = await service.qrScan(
+      {
+        qrToken: 'actual-room-token', // scan de fin = MÊME salle qu'au début
+        scanType: 'end',
+        scheduleId: 'schedule-1',
+        date: '2026-04-14',
+      },
+      { schemaName: 'school_sainte_marie', userId: 'user-1' }
+    );
+
+    // Cohérent début↔fin → pas de mismatch renvoyé au front
+    expect(result.roomMismatch).toBe(false);
+    // recordQrScan reçoit endScanMismatch=false → room_scan_end_at sera posé
+    expect(repository.recordQrScan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scanType: 'end',
+        endScanMismatch: false,
+      })
+    );
+  });
+
+  it('qrScan() scanType=end dans une salle DIFFÉRENTE du début → refusé (endScanMismatch=true)', async () => {
+    vi.setSystemTime(new Date('2026-04-14T08:55:00.000Z'));
+    repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1' });
+    repository.findScheduleContextForTeacher.mockResolvedValue({
+      scheduleId: 'schedule-1',
+      teacherId: 'teacher-1',
+      teacherName: 'Teacher 1',
+      className: '3eme A',
+      subject: 'Maths',
+      plannedRoomId: 'room-1',
+      plannedRoomName: 'A1',
+      plannedRoomToken: 'edt-room-token',
+      timeSlotId: 'slot-1',
+      slotLabel: '07h30-09h00',
+      slotStartTime: '07:30:00',
+      slotEndTime: '09:00:00',
+    });
+    repository.findRoomByToken.mockResolvedValue({ id: 'room-3' });
+    repository.getStartScanRoomToken.mockResolvedValue('start-room-token');
+    repository.ensureAttendanceRecord.mockResolvedValue(undefined);
+    repository.recordQrScan.mockResolvedValue(undefined);
+
+    const service = new AttendanceService(repository as never);
+    const result = await service.qrScan(
+      {
+        qrToken: 'other-room-token', // ≠ salle scannée au début
+        scanType: 'end',
+        scheduleId: 'schedule-1',
+        date: '2026-04-14',
+      },
+      { schemaName: 'school_sainte_marie', userId: 'user-1' }
+    );
+
+    expect(result.roomMismatch).toBe(true);
+    expect(repository.recordQrScan).toHaveBeenCalledWith(
+      expect.objectContaining({ scanType: 'end', endScanMismatch: true })
+    );
+  });
+
   it('detectMissingQrScans() émet teacher_qr_missing_scan, marque qr_alert_sent et retourne le compteur', async () => {
     repository.listMissingQrScans.mockResolvedValue([
       { teacherId: 'teacher-1', scheduleId: 'schedule-1' },
