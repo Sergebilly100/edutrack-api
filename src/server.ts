@@ -14,9 +14,11 @@ import { closeSharedRedis, getSharedRedis } from './shared/queue/shared-redis.js
 import { assertRequiredSecrets } from './shared/utils/required-secrets.js';
 import { initSentry, captureException, isSentryEnabled } from './shared/observability/sentry.js';
 import { registerSwagger } from './shared/observability/swagger.js';
+import { initWebPush } from './shared/push/web-push.js';
 
 assertRequiredSecrets();
 initSentry();
+initWebPush();
 
 import adminController from './modules/admin/admin.controller.js';
 import attendanceController from './modules/attendance/attendance.controller.js';
@@ -34,6 +36,8 @@ import importExportController from './modules/import-export/import.controller.js
 import notificationsController from './modules/notifications/notifications.controller.js';
 import permissionsController from './modules/permissions/permissions.controller.js';
 import parentPortalController from './modules/parent-portal/parent-portal.controller.js';
+import pushController from './modules/push/push.controller.js';
+import { registerPushEventListeners } from './modules/push/push.listeners.js';
 import {
   createNotificationsQueue,
   createNotificationsWorker,
@@ -173,6 +177,7 @@ const loadMaintenanceState = async (): Promise<{ mode: boolean; message: string 
 
 notificationsService.start();
 registerSalaryEventListeners();
+registerPushEventListeners();
 
 const corsOrigins = process.env.CORS_ORIGINS
   ?.split(',')
@@ -260,6 +265,7 @@ app.register(importExportController);
 app.register(permissionsController);
 app.register(subscriptionsController, { pdfQueue: billingPdfQueue });
 app.register(parentPortalController);
+app.register(pushController);
 
 app.get('/health', async () => ({ status: 'ok' }));
 
