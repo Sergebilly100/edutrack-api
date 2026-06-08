@@ -5,6 +5,8 @@ const eventMocks = vi.hoisted(() => ({
   emitTeacherCheckedIn: vi.fn(),
   emitTeacherLate: vi.fn(),
   emitTeacherQrAlert: vi.fn(),
+  emitTeacherQrInvalid: vi.fn(),
+  emitTeacherCheckoutCompleted: vi.fn(),
 }));
 
 const schedulerMocks = vi.hoisted(() => ({
@@ -16,6 +18,8 @@ vi.mock('../../src/modules/attendance/attendance.events.js', () => ({
   emitTeacherCheckedIn: eventMocks.emitTeacherCheckedIn,
   emitTeacherLate: eventMocks.emitTeacherLate,
   emitTeacherQrAlert: eventMocks.emitTeacherQrAlert,
+  emitTeacherQrInvalid: eventMocks.emitTeacherQrInvalid,
+  emitTeacherCheckoutCompleted: eventMocks.emitTeacherCheckoutCompleted,
 }));
 
 vi.mock('../../src/shared/queue/attendance-queue.js', () => ({
@@ -40,6 +44,8 @@ const repository = {
   bulkUpsertStudentAttendance: vi.fn(),
   listStudentAbsenceNotificationCandidates: vi.fn(),
   listAbsentStudentsForSchedule: vi.fn(),
+  getTeacherAttendance: vi.fn(),
+  checkOut: vi.fn(),
 };
 
 beforeEach(() => {
@@ -582,5 +588,51 @@ describe('attendance.service', () => {
     expect(notifQueue.getJob).toHaveBeenCalledTimes(2);
     expect(mockJob.changeDelay).toHaveBeenCalledTimes(2);
     expect(mockJob.changeDelay).toHaveBeenCalledWith(0);
+  });
+
+  it('checkOut() scanné bien après la fin du créneau → actualMinutes borné à slotEnd (pas de sur-paie)', async () => {
+    // Créneau 07:30→09:00 (90 min). Check-in à l'heure, scan de fin à 11:00 (2h
+    // après la fin). actual_minutes alimente la paie (use_real_hours) : il doit
+    // valoir 90 min (07:30→09:00), PAS 210 min (07:30→11:00).
+    vi.setSystemTime(new Date('2026-04-14T11:00:00.000Z'));
+    repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1' });
+    repository.findScheduleContextForTeacher.mockResolvedValue({
+      scheduleId: 'schedule-1',
+      teacherId: 'teacher-1',
+      teacherName: 'Teacher 1',
+      className: '3eme A',
+      subject: 'Maths',
+      plannedRoomId: 'room-1',
+      plannedRoomName: 'A1',
+      plannedRoomToken: 'token',
+      timeSlotId: 'slot-1',
+      slotLabel: '07h30-09h00',
+      slotStartTime: '07:30:00',
+      slotEndTime: '09:00:00',
+    });
+    repository.getTeacherAttendance.mockResolvedValue({
+      checked_in_at: '2026-04-14T07:30:00.000Z',
+      checked_out_at: null,
+      room_scan_end_at: '2026-04-14T09:00:00.000Z',
+    });
+    repository.getSchoolFeatureFlags.mockResolvedValue({
+      use_real_hours: true,
+      geo_check_enabled: false,
+      require_end_scan: false,
+      checkout_tolerance_minutes: 5,
+    });
+    repository.checkOut.mockResolvedValue(undefined);
+
+    const service = new AttendanceService(repository as never);
+    const result = await service.checkOut(
+      { scheduleId: 'schedule-1', date: '2026-04-14' },
+      { schemaName: 'school_sainte_marie', userId: 'user-1' }
+    );
+
+    // 90 min = durée du créneau, pas 210 min (07:30 → 11:00)
+    expect(result.actualMinutes).toBe(90);
+    expect(repository.checkOut).toHaveBeenCalledWith(
+      expect.objectContaining({ actualMinutes: 90 })
+    );
   });
 });

@@ -305,10 +305,6 @@ export class AttendanceService {
     // par un client offline, pour ne pas surévaluer la durée du cours.
     const checkedOutAt = resolveActualOccurredAt(input.clientTimestamp);
     const checkedInAt = new Date(existing.checked_in_at);
-    const actualMinutes = Math.max(
-      0,
-      Math.floor((checkedOutAt.getTime() - checkedInAt.getTime()) / 60000)
-    );
     const geo = resolveGeo({
       enabled: flags.geo_check_enabled,
       latitude: input.latitude,
@@ -325,11 +321,20 @@ export class AttendanceService {
     );
     const fullHours = Math.round((scheduleDurationMinutes / 60) * 100) / 100;
 
+    // `actual_minutes` alimente la paie (use_real_hours) : c'est la DURÉE RÉELLE DE
+    // COURS, pas le temps brut jusqu'au scan. On borne donc le checkout à slotEnd —
+    // un prof qui scanne sa fin bien après la fin du cours ne doit pas être payé
+    // pour ce temps hors créneau.
+    const checkedOutCapped = new Date(Math.min(checkedOutAt.getTime(), slotEnd.getTime()));
+    const actualMinutes = Math.max(
+      0,
+      Math.floor((checkedOutCapped.getTime() - checkedInAt.getTime()) / 60000)
+    );
+
     // Heures réellement effectuées = de l'heure de début du cours à l'heure de fin réelle.
     // Si le prof est arrivé en retard, on recalcule la durée depuis le début du créneau.
     // Règle : heure_effectuée = min(checkout, slotEnd) - slotStart
     // Si heure_effectuée >= scheduleDuration - tolerance → comptabilisé automatiquement
-    const checkedOutCapped = new Date(Math.min(checkedOutAt.getTime(), slotEnd.getTime()));
     const effectiveMinutes = Math.max(
       0,
       Math.floor((checkedOutCapped.getTime() - slotStart.getTime()) / 60000)
