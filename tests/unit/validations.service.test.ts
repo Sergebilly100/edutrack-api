@@ -146,7 +146,8 @@ describe('ValidationsService', () => {
       await service.approve({ attendanceId: 'att-uuid-1' }, context);
 
       expect(repository.auditValidation).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'attendance_validation_approved' })
+        expect.objectContaining({ action: 'attendance_validation_approved' }),
+        repository
       );
     });
 
@@ -159,7 +160,8 @@ describe('ValidationsService', () => {
 
       expect(repository.recomputeForAttendanceDate).toHaveBeenCalledWith(
         ctx.teacher_id,
-        ctx.date
+        ctx.date,
+        repository
       );
     });
   });

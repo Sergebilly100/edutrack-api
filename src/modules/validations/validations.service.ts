@@ -35,6 +35,11 @@ export class ValidationsService {
     input: { attendanceId: string; validatedHours?: number },
     context: ServiceContext
   ): Promise<{ success: true }> {
+    // L'approbation, le recalcul du salaire et l'audit financier sont dans la
+    // MÊME transaction : une approbation qui ne serait pas accompagnée de son
+    // recalcul de salaire (ou de son audit) laisserait un état incohérent sur
+    // une donnée qui touche la paie. Les effets de bord non-DB (notification
+    // in-app, event SMS/email) restent après le commit.
     const before = await this.repository.transaction(async (tx) => {
       const ctx = await this.repository.findValidationContext(input.attendanceId, tx);
       if (!ctx) {
@@ -46,22 +51,25 @@ export class ValidationsService {
         { attendanceId: input.attendanceId, validatedHours, validatedBy: context.userId },
         tx
       );
+      // actualiser le cache de salaire de l'enseignant pour la date concernée
+      await this.repository.recomputeForAttendanceDate(ctx.teacher_id, ctx.date, tx);
+      // Auditer l'action d'approbation
+      await this.repository.auditValidation(
+        {
+          schemaName: context.schemaName,
+          actorId: context.userId,
+          actorRole: context.role,
+          action: 'attendance_validation_approved',
+          before: ctx,
+          after: {
+            attendanceId: input.attendanceId,
+            validationStatus: 'approved',
+            validatedHours,
+          },
+        },
+        tx
+      );
       return { ctx, validatedHours };
-    });
-    // actualiser le cache de salaire de l'enseignant pour la date concernée
-    await this.repository.recomputeForAttendanceDate(before.ctx.teacher_id, before.ctx.date);
-    // Auditer l'action d'approbation
-    await this.repository.auditValidation({
-      schemaName: context.schemaName,
-      actorId: context.userId,
-      actorRole: context.role,
-      action: 'attendance_validation_approved',
-      before: before.ctx,
-      after: {
-        attendanceId: input.attendanceId,
-        validationStatus: 'approved',
-        validatedHours: before.validatedHours,
-      },
     });
     // Envoyer la notification d'approbation à l'enseignant
     await this.repository.insertApprovedTeacherNotification({
@@ -91,6 +99,7 @@ export class ValidationsService {
     input: { attendanceId: string; reason: string },
     context: ServiceContext
   ): Promise<{ success: true }> {
+    // Rejet + recalcul salaire + audit dans la même transaction (cf. approve).
     const before = await this.repository.transaction(async (tx) => {
       const ctx = await this.repository.findValidationContext(input.attendanceId, tx);
       if (!ctx) {
@@ -98,6 +107,24 @@ export class ValidationsService {
       }
       await this.repository.reject(
         { attendanceId: input.attendanceId, reason: input.reason, validatedBy: context.userId },
+        tx
+      );
+      await this.repository.recomputeForAttendanceDate(ctx.teacher_id, ctx.date, tx);
+      // Auditer l'action de rejet
+      await this.repository.auditValidation(
+        {
+          schemaName: context.schemaName,
+          actorId: context.userId,
+          actorRole: context.role,
+          action: 'attendance_validation_rejected',
+          before: ctx,
+          after: {
+            attendanceId: input.attendanceId,
+            validationStatus: 'rejected',
+            validatedHours: 0,
+            reason: input.reason,
+          },
+        },
         tx
       );
       return ctx;
@@ -121,21 +148,6 @@ export class ValidationsService {
       date: before.date,
       reason: input.reason,
       validatedBy: context.userId,
-    });
-    await this.repository.recomputeForAttendanceDate(before.teacher_id, before.date);
-    // Auditer l'action de rejet
-    await this.repository.auditValidation({
-      schemaName: context.schemaName, 
-      actorId: context.userId, // ID de l'utilisateur qui rejette la validation
-      actorRole: context.role, // Rôle de l'utilisateur qui rejette la validation
-      action: 'attendance_validation_rejected',
-      before,
-      after: {
-        attendanceId: input.attendanceId,
-        validationStatus: 'rejected',
-        validatedHours: 0,
-        reason: input.reason,
-      },
     });
 
     return { success: true };

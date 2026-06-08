@@ -430,8 +430,9 @@ export class ValidationsRepository {
     action: 'attendance_validation_approved' | 'attendance_validation_rejected';
     before: AttendanceValidationContextRow;
     after: Record<string, unknown>;
-  }): Promise<void> {
-    const actorResult = await this.db.execute<{ actor_name: string | null; actor_position: string | null }>(sql`
+  }, tx?: QueryExecutor): Promise<void> {
+    const db = tx ?? this.db;
+    const actorResult = await db.execute<{ actor_name: string | null; actor_position: string | null }>(sql`
       SELECT
         u.name AS actor_name,
         (
@@ -448,7 +449,7 @@ export class ValidationsRepository {
     `);
     const actor = actorResult.rows[0] ?? { actor_name: null, actor_position: null };
 
-    await this.db.execute(sql`
+    await db.execute(sql`
       INSERT INTO public.audit_financial_events (
         tenant_id,
         actor_id,
@@ -478,9 +479,9 @@ export class ValidationsRepository {
     teacherId: string;
     monthStart: string;
     monthEnd: string;
-  }): Promise<void> {
-
-    await this.db.execute(sql`
+  }, tx?: QueryExecutor): Promise<void> {
+    const db = tx ?? this.db;
+    await db.execute(sql`
       WITH feature_flags AS (
         SELECT COALESCE(f.use_real_hours, false) AS use_real_hours
         FROM public.tenants t
@@ -529,9 +530,9 @@ export class ValidationsRepository {
     `);
   }
 
-  async recomputeForAttendanceDate(teacherId: string, date: string): Promise<void> {
+  async recomputeForAttendanceDate(teacherId: string, date: string, tx?: QueryExecutor): Promise<void> {
     const { monthStart, monthEnd } = monthBoundsFromDate(date);
-    await this.recomputeTeacherSalaryForMonth({ teacherId, monthStart, monthEnd });
+    await this.recomputeTeacherSalaryForMonth({ teacherId, monthStart, monthEnd }, tx);
   }
 
   // ── Missing end-scan queries ────────────────────────────────────────────────
