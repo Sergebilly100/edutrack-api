@@ -46,7 +46,7 @@ export const db = drizzle(pool);
 export type TenantDb = NodePgDatabase<Record<string, unknown>>;
 
 // Tables cœur attendues dans tout schéma tenant correctement provisionné.
-// Sert de garde avant d'exécuter un job tenant (cron) : un schéma orphelin —
+// Sert de garde avant d'exécuter un job tenant (cron) : un schéma orphelin -
 // ligne résiduelle dans public.tenants dont le schéma PG a été supprimé - ne
 // doit pas faire planter le worker en boucle.
 const REQUIRED_TENANT_TABLES = ['schedule_periods', 'schedules', 'attendances_teacher'] as const;
@@ -94,7 +94,7 @@ export const acquireTenantDb = async (
  * Exécute `callback` avec une instance Drizzle dont le search_path est
  * positionné sur `schemaName`. La connexion est libérée après la callback.
  *
- * Règle AGENTS.md §3 : toute query tenant DOIT passer par ce wrapper —
+ * Règle AGENTS.md §3 : toute query tenant DOIT passer par ce wrapper -
  * jamais de `db` global pour des données école.
  */
 export const withTenantSchema = async <T>(

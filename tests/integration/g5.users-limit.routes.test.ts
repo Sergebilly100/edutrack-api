@@ -52,7 +52,7 @@ describe('G5 users limit enforcement', () => {
 
   it('POST /api/v1/teachers accepte la création quand staff supplémentaires n\'affectent pas le quota profs', async () => {
     const headers = await getAuthHeaders('director');
-    // Les tests précédents ont pu ajouter des teachers — on fixe max_users suffisamment haut (20)
+    // Les tests précédents ont pu ajouter des teachers - on fixe max_users suffisamment haut (20)
     // pour qu'il reste de la place, puis on vérifie que les staff n'affectent pas le quota profs.
     await ensureTenantRow(20);
 

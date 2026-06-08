@@ -85,10 +85,10 @@ export const renderPaymentHistory = async (
       rows: items.map((item) => [
         { text: formatMonthLabel(item.month), font: builder.f.medium },
         { text: formatFcfa(item.amountFcfa), align: 'right', font: builder.f.semibold },
-        { text: item.hoursPaid !== null ? formatHours(item.hoursPaid) : '—', align: 'right' },
+        { text: item.hoursPaid !== null ? formatHours(item.hoursPaid) : '-', align: 'right' },
         { text: formatSalaryStatus(item.status), pill: salaryStatusPill(item.status, t) },
-        { text: item.paidAt ? formatDateTime(item.paidAt) : '—', color: t.color.muted },
-        { text: item.paidByName ?? '—', color: t.color.muted },
+        { text: item.paidAt ? formatDateTime(item.paidAt) : '-', color: t.color.muted },
+        { text: item.paidByName ?? '-', color: t.color.muted },
       ]),
     });
     builder.totalBanner('Total versé sur la période', formatFcfa(totalPaid), {

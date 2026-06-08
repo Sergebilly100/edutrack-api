@@ -9,10 +9,10 @@ import type { PdfTheme } from './theme.js';
 
 const FCFA = new Intl.NumberFormat('fr-FR', { useGrouping: true });
 
-/** « 125 000 FCFA ». null → « —. ». */
+/** « 125 000 FCFA ». null → « -. ». */
 export const formatFcfa = (value: number | null | undefined): string => {
   if (value === null || value === undefined || Number.isNaN(value)) {
-    return '—';
+    return '-';
   }
   return `${FCFA.format(Math.round(value))} FCFA`;
 };
@@ -20,7 +20,7 @@ export const formatFcfa = (value: number | null | undefined): string => {
 /** « 12,5 h ». */
 export const formatHours = (value: number | null | undefined): string => {
   if (value === null || value === undefined || Number.isNaN(value)) {
-    return '—';
+    return '-';
   }
   const rounded = Math.round(value * 100) / 100;
   return `${rounded.toLocaleString('fr-FR', { maximumFractionDigits: 2 })} h`;
@@ -28,9 +28,9 @@ export const formatHours = (value: number | null | undefined): string => {
 
 /** « 15 mai 2026 ». ISO date ou datetime accepté. */
 export const formatDate = (value: string | Date | null | undefined): string => {
-  if (!value) return '—';
+  if (!value) return '-';
   const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return '—';
+  if (Number.isNaN(date.getTime())) return '-';
   return new Intl.DateTimeFormat('fr-FR', {
     dateStyle: 'long',
     timeZone: 'Africa/Abidjan',
@@ -39,9 +39,9 @@ export const formatDate = (value: string | Date | null | undefined): string => {
 
 /** « 15 mai 2026 à 08:12 ». */
 export const formatDateTime = (value: string | Date | null | undefined): string => {
-  if (!value) return '—';
+  if (!value) return '-';
   const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return '—';
+  if (Number.isNaN(date.getTime())) return '-';
   return new Intl.DateTimeFormat('fr-FR', {
     dateStyle: 'long',
     timeStyle: 'short',

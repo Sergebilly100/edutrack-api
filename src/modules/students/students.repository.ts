@@ -1137,8 +1137,8 @@ export class StudentsRepository {
       date: row.date,
       subject: row.subject ?? 'Non renseigné',
       className: row.class_name ?? 'Non renseignée',
-      startTime: row.start_time ?? '—',
-      endTime: row.end_time ?? '—',
+      startTime: row.start_time ?? '-',
+      endTime: row.end_time ?? '-',
       status: row.status,
       excuseReason: row.excuse_reason,
       smsPhone1: {

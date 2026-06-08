@@ -7,7 +7,7 @@ let configured = false;
 /**
  * Initialise les clés VAPID. Sans configuration, le push est désactivé
  * silencieusement (les SMS/email restent le canal fiable) plutôt que de faire
- * planter le serveur — le push est un complément, pas une dépendance dure.
+ * planter le serveur - le push est un complément, pas une dépendance dure.
  */
 export const initWebPush = (): void => {
   const publicKey = process.env.VAPID_PUBLIC_KEY?.trim();
@@ -15,7 +15,7 @@ export const initWebPush = (): void => {
   const subject = process.env.VAPID_SUBJECT?.trim() || 'mailto:contact@ivoiredu.ci';
 
   if (!publicKey || !privateKey) {
-    logger.warn('[web-push] VAPID keys missing — push notifications disabled');
+    logger.warn('[web-push] VAPID keys missing - push notifications disabled');
     configured = false;
     return;
   }

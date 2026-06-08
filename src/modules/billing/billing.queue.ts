@@ -113,7 +113,7 @@ type ExportArtifact = {
   r2Key?: string;
 };
 
-// R2 objects live under this prefix and survive instance restarts. Keep a flat layout —
+// R2 objects live under this prefix and survive instance restarts. Keep a flat layout -
 // jobId in the filename is unique enough to avoid collisions across tenants.
 const buildR2Key = (fileName: string): string => `billing/exports/${fileName}`;
 

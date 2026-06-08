@@ -429,7 +429,7 @@ describe('billing integration (real db)', () => {
     );
 
     if (records.length === 0) {
-      return; // Pas de vacataires dans ce jeu de données — test ignoré
+      return; // Pas de vacataires dans ce jeu de données - test ignoré
     }
 
     // Préparer les items

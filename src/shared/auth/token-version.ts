@@ -13,7 +13,7 @@ const getRedis = (): Redis => {
 
 /**
  * Thrown when the Redis-backed revocation check cannot complete.
- * Callers (the auth middleware) translate this into a 503 to fail closed —
+ * Callers (the auth middleware) translate this into a 503 to fail closed -
  * we'd rather lock users out briefly than honor a token that may have been revoked.
  */
 export class TokenRevocationUnavailableError extends Error {

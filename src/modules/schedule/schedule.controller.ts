@@ -447,7 +447,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
         // On ne valide la couverture que si l'utilisateur a fourni une date
         // explicite (cas one_shot / date précise). Sans date fournie,
         // effective_from défaute à aujourd'hui avec la sémantique « à partir de
-        // maintenant » et l'effet réel est déjà borné à la période côté repo —
+        // maintenant » et l'effet réel est déjà borné à la période côté repo -
         // bloquer ici casserait la modification d'un créneau d'une période future.
         if (body.effective_from) {
           await assertEffectiveDateWithinPeriod(db, {
@@ -538,7 +538,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
         // On ne valide la couverture que si l'utilisateur a fourni une date
         // explicite (cas one_shot / date précise). Sans date fournie,
         // effective_from défaute à aujourd'hui avec la sémantique « à partir de
-        // maintenant » et l'effet réel est déjà borné à la période côté repo —
+        // maintenant » et l'effet réel est déjà borné à la période côté repo -
         // bloquer ici casserait la modification d'un créneau d'une période future.
         if (body.effective_from) {
           await assertEffectiveDateWithinPeriod(db, {

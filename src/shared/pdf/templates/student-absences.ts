@@ -55,7 +55,7 @@ const smsPill = (summary: string, t: PdfTheme): { bg: RGB; fg: RGB } => {
   }
 };
 
-const formatPhone = (value: string | null): string => (value ? `+${value}` : '—');
+const formatPhone = (value: string | null): string => (value ? `+${value}` : '-');
 const formatRate = (value: number | null): string => `${(value ?? 0).toFixed(1)} %`;
 
 /**

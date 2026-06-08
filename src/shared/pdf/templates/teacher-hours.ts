@@ -43,7 +43,7 @@ const COLUMN_WIDTHS = {
 };
 
 const slotLabel = (start: string, end: string): string => {
-  const trim = (value: string): string => (value ? value.slice(0, 5) : '—');
+  const trim = (value: string): string => (value ? value.slice(0, 5) : '-');
   return `${trim(start)} – ${trim(end)}`;
 };
 
@@ -115,7 +115,7 @@ export const renderTeacherHoursReport = async (
         { text: formatDate(row.date) },
         { text: slotLabel(row.startTime, row.endTime) },
         { text: `${row.subject} · ${row.className}` },
-        { text: row.roomName || '—' },
+        { text: row.roomName || '-' },
         {
           text: row.attendanceStatus
             ? formatAttendanceStatus(row.attendanceStatus, row.lateMinutes)

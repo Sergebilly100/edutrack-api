@@ -104,7 +104,7 @@ export type NotificationJobData =
   | ValidationDailySummaryJobData
   | DeferredStudentAbsentJobData;
 
-/** ID déterministe pour les jobs d'absence différée — permet l'annulation/mise à jour */
+/** ID déterministe pour les jobs d'absence différée - permet l'annulation/mise à jour */
 // IMPORTANT : un jobId custom BullMQ NE PEUT PAS contenir ':' (BullMQ lève
 // « Custom Id cannot contain : »). On utilise donc '__' comme séparateur. Avec
 // ':', notifQueue.add(...) échouait silencieusement (avalé par Promise.allSettled)

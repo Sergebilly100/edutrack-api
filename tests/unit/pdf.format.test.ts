@@ -16,9 +16,9 @@ describe('pdf/format - montants & heures', () => {
   });
 
   it('renvoie un tiret pour null / NaN', () => {
-    expect(formatFcfa(null)).toBe('—');
-    expect(formatFcfa(undefined)).toBe('—');
-    expect(formatHours(null)).toBe('—');
+    expect(formatFcfa(null)).toBe('-');
+    expect(formatFcfa(undefined)).toBe('-');
+    expect(formatHours(null)).toBe('-');
   });
 
   it('formate les heures avec au plus 2 décimales', () => {

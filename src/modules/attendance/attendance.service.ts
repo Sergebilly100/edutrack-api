@@ -322,7 +322,7 @@ export class AttendanceService {
     const fullHours = Math.round((scheduleDurationMinutes / 60) * 100) / 100;
 
     // `actual_minutes` alimente la paie (use_real_hours) : c'est la DURÉE RÉELLE DE
-    // COURS, pas le temps brut jusqu'au scan. On borne donc le checkout à slotEnd —
+    // COURS, pas le temps brut jusqu'au scan. On borne donc le checkout à slotEnd -
     // un prof qui scanne sa fin bien après la fin du cours ne doit pas être payé
     // pour ce temps hors créneau.
     const checkedOutCapped = new Date(Math.min(checkedOutAt.getTime(), slotEnd.getTime()));
@@ -440,7 +440,7 @@ export class AttendanceService {
 
     // Pour le scan de fin, la VALIDATION qui décide d'enregistrer la fin du cours
     // est la cohérence début↔fin : le prof doit scanner la même salle qu'au début
-    // (même s'il fait cours hors de la salle prévue dans l'EDT — cas courant).
+    // (même s'il fait cours hors de la salle prévue dans l'EDT - cas courant).
     // On compare UNIQUEMENT les tokens de salle (début vs fin), SANS la contrainte
     // de fenêtre horaire : un scan de fin se fait à la fin du créneau (voire un peu
     // après), donc appliquer la fenêtre temporelle bloquerait quasiment tous les
@@ -708,7 +708,7 @@ private computeNotifSendAfterMs(date: string, slotEndTime: string): number {
     const notifSendAfter = this.computeNotifSendAfterMs(input.date, schedule.slotEndTime);
     const nowMs = Date.now();
 
-    // Si la deadline est dépassée, le pointage est verrouillé — on refuse la re-soumission
+    // Si la deadline est dépassée, le pointage est verrouillé - on refuse la re-soumission
     if (nowMs >= notifSendAfter) {
       throw new AttendanceModuleError(
         'Rollcall submission window has closed',
