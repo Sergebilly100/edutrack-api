@@ -434,9 +434,15 @@ export class TeachersRepository {
       username: string;
     };
 
+    // IN (...) via sql.join plutôt que ANY(${array}::uuid[]) : Drizzle éclate un
+    // tableau JS en ($1, $2) dans un `sql` brut, ce qui fait échouer le cast en
+    // uuid[] ("cannot cast type record to uuid[]").
     const idsFilter =
       teacherIds && teacherIds.length > 0
-        ? sql`AND t.id = ANY(${teacherIds}::uuid[])`
+        ? sql`AND t.id IN (${sql.join(
+            teacherIds.map((id) => sql`${id}::uuid`),
+            sql`, `
+          )})`
         : sql``;
 
     const result = await this.db.execute(sql`
