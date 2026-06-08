@@ -118,6 +118,7 @@ export type NotificationsRepository = {
     tenantDb: TenantDbLike,
     params: {
       limit: number;
+      offset?: number;
       types?: NotificationType[];
     }
   ) => Promise<NotificationLogRow[]>;
@@ -422,6 +423,7 @@ export const defaultRepository: NotificationsRepository = {
 
   async listNotificationLog(tenantDb, params) {
     const safeLimit = Math.max(1, Math.min(params.limit, 50));
+    const safeOffset = Math.max(0, params.offset ?? 0);
     // Whitelist stricte : seuls les types destinés au directeur apparaissent dans son panneau.
     // Tout type prof/parent est invisible au directeur (corrige fuite notifications cross-roles).
     const DIRECTOR_ALLOWED_TYPES: NotificationType[] = [
@@ -481,6 +483,7 @@ export const defaultRepository: NotificationsRepository = {
         ${whereClause}
         ORDER BY COALESCE(sent_at, created_at) DESC, created_at DESC
         LIMIT ${safeLimit}
+        OFFSET ${safeOffset}
       `);
 
       return result.rows;
@@ -500,6 +503,7 @@ export const defaultRepository: NotificationsRepository = {
       ${whereClause}
       ORDER BY COALESCE(sent_at, created_at) DESC, created_at DESC
       LIMIT ${safeLimit}
+      OFFSET ${safeOffset}
     `);
 
     return result.rows;

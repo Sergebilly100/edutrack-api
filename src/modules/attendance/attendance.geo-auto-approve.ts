@@ -53,7 +53,7 @@ export const runGeoAutoApproveForAllTenants = async (): Promise<void> => {
     return publicDb.execute<{ schema_name: string }>(sql`
       SELECT schema_name
       FROM tenants
-      WHERE status = 'active'
+      WHERE status IN ('active', 'trial')
       ORDER BY schema_name ASC
     `);
   });

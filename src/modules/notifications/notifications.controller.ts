@@ -61,6 +61,7 @@ const toPgTextArrayLiteral = (values: readonly string[]): string => {
 
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(10),
+  offset: z.coerce.number().int().min(0).default(0),
   types: z
     .string()
     .optional()
@@ -210,6 +211,7 @@ export default async function notificationsController(
       const data = await withTenantSchema(claims.schemaName, async (tenantDb) => {
         return defaultRepository.listNotificationLog(tenantDb, {
           limit: query.limit,
+          offset: query.offset,
           types: query.types,
         });
       });
