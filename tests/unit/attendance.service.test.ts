@@ -364,7 +364,8 @@ describe('attendance.service', () => {
   });
 
   it('submitStudentAttendance() émet student.absent uniquement pour les absences à notifier (sans queue)', async () => {
-    // Temps fixé AVANT la fin du créneau 09:00 + 15 min → pas de ROLLCALL_WINDOW_CLOSED
+    // Temps fixé AVANT la fin du créneau 09:00 + 15 min → pas de ROLLCALL_WINDOW_CLOSED.
+    // Les notifications restent différées à 09:20 (fin + 20 min).
     vi.setSystemTime(new Date('2026-04-14T08:30:00.000Z'));
     repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1' });
     repository.findScheduleContextForTeacher.mockResolvedValue({
@@ -410,7 +411,7 @@ describe('attendance.service', () => {
     );
 
     expect(result).toMatchObject({ upsertedCount: 3, isLocked: false });
-    expect(result.notifSendAfter).toBeGreaterThan(Date.now());
+    expect(result.notifSendAfter).toBe(new Date('2026-04-14T09:20:00.000Z').getTime());
     expect(repository.bulkUpsertStudentAttendance).toHaveBeenCalledWith({
       scheduleId: 'schedule-1',
       date: '2026-04-14',
@@ -534,7 +535,7 @@ describe('attendance.service', () => {
       }),
       expect.objectContaining({
         jobId: expect.stringContaining('deferred-absent__school_sainte_marie__schedule-1__student-1'),
-        delay: expect.any(Number),
+        delay: new Date('2026-04-14T09:20:00.000Z').getTime() - Date.now(),
       })
     );
     // Annulation du job du présent (student-2)

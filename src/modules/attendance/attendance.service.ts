@@ -132,8 +132,11 @@ const resolveActualOccurredAt = (clientTimestamp: string | undefined): Date => {
   return parsed;
 };
 
-/** Délai après la fin du cours avant d'envoyer les notifications SMS parents */
-const ABSENT_NOTIF_DELAY_AFTER_END_MS = 15 * 60 * 1000; // 15 minutes
+/** Grâce après la fin du cours pendant laquelle le prof peut encore soumettre l'appel. */
+const ROLLCALL_SUBMISSION_GRACE_AFTER_END_MS = 15 * 60 * 1000; // 15 minutes
+
+/** Délai après la fin du cours avant d'envoyer les notifications SMS parents. */
+const ABSENT_NOTIF_DELAY_AFTER_END_MS = 20 * 60 * 1000; // 20 minutes
 
 export class AttendanceService {
   constructor(
@@ -670,16 +673,13 @@ export class AttendanceService {
     return scheduleForWeek;
   }
 
-  // ── Calcul du délai avant envoi notification absence élève ─────────────────
-  // Retourne le timestamp UTC (ms) à partir duquel les notifs peuvent partir :
-  // fin du cours + ABSENT_NOTIF_DELAY_AFTER_END_MS.
-private computeNotifSendAfterMs(date: string, slotEndTime: string): number {
+  private computeAfterSlotEndMs(date: string, slotEndTime: string, delayMs: number): number {
     // slotEndTime est au format "HH:MM", date au format "YYYY-MM-DD"
     const [hours, minutes] = slotEndTime.split(':').map(Number);
     
     // Ajout du suffixe 'Z' pour forcer l'interprétation en UTC (ISO 8601)
     const endOfClass = new Date(`${date}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00Z`);
-    return endOfClass.getTime() + ABSENT_NOTIF_DELAY_AFTER_END_MS;
+    return endOfClass.getTime() + delayMs;
   }
 
   // ── NOUVEAU - appel élèves par le prof ────────────────────────────────────
@@ -705,11 +705,21 @@ private computeNotifSendAfterMs(date: string, slotEndTime: string): number {
       throw new AttendanceModuleError('Schedule not found', 404, 'SCHEDULE_NOT_FOUND');
     }
 
-    const notifSendAfter = this.computeNotifSendAfterMs(input.date, schedule.slotEndTime);
+    const rollcallDeadline = this.computeAfterSlotEndMs(
+      input.date,
+      schedule.slotEndTime,
+      ROLLCALL_SUBMISSION_GRACE_AFTER_END_MS
+    );
+    const notifSendAfter = this.computeAfterSlotEndMs(
+      input.date,
+      schedule.slotEndTime,
+      ABSENT_NOTIF_DELAY_AFTER_END_MS
+    );
     const nowMs = Date.now();
 
-    // Si la deadline est dépassée, le pointage est verrouillé - on refuse la re-soumission
-    if (nowMs >= notifSendAfter) {
+    // Si la deadline de grâce est dépassée, le pointage est verrouillé.
+    // Les notifications parents restent, elles, différées jusqu'à fin + 20 min.
+    if (nowMs >= rollcallDeadline) {
       throw new AttendanceModuleError(
         'Rollcall submission window has closed',
         409,
