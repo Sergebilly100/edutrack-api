@@ -99,6 +99,7 @@ export const buildTeacherLateSms = (params: TeacherLateSmsParams): string => {
   );
 };
 
+// buildTeacherQrAlertSms trace les alert en BD mais n'envoie pas de sms car trop bruillant pour le Directeur
 export const buildTeacherQrAlertSms = (
   alertType: TeacherQrAlertPayload['alertType'],
   params:

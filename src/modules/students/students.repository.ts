@@ -381,6 +381,10 @@ export class StudentsRepository {
           AND sp.is_active = true
           AND sp.valid_from <= ${input.date}::date
           AND sp.valid_to >= ${input.date}::date
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = ${input.date}::date
+          )
         LIMIT 1
       ) AS has_access
     `);
@@ -581,6 +585,10 @@ export class StudentsRepository {
               AND n.recipient_phone IN (s.parent_phone, s.parent_phone_2)
               AND COALESCE(n.sent_at::date, n.created_at::date) = a.date::date
               AND (a.schedule_id IS NULL OR n.related_id = a.schedule_id)
+              AND NOT EXISTS (
+                SELECT 1 FROM schedule_exceptions se
+                WHERE se.schedule_id = s.id AND se.exception_date = a.date
+              )
             ORDER BY n.created_at DESC
             LIMIT 1
           ) sms_log ON true
@@ -887,6 +895,10 @@ export class StudentsRepository {
             AND n.related_id = a.schedule_id
             AND n.recipient_phone = s.parent_phone
             AND COALESCE(n.sent_at::date, n.created_at::date) = a.date::date
+            AND NOT EXISTS (
+              SELECT 1 FROM schedule_exceptions se
+              WHERE se.schedule_id = n.related_id AND se.exception_date = a.date
+            )
           ORDER BY n.created_at DESC
           LIMIT 1
         ) sms_log ON true
@@ -933,6 +945,10 @@ export class StudentsRepository {
           AND n.related_id = a.schedule_id
           AND n.recipient_phone = s.parent_phone
           AND COALESCE(n.sent_at::date, n.created_at::date) = a.date::date
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = n.related_id AND se.exception_date = a.date
+          )
         ORDER BY n.created_at DESC
         LIMIT 1
       ) sms_log ON true
@@ -1025,6 +1041,10 @@ export class StudentsRepository {
         ) nl ON true
         WHERE ast.status IN ('absent', 'excused')
           AND ast.date BETWEEN ${query.from}::date AND ${query.to}::date
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = ast.date
+          )
           ${subjectAbsenceFilter}
       ),
       student_absences AS (
@@ -1128,6 +1148,10 @@ export class StudentsRepository {
       WHERE ast.student_id = ${studentId}::uuid
         AND ast.status IN ('absent', 'excused')
         AND ast.date BETWEEN ${query.from}::date AND ${query.to}::date
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_exceptions se
+          WHERE se.schedule_id = s.id AND se.exception_date = ast.date
+        )
         ${subjectFilter}
       ORDER BY ast.date DESC
     `);

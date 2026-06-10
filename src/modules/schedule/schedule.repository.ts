@@ -322,6 +322,8 @@ export const ensureScheduleTemporalColumns = async (db: QueryExecutor): Promise<
   `);
 };
 
+// Ajouter une exception pour un créneau récurrent à une date donnée (utilisé pour masquer une occurrence d'un créneau récurrent en cas de modification avec portée "this" ou de suppression d'une occurrence spécifique). 
+// L'exception est ajoutée dans la table schedule_exceptions, et la requête de récupération des créneaux actifs doit être modifiée pour exclure les créneaux qui ont une exception pour la date concernée.
 export const addScheduleException = async (
   db: QueryExecutor,
   scheduleId: string,
@@ -597,7 +599,7 @@ export const listSchedulesForPeriod = async (
   }
 ): Promise<ActiveSchedule[]> => {
   const dayFilter =
-    params.weekStart && params.weekEnd
+    params.weekStart && params.weekEnd // Si on a une plage de semaine, on filtre les créneaux pour ne récupérer que ceux qui ont un jour de semaine correspondant à au moins une date de la plage (pour éviter de récupérer des créneaux qui ne sont pas actifs du tout sur la plage, même s'ils sont actifs à la date ciblée).
       ? sql`
         AND s.day_of_week IN (
           SELECT DISTINCT EXTRACT(ISODOW FROM d)::int
@@ -611,7 +613,7 @@ export const listSchedulesForPeriod = async (
       `
       : sql``;
 
-  const temporalFilter = params.weekStart && params.weekEnd
+  const temporalFilter = params.weekStart && params.weekEnd // Si on a une plage de semaine, on doit vérifier que le créneau est actif sur au moins une date de la plage (en vérifiant que la date de début et de fin du créneau recouvre au moins une date de la plage). Si on n'a pas de plage de semaine, on vérifie juste que le créneau est actif à la date ciblée.
     ? sql`
       (
         s.start_date IS NULL OR s.start_date <= (${params.weekStart}::date + ((s.day_of_week - 1) * INTERVAL '1 day'))::date
@@ -622,7 +624,7 @@ export const listSchedulesForPeriod = async (
     `
     : buildActiveScheduleClause({ date: params.date });
 
-  const exceptionFilter = params.weekStart
+  const exceptionFilter = params.weekStart // Si on a une plage de semaine, on doit exclure les créneaux qui ont une exception sur au moins une date de la plage (pour éviter d'inclure des créneaux qui sont actifs à la date ciblée mais qui ont une exception sur une autre date de la semaine, ce qui fait que le créneau n'est pas actif du tout sur la semaine). Si on n'a pas de plage de semaine, on exclut juste les créneaux qui ont une exception à la date ciblée.
     ? sql`
       AND NOT EXISTS (
         SELECT 1 FROM schedule_exceptions se
@@ -637,6 +639,7 @@ export const listSchedulesForPeriod = async (
       )
     `;
 
+  // la logique de filtrage temporel est un peu complexe pour gérer à la fois le cas où on veut récupérer les créneaux actifs à une date donnée (dans ce cas on vérifie que le créneau est actif à cette date) et le cas où on veut récupérer les créneaux actifs sur une semaine donnée (dans ce cas on vérifie que le créneau est actif sur au moins une date de la semaine, et on exclut les créneaux qui ont une exception sur au moins une date de la semaine).
   const result = await db.execute<ActiveScheduleRow>(sql`
     SELECT
       s.id,

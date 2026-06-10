@@ -128,6 +128,7 @@ const extractHostname = (request: FastifyRequest): string | null => {
   return noPort.length > 0 ? noPort : null;
 };
 
+// Extrait le premier label d'un hostname s'il correspond à un subdomain valide pour notre usage (tenant), sinon retourne null.
 const parseSubdomain = (hostname: string): string | null => {
   if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
     return null;
@@ -230,6 +231,7 @@ const getSchemaName = async (request: FastifyRequest): Promise<string> => {
       return schema;
     }
 
+    // Support de l'hôte "localhost" pour le développement local : on retourne un schéma par défaut si défini et valide.
     const isLocalHost =
       hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
     if (isLocalHost && SCHEMA_NAME_REGEX.test(DEFAULT_LOCAL_SCHEMA)) {

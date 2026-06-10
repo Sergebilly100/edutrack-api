@@ -252,6 +252,10 @@ export class AttendanceRepository {
         WHERE s.is_active = true
           AND (s.start_date IS NULL OR s.start_date <= now_ctx.today)
           AND (s.end_date IS NULL OR s.end_date > now_ctx.today)
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = now_ctx.today
+          )
           AND s.day_of_week = now_ctx.day_of_week
           AND (now_ctx.today::timestamp + ts.end_time + INTERVAL '15 minute') <= now_ctx.now_local
       )
@@ -1095,6 +1099,11 @@ export class AttendanceRepository {
               s.end_date IS NULL
               OR s.end_date > (wc.week_start + ((s.day_of_week - 1) * INTERVAL '1 day'))::date
             )
+            AND NOT EXISTS (
+              SELECT 1 FROM schedule_exceptions se
+              WHERE se.schedule_id = s.id
+                AND se.exception_date = (wc.week_start + ((s.day_of_week - 1) * INTERVAL '1 day'))::date
+            )
           ORDER BY s.day_of_week ASC, ts.sort_order ASC, ts.start_time ASC
     `);
 
@@ -1153,6 +1162,10 @@ export class AttendanceRepository {
       WHERE s.teacher_id = ${params.teacherId}
         AND s.day_of_week = ${params.dayOfWeek}
         AND s.is_active = true
+      AND NOT EXISTS (
+        SELECT 1 FROM schedule_exceptions se
+        WHERE se.schedule_id = s.id AND se.exception_date = ${params.date}::date
+      )
       ORDER BY ts.sort_order ASC, ts.start_time ASC
     `);
 
@@ -1278,6 +1291,10 @@ export class AttendanceRepository {
         AND s.is_active = true
         AND (s.start_date IS NULL OR s.start_date <= ${today}::date)
         AND (s.end_date IS NULL OR s.end_date > ${today}::date)
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_exceptions se
+          WHERE se.schedule_id = s.id AND se.exception_date = ${today}::date
+        )
       GROUP BY
         s.id,
         u.name,
@@ -1450,6 +1467,10 @@ export class AttendanceRepository {
        AND s.teacher_id = ${params.teacherId}
        AND (s.start_date IS NULL OR s.start_date <= d.date)
        AND (s.end_date IS NULL OR s.end_date > d.date)
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_exceptions se
+          WHERE se.schedule_id = s.id AND se.exception_date = d.date
+        )
       INNER JOIN teachers t    ON t.id = s.teacher_id
       INNER JOIN users u       ON u.id = t.user_id
       INNER JOIN classes c     ON c.id = s.class_id
@@ -1520,6 +1541,10 @@ export class AttendanceRepository {
        AND s.is_active = true
        AND (s.start_date IS NULL OR s.start_date <= d.date)
        AND (s.end_date IS NULL OR s.end_date > d.date)
+       AND NOT EXISTS (
+        SELECT 1 FROM schedule_exceptions se
+        WHERE se.schedule_id = s.id AND se.exception_date = d.date
+       )
       INNER JOIN teachers t    ON t.id = s.teacher_id
       INNER JOIN users u       ON u.id = t.user_id
       INNER JOIN classes c     ON c.id = s.class_id

@@ -227,6 +227,9 @@ export class BillingService {
       throw new BillingModuleError('Teacher not found', 404, 'TEACHER_NOT_FOUND');
     }
 
+    // le détail jour par jour des heures planifiées et effectuées, avec les statuts de pointage (présent/absent/late/excused/not_marked) pour chaque cours du mois, utilisé pour afficher la timeline de pointage dans le détail du salaire du prof. 
+    // Les heures planifiées et effectuées sont calculées à partir de l'emploi du temps (et non pas à partir des données d'assiduité) : si un cours de 2h est planifié mais que le prof a été absent, on affiche quand même 2h planifiées et 0h effectuées, avec un statut "absent" (et pas 0h planifiées et 0h effectuées) 
+    // - c'est la règle qui prévaut pour le calcul du salaire : c'est parce qu'il avait 2h de cours planifiées qu'on considère qu'il doit être payé pour ces 2h, même s'il n'a pas fait le travail (sauf si le statut de pointage est "absent" ou "excused", auquel cas les heures ne sont pas payées).
     const daily = await this.repository.listTeacherDailyBreakdown(teacherId, monthStart, monthEnd);
     const rows = buildDailyRows(daily as DailyBreakdownRow[]);
     const totals = rows.reduce(

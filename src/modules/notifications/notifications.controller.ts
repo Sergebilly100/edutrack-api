@@ -39,7 +39,7 @@ const notificationTypes: NotificationType[] = [
 const notificationTypeSet = new Set(notificationTypes);
 const SMS_TEMPLATE_STUDENT_ABSENT_TYPE = 'student_absent_parent';
 const DEFAULT_STUDENT_ABSENT_TEMPLATE =
-  'IvoirEdu: {studentFirstName} absent(e) en {subject} le {date}. Contact école: {schoolPhone}';
+  'IvoirEdu: {studentFirstName} absent(e) en {subject} le {date}. Connectez-vous à votre espace parent pour plus d\'informations. \nContact école: {schoolPhone}';
 
 const schoolTemplateBodySchema = z.object({
   message_template: z.string().trim().min(5).max(500),

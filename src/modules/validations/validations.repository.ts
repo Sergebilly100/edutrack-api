@@ -141,6 +141,10 @@ export class ValidationsRepository {
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id
         LEFT JOIN rooms r ON r.id = s.room_id
         WHERE at.validation_status = 'pending'
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = at.date
+          )
       )
       SELECT
         attendance_id::text AS attendance_id,
@@ -205,6 +209,10 @@ export class ValidationsRepository {
         INNER JOIN schedules s ON s.id = at.schedule_id
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id
         WHERE at.validation_status = 'pending'
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = at.date
+          )
       )
       -- Onglet primaire identique à listPending : short_hours prioritaire si déclenché,
       -- sinon gps_suspicious. Garantit qu'un cours multi-critères n'est compté qu'une fois.
@@ -300,6 +308,10 @@ export class ValidationsRepository {
       INNER JOIN schedules s ON s.id = at.schedule_id
       INNER JOIN classes c ON c.id = s.class_id
       INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+      AND NOT EXISTS (
+        SELECT 1 FROM schedule_exceptions se
+        WHERE se.schedule_id = s.id AND se.exception_date = at.date
+      )
       LEFT JOIN rooms r ON r.id = s.room_id
       WHERE at.id = ${attendanceId}
       LIMIT 1
@@ -506,6 +518,10 @@ export class ValidationsRepository {
           )::numeric(8,2) AS hours_done
         FROM attendances_teacher at
         INNER JOIN schedules s ON s.id = at.schedule_id
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_exceptions se
+          WHERE se.schedule_id = s.id AND se.exception_date = at.date
+        )
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id
         WHERE at.teacher_id = ${params.teacherId}
           AND at.date BETWEEN ${params.monthStart}::date AND ${params.monthEnd}::date
@@ -615,6 +631,10 @@ export class ValidationsRepository {
         AND at.checked_in_at IS NOT NULL
         AND at.checked_out_at IS NULL
         AND at.room_scan_end_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_exceptions se
+          WHERE se.schedule_id = s.id AND se.exception_date = at.date
+        )
         AND (
           at.date < CURRENT_DATE
           OR (NOW() AT TIME ZONE 'Africa/Abidjan') > (at.date::timestamp + ts.end_time + INTERVAL '30 minutes')
@@ -727,6 +747,10 @@ export class ValidationsRepository {
       INNER JOIN teachers t ON t.id = at.teacher_id
       INNER JOIN users u ON u.id = t.user_id
       INNER JOIN schedules s ON s.id = at.schedule_id
+      AND NOT EXISTS (
+        SELECT 1 FROM schedule_exceptions se
+        WHERE se.schedule_id = s.id AND se.exception_date = at.date
+      )
       WHERE at.id = ${attendanceId}
       LIMIT 1
     `);
@@ -837,7 +861,11 @@ export class ValidationsRepository {
         INNER JOIN teachers t ON t.id = at.teacher_id
         INNER JOIN users u ON u.id = t.user_id
         INNER JOIN time_slots ts ON ts.id = (
-          SELECT s.time_slot_id FROM schedules s WHERE s.id = at.schedule_id
+          SELECT s.time_slot_id FROM schedules s WHERE s.id = at.schedule_id 
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = at.date
+          )
         )
         WHERE t.id IN (${idList})
           AND at.date BETWEEN ${monthStart}::date AND ${monthEnd}::date
@@ -1088,6 +1116,10 @@ export class ValidationsRepository {
       INNER JOIN time_slots ts ON ts.id = s.time_slot_id
       LEFT JOIN rooms r ON r.id = s.room_id
       WHERE at.validation_status IN ('approved', 'rejected')
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_exceptions se
+          WHERE se.schedule_id = s.id AND se.exception_date = at.date
+        )
         AND (
           at.geo_status = 'suspicious'
           OR at.actual_minutes IS NOT NULL

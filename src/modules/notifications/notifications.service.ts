@@ -98,7 +98,7 @@ const DEFAULT_PAYMENT_REMINDER_TEMPLATE =
 const DEFAULT_STUDENT_ABSENT_EMAIL_SUBJECT = 'Absence {studentLabel} - IvoirEdu';
 const DEFAULT_STUDENT_LABEL = 'élève';
 const DEFAULT_STUDENT_ABSENT_EMAIL_TEMPLATE =
-  'Votre enfant {studentFirstName} est absent(e) en {subject} le {date}. Contact école: {schoolPhone}.';
+  'Votre enfant {studentFirstName} est absent(e) en {subject} le {date}. Connectez-vous à votre espace parent pour plus d\'informations. \n Contact école: {schoolPhone}.';
 
 const loadSmsPlatformConfig = async (): Promise<SmsPlatformRuntimeConfig> => {
   const now = Date.now();

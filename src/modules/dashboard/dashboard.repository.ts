@@ -49,6 +49,10 @@ export function buildDashboardRepository(db: TenantDb) {
           AND s.day_of_week = EXTRACT(ISODOW FROM ${date}::date)::int
           AND (s.start_date IS NULL OR s.start_date <= ${date}::date)
           AND (s.end_date IS NULL OR s.end_date > ${date}::date)
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = ${date}::date
+          )
       )
       SELECT
         es.teacher_type,
@@ -126,6 +130,10 @@ export function buildDashboardRepository(db: TenantDb) {
          AND s.day_of_week = EXTRACT(ISODOW FROM apd.d)::int
          AND (s.start_date IS NULL OR s.start_date <= apd.d)
          AND (s.end_date IS NULL OR s.end_date > apd.d)
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = apd.d
+          )
         INNER JOIN teachers t ON t.id = s.teacher_id
         INNER JOIN users u ON u.id = t.user_id
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id
@@ -208,6 +216,10 @@ export function buildDashboardRepository(db: TenantDb) {
           AND s.day_of_week = EXTRACT(ISODOW FROM ${date}::date)::int
           AND (s.start_date IS NULL OR s.start_date <= ${date}::date)
           AND (s.end_date IS NULL OR s.end_date > ${date}::date)
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = ${date}::date
+          )
       )
       SELECT
         COUNT(*)::int AS total,
@@ -321,6 +333,10 @@ export function buildDashboardRepository(db: TenantDb) {
          AND s.day_of_week = EXTRACT(ISODOW FROM apd.d)::int
          AND (s.start_date IS NULL OR s.start_date <= apd.d)
          AND (s.end_date IS NULL OR s.end_date > apd.d)
+         AND NOT EXISTS (
+           SELECT 1 FROM schedule_exceptions se
+           WHERE se.schedule_id = s.id AND se.exception_date = apd.d
+         )
         INNER JOIN teachers t ON t.id = s.teacher_id
         INNER JOIN users u ON u.id = t.user_id
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id

@@ -164,6 +164,10 @@ export class BillingRepository {
          AND (s.start_date IS NULL OR s.start_date <= md.d)
          AND (s.end_date IS NULL OR s.end_date > md.d)
          AND s.day_of_week = EXTRACT(ISODOW FROM md.d)::int
+         AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = md.d
+          )
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id
         GROUP BY s.teacher_id
       ),
@@ -390,6 +394,10 @@ export class BillingRepository {
        AND (s.start_date IS NULL OR s.start_date <= md.d)
        AND (s.end_date IS NULL OR s.end_date > md.d)
        AND s.day_of_week = EXTRACT(ISODOW FROM md.d)::int
+       AND NOT EXISTS (
+          SELECT 1 FROM schedule_exceptions se
+          WHERE se.schedule_id = s.id AND se.exception_date = md.d
+        )
        AND s.teacher_id = ${teacherId}
       INNER JOIN classes c ON c.id = s.class_id
       INNER JOIN time_slots ts ON ts.id = s.time_slot_id

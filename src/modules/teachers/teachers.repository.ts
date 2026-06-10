@@ -532,6 +532,10 @@ export class TeachersRepository {
       WHERE at.teacher_id = ${teacherId}
         AND at.date >= ${dateFrom}
         AND at.date <= ${dateTo}
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_exceptions se
+          WHERE se.schedule_id = s.id AND se.exception_date = at.date
+        )
     `);
 
     const row = getRows<{
@@ -610,6 +614,10 @@ export class TeachersRepository {
           AND s.is_active = true
           AND (s.start_date IS NULL OR s.start_date <= d.date)
           AND (s.end_date IS NULL OR s.end_date > d.date)
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = d.date
+          )
         INNER JOIN teachers t ON t.id = s.teacher_id
         INNER JOIN users u ON u.id = t.user_id
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id

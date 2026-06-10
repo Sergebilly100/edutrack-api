@@ -470,6 +470,8 @@ export default async function attendanceController(
       const query = monthQuerySchema.parse(request.query ?? {});
 
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        // ici getTeacherMonthlyAttendance retourne les statuts de pointage du prof pour chaque cours de chaque jour du mois, avec les horaires et les données de localisation (pour les pointages géolocalisés) - utilisé par TeacherAttendanceAnalysisPage pour afficher le détail des pointages d'un prof sur le mois, 
+        // avec une timeline jour par jour et cours par cours, et des filtres de statut (présent
         return buildBillingService(tenantDb).getTeacherMonthlyAttendance(params.teacherId, query.month);
       });
 
