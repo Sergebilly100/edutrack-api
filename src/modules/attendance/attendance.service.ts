@@ -132,8 +132,8 @@ const resolveActualOccurredAt = (clientTimestamp: string | undefined): Date => {
   return parsed;
 };
 
-/** Grâce métier après la fin du cours pendant laquelle le prof peut soumettre l'appel. */
-const ROLLCALL_SUBMISSION_GRACE_AFTER_END_MS = 15 * 60 * 1000; // 15 minutes
+/** Grâce métier après la fin du cours pendant laquelle le prof peut soumettre ou synchroniser l'appel. */
+const ROLLCALL_SUBMISSION_GRACE_AFTER_END_MS = 7 * 24 * 60 * 60 * 1000; // 7 jours
 
 /** Délai après la fin du cours avant d'envoyer les notifications SMS parents. */
 const ABSENT_NOTIF_DELAY_AFTER_END_MS = 20 * 60 * 1000; // 20 minutes
@@ -677,8 +677,7 @@ export class AttendanceService {
     // slotEndTime est au format "HH:MM", date au format "YYYY-MM-DD"
     const [hours, minutes] = slotEndTime.split(':').map(Number);
     
-    // Ajout du suffixe 'Z' pour forcer l'interprétation en UTC (ISO 8601)
-    const endOfClass = new Date(`${date}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00Z`);
+    const endOfClass = new Date(`${date}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`);
     return endOfClass.getTime() + delayMs;
   }
 

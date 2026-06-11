@@ -13,6 +13,8 @@ import type {
   ValidationKind,
 } from './validations.types.js';
 
+import { formatDecimalHours } from "../../shared/utils/time.js";
+
 export type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
 
 type TransactionCallback<T> = (tx: QueryExecutor) => Promise<T>;
@@ -401,7 +403,7 @@ export class ValidationsRepository {
   }): Promise<void> {
     const validatedHoursLabel =
       params.validatedHours > 0
-        ? `${params.validatedHours.toFixed(2).replace('.00', '')}h validées`
+        ? `${formatDecimalHours(params.validatedHours)} validées`
         : 'heures validées';
     const message = `Votre présence pour ${params.context.course_name} du ${params.context.date} a été validée. ${validatedHoursLabel}.`;
     await this.db.execute(sql`
@@ -925,7 +927,7 @@ export class ValidationsRepository {
     const isSanction = params.action === 'sanctioned';
     const message = isSanction
       ? `Sanction pour absence de scan de fin - ${params.courseName} du ${params.date}. Motif : ${params.reason}. Présentez-vous à l'administration pour justification.`
-      : `Avertissement pour absence de scan de fin - ${params.courseName} du ${params.date}. Motif : ${params.reason}. Aucun impact sur votre salaire ce mois.`;
+      : `Avertissement pour absence de scan de fin - ${params.courseName} du ${params.date}. Motif : ${params.reason}. Rendez-vous à l'administration de l'établissement pour plus d'informations.`;
     await this.db.execute(sql`
       INSERT INTO notifications_log (
         type, channel, recipient_id, recipient_phone, recipient_email, message, status, metadata
@@ -951,7 +953,7 @@ export class ValidationsRepository {
     date: string;
     cancelReason: string;
   }): Promise<void> {
-    const message = `La sanction pour ${params.courseName} du ${params.date} a été annulée. Motif : ${params.cancelReason}. Votre cours est de nouveau pris en compte.`;
+    const message = `La sanction pour ${params.courseName} du ${params.date} a été annulée. Motif : ${params.cancelReason}. Votre cours est de nouveau pris en compte. Rendez-vous à l'administration de l'établissement pour plus d'informations.`;
     await this.db.execute(sql`
       INSERT INTO notifications_log (
         type, channel, recipient_id, recipient_phone, recipient_email, message, status, metadata
