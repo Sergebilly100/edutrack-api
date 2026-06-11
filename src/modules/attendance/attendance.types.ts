@@ -5,7 +5,7 @@ export const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 // Horodatage client capturé au moment réel de l'action (ex: pointage offline
 // puis synchronisé plus tard). Le backend l'utilise quand fourni pour calculer
 // retard / présence sur le temps réel et non l'heure de la sync.
-// La validation anti-tricherie (fenêtre 24h passé / 5min futur) est faite
+// La validation anti-tricherie (fenêtre 7 jours passé / 5min futur) est faite
 // dans le service via resolveActualOccurredAt().
 export const clientTimestampSchema = z
   .string()
@@ -50,6 +50,7 @@ export const bulkStudentsBodySchema = z.object({
   schedule_id: z.string().uuid(),
   date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format'),
   absent_student_ids: z.array(z.string().uuid()),
+  client_timestamp: clientTimestampSchema,
 });
 
 export const teacherAttendanceDateQuerySchema = z.object({

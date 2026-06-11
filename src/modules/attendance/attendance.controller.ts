@@ -393,12 +393,18 @@ export default async function attendanceController(
       const body = bulkStudentsBodySchema.parse(request.body ?? {});
 
       const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        // la logique de soumission de l'appel est la même que pour le pointage individuel côté mobile, mais en version bulk : on met à jour les statuts de tous les élèves d'un coup, et on déclenche les notifications parents en masse via la queue (avec un job par élève absent pour permettre des retries individuels en cas d'erreur d'envoi SMS/email) - d'où le besoin de passer la notifQueue au service pour ce cas spécifique.
+        // si l'appel est déjà soumis (même schedule_id + date), on le met à jour avec les nouveaux absent_student_ids (idempotence) et on remet à jour les notifications parents en conséquence (envoi de notifications pour les nouveaux absents, annulation des notifications pour les élèves qui ne sont plus marqués absents) - c'est géré dans la méthode du service, pas besoin de gérer l'idempotence côté controller.
+        // si cet endpointe retourne une erreur 400 ou 500, le pointage côté frontend n'est pas marqué comme soumis, et le prof peut réessayer (après correction du problème si besoin) - d'où l'importance de gérer les erreurs de manière robuste côté service pour éviter les échecs de soumission (ex: si la queue de notifications est indisponible, on peut quand même enregistrer les statuts d'absence des élèves et enchaîner les notifications à la prochaine synchronisation online du client).
+        // en cas de soumission par sync offline, les notifications parents ne seront pas envoyées immédiatement (car la queue n'est pas disponible offline) mais seront enfilées dans la queue de notifications à la prochaine synchronisation online du client - d'où le besoin de passer la notifQueue au service pour gérer ce cas.
+  
         const service = buildAttendanceService(tenantDb, options.notifQueue);
         return service.submitStudentAttendance(
           {
             scheduleId: body.schedule_id,
             date: body.date,
             absentStudentIds: body.absent_student_ids,
+            clientTimestamp: body.client_timestamp, 
           },
           { schemaName: claims.schemaName, userId: claims.sub }
         );

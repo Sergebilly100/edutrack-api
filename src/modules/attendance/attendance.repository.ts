@@ -102,6 +102,10 @@ type TeacherAttendanceByDateRow = {
   checked_out_at: string | null;
   actual_minutes: number | null;
   geo_status: 'verified' | 'suspicious' | 'unavailable' | 'not_checked' | null;
+  student_rollcall_done: boolean;
+  student_present_count: number;
+  student_absent_count: number;
+  student_total_count: number;
 };
 
 type DirectorTodayCourseRow = {
@@ -585,10 +589,18 @@ export class AttendanceRepository {
         at.room_scan_end_at::text AS room_scan_end_at,
         at.checked_out_at::text AS checked_out_at,
         at.actual_minutes,
-        at.geo_status
+        at.geo_status,
+        CASE WHEN COUNT(ast.id) > 0 THEN true ELSE false END AS student_rollcall_done,
+        COUNT(CASE WHEN ast.status = 'present' THEN 1 END)::int AS student_present_count,
+        COUNT(CASE WHEN ast.status = 'absent' THEN 1 END)::int AS student_absent_count,
+        COUNT(ast.id)::int AS student_total_count
       FROM attendances_teacher at
+      LEFT JOIN attendances_student ast
+        ON ast.schedule_id = at.schedule_id
+       AND ast.date = at.date
       WHERE at.teacher_id = ${params.teacherId}
         AND at.date = ${params.date}
+      GROUP BY at.id
     `);
 
     return getRows(result);
