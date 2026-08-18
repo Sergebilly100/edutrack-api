@@ -213,6 +213,7 @@ const getSchemaName = async (request: FastifyRequest): Promise<string> => {
     }
 
     // Support de l'hôte "localhost" pour le développement local : on retourne un schéma par défaut si défini et valide.
+    // Support de l'hôte "localhost" pour le développement local : on retourne un schéma par défaut si défini et valide.
     const isLocalHost =
       hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
     if (isLocalHost && SCHEMA_NAME_REGEX.test(DEFAULT_LOCAL_SCHEMA)) {
