@@ -15,8 +15,6 @@ import type {
 
 import { formatDecimalHours } from "../../shared/utils/time.js";
 
-import { formatDecimalHours } from "../../shared/utils/time.js";
-
 export type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
 
 type TransactionCallback<T> = (tx: QueryExecutor) => Promise<T>;
@@ -519,10 +517,6 @@ export class ValidationsRepository {
         SELECT 1 FROM schedule_exceptions se
         WHERE se.schedule_id = s.id AND se.exception_date = at.date
       )
-      AND NOT EXISTS (
-        SELECT 1 FROM schedule_exceptions se
-        WHERE se.schedule_id = s.id AND se.exception_date = at.date
-      )
       LEFT JOIN rooms r ON r.id = s.room_id
       WHERE at.id = ${attendanceId}
       LIMIT 1
@@ -612,7 +606,6 @@ export class ValidationsRepository {
   }): Promise<void> {
     const validatedHoursLabel =
       params.validatedHours > 0
-        ? `${formatDecimalHours(params.validatedHours)} validées`
         ? `${formatDecimalHours(params.validatedHours)} validées`
         : 'heures validées';
     const message = `Votre présence pour ${params.context.course_name} du ${params.context.date} a été validée. ${validatedHoursLabel}.`;
@@ -734,10 +727,6 @@ export class ValidationsRepository {
           SELECT 1 FROM schedule_exceptions se
           WHERE se.schedule_id = s.id AND se.exception_date = at.date
         )
-        AND NOT EXISTS (
-          SELECT 1 FROM schedule_exceptions se
-          WHERE se.schedule_id = s.id AND se.exception_date = at.date
-        )
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id
         WHERE at.teacher_id = ${params.teacherId}
           AND at.date BETWEEN ${params.monthStart}::date AND ${params.monthEnd}::date
@@ -849,10 +838,6 @@ export class ValidationsRepository {
         AND at.checked_in_at IS NOT NULL
         AND at.checked_out_at IS NULL
         AND at.room_scan_end_at IS NULL
-        AND NOT EXISTS (
-          SELECT 1 FROM schedule_exceptions se
-          WHERE se.schedule_id = s.id AND se.exception_date = at.date
-        )
         AND NOT EXISTS (
           SELECT 1 FROM schedule_exceptions se
           WHERE se.schedule_id = s.id AND se.exception_date = at.date
@@ -973,10 +958,6 @@ export class ValidationsRepository {
         SELECT 1 FROM schedule_exceptions se
         WHERE se.schedule_id = s.id AND se.exception_date = at.date
       )
-      AND NOT EXISTS (
-        SELECT 1 FROM schedule_exceptions se
-        WHERE se.schedule_id = s.id AND se.exception_date = at.date
-      )
       WHERE at.id = ${attendanceId}
       LIMIT 1
     `);
@@ -1092,11 +1073,6 @@ export class ValidationsRepository {
             SELECT 1 FROM schedule_exceptions se
             WHERE se.schedule_id = s.id AND se.exception_date = at.date
           )
-          SELECT s.time_slot_id FROM schedules s WHERE s.id = at.schedule_id 
-          AND NOT EXISTS (
-            SELECT 1 FROM schedule_exceptions se
-            WHERE se.schedule_id = s.id AND se.exception_date = at.date
-          )
         )
         WHERE t.id IN (${idList})
           AND at.date BETWEEN ${monthStart}::date AND ${monthEnd}::date
@@ -1157,7 +1133,6 @@ export class ValidationsRepository {
     const message = isSanction
       ? `Sanction pour absence de scan de fin - ${params.courseName} du ${params.date}. Motif : ${params.reason}. Présentez-vous à l'administration pour justification.`
       : `Avertissement pour absence de scan de fin - ${params.courseName} du ${params.date}. Motif : ${params.reason}. Rendez-vous à l'administration de l'établissement pour plus d'informations.`;
-      : `Avertissement pour absence de scan de fin - ${params.courseName} du ${params.date}. Motif : ${params.reason}. Rendez-vous à l'administration de l'établissement pour plus d'informations.`;
     await this.db.execute(sql`
       INSERT INTO notifications_log (
         type, channel, recipient_id, recipient_phone, recipient_email, message, status, metadata
@@ -1183,7 +1158,6 @@ export class ValidationsRepository {
     date: string;
     cancelReason: string;
   }): Promise<void> {
-    const message = `La sanction pour ${params.courseName} du ${params.date} a été annulée. Motif : ${params.cancelReason}. Votre cours est de nouveau pris en compte. Rendez-vous à l'administration de l'établissement pour plus d'informations.`;
     const message = `La sanction pour ${params.courseName} du ${params.date} a été annulée. Motif : ${params.cancelReason}. Votre cours est de nouveau pris en compte. Rendez-vous à l'administration de l'établissement pour plus d'informations.`;
     await this.db.execute(sql`
       INSERT INTO notifications_log (
