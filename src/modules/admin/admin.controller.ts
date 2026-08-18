@@ -13,12 +13,14 @@ import {
   smsFeatureMonthQuerySchema,
   planParamsSchema,
   schoolTenantIdParamsSchema,
+  schoolUserParamsSchema,
   smsPlatformAuditQuerySchema,
   smsTemplateTypeSchema,
   tenantParamsSchema,
   updateSmsPlatformConfigBodySchema,
   updateSmsTemplateBodySchema,
   updateSchoolConfigBodySchema,
+  updateSchoolDirectorBodySchema,
   updateSchoolSubscriptionBodySchema,
   updateTenantBodySchema,
   updateTenantParamsSchema,
@@ -60,6 +62,7 @@ import {
   updateSmsPlatformConfig,
   upsertSmsTemplate,
   updateSchoolConfig,
+  updateSchoolDirector,
   updateSchoolSubscription,
   updateSchoolSmsFeatureConfig,
   updateTenant,
@@ -81,7 +84,7 @@ type AdminControllerOptions = {
   deadLetterQueue?: Queue<DeadLetterPayload>;
 };
 
-const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
+const handleError = (reply: FastifyReply, error: unknown, request?: FastifyRequest): FastifyReply => {
   if (error instanceof ZodError) {
     return reply.code(400).send({
       error: 'Validation error',
@@ -90,10 +93,26 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
     });
   }
 
-  const maybePgError = error as { code?: string; message?: string };
-  if (maybePgError?.code === '23505') {
+  const maybePgError = error as {
+    code?: string;
+    message?: string;
+    cause?: { code?: string; message?: string; constraint?: string };
+  };
+  const pgCode = maybePgError?.code ?? maybePgError?.cause?.code;
+  const pgConstraint = maybePgError?.cause?.constraint;
+
+  // Toujours logger côté serveur, avec la cause complète, pour ne plus jamais
+  // être aveugle sur une erreur SQL comme celle-ci.
+  request?.log.error({ err: error, cause: maybePgError?.cause }, 'Admin request failed');
+
+  if (pgCode === '23505') {
+    const fieldLabel =
+      pgConstraint === 'users_phone_unique' ? 'Ce numéro de téléphone'
+      : pgConstraint === 'users_email_unique' ? 'Cette adresse email'
+      : 'Cette valeur';
+
     return reply.code(409).send({
-      error: 'Resource already exists',
+      error: `${fieldLabel} est déjà utilisé(e) par un autre compte de cette école.`,
       code: 'CONFLICT',
       statusCode: 409,
     });
@@ -176,7 +195,7 @@ export default async function adminController(
       const result = await listTenants(ensurePublicDb(request), query);
       return reply.send(result);
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(reply, error, request);
     }
   });
 
@@ -236,7 +255,7 @@ export default async function adminController(
       const result = await createSchool(ensurePublicDb(request), payload);
       return reply.code(201).send(result);
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(reply, error, request);
     }
   });
 
@@ -246,7 +265,7 @@ export default async function adminController(
       const result = await listSchools(ensurePublicDb(request), query);
       return reply.send(result);
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(reply, error, request);
     }
   });
 
@@ -256,7 +275,7 @@ export default async function adminController(
       const result = await getSchoolDetails(ensurePublicDb(request), tenantId);
       return reply.send(result);
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(reply, error, request);
     }
   });
 
@@ -266,9 +285,24 @@ export default async function adminController(
       const result = await getSchoolUsers(ensurePublicDb(request), tenantId);
       return reply.send(result);
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(reply, error, request);
     }
   });
+
+  app.patch(
+    '/api/v1/admin/schools/:tenantId/users/:userId/director',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId, userId } = schoolUserParamsSchema.parse(request.params);
+        const payload = updateSchoolDirectorBodySchema.parse(request.body);
+        const director = await updateSchoolDirector(ensurePublicDb(request), tenantId, userId, payload);
+        return reply.send({ director });
+      } catch (error) {
+        return handleError(reply, error, request);
+      }
+    }
+  );
 
   app.patch(
     '/api/v1/admin/schools/:tenantId/config',
@@ -280,7 +314,7 @@ export default async function adminController(
         await updateSchoolConfig(ensurePublicDb(request), tenantId, payload);
         return reply.send({ success: true });
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -295,7 +329,7 @@ export default async function adminController(
         await updateSchoolSubscription(ensurePublicDb(request), tenantId, payload);
         return reply.send({ success: true });
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -309,7 +343,7 @@ export default async function adminController(
         const data = await listAllRecentPayments(ensurePublicDb(request), query.tenantId);
         return reply.send(data);
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -323,7 +357,7 @@ export default async function adminController(
         const data = await listSchoolPayments(ensurePublicDb(request), tenantId);
         return reply.send({ items: data });
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -338,7 +372,7 @@ export default async function adminController(
         await addManualPayment(ensurePublicDb(request), tenantId, payload);
         return reply.code(201).send({ success: true });
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -353,7 +387,7 @@ export default async function adminController(
         const result = await listSchoolCommissionPayments(ensurePublicDb(request), tenantId, query.month);
         return reply.send({ items: result });
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -367,7 +401,7 @@ export default async function adminController(
         const result = await sendSchoolPaymentReminder(ensurePublicDb(request), tenantId);
         return reply.send(result);
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -387,7 +421,7 @@ export default async function adminController(
         );
         return reply.send(result);
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -401,7 +435,7 @@ export default async function adminController(
         const result = await deactivateSchoolSmsFeature(ensurePublicDb(request), tenantId);
         return reply.send(result);
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -419,7 +453,7 @@ export default async function adminController(
         });
         return reply.send(result);
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -437,7 +471,7 @@ export default async function adminController(
         });
         return reply.send(result);
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -455,7 +489,7 @@ export default async function adminController(
         });
         return reply.send(result);
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -474,7 +508,7 @@ export default async function adminController(
         });
         return reply.send(result);
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -492,7 +526,7 @@ export default async function adminController(
         });
         return reply.send(result);
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -506,7 +540,7 @@ export default async function adminController(
         const result = await getSchoolSmsFeatureStats(ensurePublicDb(request), tenantId);
         return reply.send(result);
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -520,7 +554,7 @@ export default async function adminController(
         const result = await getSmsFeatureGlobalStats(ensurePublicDb(request), query.month);
         return reply.send({ items: result });
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -530,7 +564,7 @@ export default async function adminController(
       const result = await getAdminMetrics(ensurePublicDb(request));
       return reply.send(result);
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(reply, error, request);
     }
   });
 
@@ -539,7 +573,7 @@ export default async function adminController(
       const result = await getRevenueMetrics(ensurePublicDb(request));
       return reply.send(result);
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(reply, error, request);
     }
   });
 
@@ -548,7 +582,7 @@ export default async function adminController(
       const items = await listPlanCatalog(ensurePublicDb(request));
       return reply.send({ items });
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(reply, error, request);
     }
   });
 
@@ -559,7 +593,7 @@ export default async function adminController(
       await updatePlanCatalog(ensurePublicDb(request), plan, payload);
       return reply.send({ success: true });
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(reply, error, request);
     }
   });
 
@@ -568,7 +602,7 @@ export default async function adminController(
       const result = await getSmsDashboard(ensurePublicDb(request));
       return reply.send(result);
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(reply, error, request);
     }
   });
 
@@ -577,7 +611,7 @@ export default async function adminController(
       const result = await getSmsPlatformConfig(ensurePublicDb(request));
       return reply.send(result);
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(reply, error, request);
     }
   });
 
@@ -587,7 +621,7 @@ export default async function adminController(
       await updateSmsPlatformConfig(ensurePublicDb(request), payload, request.auth?.sub);
       return reply.send({ success: true });
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(reply, error, request);
     }
   });
 
@@ -597,7 +631,7 @@ export default async function adminController(
       const items = await listSmsPlatformAudit(ensurePublicDb(request), query.limit);
       return reply.send({ items });
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(reply, error, request);
     }
   });
 
@@ -606,7 +640,7 @@ export default async function adminController(
       const templates = await listSmsTemplates(ensurePublicDb(request));
       return reply.send({ items: templates });
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(reply, error, request);
     }
   });
 
@@ -625,7 +659,7 @@ export default async function adminController(
         });
         return reply.send({ success: true });
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -639,7 +673,7 @@ export default async function adminController(
         const templates = await listSmsTemplates(ensurePublicDb(request), tenantId);
         return reply.send({ items: templates });
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -660,7 +694,7 @@ export default async function adminController(
         });
         return reply.send({ success: true });
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -675,7 +709,7 @@ export default async function adminController(
         await deleteTenantSmsTemplate(ensurePublicDb(request), tenantId, type);
         return reply.send({ success: true });
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -685,7 +719,7 @@ export default async function adminController(
       const config = await getMaintenanceConfig(ensurePublicDb(request));
       return reply.send(config);
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(reply, error, request);
     }
   });
 
@@ -695,16 +729,16 @@ export default async function adminController(
       await updateMaintenanceConfig(ensurePublicDb(request), payload);
       return reply.send({ success: true });
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(reply, error, request);
     }
   });
 
-  app.delete('/api/v1/admin/cache', { preHandler: preHandlers }, async (_request, reply) => {
+  app.delete('/api/v1/admin/cache', { preHandler: preHandlers }, async (request, reply) => {
     try {
       await clearAdminCache();
       return reply.send({ success: true });
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(reply, error, request);
     }
   });
 
@@ -713,7 +747,7 @@ export default async function adminController(
       const result = await getRevenueSummary(ensurePublicDb(request));
       return reply.send(result);
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(reply, error, request);
     }
   });
 
@@ -723,7 +757,7 @@ export default async function adminController(
       const result = await createTenant(ensurePublicDb(request), payload);
       return reply.code(201).send(result);
     } catch (error) {
-      return handleError(reply, error);
+      return handleError(reply, error, request);
     }
   });
 
@@ -741,7 +775,7 @@ export default async function adminController(
           success: true,
         });
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -755,7 +789,7 @@ export default async function adminController(
         const result = await getTenantStats(ensurePublicDb(request), id);
         return reply.send(result);
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );
@@ -773,7 +807,7 @@ export default async function adminController(
         );
         return reply.send(result);
       } catch (error) {
-        return handleError(reply, error);
+        return handleError(reply, error, request);
       }
     }
   );

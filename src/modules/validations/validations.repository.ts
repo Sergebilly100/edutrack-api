@@ -13,6 +13,8 @@ import type {
   ValidationKind,
 } from './validations.types.js';
 
+import { formatDecimalHours } from "../../shared/utils/time.js";
+
 export type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
 
 type TransactionCallback<T> = (tx: QueryExecutor) => Promise<T>;
@@ -101,7 +103,9 @@ export class ValidationsRepository {
 
     const result = await this.db.execute<PendingValidationRow>(sql`
       WITH feature_flags AS (
-        SELECT COALESCE(f.checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
+        SELECT
+          COALESCE(f.use_real_hours, false) AS use_real_hours,
+          COALESCE(f.checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
         FROM public.tenants t
         LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
         WHERE t.schema_name = current_schema()
@@ -122,16 +126,84 @@ export class ValidationsRepository {
           at.checked_out_at,
           at.geo_status,
           at.checkin_distance,
-          at.actual_minutes,
+          COALESCE(
+            at.actual_minutes,
+            CASE
+              WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                AND at.checked_in_at IS NOT NULL
+                AND at.room_scan_end_at IS NOT NULL
+              THEN GREATEST(
+                0,
+                FLOOR(
+                  EXTRACT(EPOCH FROM (
+                    LEAST(at.room_scan_end_at, at.date::timestamp + ts.end_time) - at.checked_in_at
+                  )) / 60
+                )
+              )::int
+              ELSE NULL
+            END
+          ) AS actual_minutes,
+          COALESCE(
+            at.actual_minutes,
+            CASE
+              WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                AND at.checked_in_at IS NOT NULL
+                AND at.room_scan_end_at IS NOT NULL
+              THEN GREATEST(
+                0,
+                FLOOR(
+                  EXTRACT(EPOCH FROM (
+                    LEAST(at.room_scan_end_at, at.date::timestamp + ts.end_time) - (at.date::timestamp + ts.start_time)
+                  )) / 60
+                )
+              )::int
+              ELSE NULL
+            END
+          ) AS validation_minutes,
           (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0)::numeric(8,2) AS schedule_duration_minutes,
           at.validation_reason,
+          at.validation_status,
+          (at.actual_minutes IS NULL) AS needs_derived_duration,
+          (at.validated_hours IS NULL) AS lacks_validated_hours,
           t.hourly_rate,
           ts.label AS slot_label,
           r.name AS room_name,
           (at.geo_status = 'suspicious') AS is_gps_suspicious,
           (
-            at.actual_minutes IS NOT NULL
-            AND at.actual_minutes < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
+            COALESCE(
+              at.actual_minutes,
+              CASE
+                WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                  AND at.checked_in_at IS NOT NULL
+                  AND at.room_scan_end_at IS NOT NULL
+                THEN GREATEST(
+                  0,
+                  FLOOR(
+                    EXTRACT(EPOCH FROM (
+                      LEAST(at.room_scan_end_at, at.date::timestamp + ts.end_time) - (at.date::timestamp + ts.start_time)
+                    )) / 60
+                  )
+                )::int
+                ELSE NULL
+              END
+            ) IS NOT NULL
+            AND COALESCE(
+              at.actual_minutes,
+              CASE
+                WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                  AND at.checked_in_at IS NOT NULL
+                  AND at.room_scan_end_at IS NOT NULL
+                THEN GREATEST(
+                  0,
+                  FLOOR(
+                    EXTRACT(EPOCH FROM (
+                      LEAST(at.room_scan_end_at, at.date::timestamp + ts.end_time) - (at.date::timestamp + ts.start_time)
+                    )) / 60
+                  )
+                )::int
+                ELSE NULL
+              END
+            ) < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
           ) AS is_short_hours
         FROM attendances_teacher at
         INNER JOIN teachers t ON t.id = at.teacher_id
@@ -140,7 +212,12 @@ export class ValidationsRepository {
         INNER JOIN classes c ON c.id = s.class_id
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id
         LEFT JOIN rooms r ON r.id = s.room_id
-        WHERE at.validation_status = 'pending'
+        WHERE at.validation_status NOT IN ('approved', 'rejected')
+          AND at.status IN ('present', 'late', 'excused')
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = at.date
+          )
       )
       SELECT
         attendance_id::text AS attendance_id,
@@ -170,7 +247,13 @@ export class ValidationsRepository {
         slot_label,
         room_name
       FROM base
-      WHERE is_gps_suspicious OR is_short_hours
+      WHERE (validation_status = 'pending' AND (is_gps_suspicious OR is_short_hours))
+        OR (
+          validation_status <> 'pending'
+          AND lacks_validated_hours
+          AND needs_derived_duration
+          AND is_short_hours
+        )
       ORDER BY date DESC, checked_in_at DESC NULLS LAST, teacher_name ASC
     `);
 
@@ -188,7 +271,9 @@ export class ValidationsRepository {
     type CountRow = { kind: ValidationKind | 'missing_end_scan'; cnt: string };
     const result = await this.db.execute<CountRow>(sql`
       WITH feature_flags AS (
-        SELECT COALESCE(f.checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
+        SELECT
+          COALESCE(f.use_real_hours, false) AS use_real_hours,
+          COALESCE(f.checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
         FROM public.tenants t
         LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
         WHERE t.schema_name = current_schema()
@@ -196,15 +281,55 @@ export class ValidationsRepository {
       ),
       pending_base AS (
         SELECT
+          at.validation_status,
+          (at.actual_minutes IS NULL) AS needs_derived_duration,
+          (at.validated_hours IS NULL) AS lacks_validated_hours,
           (at.geo_status = 'suspicious') AS is_gps_suspicious,
           (
-            at.actual_minutes IS NOT NULL
-            AND at.actual_minutes < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
+            COALESCE(
+              at.actual_minutes,
+              CASE
+                WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                  AND at.checked_in_at IS NOT NULL
+                  AND at.room_scan_end_at IS NOT NULL
+                THEN GREATEST(
+                  0,
+                  FLOOR(
+                    EXTRACT(EPOCH FROM (
+                      LEAST(at.room_scan_end_at, at.date::timestamp + ts.end_time) - (at.date::timestamp + ts.start_time)
+                    )) / 60
+                  )
+                )::int
+                ELSE NULL
+              END
+            ) IS NOT NULL
+            AND COALESCE(
+              at.actual_minutes,
+              CASE
+                WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                  AND at.checked_in_at IS NOT NULL
+                  AND at.room_scan_end_at IS NOT NULL
+                THEN GREATEST(
+                  0,
+                  FLOOR(
+                    EXTRACT(EPOCH FROM (
+                      LEAST(at.room_scan_end_at, at.date::timestamp + ts.end_time) - (at.date::timestamp + ts.start_time)
+                    )) / 60
+                  )
+                )::int
+                ELSE NULL
+              END
+            ) < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
           ) AS is_short_hours
         FROM attendances_teacher at
         INNER JOIN schedules s ON s.id = at.schedule_id
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id
-        WHERE at.validation_status = 'pending'
+        WHERE at.validation_status NOT IN ('approved', 'rejected')
+          AND at.status IN ('present', 'late', 'excused')
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = at.date
+          )
       )
       -- Onglet primaire identique à listPending : short_hours prioritaire si déclenché,
       -- sinon gps_suspicious. Garantit qu'un cours multi-critères n'est compté qu'une fois.
@@ -212,7 +337,13 @@ export class ValidationsRepository {
         CASE WHEN is_short_hours THEN 'short_hours' ELSE 'gps_suspicious' END AS kind,
         COUNT(*)::text AS cnt
       FROM pending_base
-      WHERE is_gps_suspicious OR is_short_hours
+      WHERE (validation_status = 'pending' AND (is_gps_suspicious OR is_short_hours))
+        OR (
+          validation_status <> 'pending'
+          AND lacks_validated_hours
+          AND needs_derived_duration
+          AND is_short_hours
+        )
       GROUP BY 1
       UNION ALL
       SELECT
@@ -253,7 +384,9 @@ export class ValidationsRepository {
 
     const result = await db.execute<AttendanceValidationContextRow>(sql`
       WITH feature_flags AS (
-        SELECT COALESCE(f.checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
+        SELECT
+          COALESCE(f.use_real_hours, false) AS use_real_hours,
+          COALESCE(f.checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
         FROM public.tenants t
         LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
         WHERE t.schema_name = current_schema()
@@ -273,20 +406,100 @@ export class ValidationsRepository {
         at.checked_out_at::text AS checked_out_at,
         at.geo_status,
         at.checkin_distance,
-        at.actual_minutes,
+        COALESCE(
+          at.actual_minutes,
+          CASE
+            WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+              AND at.checked_in_at IS NOT NULL
+              AND at.room_scan_end_at IS NOT NULL
+            THEN GREATEST(
+              0,
+              FLOOR(
+                EXTRACT(EPOCH FROM (
+                  LEAST(at.room_scan_end_at, at.date::timestamp + ts.end_time) - at.checked_in_at
+                )) / 60
+              )
+            )::int
+            ELSE NULL
+          END
+        ) AS actual_minutes,
         (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0)::numeric(8,2) AS schedule_duration_minutes,
         at.validation_reason,
         t.hourly_rate,
         CASE
-          WHEN at.actual_minutes IS NOT NULL
-            AND at.actual_minutes < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
+          WHEN COALESCE(
+            at.actual_minutes,
+            CASE
+              WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                AND at.checked_in_at IS NOT NULL
+                AND at.room_scan_end_at IS NOT NULL
+              THEN GREATEST(
+                0,
+                FLOOR(
+                  EXTRACT(EPOCH FROM (
+                    LEAST(at.room_scan_end_at, at.date::timestamp + ts.end_time) - (at.date::timestamp + ts.start_time)
+                  )) / 60
+                )
+              )::int
+              ELSE NULL
+            END
+          ) IS NOT NULL
+            AND COALESCE(
+              at.actual_minutes,
+              CASE
+                WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                  AND at.checked_in_at IS NOT NULL
+                  AND at.room_scan_end_at IS NOT NULL
+                THEN GREATEST(
+                  0,
+                  FLOOR(
+                    EXTRACT(EPOCH FROM (
+                      LEAST(at.room_scan_end_at, at.date::timestamp + ts.end_time) - (at.date::timestamp + ts.start_time)
+                    )) / 60
+                  )
+                )::int
+                ELSE NULL
+              END
+            ) < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
           THEN 'short_hours'
           ELSE 'gps_suspicious'
         END AS kind,
         ARRAY_REMOVE(ARRAY[
           CASE
-            WHEN at.actual_minutes IS NOT NULL
-              AND at.actual_minutes < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
+            WHEN COALESCE(
+              at.actual_minutes,
+              CASE
+                WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                  AND at.checked_in_at IS NOT NULL
+                  AND at.room_scan_end_at IS NOT NULL
+                THEN GREATEST(
+                  0,
+                  FLOOR(
+                    EXTRACT(EPOCH FROM (
+                      LEAST(at.room_scan_end_at, at.date::timestamp + ts.end_time) - (at.date::timestamp + ts.start_time)
+                    )) / 60
+                  )
+                )::int
+                ELSE NULL
+              END
+            ) IS NOT NULL
+              AND COALESCE(
+                at.actual_minutes,
+                CASE
+                  WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                    AND at.checked_in_at IS NOT NULL
+                    AND at.room_scan_end_at IS NOT NULL
+                  THEN GREATEST(
+                    0,
+                    FLOOR(
+                      EXTRACT(EPOCH FROM (
+                        LEAST(at.room_scan_end_at, at.date::timestamp + ts.end_time) - (at.date::timestamp + ts.start_time)
+                      )) / 60
+                    )
+                  )::int
+                  ELSE NULL
+                END
+              ) < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
             THEN 'short_hours'::text
           END,
           CASE WHEN at.geo_status = 'suspicious' THEN 'gps_suspicious'::text END
@@ -300,6 +513,10 @@ export class ValidationsRepository {
       INNER JOIN schedules s ON s.id = at.schedule_id
       INNER JOIN classes c ON c.id = s.class_id
       INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+      AND NOT EXISTS (
+        SELECT 1 FROM schedule_exceptions se
+        WHERE se.schedule_id = s.id AND se.exception_date = at.date
+      )
       LEFT JOIN rooms r ON r.id = s.room_id
       WHERE at.id = ${attendanceId}
       LIMIT 1
@@ -389,7 +606,7 @@ export class ValidationsRepository {
   }): Promise<void> {
     const validatedHoursLabel =
       params.validatedHours > 0
-        ? `${params.validatedHours.toFixed(2).replace('.00', '')}h validées`
+        ? `${formatDecimalHours(params.validatedHours)} validées`
         : 'heures validées';
     const message = `Votre présence pour ${params.context.course_name} du ${params.context.date} a été validée. ${validatedHoursLabel}.`;
     await this.db.execute(sql`
@@ -506,6 +723,10 @@ export class ValidationsRepository {
           )::numeric(8,2) AS hours_done
         FROM attendances_teacher at
         INNER JOIN schedules s ON s.id = at.schedule_id
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_exceptions se
+          WHERE se.schedule_id = s.id AND se.exception_date = at.date
+        )
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id
         WHERE at.teacher_id = ${params.teacherId}
           AND at.date BETWEEN ${params.monthStart}::date AND ${params.monthEnd}::date
@@ -564,7 +785,9 @@ export class ValidationsRepository {
 
     const result = await this.db.execute<MissingRow>(sql`
       WITH feature_flags AS (
-        SELECT COALESCE(f.checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
+        SELECT
+          COALESCE(f.use_real_hours, false) AS use_real_hours,
+          COALESCE(f.checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
         FROM public.tenants t
         LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
         WHERE t.schema_name = current_schema()
@@ -615,6 +838,10 @@ export class ValidationsRepository {
         AND at.checked_in_at IS NOT NULL
         AND at.checked_out_at IS NULL
         AND at.room_scan_end_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_exceptions se
+          WHERE se.schedule_id = s.id AND se.exception_date = at.date
+        )
         AND (
           at.date < CURRENT_DATE
           OR (NOW() AT TIME ZONE 'Africa/Abidjan') > (at.date::timestamp + ts.end_time + INTERVAL '30 minutes')
@@ -727,6 +954,10 @@ export class ValidationsRepository {
       INNER JOIN teachers t ON t.id = at.teacher_id
       INNER JOIN users u ON u.id = t.user_id
       INNER JOIN schedules s ON s.id = at.schedule_id
+      AND NOT EXISTS (
+        SELECT 1 FROM schedule_exceptions se
+        WHERE se.schedule_id = s.id AND se.exception_date = at.date
+      )
       WHERE at.id = ${attendanceId}
       LIMIT 1
     `);
@@ -837,7 +1068,11 @@ export class ValidationsRepository {
         INNER JOIN teachers t ON t.id = at.teacher_id
         INNER JOIN users u ON u.id = t.user_id
         INNER JOIN time_slots ts ON ts.id = (
-          SELECT s.time_slot_id FROM schedules s WHERE s.id = at.schedule_id
+          SELECT s.time_slot_id FROM schedules s WHERE s.id = at.schedule_id 
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = at.date
+          )
         )
         WHERE t.id IN (${idList})
           AND at.date BETWEEN ${monthStart}::date AND ${monthEnd}::date
@@ -897,7 +1132,7 @@ export class ValidationsRepository {
     const isSanction = params.action === 'sanctioned';
     const message = isSanction
       ? `Sanction pour absence de scan de fin - ${params.courseName} du ${params.date}. Motif : ${params.reason}. Présentez-vous à l'administration pour justification.`
-      : `Avertissement pour absence de scan de fin - ${params.courseName} du ${params.date}. Motif : ${params.reason}. Aucun impact sur votre salaire ce mois.`;
+      : `Avertissement pour absence de scan de fin - ${params.courseName} du ${params.date}. Motif : ${params.reason}. Rendez-vous à l'administration de l'établissement pour plus d'informations.`;
     await this.db.execute(sql`
       INSERT INTO notifications_log (
         type, channel, recipient_id, recipient_phone, recipient_email, message, status, metadata
@@ -923,7 +1158,7 @@ export class ValidationsRepository {
     date: string;
     cancelReason: string;
   }): Promise<void> {
-    const message = `La sanction pour ${params.courseName} du ${params.date} a été annulée. Motif : ${params.cancelReason}. Votre cours est de nouveau pris en compte.`;
+    const message = `La sanction pour ${params.courseName} du ${params.date} a été annulée. Motif : ${params.cancelReason}. Votre cours est de nouveau pris en compte. Rendez-vous à l'administration de l'établissement pour plus d'informations.`;
     await this.db.execute(sql`
       INSERT INTO notifications_log (
         type, channel, recipient_id, recipient_phone, recipient_email, message, status, metadata
@@ -1043,67 +1278,133 @@ export class ValidationsRepository {
 
     const result = await this.db.execute<HistoryRow>(sql`
       WITH feature_flags AS (
-        SELECT COALESCE(f.checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
+        SELECT
+          COALESCE(f.use_real_hours, false) AS use_real_hours,
+          COALESCE(f.checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
         FROM public.tenants t
         LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
         WHERE t.schema_name = current_schema()
         LIMIT 1
+      ),
+      base AS (
+        SELECT
+          at.id::text AS attendance_id,
+          t.id::text AS teacher_id,
+          u.name AS teacher_name,
+          s.subject AS course_name,
+          c.name AS class_name,
+          at.date,
+          at.validation_status,
+          at.validated_hours,
+          at.validation_reason,
+          at.validated_at,
+          ts.label AS slot_label,
+          r.name AS room_name,
+          (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0)::numeric(8,2) AS schedule_duration_minutes,
+          COALESCE(
+            at.actual_minutes,
+            CASE
+              WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                AND at.checked_in_at IS NOT NULL
+                AND at.room_scan_end_at IS NOT NULL
+              THEN GREATEST(
+                0,
+                FLOOR(
+                  EXTRACT(EPOCH FROM (
+                    LEAST(at.room_scan_end_at, at.date::timestamp + ts.end_time) - at.checked_in_at
+                  )) / 60
+                )
+              )::int
+              ELSE NULL
+            END
+          ) AS actual_minutes,
+          t.hourly_rate,
+          (at.geo_status = 'suspicious') AS is_gps_suspicious,
+          (
+            COALESCE(
+              at.actual_minutes,
+              CASE
+                WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                  AND at.checked_in_at IS NOT NULL
+                  AND at.room_scan_end_at IS NOT NULL
+                THEN GREATEST(
+                  0,
+                  FLOOR(
+                    EXTRACT(EPOCH FROM (
+                      LEAST(at.room_scan_end_at, at.date::timestamp + ts.end_time) - (at.date::timestamp + ts.start_time)
+                    )) / 60
+                  )
+                )::int
+                ELSE NULL
+              END
+            ) IS NOT NULL
+            AND COALESCE(
+              at.actual_minutes,
+              CASE
+                WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                  AND at.checked_in_at IS NOT NULL
+                  AND at.room_scan_end_at IS NOT NULL
+                THEN GREATEST(
+                  0,
+                  FLOOR(
+                    EXTRACT(EPOCH FROM (
+                      LEAST(at.room_scan_end_at, at.date::timestamp + ts.end_time) - (at.date::timestamp + ts.start_time)
+                    )) / 60
+                  )
+                )::int
+                ELSE NULL
+              END
+            ) < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
+          ) AS is_short_hours
+        FROM attendances_teacher at
+        INNER JOIN teachers t ON t.id = at.teacher_id
+        INNER JOIN users u ON u.id = t.user_id
+        INNER JOIN schedules s ON s.id = at.schedule_id
+        INNER JOIN classes c ON c.id = s.class_id
+        INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+        LEFT JOIN rooms r ON r.id = s.room_id
+        WHERE at.validation_status IN ('approved', 'rejected')
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = at.date
+          )
+          ${params.status ? sql`AND at.validation_status = ${params.status}` : sql``}
+          ${monthStart && monthEnd ? sql`AND at.date BETWEEN ${monthStart}::date AND ${monthEnd}::date` : sql``}
+          ${params.search ? sql`AND u.name ILIKE ${'%' + params.search + '%'}` : sql``}
       )
       SELECT
-        at.id::text AS attendance_id,
-        t.id::text AS teacher_id,
-        u.name AS teacher_name,
-        s.subject AS course_name,
-        c.name AS class_name,
-        at.date::text AS date,
-        at.validation_status::text AS validation_status,
-        at.validated_hours::text AS validated_hours,
-        at.validation_reason,
-        at.validated_at::text AS validated_at,
-        CASE
-          WHEN at.actual_minutes IS NOT NULL
-            AND at.actual_minutes < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
-          THEN 'short_hours'
-          ELSE 'gps_suspicious'
-        END AS kind,
+        attendance_id,
+        teacher_id,
+        teacher_name,
+        course_name,
+        class_name,
+        date::text AS date,
+        validation_status::text AS validation_status,
+        validated_hours::text AS validated_hours,
+        validation_reason,
+        validated_at::text AS validated_at,
+        CASE WHEN is_short_hours THEN 'short_hours' ELSE 'gps_suspicious' END AS kind,
         ARRAY_REMOVE(ARRAY[
-          CASE
-            WHEN at.actual_minutes IS NOT NULL
-              AND at.actual_minutes < ((EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0) - (SELECT checkout_tolerance_minutes FROM feature_flags))
-            THEN 'short_hours'::text
-          END,
-          CASE WHEN at.geo_status = 'suspicious' THEN 'gps_suspicious'::text END
+          CASE WHEN is_short_hours THEN 'short_hours'::text END,
+          CASE WHEN is_gps_suspicious THEN 'gps_suspicious'::text END
         ], NULL) AS kinds,
-        ts.label AS slot_label,
-        r.name AS room_name,
-        (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 60.0)::numeric(8,2) AS schedule_duration_minutes,
-        at.actual_minutes,
-        t.hourly_rate,
+        slot_label,
+        room_name,
+        schedule_duration_minutes,
+        actual_minutes,
+        hourly_rate,
         COUNT(*) OVER() AS total_count
-      FROM attendances_teacher at
-      INNER JOIN teachers t ON t.id = at.teacher_id
-      INNER JOIN users u ON u.id = t.user_id
-      INNER JOIN schedules s ON s.id = at.schedule_id
-      INNER JOIN classes c ON c.id = s.class_id
-      INNER JOIN time_slots ts ON ts.id = s.time_slot_id
-      LEFT JOIN rooms r ON r.id = s.room_id
-      WHERE at.validation_status IN ('approved', 'rejected')
-        AND (
-          at.geo_status = 'suspicious'
-          OR at.actual_minutes IS NOT NULL
-        )
-        ${params.status ? sql`AND at.validation_status = ${params.status}` : sql``}
-        ${params.kind === 'gps_suspicious' ? sql`AND at.geo_status = 'suspicious'` : params.kind === 'short_hours' ? sql`AND at.geo_status != 'suspicious'` : sql``}
+      FROM base
+      WHERE (is_gps_suspicious OR is_short_hours)
+        ${params.kind === 'gps_suspicious' ? sql`AND is_gps_suspicious` : params.kind === 'short_hours' ? sql`AND is_short_hours` : sql``}
         ${
           params.kind === 'short_hours' && params.approvalType === 'planned'
-            ? sql`AND at.validation_status = 'approved' AND at.validated_hours >= (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0) - 0.01`
+            ? sql`AND validation_status = 'approved' AND validated_hours >= (schedule_duration_minutes / 60.0) - 0.01`
             : params.kind === 'short_hours' && params.approvalType === 'actual'
-              ? sql`AND at.validation_status = 'approved' AND at.validated_hours < (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0) - 0.01`
+              ? sql`AND validation_status = 'approved' AND validated_hours < (schedule_duration_minutes / 60.0) - 0.01`
               : sql``
         }
-        ${monthStart && monthEnd ? sql`AND at.date BETWEEN ${monthStart}::date AND ${monthEnd}::date` : sql``}
-        ${params.search ? sql`AND u.name ILIKE ${'%' + params.search + '%'}` : sql``}
-      ORDER BY at.validated_at DESC NULLS LAST, at.date DESC
+      ORDER BY validated_at DESC NULLS LAST, date DESC
       LIMIT ${params.limit} OFFSET ${offset}
     `);
 

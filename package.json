@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc && npm run copy-assets",
-    "copy-assets": "mkdir -p dist/shared/pdf/assets/fonts && cp src/shared/pdf/assets/fonts/*.ttf dist/shared/pdf/assets/fonts/",
+    "copy-assets": "mkdir -p dist/shared/pdf/assets/fonts && cp src/shared/pdf/assets/fonts/*.ttf dist/shared/pdf/assets/fonts/ && mkdir -p dist/shared/database/migrations && cp -r src/shared/database/migrations/* dist/shared/database/migrations/",
     "start": "node dist/server.js",
     "test": "vitest",
     "test:unit": "vitest tests/unit",
@@ -21,8 +21,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:seed": "tsx src/shared/database/seed.ts",
-    "db:studio": "drizzle-kit studio",
-    "sync-types": "mkdir -p ../edutrack-web/src/shared/types && cp src/shared/types/index.ts ../edutrack-web/src/shared/types/index.ts"
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1030.0",

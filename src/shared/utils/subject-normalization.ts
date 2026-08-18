@@ -92,11 +92,11 @@ export const canonicalizeSubject = (value: string, knownSubjects?: Iterable<stri
   return SUBJECT_DISPLAY_BY_KEY[key] ?? fallbackDisplay(trimmed);
 };
 
-export const canonicalizeSubjectList = (values: string[]): string[] => {
+export const canonicalizeSubjectList = (values: string[], knownSubjects?: Iterable<string>): string[] => {
   const byKey = new Map<string, string>();
 
   for (const item of values) {
-    const canonical = canonicalizeSubject(item);
+    const canonical = canonicalizeSubject(item, knownSubjects);
     if (!canonical) {
       continue;
     }

@@ -25,6 +25,10 @@ describe('Billing - actual_minutes validation', () => {
       return 0;
     }
 
+    if (params.validatedHours !== undefined) {
+      return params.validatedHours;
+    }
+
     if (
       params.useRealHours &&
       params.actualMinutes !== null &&
@@ -34,12 +38,20 @@ describe('Billing - actual_minutes validation', () => {
       return params.actualMinutes / 60.0;
     }
 
+    if (params.useRealHours && params.actualMinutes !== null) {
+      return params.slotDurationMinutes / 60.0;
+    }
+
+    if (params.useRealHours) {
+      return 0;
+    }
+
     // Fallback: durée planifiée
     return params.slotDurationMinutes / 60.0;
   };
 
   describe('Edge case: actual_minutes = NULL', () => {
-    it('should use slot duration when actual_minutes is NULL', () => {
+    it('should return 0 when actual_minutes and validated_hours are missing with real hours enabled', () => {
       const result = computeHoursDone({
         validationStatus: 'not_required',
         useRealHours: true,
@@ -47,7 +59,7 @@ describe('Billing - actual_minutes validation', () => {
         slotDurationMinutes: 60, // 1h
       });
 
-      expect(result).toBe(1.0);
+      expect(result).toBe(0);
     });
   });
 
@@ -153,6 +165,20 @@ describe('Billing - actual_minutes validation', () => {
       });
 
       expect(result).toBe(3.0); // validated_hours prioritaire
+    });
+  });
+
+  describe('Edge case: validated_hours with validation_status = not_required', () => {
+    it('should use validated_hours before actual_minutes for auto-validated courses', () => {
+      const result = computeHoursDone({
+        validationStatus: 'not_required',
+        validatedHours: 0.5,
+        useRealHours: true,
+        actualMinutes: 33,
+        slotDurationMinutes: 30,
+      });
+
+      expect(result).toBe(0.5);
     });
   });
 

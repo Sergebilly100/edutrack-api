@@ -518,7 +518,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     }
   );
 
-  app.put(
+  app.put( // c'est ici que la logique de portée (updateScope) est appliquée - mise à jour d'un créneau existant avec différentes options de portée (cette occurrence, toutes les occurrences, cette et suivantes)
     '/api/v1/schedule/:id',
     { preHandler: [requireDirectorOrSecretary, attachTenantDb] },
     async (request, reply) => {
@@ -547,22 +547,26 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           });
         }
 
+        // Résoudre le timeSlotId à partir de l'ID fourni ou des horaires (en vérifiant que les horaires correspondent bien au time slot).
         const timeSlotId = await resolveTimeSlotId(db, {
           timeSlotId: body.time_slot_id,
           startTime: body.start_time,
           endTime: body.end_time,
         });
+        // En cas de résolution à partir des horaires, vérifier que le time slot existe (sinon on risque de créer un créneau avec un timeSlotId null ou invalide, ce qui casse la grille et les conflits).
         const resolvedStartTime = body.start_time ?? (await findTimeSlotById(db, timeSlotId))?.startTime;
         if (!resolvedStartTime) {
           throw new Error('Time slot not found');
         }
 
+        // Même si la date d'effet est dans le futur, il faut aussi vérifier que le créneau lui-même cible une date/heure future (ex: ne pas autoriser à créer un créneau récurrent hebdo le lundi à 8h si aujourd'hui on est mardi et qu'on est déjà passé lundi 8h cette semaine).
         await assertScheduleTargetsFutureDateTime(db, {
           schedulePeriodId: body.schedule_period_id,
           dayOfWeek: body.day_of_week,
           startTime: resolvedStartTime,
         });
 
+        // Vérifier les conflits sur la date d'effet (même si la modification est censée impacter aussi les occurrences futures, on veut éviter de créer un conflit immédiat le jour même de la modification).
         const conflicts = await findScheduleConflicts(db, {
           schedulePeriodId: body.schedule_period_id,
           teacherId: body.teacher_id,
@@ -586,6 +590,10 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           throw new Error('Class already has a course at the same time');
         }
 
+        // Logique de portée de la modification :
+        // - this : ne modifier que cette occurrence → créer un créneau one-shot à la date d'effet + ajouter une exception sur le créneau récurrent original pour masquer cette occurrence.
+        // - all : modifier toutes les occurrences (passé + futur) → UPDATE direct du créneau. Verrouillage : interdire si des présences ont été enregistrées (préserver l'intégrité de l'historique d'attendance).
+        // - this_and_following (par défaut) : modifier cette et les occurrences suivantes → vérifier s'il y a des occurrences passées. S'il y en a, fermer le créneau original à la veille de la date d'effet + créer un nouveau créneau avec les modifications à partir de la date d'effet. S'il n'y en a pas, UPDATE direct (même logique que "all" puisque pas d'occurrence passée à préserver).
         const updateScope = body.update_scope ?? 'this_and_following';
 
         if (updateScope === 'this') {
@@ -593,9 +601,12 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           // sur la date concernée + masquer le récurrent original ce jour-là.
           const oneShotEndDate = computeOneShotEndDate(effectiveFrom);
 
+          // BUG 1 - Sans transaction, on risque de créer un créneau one-shot sans ajouter l'exception sur le récurrent original (si la requête est interrompue entre les 2 opérations), ce qui fait que le créneau modifié apparaît en double dans la grille (le one-shot + le récurrent original qui n'est pas masqué par l'exception).
+          // Envelopper dans une transaction pour garantir la cohérence entre l'ajout de l'exception et la création du créneau modifié.
+          // pour corriger le bug, on doit aussi s'assurer que la validation de conflit et de date future est faite AVANT la création du créneau one-shot (et pas après), sinon on risque de créer un créneau one-shot orphelin sans exception si la validation échoue après la création du one-shot mais avant l'ajout de l'exception.
           const result = await db.transaction(async (tx) => {
-            await addScheduleException(tx, id, effectiveFrom);
-            const created = await createSchedule(tx, {
+            await addScheduleException(tx, id, effectiveFrom); // masquer le récurrent original ce jour-là
+            const created = await createSchedule(tx, { // créer le créneau modifié en one-shot
               schedulePeriodId: body.schedule_period_id,
               teacherId: body.teacher_id,
               classId: body.class_id,
@@ -610,7 +621,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
             return { created };
           });
 
-          return reply.send({
+          return reply.send({ // retourner le créneau créé + l'ID du créneau récurrent original + la date d'effet pour que le frontend puisse mettre à jour la grille en conséquence (remplacer l'occurrence modifiée du récurrent par le one-shot modifié).
             schedule: result.created,
             original_schedule_id: id,
             occurrence_date: effectiveFrom,

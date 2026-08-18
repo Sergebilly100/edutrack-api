@@ -164,6 +164,12 @@ export class ParentPortalRepository {
       INNER JOIN users u ON u.id = t.user_id
       INNER JOIN rooms r ON r.id = s.room_id
       INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+      AND NOT EXISTS (
+        SELECT 1 FROM schedule_exceptions se
+        WHERE se.schedule_id = s.id
+          AND se.exception_date BETWEEN ${input.weekStart}::date AND ${input.weekEnd}::date
+          AND EXTRACT(ISODOW FROM se.exception_date)::int = s.day_of_week
+      )
       WHERE s.class_id = ${input.classId}::uuid
         AND s.is_active = true
         AND sp.is_active = true
@@ -180,6 +186,9 @@ export class ParentPortalRepository {
     from: string;
     to: string;
   }): Promise<StudentAttendanceRow[]> {
+    // ce query est volontairement simple pour éviter de faire des jointures complexes et risquer de rater des enregistrements d'absences
+    // on récupère simplement tous les enregistrements d'attendance pour l'étudiant dans la période donnée, et on laisse la logique métier de l'application décider comment les interpréter 
+    // (ex: si un cours est manqué mais qu'il y a une exception de planning, c'est à l'application de décider si c'est une absence ou pas)
     const result = await this.db.execute<StudentAttendanceRow>(sql`
       SELECT
         schedule_id::text AS schedule_id,
@@ -214,6 +223,10 @@ export class ParentPortalRepository {
       WHERE a.student_id = ${input.studentId}::uuid
         AND a.status = 'absent'
         AND a.date BETWEEN ${input.monthStart}::date AND ${input.monthEnd}::date
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_exceptions se
+          WHERE se.schedule_id = s.id AND se.exception_date = a.date
+        )
       ORDER BY a.date DESC, ts.start_time DESC
     `);
 

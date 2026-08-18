@@ -78,6 +78,10 @@ export type ImportRepository = {
     input: { name: string; qrToken: string; building?: string | null; capacity?: number | null }
   ) => Promise<{ id: string; name: string }>;
   listTimeSlots: (db: QueryExecutor) => Promise<TimeSlotRow[]>;
+  findOrCreateTimeSlot: (
+    db: QueryExecutor,
+    input: { label: string; startTime: string; endTime: string }
+  ) => Promise<TimeSlotRow>;
   findActiveSchedulePeriodId: (db: QueryExecutor, date: string) => Promise<string | null>;
   findSchedulePeriodById: (
     db: QueryExecutor,
@@ -145,6 +149,7 @@ export type ImportRepository = {
       classId: string;
       timeSlotId: string;
       roomId: string;
+      startDate: string | null;
     }
   ) => Promise<{ result: 'inserted' | 'updated'; id: string }>;
   deactivateSchedulesByPeriodExcluding: (
@@ -225,6 +230,44 @@ export const defaultImportRepository: ImportRepository = {
     `);
 
     return getRows<TimeSlotRow>(result);
+  },
+
+  async findOrCreateTimeSlot(db, input) {
+    const sortOrderParts = input.startTime.split(':').map(Number);
+    const sortOrder = (sortOrderParts[0] ?? 0) * 60 + (sortOrderParts[1] ?? 0);
+
+    const result = await db.execute(sql`
+      WITH existing AS (
+        SELECT id, label, start_time::text AS start_time, end_time::text AS end_time
+        FROM time_slots
+        WHERE start_time = ${input.startTime}::time
+          AND end_time = ${input.endTime}::time
+        LIMIT 1
+      ),
+      inserted AS (
+        INSERT INTO time_slots (label, start_time, end_time, sort_order)
+        SELECT ${input.label}, ${input.startTime}::time, ${input.endTime}::time, ${sortOrder}
+        WHERE NOT EXISTS (SELECT 1 FROM existing)
+        ON CONFLICT (label) DO NOTHING
+        RETURNING id, label, start_time::text AS start_time, end_time::text AS end_time
+      )
+      SELECT id, label, start_time, end_time FROM existing
+      UNION ALL
+      SELECT id, label, start_time, end_time FROM inserted
+      UNION ALL
+      SELECT id, label, start_time::text AS start_time, end_time::text AS end_time
+      FROM time_slots
+      WHERE start_time = ${input.startTime}::time
+        AND end_time = ${input.endTime}::time
+      LIMIT 1
+    `);
+
+    const row = getRows<TimeSlotRow>(result)[0];
+    if (!row) {
+      throw new Error('Unable to find or create time slot');
+    }
+
+    return row;
   },
 
   async findActiveSchedulePeriodId(db, date) {
@@ -636,6 +679,7 @@ export const defaultImportRepository: ImportRepository = {
           room_id = ${params.roomId},
           subject = ${row.subject},
           is_active = true,
+          start_date = ${params.startDate}::date,
           end_date = NULL
         WHERE id = ${existing.id}
       `);
@@ -651,6 +695,7 @@ export const defaultImportRepository: ImportRepository = {
         time_slot_id,
         day_of_week,
         subject,
+        start_date,
         is_active
       )
       VALUES (
@@ -661,6 +706,7 @@ export const defaultImportRepository: ImportRepository = {
         ${params.timeSlotId},
         ${row.dayOfWeek},
         ${row.subject},
+        ${params.startDate}::date,
         true
       )
       RETURNING id

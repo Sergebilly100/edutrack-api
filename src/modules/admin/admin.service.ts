@@ -26,6 +26,7 @@ import {
   type TenantListItem,
   type TenantListResult,
   type TenantStatsResult,
+  type UpdateSchoolDirectorBody,
   type UpdatePlanCatalogBody,
   type UpdateSmsPlatformConfigBody,
   type UpdateSmsTemplateBody,
@@ -40,6 +41,7 @@ import { SubscriptionsRepository } from '../subscriptions/subscriptions.reposito
 import { invalidateTenantCache } from '../../shared/cache/tenant-cache.js';
 import { invalidateTenantStatusCache } from '../../shared/cache/tenant-status.js';
 import { processInBatches } from '../../shared/utils/batch-process.js';
+import { ensureAdminPublicInfrastructure } from './admin.infrastructure.service.js';
 
 type TenantRow = {
   id: string;
@@ -245,6 +247,16 @@ type SchoolUserRow = {
   is_active: boolean;
 };
 
+type SchoolDirectorUpdateRow = {
+  id: string;
+  role: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  last_login_at: string | null;
+  is_active: boolean;
+};
+
 type DirectorInsertRow = { id: string };
 
 type SubscriptionInsertRow = { id: string };
@@ -292,6 +304,8 @@ const MAX_USERS_BY_PLAN: Record<TenantListItem['plan'], number> = {
   pro: 20,
   establishment: 50,
 };
+
+export { ensureAdminPublicInfrastructure };
 
 const normalizePem = (value: string): string => {
   const trimmed = value.trim();
@@ -388,113 +402,6 @@ const toPgTextArrayLiteral = (values: readonly string[]): string => {
 
 const toTextArraySql = (values: readonly string[]) =>
   sql`CAST(${toPgTextArrayLiteral(values)} AS text[])`;
-
-const ensureAdminPublicInfrastructure = async (publicDb: TenantDb): Promise<void> => {
-  await publicDb.execute(sql.raw(`
-    ALTER TABLE public.tenants
-      ADD COLUMN IF NOT EXISTS student_label varchar(120) DEFAULT 'Élève',
-      ADD COLUMN IF NOT EXISTS director_title varchar(120) DEFAULT 'Directeur',
-      ADD COLUMN IF NOT EXISTS max_sms_per_month integer DEFAULT 2000,
-      ADD COLUMN IF NOT EXISTS can_edit_sms_template boolean DEFAULT false,
-      ADD COLUMN IF NOT EXISTS can_export_data boolean DEFAULT true,
-      ADD COLUMN IF NOT EXISTS active_school_year varchar(20),
-      ADD COLUMN IF NOT EXISTS logo_url text;
-  `));
-
-  await publicDb.execute(sql.raw(`
-    CREATE TABLE IF NOT EXISTS public.sms_templates (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-      tenant_id uuid REFERENCES public.tenants(id) ON DELETE CASCADE,
-      type varchar(50) NOT NULL,
-      message_template text NOT NULL,
-      variables text[] NOT NULL DEFAULT '{}',
-      created_by uuid,
-      updated_at timestamptz NOT NULL DEFAULT now(),
-      UNIQUE(tenant_id, type)
-    );
-  `));
-
-  await publicDb.execute(sql.raw(`
-    CREATE TABLE IF NOT EXISTS public.app_settings (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-      maintenance_mode boolean NOT NULL DEFAULT false,
-      maintenance_message text NOT NULL DEFAULT 'Mise à jour en cours',
-      updated_at timestamptz NOT NULL DEFAULT now()
-    );
-  `));
-
-  await publicDb.execute(sql.raw(`
-    ALTER TABLE public.app_settings
-      ADD COLUMN IF NOT EXISTS sms_provider varchar(50) NOT NULL DEFAULT 'mock',
-      ADD COLUMN IF NOT EXISTS sms_api_base_url varchar(255),
-      ADD COLUMN IF NOT EXISTS sms_api_key text,
-      ADD COLUMN IF NOT EXISTS sms_api_key_last4 varchar(4),
-      ADD COLUMN IF NOT EXISTS sms_api_key_updated_at timestamptz,
-      ADD COLUMN IF NOT EXISTS sms_sender_id varchar(20) NOT NULL DEFAULT 'IvoirEdu',
-      ADD COLUMN IF NOT EXISTS sms_fallback_sender_id varchar(20),
-      ADD COLUMN IF NOT EXISTS sms_default_country_code varchar(8) NOT NULL DEFAULT '+225',
-      ADD COLUMN IF NOT EXISTS sms_alert_quota_threshold_pct integer NOT NULL DEFAULT 80,
-      ADD COLUMN IF NOT EXISTS sms_alert_failure_threshold_count integer NOT NULL DEFAULT 5,
-      ADD COLUMN IF NOT EXISTS sms_alert_email varchar(255),
-      ADD COLUMN IF NOT EXISTS sms_maintenance_mode boolean NOT NULL DEFAULT false,
-      ADD COLUMN IF NOT EXISTS sms_maintenance_message text NOT NULL DEFAULT 'Service SMS en maintenance';
-  `));
-
-  await publicDb.execute(sql.raw(`
-    ALTER TABLE public.app_settings
-      DROP CONSTRAINT IF EXISTS app_settings_sms_provider_check;
-    UPDATE public.app_settings SET sms_provider = 'smsmode' WHERE sms_provider = 'orange_api';
-    ALTER TABLE public.app_settings
-      ADD CONSTRAINT app_settings_sms_provider_check
-      CHECK (sms_provider IN ('mock', 'infobip', 'africas_talking', 'twilio', 'smsmode', 'custom'));
-  `));
-
-  await publicDb.execute(sql.raw(`
-    CREATE TABLE IF NOT EXISTS public.sms_admin_audit_log (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-      admin_id uuid,
-      action varchar(80) NOT NULL,
-      details jsonb NOT NULL DEFAULT '{}'::jsonb,
-      created_at timestamptz NOT NULL DEFAULT now()
-    );
-  `));
-
-  await publicDb.execute(sql.raw(`
-    INSERT INTO public.app_settings (maintenance_mode, maintenance_message)
-    SELECT false, 'Mise à jour en cours'
-    WHERE NOT EXISTS (SELECT 1 FROM public.app_settings);
-  `));
-
-  await publicDb.execute(sql.raw(`
-    CREATE TABLE IF NOT EXISTS public.plan_catalog (
-      plan tenant_plan PRIMARY KEY,
-      monthly_price_fcfa integer NOT NULL DEFAULT 0,
-      annual_price_fcfa integer NOT NULL DEFAULT 0,
-      default_billing_cycle billing_cycle NOT NULL DEFAULT 'monthly',
-      max_users integer NOT NULL DEFAULT 10,
-      max_admin_positions integer NOT NULL DEFAULT 5,
-      max_sms_per_month integer NOT NULL DEFAULT 2000,
-      updated_at timestamptz NOT NULL DEFAULT now()
-    );
-  `));
-
-  await publicDb.execute(sql.raw(`
-    INSERT INTO public.plan_catalog (
-      plan,
-      monthly_price_fcfa,
-      annual_price_fcfa,
-      default_billing_cycle,
-      max_users,
-      max_admin_positions,
-      max_sms_per_month
-    )
-    VALUES
-      ('essential', 15000, 162000, 'monthly', 5, 5, 2000),
-      ('pro', 30000, 324000, 'monthly', 20, 15, 6000),
-      ('establishment', 50000, 540000, 'monthly', 50, 30, 12000)
-    ON CONFLICT (plan) DO NOTHING;
-  `));
-};
 
 const maskPhone = (phone: string): string => {
   if (phone.length <= 5) {
@@ -1231,6 +1138,13 @@ export const createSchool = async (
     password: string;
   };
 }> => {
+  // Garantit que public.plan_catalog (et le reste de l'infra admin) existe avant
+  // toute lecture/écriture. Sans cet appel, la création d'école échoue avec
+  // "relation public.plan_catalog does not exist" tant qu'aucun autre endpoint
+  // (updateSchoolConfig, activateSchoolSmsFeature, etc.) n'a été appelé au moins
+  // une fois pour initialiser ces tables.
+  await ensureAdminPublicInfrastructure(publicDb);
+
   const schemaName = toSchemaName(payload.subdomain);
   const directorPassword = generateDirectorInitialPassword();
   const passwordHash = await argon2.hash(directorPassword);
@@ -1644,6 +1558,55 @@ export const getSchoolUsers = async (
   const teachers = mapped.filter((item) => item.role === 'teacher');
 
   return { director, staff, teachers };
+};
+
+export const updateSchoolDirector = async (
+  publicDb: TenantDb,
+  tenantId: string,
+  userId: string,
+  payload: UpdateSchoolDirectorBody
+): Promise<SchoolUsersResult['director']> => {
+  const tenantResult = await publicDb.execute<TenantLookupRow>(sql`
+    SELECT id, schema_name
+    FROM public.tenants
+    WHERE id = ${tenantId}
+    LIMIT 1
+  `);
+  const tenant = getRows<TenantLookupRow>(tenantResult)[0];
+  if (!tenant) {
+    throw new Error('Tenant not found');
+  }
+
+  const row = await withTenantSchema(tenant.schema_name, async (tenantDb) => {
+    const result = await tenantDb.execute<SchoolDirectorUpdateRow>(sql`
+      UPDATE users
+      SET
+        name = CASE WHEN ${payload.name !== undefined} THEN ${payload.name ?? null} ELSE name END,
+        phone = CASE WHEN ${payload.phone !== undefined} THEN ${payload.phone ?? null} ELSE phone END,
+        email = CASE WHEN ${payload.email !== undefined} THEN ${payload.email ?? null} ELSE email END
+      WHERE id = ${userId}
+        AND role = 'director'
+        AND is_active = true
+      RETURNING id::text, role::text, name, phone, email, last_login_at::text, is_active
+    `);
+    return getRows<SchoolDirectorUpdateRow>(result)[0] ?? null;
+  });
+
+  if (!row) {
+    throw new Error('Director not found');
+  }
+
+  return {
+    id: row.id,
+    role: 'director',
+    name: row.name,
+    phone: row.phone,
+    email: row.email,
+    username: null,
+    positions: [],
+    lastLoginAt: row.last_login_at,
+    isActive: row.is_active,
+  };
 };
 
 export const updateSchoolConfig = async (

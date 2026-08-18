@@ -88,10 +88,10 @@ const resolveGeo = (input: {
 export const monthBoundsFromDate = getMonthBounds;
 
 // Fenêtre d'acceptation d'un `client_timestamp` (action réelle vs heure de sync).
-// On accepte jusqu'à 24h dans le passé pour couvrir un téléphone offline une
-// journée entière, et 5 min dans le futur pour tolérer une horloge client
+// On accepte jusqu'à 7 jours dans le passé pour couvrir un téléphone offline une
+// journée entière ou un week-end, et 5 min dans le futur pour tolérer une horloge client
 // légèrement désynchronisée.
-const CLIENT_TIMESTAMP_MAX_PAST_MS = 24 * 60 * 60 * 1000; // 24h
+const CLIENT_TIMESTAMP_MAX_PAST_MS = 7 * 24 * 60 * 60 * 1000; // 7 jours
 const CLIENT_TIMESTAMP_MAX_FUTURE_MS = 5 * 60 * 1000; // 5 min
 
 // Retourne l'horodatage réel à utiliser pour l'action :
@@ -132,8 +132,8 @@ const resolveActualOccurredAt = (clientTimestamp: string | undefined): Date => {
   return parsed;
 };
 
-/** Grâce après la fin du cours pendant laquelle le prof peut encore soumettre l'appel. */
-const ROLLCALL_SUBMISSION_GRACE_AFTER_END_MS = 15 * 60 * 1000; // 15 minutes
+/** Grâce métier après la fin du cours pendant laquelle le prof peut soumettre ou synchroniser l'appel. */
+const ROLLCALL_SUBMISSION_GRACE_AFTER_END_MS = 7 * 24 * 60 * 60 * 1000; // 7 jours
 
 /** Délai après la fin du cours avant d'envoyer les notifications SMS parents. */
 const ABSENT_NOTIF_DELAY_AFTER_END_MS = 20 * 60 * 1000; // 20 minutes
@@ -677,8 +677,7 @@ export class AttendanceService {
     // slotEndTime est au format "HH:MM", date au format "YYYY-MM-DD"
     const [hours, minutes] = slotEndTime.split(':').map(Number);
     
-    // Ajout du suffixe 'Z' pour forcer l'interprétation en UTC (ISO 8601)
-    const endOfClass = new Date(`${date}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00Z`);
+    const endOfClass = new Date(`${date}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`);
     return endOfClass.getTime() + delayMs;
   }
 
@@ -688,6 +687,7 @@ export class AttendanceService {
       scheduleId: string;
       date: string;
       absentStudentIds: string[];
+      clientTimestamp?: string;
     },
     context: ServiceContext
   ): Promise<{ upsertedCount: number; notifSendAfter: number; isLocked: boolean }> {
@@ -715,11 +715,20 @@ export class AttendanceService {
       schedule.slotEndTime,
       ABSENT_NOTIF_DELAY_AFTER_END_MS
     );
-    const nowMs = Date.now();
 
-    // Si la deadline de grâce est dépassée, le pointage est verrouillé.
-    // Les notifications parents restent, elles, différées jusqu'à fin + 20 min.
-    if (nowMs >= rollcallDeadline) {
+    // Pour la vérification de deadline, on utilise l'heure RÉELLE de l'action
+    // (client_timestamp validé), pas l'heure de synchronisation.
+    // Cas offline : si le prof a soumis l'appel pendant le cours (client_timestamp
+    // dans la fenêtre), on accepte même si la sync arrive des heures plus tard.
+    const actionTime = resolveActualOccurredAt(input.clientTimestamp);
+    // const actionMs = actionTime.getTime();
+
+    // Si actionTime === serverNow c'est soit pas de client_timestamp, soit un
+    // timestamp trop vieux/invalide → on utilise l'heure serveur courante.
+    // Dans le cas offline tardif avec client_timestamp valide, actionMs reflète
+    // l'heure réelle du pointage, ce qui permet d'accepter une sync post-cours.
+
+    if (actionTime.getTime() >= rollcallDeadline) {
       throw new AttendanceModuleError(
         'Rollcall submission window has closed',
         409,
@@ -1040,7 +1049,7 @@ export class AttendanceService {
 
   // getTeacherCompliance retourne pour chaque enseignant le taux de conformité de ses pointages (check-in et check-out effectués, scans QR effectués quand requis, etc.) 
   // sur une période donnée. Utile pour identifier les enseignants qui auraient des difficultés à pointer correctement et leur apporter un accompagnement ciblé.
-  async getTeacherCompliance(input: { month: string; role?: string; userId?: string }): Promise<
+  async getTeacherCompliance(input: { month: string; subject?: string; role?: string; userId?: string }): Promise<
     Array<{
       teacherId: string;
       teacherName: string;
@@ -1070,6 +1079,7 @@ export class AttendanceService {
     const rows = await this.repository.listTeacherCompliance({
       monthStart,
       monthEnd,
+      subject: input.subject,
       teacherId,
     });
     return rows.map((row, index) => ({

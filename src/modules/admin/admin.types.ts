@@ -78,6 +78,41 @@ export const schoolTenantIdParamsSchema = z.object({
   tenantId: z.string().uuid(),
 });
 
+export const schoolUserParamsSchema = z.object({
+  tenantId: z.string().uuid(),
+  userId: z.string().uuid(),
+});
+
+export const updateSchoolDirectorBodySchema = z
+  .object({
+    name: z.string().trim().min(2).max(255).optional(),
+    phone: z.string().trim().regex(/^225\d{10}$/).nullable().optional(),
+    email: z.string().trim().toLowerCase().email().nullable().optional(),
+  })
+  .refine(
+    (value) =>
+      value.name !== undefined || value.phone !== undefined || value.email !== undefined,
+    {
+      message: 'At least one field must be provided',
+    }
+  )
+  .refine(
+    (value) => {
+      const phone = value.phone ?? undefined;
+      const email = value.email ?? undefined;
+      if (phone !== undefined && phone !== null && phone.length > 0) {
+        return true;
+      }
+      if (email !== undefined && email !== null && email.length > 0) {
+        return true;
+      }
+      return value.phone === undefined && value.email === undefined;
+    },
+    {
+      message: 'Either phone or email is required',
+    }
+  );
+
 export const smsFeatureActivateBodySchema = z.object({
   commission_pct: z.coerce.number().min(0).max(100),
 });
@@ -180,6 +215,7 @@ export type UpdateTenantBody = z.infer<typeof updateTenantBodySchema>;
 export type CreateSchoolBody = z.infer<typeof createSchoolBodySchema>;
 export type ListSchoolsQuery = z.infer<typeof listSchoolsQuerySchema>;
 export type UpdateSchoolConfigBody = z.infer<typeof updateSchoolConfigBodySchema>;
+export type UpdateSchoolDirectorBody = z.infer<typeof updateSchoolDirectorBodySchema>;
 
 export type TenantListItem = {
   id: string;

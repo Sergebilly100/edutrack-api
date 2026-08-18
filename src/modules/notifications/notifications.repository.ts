@@ -212,6 +212,10 @@ export const defaultRepository: NotificationsRepository = {
         ON at.teacher_id = s.teacher_id
         AND at.schedule_id = s.id
         AND at.date = ${payload.date}
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_exceptions se
+          WHERE se.schedule_id = s.id AND se.exception_date = at.date
+        )
       LEFT JOIN rooms scanned_room ON scanned_room.id = at.room_scanned_id
       LEFT JOIN LATERAL (
         SELECT u.phone
@@ -387,6 +391,10 @@ export const defaultRepository: NotificationsRepository = {
         WHERE s.is_active = true
           AND (s.start_date IS NULL OR s.start_date <= dc.target_date)
           AND (s.end_date IS NULL OR s.end_date > dc.target_date)
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = dc.target_date
+          )
       ),
       director AS (
         SELECT u.phone, u.email

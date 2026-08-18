@@ -471,6 +471,43 @@ describe('attendance.service', () => {
     expect(eventMocks.emitStudentAbsent).not.toHaveBeenCalled();
   });
 
+  it('submitStudentAttendance() accepte une sync offline tardive si client_timestamp est dans la fenêtre', async () => {
+    vi.setSystemTime(new Date('2026-04-14T10:30:00.000Z'));
+    repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1' });
+    repository.findScheduleContextForTeacher.mockResolvedValue({
+      scheduleId: 'schedule-1',
+      teacherId: 'teacher-1',
+      teacherName: 'Teacher 1',
+      classId: 'class-1',
+      className: '3eme A',
+      subject: 'Maths',
+      plannedRoomId: 'room-1',
+      plannedRoomName: 'A1',
+      plannedRoomToken: 'expected-token',
+      timeSlotId: 'slot-1',
+      slotLabel: '07h30-09h00',
+      slotStartTime: '07:30:00',
+      slotEndTime: '09:00:00',
+    });
+    repository.listStudentsByClass.mockResolvedValue([{ id: 'student-1' }]);
+    repository.bulkUpsertStudentAttendance.mockResolvedValue({ upsertedCount: 1 });
+    repository.listStudentAbsenceNotificationCandidates.mockResolvedValue([]);
+
+    const service = new AttendanceService(repository as never);
+    await expect(
+      service.submitStudentAttendance(
+        {
+          scheduleId: 'schedule-1',
+          date: '2026-04-14',
+          absentStudentIds: [],
+          clientTimestamp: '2026-04-14T09:10:00.000Z',
+        },
+        { schemaName: 'school_sainte_marie', userId: 'user-1' }
+      )
+    ).resolves.toMatchObject({ upsertedCount: 1, isLocked: false });
+    expect(repository.bulkUpsertStudentAttendance).toHaveBeenCalled();
+  });
+
   it('submitStudentAttendance() avec queue : enfile un job différé pour chaque absent candidat', async () => {
     vi.setSystemTime(new Date('2026-04-14T08:30:00.000Z'));
     repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1' });

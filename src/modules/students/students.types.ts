@@ -278,6 +278,7 @@ export type StudentAbsenceDetailRecord = {
   id: string;
   date: string;
   subject: string;
+  teacherName: string;
   className: string;
   startTime: string;
   endTime: string;

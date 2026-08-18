@@ -17,6 +17,7 @@ export type ImportError = {
   column: string;
   message: string;
   value: string;
+  severity?: 'error' | 'warning';
   sheet?: string;
 };
 
@@ -85,6 +86,7 @@ export type ScheduleImportRow = {
   roomName: string;
   roomBuilding: string | null;
   roomCapacity: number | null;
+  startDate: string | null;
 };
 
 export type SchedulePeriodInput = {

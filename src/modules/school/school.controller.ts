@@ -5,6 +5,10 @@ import { ZodError, z } from 'zod';
 import { db, withTenantSchema } from '../../shared/database/db.js';
 import { authenticateRequest, requireDirectorOrSecretary } from '../../shared/middleware/auth.middleware.js';
 import { logger } from '../../shared/observability/logger.js';
+import {
+  extractHostname,
+  resolveTenantFromHostname,
+} from '../../shared/tenancy/tenant-host.js';
 
 type TenantInfoRow = {
   id: string;
@@ -87,34 +91,6 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
   });
 };
 
-const extractHostname = (request: FastifyRequest): string | null => {
-  const host = typeof request.headers.host === 'string' ? request.headers.host : '';
-  if (!host) {
-    return null;
-  }
-
-  const noPort = host.split(':')[0]?.trim().toLowerCase() ?? '';
-  return noPort.length > 0 ? noPort : null;
-};
-
-const parseSubdomain = (hostname: string): string | null => {
-  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
-    return null;
-  }
-
-  const labels = hostname.split('.').filter(Boolean);
-  if (labels.length < 3) {
-    return null;
-  }
-
-  const firstLabel = labels[0] ?? '';
-  if (!SUBDOMAIN_REGEX.test(firstLabel) || firstLabel === 'www' || firstLabel === 'admin') {
-    return null;
-  }
-
-  return firstLabel;
-};
-
 const resolveSchemaBySubdomain = async (subdomain: string): Promise<string | null> => {
   const result = await db.execute<{ schema_name: string }>(sql`
     SELECT schema_name
@@ -151,9 +127,15 @@ const resolveSchemaNameFromPublicRequest = async (request: FastifyRequest): Prom
 
   const hostname = extractHostname(request);
   if (hostname) {
-    const subdomain = parseSubdomain(hostname);
-    if (subdomain) {
-      const schema = await resolveSchemaBySubdomain(subdomain);
+    const tenant = resolveTenantFromHostname(hostname);
+    if (tenant?.type === 'schema') {
+      if (!SCHEMA_NAME_REGEX.test(tenant.value)) {
+        throw new Error('Invalid tenant schema');
+      }
+      return tenant.value;
+    }
+    if (tenant?.type === 'subdomain') {
+      const schema = await resolveSchemaBySubdomain(tenant.value);
       if (!schema) {
         throw new Error('Tenant not found');
       }

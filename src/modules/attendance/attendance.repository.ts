@@ -102,6 +102,10 @@ type TeacherAttendanceByDateRow = {
   checked_out_at: string | null;
   actual_minutes: number | null;
   geo_status: 'verified' | 'suspicious' | 'unavailable' | 'not_checked' | null;
+  student_rollcall_done: boolean;
+  student_present_count: number;
+  student_absent_count: number;
+  student_total_count: number;
 };
 
 type DirectorTodayCourseRow = {
@@ -220,6 +224,23 @@ const mapScheduleContext = (row: ScheduleContextRow): AttendanceScheduleContext 
   slotEndTime: row.slot_end_time,
 });
 
+const normalizeSubjectSql = (value: ReturnType<typeof sql>): ReturnType<typeof sql> => sql`
+  btrim(
+    lower(
+      regexp_replace(
+        translate(
+          ${value}::text,
+          'àáâäãåçèéêëìíîïñòóôöõùúûüýÿÀÁÂÄÃÅÇÈÉÊËÌÍÎÏÑÒÓÔÖÕÙÚÛÜÝŸ',
+          'aaaaaaceeeeiiiinooooouuuuyyAAAAAACEEEEIIIINOOOOOUUUUYY'
+        ),
+        '[^a-z0-9]+',
+        ' ',
+        'g'
+      )
+    )
+  )
+`;
+
 export class AttendanceRepository {
   constructor(private readonly db: QueryExecutor) {}
 
@@ -252,6 +273,10 @@ export class AttendanceRepository {
         WHERE s.is_active = true
           AND (s.start_date IS NULL OR s.start_date <= now_ctx.today)
           AND (s.end_date IS NULL OR s.end_date > now_ctx.today)
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = now_ctx.today
+          )
           AND s.day_of_week = now_ctx.day_of_week
           AND (now_ctx.today::timestamp + ts.end_time + INTERVAL '15 minute') <= now_ctx.now_local
       )
@@ -581,10 +606,18 @@ export class AttendanceRepository {
         at.room_scan_end_at::text AS room_scan_end_at,
         at.checked_out_at::text AS checked_out_at,
         at.actual_minutes,
-        at.geo_status
+        at.geo_status,
+        CASE WHEN COUNT(ast.id) > 0 THEN true ELSE false END AS student_rollcall_done,
+        COUNT(CASE WHEN ast.status = 'present' THEN 1 END)::int AS student_present_count,
+        COUNT(CASE WHEN ast.status = 'absent' THEN 1 END)::int AS student_absent_count,
+        COUNT(ast.id)::int AS student_total_count
       FROM attendances_teacher at
+      LEFT JOIN attendances_student ast
+        ON ast.schedule_id = at.schedule_id
+       AND ast.date = at.date
       WHERE at.teacher_id = ${params.teacherId}
         AND at.date = ${params.date}
+      GROUP BY at.id
     `);
 
     return getRows(result);
@@ -683,44 +716,141 @@ export class AttendanceRepository {
   async listTeacherCompliance(params: {
     monthStart: string;
     monthEnd: string;
+    subject?: string;
     teacherId?: string;
   }): Promise<TeacherComplianceRow[]> {
-
+    const teacherFilter = params.teacherId
+      ? sql`AND t.id = ${params.teacherId}::uuid`
+      : sql``;
+    const scheduleTeacherFilter = params.teacherId
+      ? sql`AND s.teacher_id = ${params.teacherId}::uuid`
+      : sql``;
+    const subjectFilter = params.subject
+      ? sql`AND ${normalizeSubjectSql(sql`s.subject`)} = ${normalizeSubjectSql(sql`${params.subject}`)}`
+      : sql``;
     const result = await this.db.execute<TeacherComplianceRow>(sql`
+      WITH month_days AS (
+        SELECT generate_series(${params.monthStart}::date, ${params.monthEnd}::date, interval '1 day')::date AS date
+      ),
+      active_period_by_day AS (
+        SELECT md.date, sp.id AS period_id
+        FROM month_days md
+        LEFT JOIN LATERAL (
+          SELECT id
+          FROM schedule_periods
+          WHERE is_active = true
+            AND valid_from <= md.date
+            AND valid_to >= md.date
+          ORDER BY created_at DESC
+          LIMIT 1
+        ) sp ON true
+      ),
+      scheduled AS (
+        SELECT
+          apd.date,
+          s.id AS schedule_id,
+          s.teacher_id,
+          s.subject
+        FROM active_period_by_day apd
+        INNER JOIN schedules s
+          ON s.schedule_period_id = apd.period_id
+         AND s.is_active = true
+         AND s.day_of_week = EXTRACT(ISODOW FROM apd.date)::int
+         AND (s.start_date IS NULL OR s.start_date <= apd.date)
+         AND (s.end_date IS NULL OR s.end_date > apd.date)
+         AND NOT EXISTS (
+           SELECT 1 FROM schedule_exceptions se
+           WHERE se.schedule_id = s.id AND se.exception_date = apd.date
+         )
+        ${subjectFilter}
+        ${scheduleTeacherFilter}
+      ),
+      scored AS (
+        SELECT
+          sc.*,
+          at.id AS attendance_id,
+          at.status,
+          at.checked_in_at,
+          at.checked_out_at,
+          at.room_scan_start_at,
+          at.room_scan_end_at,
+          at.room_mismatch,
+          rollcall.has_rollcall
+        FROM scheduled sc
+        LEFT JOIN attendances_teacher at
+          ON at.schedule_id = sc.schedule_id
+         AND at.date = sc.date
+        LEFT JOIN LATERAL (
+          SELECT true AS has_rollcall
+          FROM attendances_student ast
+          WHERE ast.schedule_id = sc.schedule_id
+            AND ast.date = sc.date
+          LIMIT 1
+        ) rollcall ON true
+      ),
+      aggregated AS (
+        SELECT
+          t.id AS teacher_id,
+          u.name AS teacher_name,
+          COUNT(sc.schedule_id)::int AS total_scheduled,
+          COUNT(sc.attendance_id) FILTER (
+            WHERE sc.checked_in_at IS NOT NULL
+              OR sc.room_scan_start_at IS NOT NULL
+              OR sc.status IN ('present', 'late')
+          )::int AS total_checkins,
+          COUNT(sc.attendance_id) FILTER (
+            WHERE sc.checked_out_at IS NOT NULL
+              OR sc.room_scan_end_at IS NOT NULL
+          )::int AS total_checkouts,
+          COUNT(sc.attendance_id) FILTER (
+            WHERE sc.checked_in_at IS NOT NULL
+          )::int AS checkins_with_time,
+          COUNT(sc.attendance_id) FILTER (
+            WHERE sc.room_mismatch = false
+              AND sc.checked_in_at IS NOT NULL
+          )::int AS room_correct_count,
+          COUNT(sc.attendance_id) FILTER (
+            WHERE sc.status IN ('present', 'late', 'excused')
+          )::int AS present_like_count,
+          COUNT(sc.attendance_id) FILTER (
+            WHERE sc.status IN ('present', 'late')
+          )::int AS present_count,
+          COUNT(sc.attendance_id) FILTER (
+            WHERE sc.status IN ('present', 'late', 'excused')
+              AND sc.has_rollcall = true
+          )::int AS rollcall_done_count
+        FROM teachers t
+        INNER JOIN users u ON u.id = t.user_id
+        LEFT JOIN scored sc ON sc.teacher_id = t.id
+        WHERE 1=1
+          ${teacherFilter}
+        GROUP BY t.id, u.name
+      )
       SELECT
         teacher_id::text AS teacher_id,
         teacher_name,
         total_checkins,
         total_checkouts,
-        compliance_rate,
-        scan_end_rate,
-        room_correct_rate,
-        rollcall_rate,
-        attendance_rate
-      FROM teacher_scan_compliance
-      WHERE month = ${params.monthStart}::date
-        AND (${params.teacherId ?? null}::uuid IS NULL OR teacher_id = ${params.teacherId ?? null}::uuid)
-      UNION ALL
-      SELECT
-        t.id::text AS teacher_id,
-        u.name AS teacher_name,
-        0 AS total_checkins,
-        0 AS total_checkouts,
-        0::numeric AS compliance_rate,
-        0::numeric AS scan_end_rate,
-        0::numeric AS room_correct_rate,
-        0::numeric AS rollcall_rate,
-        0::numeric AS attendance_rate
-      FROM teachers t
-      INNER JOIN users u ON u.id = t.user_id
-      WHERE (${params.teacherId ?? null}::uuid IS NULL OR t.id = ${params.teacherId ?? null}::uuid)
-        AND NOT EXISTS (
+        COALESCE(ROUND(total_checkouts::numeric / NULLIF(total_checkins, 0) * 100, 1), 0) AS scan_end_rate,
+        COALESCE(ROUND(room_correct_count::numeric / NULLIF(checkins_with_time, 0) * 100, 1), 0) AS room_correct_rate,
+        COALESCE(ROUND(rollcall_done_count::numeric / NULLIF(present_like_count, 0) * 100, 1), 0) AS rollcall_rate,
+        COALESCE(ROUND(present_count::numeric / NULLIF(total_scheduled, 0) * 100, 1), 0) AS attendance_rate,
+        COALESCE(
+          ROUND(
+            COALESCE(total_checkouts::numeric / NULLIF(total_checkins, 0) * 30, 0)
+            + COALESCE(room_correct_count::numeric / NULLIF(checkins_with_time, 0) * 25, 0)
+            + COALESCE(rollcall_done_count::numeric / NULLIF(present_like_count, 0) * 25, 0)
+            + COALESCE(present_count::numeric / NULLIF(total_scheduled, 0) * 20, 0),
+            1
+          ),
+          0
+        ) AS compliance_rate
+      FROM aggregated
+      WHERE ${params.subject ? sql`total_scheduled > 0 OR EXISTS (
         SELECT 1
-        FROM attendances_teacher at
-        WHERE at.teacher_id = t.id
-          AND at.date >= ${params.monthStart}::date
-          AND at.date < (${params.monthEnd}::date + INTERVAL '1 day')
-      )
+        FROM unnest(COALESCE((SELECT subjects FROM teachers WHERE id = aggregated.teacher_id), ARRAY[]::text[])) AS subj(subject)
+        WHERE ${normalizeSubjectSql(sql`subj.subject`)} = ${normalizeSubjectSql(sql`${params.subject}`)}
+      )` : sql`true`}
       ORDER BY compliance_rate DESC, teacher_name ASC
     `);
 
@@ -1095,6 +1225,11 @@ export class AttendanceRepository {
               s.end_date IS NULL
               OR s.end_date > (wc.week_start + ((s.day_of_week - 1) * INTERVAL '1 day'))::date
             )
+            AND NOT EXISTS (
+              SELECT 1 FROM schedule_exceptions se
+              WHERE se.schedule_id = s.id
+                AND se.exception_date = (wc.week_start + ((s.day_of_week - 1) * INTERVAL '1 day'))::date
+            )
           ORDER BY s.day_of_week ASC, ts.sort_order ASC, ts.start_time ASC
     `);
 
@@ -1153,6 +1288,10 @@ export class AttendanceRepository {
       WHERE s.teacher_id = ${params.teacherId}
         AND s.day_of_week = ${params.dayOfWeek}
         AND s.is_active = true
+      AND NOT EXISTS (
+        SELECT 1 FROM schedule_exceptions se
+        WHERE se.schedule_id = s.id AND se.exception_date = ${params.date}::date
+      )
       ORDER BY ts.sort_order ASC, ts.start_time ASC
     `);
 
@@ -1278,6 +1417,10 @@ export class AttendanceRepository {
         AND s.is_active = true
         AND (s.start_date IS NULL OR s.start_date <= ${today}::date)
         AND (s.end_date IS NULL OR s.end_date > ${today}::date)
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_exceptions se
+          WHERE se.schedule_id = s.id AND se.exception_date = ${today}::date
+        )
       GROUP BY
         s.id,
         u.name,
@@ -1450,6 +1593,10 @@ export class AttendanceRepository {
        AND s.teacher_id = ${params.teacherId}
        AND (s.start_date IS NULL OR s.start_date <= d.date)
        AND (s.end_date IS NULL OR s.end_date > d.date)
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_exceptions se
+          WHERE se.schedule_id = s.id AND se.exception_date = d.date
+        )
       INNER JOIN teachers t    ON t.id = s.teacher_id
       INNER JOIN users u       ON u.id = t.user_id
       INNER JOIN classes c     ON c.id = s.class_id
@@ -1520,6 +1667,10 @@ export class AttendanceRepository {
        AND s.is_active = true
        AND (s.start_date IS NULL OR s.start_date <= d.date)
        AND (s.end_date IS NULL OR s.end_date > d.date)
+       AND NOT EXISTS (
+        SELECT 1 FROM schedule_exceptions se
+        WHERE se.schedule_id = s.id AND se.exception_date = d.date
+       )
       INNER JOIN teachers t    ON t.id = s.teacher_id
       INNER JOIN users u       ON u.id = t.user_id
       INNER JOIN classes c     ON c.id = s.class_id

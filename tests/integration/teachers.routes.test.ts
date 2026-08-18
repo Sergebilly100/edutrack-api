@@ -245,6 +245,218 @@ describe('teachers integration (real db)', () => {
     });
   });
 
+  describe('GET /api/v1/teachers/attendance-stats', () => {
+    it('compte les heures non validees par la direction comme absence partielle', async () => {
+      const headers = await getAuthHeaders('director');
+      const context = getSeedContext();
+      const date = new Date();
+      do {
+        date.setUTCDate(date.getUTCDate() - 1);
+      } while (date.getUTCDay() === 0);
+      const dateIso = date.toISOString().slice(0, 10);
+      const dayOfWeek = date.getUTCDay();
+      const subject = `Absence partielle ${Date.now()}`;
+
+      await queryTenant(`
+        CREATE TABLE IF NOT EXISTS ${tenantTable('schedule_exceptions')} (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          schedule_id uuid NOT NULL REFERENCES ${tenantTable('schedules')}(id) ON DELETE CASCADE,
+          exception_date date NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `);
+
+      const sourceSchedule = await queryTenant<{
+        schedule_period_id: string;
+        class_id: string;
+        room_id: string;
+      }>(
+        `
+          SELECT schedule_period_id, class_id, room_id
+          FROM ${tenantTable('schedules')}
+          WHERE id = $1
+          LIMIT 1
+        `,
+        [context.scheduleId]
+      );
+      expect(sourceSchedule[0]).toBeTruthy();
+
+      const timeSlots = await queryTenant<{ id: string }>(
+        `
+          INSERT INTO ${tenantTable('time_slots')} (label, start_time, end_time, sort_order)
+          VALUES ($1, '08:00'::time, '10:00'::time, 998)
+          RETURNING id
+        `,
+        [`partial-absence-${Date.now()}`]
+      );
+      const timeSlotId = timeSlots[0]?.id;
+      expect(timeSlotId).toBeTruthy();
+
+      const schedules = await queryTenant<{ id: string }>(
+        `
+          INSERT INTO ${tenantTable('schedules')} (
+            schedule_period_id,
+            teacher_id,
+            class_id,
+            room_id,
+            time_slot_id,
+            day_of_week,
+            subject,
+            is_active
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, true)
+          RETURNING id
+        `,
+        [
+          sourceSchedule[0]!.schedule_period_id,
+          context.teacherId,
+          sourceSchedule[0]!.class_id,
+          sourceSchedule[0]!.room_id,
+          timeSlotId,
+          dayOfWeek,
+          subject,
+        ]
+      );
+      const scheduleId = schedules[0]?.id;
+      expect(scheduleId).toBeTruthy();
+
+      await queryTenant(
+        `
+          INSERT INTO ${tenantTable('attendances_teacher')} (
+            teacher_id,
+            schedule_id,
+            date,
+            status,
+            validation_status,
+            validated_hours,
+            room_mismatch,
+            qr_alert_sent
+          )
+          VALUES ($1, $2, $3::date, 'present', 'approved', 1.5, false, false)
+        `,
+        [context.teacherId, scheduleId, dateIso]
+      );
+
+      const response = await request()
+        .get(
+          `/api/v1/teachers/attendance-stats?from=${dateIso}&to=${dateIso}&teacher_id=${context.teacherId}&subject=${encodeURIComponent(subject)}`
+        )
+        .set(headers);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveLength(1);
+      expect(response.body[0]).toMatchObject({
+        total_scheduled: 1,
+        present_count: 1,
+        absent_count: 1,
+        hours_scheduled: 2,
+        hours_done: 1.5,
+      });
+
+      const absentFilter = await request()
+        .get(
+          `/api/v1/teachers/attendance-stats?from=${dateIso}&to=${dateIso}&teacher_id=${context.teacherId}&subject=${encodeURIComponent(subject)}&status_filter=absent`
+        )
+        .set(headers);
+
+      expect(absentFilter.status).toBe(200);
+      expect(absentFilter.body).toHaveLength(1);
+      expect(absentFilter.body[0].hours_done).toBe(1.5);
+    });
+
+    it('ne projette pas les cours apres la date de fin de periode active', async () => {
+      const headers = await getAuthHeaders('director');
+      const context = getSeedContext();
+      const subject = `Periode bornee ${Date.now()}`;
+      const firstDate = '2030-01-07';
+      const secondDate = '2030-01-14';
+      const dayOfWeek = 1;
+
+      await queryTenant(`
+        CREATE TABLE IF NOT EXISTS ${tenantTable('schedule_exceptions')} (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          schedule_id uuid NOT NULL REFERENCES ${tenantTable('schedules')}(id) ON DELETE CASCADE,
+          exception_date date NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `);
+
+      const sourceSchedule = await queryTenant<{
+        class_id: string;
+        room_id: string;
+      }>(
+        `
+          SELECT class_id, room_id
+          FROM ${tenantTable('schedules')}
+          WHERE id = $1
+          LIMIT 1
+        `,
+        [context.scheduleId]
+      );
+      expect(sourceSchedule[0]).toBeTruthy();
+
+      const periods = await queryTenant<{ id: string }>(
+        `
+          INSERT INTO ${tenantTable('schedule_periods')} (name, valid_from, valid_to, is_active, created_by)
+          VALUES ($1, $2::date, $2::date, true, $3)
+          RETURNING id
+        `,
+        [`period-bound-${Date.now()}`, firstDate, context.directorUserId]
+      );
+      const periodId = periods[0]?.id;
+      expect(periodId).toBeTruthy();
+
+      const timeSlots = await queryTenant<{ id: string }>(
+        `
+          INSERT INTO ${tenantTable('time_slots')} (label, start_time, end_time, sort_order)
+          VALUES ($1, '08:00'::time, '09:00'::time, 997)
+          RETURNING id
+        `,
+        [`period-bound-${Date.now()}`]
+      );
+      const timeSlotId = timeSlots[0]?.id;
+      expect(timeSlotId).toBeTruthy();
+
+      await queryTenant(
+        `
+          INSERT INTO ${tenantTable('schedules')} (
+            schedule_period_id,
+            teacher_id,
+            class_id,
+            room_id,
+            time_slot_id,
+            day_of_week,
+            subject,
+            is_active
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, true)
+        `,
+        [
+          periodId,
+          context.teacherId,
+          sourceSchedule[0]!.class_id,
+          sourceSchedule[0]!.room_id,
+          timeSlotId,
+          dayOfWeek,
+          subject,
+        ]
+      );
+
+      const response = await request()
+        .get(
+          `/api/v1/teachers/attendance-stats?from=${firstDate}&to=${secondDate}&teacher_id=${context.teacherId}&subject=${encodeURIComponent(subject)}`
+        )
+        .set(headers);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveLength(1);
+      expect(response.body[0]).toMatchObject({
+        total_scheduled: 1,
+        hours_scheduled: 1,
+      });
+    });
+  });
+
   describe('permissions staff spécialisées', () => {
     it('autorise l analyse de présence prof avec teachers.attendance.view', async () => {
       await grantStaffPermissions(['teachers.attendance.view']);

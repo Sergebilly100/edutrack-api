@@ -6,6 +6,10 @@ import { db, withTenantSchema } from '../../shared/database/db.js';
 import { getRowsUntyped as getRows } from '../../shared/utils/db-helpers.js';
 import { cached } from '../../shared/cache/redis-cache.js';
 import {
+  extractHostname,
+  resolveTenantFromHostname,
+} from '../../shared/tenancy/tenant-host.js';
+import {
   assertParentPortalEnabled,
   changePassword,
   getMe,
@@ -118,34 +122,6 @@ const LOGIN_RATE_LIMIT_MAX = (() => {
 // la durée de verrouillage du compte est definie dans le module login-lockout.js, dans la fonction recordFailedLogin
 const LOGIN_RATE_LIMIT_WINDOW = process.env.AUTH_LOGIN_RATE_LIMIT_WINDOW ?? '1 minute';
 
-const extractHostname = (request: FastifyRequest): string | null => {
-  const host = typeof request.headers.host === 'string' ? request.headers.host : '';
-  if (!host) {
-    return null;
-  }
-
-  const noPort = host.split(':')[0]?.trim().toLowerCase() ?? '';
-  return noPort.length > 0 ? noPort : null;
-};
-
-const parseSubdomain = (hostname: string): string | null => {
-  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
-    return null;
-  }
-
-  const labels = hostname.split('.').filter(Boolean);
-  if (labels.length < 3) {
-    return null;
-  }
-
-  const firstLabel = labels[0] ?? '';
-  if (!SUBDOMAIN_REGEX.test(firstLabel) || firstLabel === 'www' || firstLabel === 'admin') {
-    return null;
-  }
-
-  return firstLabel;
-};
-
 const resolveSchemaBySubdomain = async (subdomain: string): Promise<string | null> => {
   return cached(`tenant:subdomain:${subdomain}`, 300, async () => {
     const result = await db.execute<{ schema_name: string }>(sql`
@@ -221,15 +197,22 @@ const getSchemaName = async (request: FastifyRequest): Promise<string> => {
 
   const hostname = extractHostname(request);
   if (hostname) {
-    const subdomain = parseSubdomain(hostname);
-    if (subdomain) {
-      const schema = await resolveSchemaBySubdomain(subdomain);
+    const tenant = resolveTenantFromHostname(hostname);
+    if (tenant?.type === 'schema') {
+      if (!SCHEMA_NAME_REGEX.test(tenant.value)) {
+        throw new Error('Invalid tenant schema');
+      }
+      return tenant.value;
+    }
+    if (tenant?.type === 'subdomain') {
+      const schema = await resolveSchemaBySubdomain(tenant.value);
       if (!schema) {
         throw new Error('Tenant not found');
       }
       return schema;
     }
 
+    // Support de l'hôte "localhost" pour le développement local : on retourne un schéma par défaut si défini et valide.
     const isLocalHost =
       hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
     if (isLocalHost && SCHEMA_NAME_REGEX.test(DEFAULT_LOCAL_SCHEMA)) {
@@ -438,7 +421,7 @@ export default async function authController(app: FastifyInstance): Promise<void
 
         if (result.user.role === 'super_admin') {
           return reply.code(403).send({
-            error: 'Utilisez /api/v1/auth/login/admin pour vous connecter en tant que super administrateur.',
+            error: 'Utilisez l\'Url /admin/login pour vous connecter en tant que super administrateur.',
             code: 'USE_ADMIN_LOGIN',
             statusCode: 403,
           });

@@ -1,0 +1,62 @@
+---
+- name: Mettre à jour la configuration Alloy
+  hosts: "{{ environ }}"
+  become: true
+
+  vars:
+    logs_base_dir: "/var/log/apps"
+    alloy_template: "/etc/alloy/alloy.template"
+    update_alloy_script: "/usr/local/sbin/update-alloy"
+
+  tasks:
+
+    # ------------------------------------------------------------------
+    # 1. Copier le script update-alloy s'il n'existe pas
+    # ------------------------------------------------------------------
+    - name: Copier le script update-alloy sur le serveur
+      ansible.builtin.copy:
+        src: scripts/update-alloy
+        dest: "{{ update_alloy_script }}"
+        owner: root
+        group: root
+        mode: "0755"
+        force: false
+
+    # ------------------------------------------------------------------
+    # 2. Copier le template Alloy s'il n'existe pas
+    # ------------------------------------------------------------------
+    - name: Copier le template Alloy sur le serveur
+      ansible.builtin.copy:
+        src: templates/alloy.template
+        dest: "{{ alloy_template }}"
+        owner: root
+        group: root
+        mode: "0644"
+        force: false
+
+    # ------------------------------------------------------------------
+    # 3. S'assurer qu'Alloy peut lire les logs Docker
+    # ------------------------------------------------------------------
+    - name: Ajouter l'utilisateur alloy au groupe docker
+      ansible.builtin.user:
+        name: alloy
+        groups: docker
+        append: true
+
+    # ------------------------------------------------------------------
+    # 4. Exécuter le script de mise à jour
+    # ------------------------------------------------------------------
+    - name: Mettre à jour la config Alloy et redémarrer
+      ansible.builtin.shell: |
+        {{ update_alloy_script }} \
+          -l {{ logs_base_dir }} \
+          -t {{ alloy_template }} \
+          --restart
+      args:
+        executable: /bin/bash
+      register: alloy_update
+      changed_when: alloy_update.rc == 0
+
+    - name: Afficher le résultat
+      ansible.builtin.debug:
+        var: alloy_update.stdout_lines

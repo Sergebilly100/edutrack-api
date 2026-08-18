@@ -12,6 +12,7 @@ import {
   teacherAttendanceStatsQuerySchema,
   teacherParamsSchema,
   teacherStatsQuerySchema,
+  teacherTeachingOptionsQuerySchema,
   teachersListQuerySchema,
   updateTeacherBodySchema,
   type CreateTeacherInput,
@@ -132,6 +133,25 @@ export default async function teachersController(
       });
 
       return reply.send(stats);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  // ─── GET /api/v1/teachers/teaching-options ────────────────────────────────
+  // Options fiables pour les filtres d'analyse : matières/classes réellement
+  // couvertes par l'emploi du temps sur la plage sélectionnée.
+  app.get('/api/v1/teachers/teaching-options', { preHandler: requireTeacherAttendanceAnalysis }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const query = teacherTeachingOptionsQuerySchema.parse(request.query ?? {});
+
+      const options = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildTeachersService(tenantDb);
+        return service.getTeachingOptions(query);
+      });
+
+      return reply.send(options);
     } catch (error) {
       return handleError(request, reply, error);
     }

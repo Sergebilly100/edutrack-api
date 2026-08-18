@@ -1,12 +1,13 @@
 import type {
   CreateTeacherInput,
   TeacherAttendanceStatsQuery,
+  TeacherTeachingOptionsQuery,
   TeachersListQuery,
   UpdateTeacherInput,
 } from './teachers.types.js';
 import { TeachersRepository } from './teachers.repository.js';
 import { getMaxUsersBySchemaName } from '../../shared/utils/users-limit.js';
-import { canonicalizeSubjectList } from '../../shared/utils/subject-normalization.js';
+import { canonicalizeSubject, canonicalizeSubjectList } from '../../shared/utils/subject-normalization.js';
 import { defaultEmailSender } from '../notifications/notifications.service.js';
 import { logger } from '../../shared/observability/logger.js';
 
@@ -180,9 +181,10 @@ export class TeachersService {
     }
 
     try {
+      const subjectCatalog = await this.repository.listSubjectCatalog();
       const created = await this.repository.createTeacher({
         ...input,
-        subjects: canonicalizeSubjectList(input.subjects),
+        subjects: canonicalizeSubjectList(input.subjects, subjectCatalog),
       });
       return toDTO(created);
     } catch (error) {
@@ -247,11 +249,14 @@ export class TeachersService {
     // du record, pas t.hourly_rate, donc l'historique reste correct.
     let updated;
     try {
+      const subjectCatalog = input.subjects
+        ? await this.repository.listSubjectCatalog()
+        : undefined;
       updated = await this.repository.updateTeacher(
         teacherId,
         {
           ...input,
-          ...(input.subjects ? { subjects: canonicalizeSubjectList(input.subjects) } : {}),
+          ...(input.subjects ? { subjects: canonicalizeSubjectList(input.subjects, subjectCatalog) } : {}),
           hourly_rate: nextHourlyRate,
           monthly_salary: nextMonthlySalary,
         },
@@ -292,7 +297,19 @@ export class TeachersService {
   }
 
   async getAttendanceStats(params: TeacherAttendanceStatsQuery) {
-    return this.repository.getAttendanceStats(params);
+    if (!params.subject) {
+      return this.repository.getAttendanceStats(params);
+    }
+
+    const subjectCatalog = await this.repository.listSubjectCatalog();
+    return this.repository.getAttendanceStats({
+      ...params,
+      subject: canonicalizeSubject(params.subject, subjectCatalog),
+    });
+  }
+
+  async getTeachingOptions(params: TeacherTeachingOptionsQuery) {
+    return this.repository.listTeachingOptions(params);
   }
 
   /**

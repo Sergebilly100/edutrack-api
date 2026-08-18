@@ -95,6 +95,18 @@ export const teacherAttendanceStatsQuerySchema = z.object({
   class_id: z.uuid().optional(),
   teacher_id: z.uuid().optional(),
   status_filter: z.enum(['absent', 'room_mismatch', 'rollcall_missing', 'late']).optional(),
+}).refine((value) => value.to >= value.from, {
+  message: 'to must be >= from',
+  path: ['to'],
+});
+
+export const teacherTeachingOptionsQuerySchema = z.object({
+  from: z.string().regex(ISO_DATE_REGEX),
+  to: z.string().regex(ISO_DATE_REGEX),
+  teacher_id: z.uuid().optional(),
+}).refine((value) => value.to >= value.from, {
+  message: 'to must be >= from',
+  path: ['to'],
 });
 
 export type TeachersListQuery = z.infer<typeof teachersListQuerySchema>;
@@ -103,3 +115,4 @@ export type CreateTeacherInput = z.infer<typeof fullPayloadSchema> & {
 };
 export type UpdateTeacherInput = z.infer<typeof updateTeacherBodySchema>;
 export type TeacherAttendanceStatsQuery = z.infer<typeof teacherAttendanceStatsQuerySchema>;
+export type TeacherTeachingOptionsQuery = z.infer<typeof teacherTeachingOptionsQuerySchema>;

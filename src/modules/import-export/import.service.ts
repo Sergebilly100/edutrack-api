@@ -63,32 +63,34 @@ const nextIsoDayOnOrAfter = (base: Date, dayOfWeek: number): Date => {
   return next;
 };
 
-const hasFutureOccurrenceInPeriod = (input: {
+const getScheduleOccurrenceState = (input: {
   validFrom: string;
   validTo: string;
   dayOfWeek: number;
   startTime: string;
   now?: Date;
-}): boolean => {
+}): { hasPast: boolean; firstFutureDate: string | null } => {
   const now = input.now ?? new Date();
-  const nowDateIso = formatUtcDate(now);
-  const baseDateIso = input.validFrom > nowDateIso ? input.validFrom : nowDateIso;
   const periodEnd = parseUtcDate(input.validTo);
-  let candidate = nextIsoDayOnOrAfter(parseUtcDate(baseDateIso), input.dayOfWeek);
+  let candidate = nextIsoDayOnOrAfter(parseUtcDate(input.validFrom), input.dayOfWeek);
+  let hasPast = false;
+  let firstFutureDate: string | null = null;
 
   while (candidate <= periodEnd) {
     const candidateIso = formatUtcDate(candidate);
     const candidateDateTime = new Date(`${candidateIso}T${input.startTime}.000Z`);
     if (candidateDateTime > now) {
-      return true;
+      firstFutureDate ??= candidateIso;
+    } else {
+      hasPast = true;
     }
-    // Advance to the next occurrence without mutating the loop variable's shared state.
+
     const next = new Date(candidate);
     next.setUTCDate(next.getUTCDate() + 7);
     candidate = next;
   }
 
-  return false;
+  return { hasPast, firstFutureDate };
 };
 
 export class ImportModuleError extends Error {
@@ -139,12 +141,16 @@ const makeError = (params: {
   column: string;
   message: string;
   value?: string;
+  severity?: ImportError['severity'];
 }): ImportError => ({
   row: params.row,
   column: params.column,
   message: params.message,
   value: params.value ?? '',
+  ...(params.severity ? { severity: params.severity } : {}),
 });
+
+const isBlockingImportIssue = (issue: ImportError): boolean => issue.severity !== 'warning';
 
 const assertFileSizeWithinLimit = (fileBuffer: Buffer): void => {
   if (fileBuffer.length > MAX_FILE_SIZE_BYTES) {
@@ -290,6 +296,50 @@ const previewWorkbookRows = (rows: ParsedWorkbookRow[]): Record<string, string>[
 
 const normalizeKey = (value: string): string => normalizeCell(value).toLowerCase();
 
+const normalizeHumanKey = (value: string): string =>
+  normalizeKey(value)
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '');
+
+const normalizeTimeValue = (hour: string, minute?: string): string | null => {
+  const parsedHour = Number(hour);
+  const parsedMinute = minute === undefined || minute === '' ? 0 : Number(minute);
+  if (
+    !Number.isInteger(parsedHour) ||
+    !Number.isInteger(parsedMinute) ||
+    parsedHour < 0 ||
+    parsedHour > 23 ||
+    parsedMinute < 0 ||
+    parsedMinute > 59
+  ) {
+    return null;
+  }
+
+  return `${String(parsedHour).padStart(2, '0')}:${String(parsedMinute).padStart(2, '0')}:00`;
+};
+
+const parseTimeSlotLabel = (label: string): { startTime: string; endTime: string; label: string } | null => {
+  const matches = [...label.matchAll(/(\d{1,2})(?:\s*(?:h|:)\s*(\d{1,2}))?/gi)];
+  if (matches.length < 2) {
+    return null;
+  }
+
+  const startTime = normalizeTimeValue(matches[0][1], matches[0][2]);
+  const endTime = normalizeTimeValue(matches[1][1], matches[1][2]);
+  if (!startTime || !endTime || startTime >= endTime) {
+    return null;
+  }
+
+  return {
+    startTime,
+    endTime,
+    label: `${startTime.slice(0, 5)} – ${endTime.slice(0, 5)}`,
+  };
+};
+
+const buildTimeSlotLookupKey = (startTime: string, endTime: string): string =>
+  `${startTime.slice(0, 5)}-${endTime.slice(0, 5)}`;
+
 const parseSubjects = (value: string): string[] =>
   value
     .split(',')
@@ -337,6 +387,15 @@ const isMonday = (isoDate: string): boolean => {
   return parsed.getUTCDay() === 1;
 };
 
+const isSunday = (isoDate: string): boolean => {
+  const parsed = new Date(`${isoDate}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    return false;
+  }
+
+  return parsed.getUTCDay() === 0;
+};
+
 // validateSchedulePeriodInput est une fonction qui valide les paramètres de période d'import du planning, 
 // en s'assurant que les dates sont au format ISO, que weekStart est un lundi, que weekEnd est un lundi ultérieur à weekStart, 
 // et que la période couvre un nombre entier de semaines.
@@ -354,9 +413,9 @@ const validateSchedulePeriodInput = (period?: SchedulePeriodInput): SchedulePeri
   }
 
   // Un EDT doit toujours couvrir au moins une semaine complète, pour éviter les cas où des cours seraient perdus faute de période suffisamment longue pour les accueillir.
-  if (!isMonday(period.weekStart) || !isMonday(period.weekEnd) || period.weekStart >= period.weekEnd) {
+  if (!isMonday(period.weekStart) || !isSunday(period.weekEnd) || period.weekStart >= period.weekEnd) {
     throw new ImportModuleError(
-      `Impossible de laisser une semaine sans EDT entre ${period.weekStart} et ${period.weekEnd}`,
+      `Impossible ! Les emplois du temps doivent couvrir des semaines complètes du lundi au dimanche entre ${period.weekStart} et ${period.weekEnd}`,
       400,
       'IMPORT_INVALID_PERIOD_RANGE'
     );
@@ -365,10 +424,14 @@ const validateSchedulePeriodInput = (period?: SchedulePeriodInput): SchedulePeri
   const start = new Date(`${period.weekStart}T00:00:00.000Z`);
   const end = new Date(`${period.weekEnd}T00:00:00.000Z`);
   const diffMs = end.getTime() - start.getTime();
-  // La période doit être un multiple de 7 jours
-  if (diffMs % (7 * 24 * 60 * 60 * 1000) !== 0) {
+  // La période couvre des semaines du lundi au dimanche inclus :
+  // on ajoute 1 jour (inclusif sur weekEnd) avant de vérifier le multiple de 7 jours
+  const MS_PER_DAY = 24 * 60 * 60 * 1000;
+  const MS_PER_WEEK = 7 * MS_PER_DAY;
+  const inclusiveMs = diffMs + MS_PER_DAY;
+  if (inclusiveMs % MS_PER_WEEK !== 0) {
     throw new ImportModuleError(
-      `Impossible de laisser une semaine sans EDT entre ${period.weekStart} et ${period.weekEnd}`,
+      `Impossible ! Les emplois du temps doivent couvrir des semaines complètes du lundi au dimanche entre ${period.weekStart} et ${period.weekEnd}`,
       400,
       'IMPORT_INVALID_PERIOD_RANGE'
     );
@@ -411,7 +474,7 @@ const buildTeacherIdentityKey = (params: {
   if (params.matricule) {
     return `matricule::${normalizeKey(params.matricule)}`;
   }
-  return `name::${normalizeKey(`${params.firstName} ${params.lastName}`)}`;
+  return `name::${normalizeHumanKey(`${params.firstName} ${params.lastName}`)}`;
 };
 
 // ---------------------------------------------------------------------------
@@ -425,7 +488,7 @@ const resolveTeacherUsername = (
   existingByName: Map<string, string[]>,
   knownUsernames: string[]
 ): string | null => {
-  const byName = existingByName.get(normalizeKey(params.fullName));
+  const byName = existingByName.get(normalizeHumanKey(params.fullName));
   if (byName && byName.length > 1) {
     return null;
   }
@@ -859,7 +922,7 @@ export class ImportService {
 
     const directory = await this.repository.listTeacherDirectory(db);
     const existingTeachers = await this.repository.listExistingTeachers(db);
-    const existingByName = new Map(existingTeachers.map((item) => [normalizeKey(item.name), item]));
+    const existingByName = new Map(existingTeachers.map((item) => [normalizeHumanKey(item.name), item]));
     const existingByMatricule = new Map(
       existingTeachers
         .filter((item) => item.matricule)
@@ -871,7 +934,7 @@ export class ImportService {
     const existingUsernames = directory.map((item) => item.username);
     const byName = new Map<string, string[]>();
     for (const item of directory) {
-      const key = normalizeKey(item.name);
+      const key = normalizeHumanKey(item.name);
       const current = byName.get(key) ?? [];
       current.push(item.username);
       byName.set(key, current);
@@ -1042,7 +1105,7 @@ export class ImportService {
       const teacherIdentity = buildTeacherIdentityKey({ matricule: matricule || null, firstName, lastName });
       parsedTeacherIdentitySet.add(teacherIdentity);
 
-      const existing = existingByMatriculeMatch ?? existingByName.get(normalizeKey(fullName));
+      const existing = existingByMatriculeMatch ?? existingByName.get(normalizeHumanKey(fullName));
       if (!existing) {
         toAdd.push({ key: teacherIdentity, displayName: fullName });
         return;
@@ -1165,9 +1228,15 @@ export class ImportService {
         { id: item.id, startTime: item.start_time, endTime: item.end_time },
       ])
     );
+    const slotsByTime = new Map(
+      timeSlots.map((item) => [
+        buildTimeSlotLookupKey(item.start_time, item.end_time),
+        { id: item.id, startTime: item.start_time, endTime: item.end_time },
+      ])
+    );
     const teachersByName = new Map<string, string[]>();
     for (const teacher of teacherDirectory) {
-      const key = normalizeKey(teacher.name);
+      const key = normalizeHumanKey(teacher.name);
       const list = teachersByName.get(key) ?? [];
       list.push(teacher.teacher_id);
       teachersByName.set(key, list);
@@ -1186,6 +1255,7 @@ export class ImportService {
       const subject = canonicalizeSubject(normalizeCell(sheetRow.values['Matière*']), subjectCatalog);
       const day = normalizeKey(sheetRow.values['Jour*']);
       const slotLabel = normalizeCell(sheetRow.values['Créneau*']);
+      const parsedSlot = slotLabel ? parseTimeSlotLabel(slotLabel) : null;
       const roomName = normalizeCell(sheetRow.values['Salle']);
       const roomBuilding = normalizeCell(sheetRow.values['Bâtiment salle']) || null;
       const roomCapacityRaw = normalizeCell(sheetRow.values['Capacité salle']);
@@ -1211,7 +1281,7 @@ export class ImportService {
         errors.push(makeError({ row: line, column: 'Nom professeur*', message: 'Professeur requis' }));
       }
 
-      const teacherMatches = teachersByName.get(normalizeKey(teacherName)) ?? [];
+      const teacherMatches = teachersByName.get(normalizeHumanKey(teacherName)) ?? [];
       if (teacherName && teacherMatches.length === 0) {
         errors.push(
           makeError({
@@ -1262,12 +1332,21 @@ export class ImportService {
 
       if (!slotLabel) {
         errors.push(makeError({ row: line, column: 'Créneau*', message: 'Créneau requis' }));
+      } else if (!slotsByLabel.has(normalizeKey(slotLabel)) && parsedSlot) {
+        const timeKey = buildTimeSlotLookupKey(parsedSlot.startTime, parsedSlot.endTime);
+        const knownSlot = slotsByTime.get(timeKey) ?? {
+          id: '',
+          startTime: parsedSlot.startTime,
+          endTime: parsedSlot.endTime,
+        };
+        slotsByTime.set(timeKey, knownSlot);
+        slotsByLabel.set(normalizeKey(slotLabel), knownSlot);
       } else if (!slotsByLabel.has(normalizeKey(slotLabel))) {
         errors.push(
           makeError({
             row: line,
             column: 'Créneau*',
-            message: 'Créneau introuvable en base',
+            message: 'Format de créneau invalide (ex: 07:30 - 09:00 ou 7h30 - 9h00)',
             value: slotLabel,
           })
         );
@@ -1284,30 +1363,43 @@ export class ImportService {
         );
       }
 
+      let shouldSkipRow = false;
+      let startDate: string | null = null;
+
       if (resolvedPeriodBounds && day in DAY_MAP && slotLabel) {
-        const slotInfo = slotsByLabel.get(normalizeKey(slotLabel));
+        const slotInfo =
+          slotsByLabel.get(normalizeKey(slotLabel)) ??
+          (parsedSlot
+            ? slotsByTime.get(buildTimeSlotLookupKey(parsedSlot.startTime, parsedSlot.endTime))
+            : undefined);
         if (slotInfo) {
-          const hasFuture = hasFutureOccurrenceInPeriod({
+          const occurrenceState = getScheduleOccurrenceState({
             validFrom: resolvedPeriodBounds.validFrom,
             validTo: resolvedPeriodBounds.validTo,
             dayOfWeek: DAY_MAP[day],
             startTime: slotInfo.startTime,
           });
-          if (!hasFuture) {
+          startDate = occurrenceState.firstFutureDate;
+          if (occurrenceState.hasPast) {
             errors.push(
               makeError({
                 row: line,
                 column: 'Jour*',
-                message: "Impossible d'ajouter un créneau sur une date/heure passée",
+                message:
+                  "Créneau sur une date/heure passée: il ne sera pas pris en compte lors de l'import.",
                 value: `${sheetRow.values['Jour*']} ${slotLabel}`,
+                severity: 'warning',
               })
             );
+          }
+          if (!occurrenceState.firstFutureDate) {
+            shouldSkipRow = true;
           }
         }
       }
 
-      const hasRowError = errors.some((error) => error.row === line);
-      if (hasRowError) {
+      const hasRowError = errors.some((error) => error.row === line && isBlockingImportIssue(error));
+      if (hasRowError || shouldSkipRow) {
         return;
       }
 
@@ -1320,6 +1412,7 @@ export class ImportService {
         roomName,
         roomBuilding,
         roomCapacity,
+        startDate,
       });
       subjectCatalog.add(subject);
     });
@@ -1351,7 +1444,7 @@ export class ImportService {
   }
 
   private ensureNoValidationErrors(report: DryRunReport): void {
-    if (report.errors.length === 0) {
+    if (!report.errors.some(isBlockingImportIssue)) {
       return;
     }
 
@@ -1578,7 +1671,18 @@ export class ImportService {
     }
 
     const classIdByName = new Map(classes.map((item) => [normalizeKey(item.name), item.id]));
-    const slotIdByLabel = new Map(timeSlots.map((item) => [normalizeKey(item.label), item.id]));
+    const slotByLabel = new Map(
+      timeSlots.map((item) => [
+        normalizeKey(item.label),
+        { id: item.id, startTime: item.start_time, endTime: item.end_time },
+      ])
+    );
+    const slotByTime = new Map(
+      timeSlots.map((item) => [
+        buildTimeSlotLookupKey(item.start_time, item.end_time),
+        { id: item.id, startTime: item.start_time, endTime: item.end_time },
+      ])
+    );
     const roomIdByName = new Map(rooms.map((item) => [normalizeKey(item.name), item.id]));
 
     // resolveRoomId est une fonction utilitaire qui prend un nom de salle et tente de trouver l'ID correspondant en base. Si la salle n'existe pas, 
@@ -1617,9 +1721,43 @@ export class ImportService {
       throw new ImportModuleError('Impossible de créer la salle automatiquement', 500, 'IMPORT_ROOM_CREATE_FAILED');
     };
 
+    const resolveTimeSlotId = async (
+      executor: QueryExecutor,
+      row: ScheduleImportRow
+    ): Promise<string | null> => {
+      const labelKey = normalizeKey(row.slotLabel);
+      const knownByLabel = slotByLabel.get(labelKey);
+      if (knownByLabel) {
+        return knownByLabel.id;
+      }
+
+      const parsedSlot = parseTimeSlotLabel(row.slotLabel);
+      if (!parsedSlot) {
+        return null;
+      }
+
+      const timeKey = buildTimeSlotLookupKey(parsedSlot.startTime, parsedSlot.endTime);
+      const knownByTime = slotByTime.get(timeKey);
+      if (knownByTime) {
+        slotByLabel.set(labelKey, knownByTime);
+        return knownByTime.id;
+      }
+
+      const created = await this.repository.findOrCreateTimeSlot(executor, parsedSlot);
+      const slotInfo = {
+        id: created.id,
+        startTime: created.start_time,
+        endTime: created.end_time,
+      };
+      slotByLabel.set(labelKey, slotInfo);
+      slotByLabel.set(normalizeKey(created.label), slotInfo);
+      slotByTime.set(buildTimeSlotLookupKey(created.start_time, created.end_time), slotInfo);
+      return created.id;
+    };
+
     const teacherByName = new Map<string, string>();
     for (const teacher of teacherDirectory) {
-      teacherByName.set(normalizeKey(teacher.name), teacher.teacher_id);
+      teacherByName.set(normalizeHumanKey(teacher.name), teacher.teacher_id);
     }
 
     // run est la fonction qui contient la logique principale d'import du planning. Elle itère sur les lignes validées du fichier Excel,
@@ -1632,8 +1770,8 @@ export class ImportService {
       // on parcourt les lignes validées du planning, et pour chacune d'elles, on tente de résoudre les références à la classe, l'enseignant, le créneau horaire et la salle.
       for (const row of validation.rows) {
         const classId = classIdByName.get(normalizeKey(row.className));
-        const teacherId = teacherByName.get(normalizeKey(row.teacherName));
-        const timeSlotId = slotIdByLabel.get(normalizeKey(row.slotLabel));
+        const teacherId = teacherByName.get(normalizeHumanKey(row.teacherName));
+        const timeSlotId = await resolveTimeSlotId(executor, row);
         const roomId = await resolveRoomId(executor, row);
 
         if (!classId || !teacherId || !timeSlotId || !roomId) {
@@ -1652,6 +1790,7 @@ export class ImportService {
           classId,
           timeSlotId,
           roomId,
+          startDate: row.startDate,
         });
 
         upsertedScheduleIds.push(scheduleId);

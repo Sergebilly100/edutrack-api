@@ -1,26 +1,55 @@
 services:
+  ivoiredu-api:
+    build: .
+    container_name: ivoiredu-api
+    restart: unless-stopped
+    env_file:
+      - ./config.env.local
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - ivoiredu-network
+
   postgres:
     image: postgres:16
-    container_name: edutrack-postgres
+    container_name: ivoiredu-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: edutrack
-      POSTGRES_USER: edutrack
-      POSTGRES_PASSWORD: edutrack
+      POSTGRES_DB: ivoiredu
+      POSTGRES_USER: ivoiredu
+      POSTGRES_PASSWORD: ivoiredu
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ivoiredu-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ivoiredu -d ivoiredu"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
-    container_name: edutrack-redis
+    container_name: ivoiredu-redis
     restart: unless-stopped
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    networks:
+      - ivoiredu-network
 
 volumes:
   postgres_data:
   redis_data:
+
+networks:
+  ivoiredu-network:
+    driver: bridge

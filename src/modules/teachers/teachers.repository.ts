@@ -5,10 +5,12 @@ import { logger } from '../../shared/observability/logger.js';
 import { toNumber } from '../../shared/utils/numbers.js';
 import { generateUsername } from '../../shared/utils/username.js';
 import { generateInitialPassword } from '../../shared/utils/password-generator.js';
+import { normalizeSubjectKey } from '../../shared/utils/subject-normalization.js';
 
 import type {
   CreateTeacherInput,
   TeacherAttendanceStatsQuery,
+  TeacherTeachingOptionsQuery,
   TeachersListQuery,
   UpdateTeacherInput,
 } from './teachers.types.js';
@@ -53,6 +55,12 @@ type TeacherRow = {
 type TotalRow = { total: string | number };
 type IdRow = { id: string };
 type CountRow = { count: string | number };
+type SubjectCatalogRow = { subject: string };
+type TeachingOptionRow = {
+  subject: string;
+  class_id: string;
+  class_name: string;
+};
 type TeacherAttendanceStatsRow = {
   teacher_id: string;
   teacher_name: string;
@@ -84,6 +92,23 @@ const toTotal = (row: TotalRow | undefined): number => {
   const value = typeof row.total === 'string' ? Number(row.total) : row.total;
   return Number.isFinite(value) ? value : 0;
 };
+
+const normalizeSubjectSql = (value: ReturnType<typeof sql>): ReturnType<typeof sql> => sql`
+  btrim(
+    lower(
+      regexp_replace(
+        translate(
+          ${value}::text,
+          'àáâäãåçèéêëìíîïñòóôöõùúûüýÿÀÁÂÄÃÅÇÈÉÊËÌÍÎÏÑÒÓÔÖÕÙÚÛÜÝŸ',
+          'aaaaaaceeeeiiiinooooouuuuyyAAAAAACEEEEIIIINOOOOOUUUUYY'
+        ),
+        '[^a-z0-9]+',
+        ' ',
+        'g'
+      )
+    )
+  )
+`;
 
 
 const buildWhere = (query: TeachersListQuery): ReturnType<typeof sql>[] => {
@@ -167,6 +192,69 @@ export class TeachersRepository {
     `);
     const [row] = getRows<CountRow>(result);
     return toTotal({ total: row?.count ?? 0 });
+  }
+
+  async listSubjectCatalog(): Promise<string[]> {
+    const result = await this.db.execute(sql`
+      SELECT DISTINCT subject
+      FROM (
+        SELECT unnest(COALESCE(subjects, ARRAY[]::text[])) AS subject
+        FROM teachers
+        UNION
+        SELECT subject
+        FROM schedules
+      ) catalog
+      WHERE btrim(subject) <> ''
+      ORDER BY subject ASC
+    `);
+
+    return getRows<SubjectCatalogRow>(result).map((row) => row.subject);
+  }
+
+  async listTeachingOptions(params: TeacherTeachingOptionsQuery): Promise<{
+    subjects: string[];
+    classes: Array<{ id: string; name: string }>;
+  }> {
+    const teacherFilter = params.teacher_id
+      ? sql`AND s.teacher_id = ${params.teacher_id}::uuid`
+      : sql``;
+
+    const result = await this.db.execute(sql`
+      SELECT DISTINCT
+        s.subject,
+        c.id::text AS class_id,
+        c.name AS class_name
+      FROM schedules s
+      INNER JOIN schedule_periods sp ON sp.id = s.schedule_period_id
+      INNER JOIN classes c ON c.id = s.class_id
+      WHERE s.is_active = true
+        AND sp.is_active = true
+        AND sp.valid_from <= ${params.to}::date
+        AND sp.valid_to >= ${params.from}::date
+        AND (s.start_date IS NULL OR s.start_date <= ${params.to}::date)
+        AND (s.end_date IS NULL OR s.end_date > ${params.from}::date)
+        ${teacherFilter}
+      ORDER BY s.subject ASC, c.name ASC
+    `);
+
+    const subjectsByKey = new Map<string, string>();
+    const classesById = new Map<string, string>();
+
+    for (const row of getRows<TeachingOptionRow>(result)) {
+      const subject = row.subject.trim();
+      const subjectKey = normalizeSubjectKey(subject);
+      if (subject && !subjectsByKey.has(subjectKey)) {
+        subjectsByKey.set(subjectKey, subject);
+      }
+      classesById.set(row.class_id, row.class_name);
+    }
+
+    return {
+      subjects: Array.from(subjectsByKey.values()).sort((a, b) => a.localeCompare(b, 'fr')),
+      classes: Array.from(classesById.entries())
+        .map(([id, name]) => ({ id, name }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'fr')),
+    };
   }
 
   async listTeachers(query: TeachersListQuery): Promise<{ rows: TeacherRow[]; total: number }> {
@@ -498,6 +586,13 @@ export class TeachersRepository {
     if (!teacher) return null;
 
     const result = await this.db.execute(sql`
+      WITH feature_flags AS (
+        SELECT COALESCE(f.use_real_hours, false) AS use_real_hours
+        FROM public.tenants tenant_ctx
+        LEFT JOIN public.school_sms_features f ON f.tenant_id = tenant_ctx.id
+        WHERE tenant_ctx.schema_name = current_schema()
+        LIMIT 1
+      )
       SELECT
         COALESCE(
           SUM(CASE WHEN at.status IN ('present', 'late', 'excused') THEN 1 ELSE 0 END),
@@ -507,8 +602,22 @@ export class TeachersRepository {
         COALESCE(
           SUM(
             CASE
-              WHEN at.status IN ('present', 'late', 'excused')
-              THEN EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0
+              WHEN at.status IN ('present', 'late', 'excused') THEN
+                CASE
+                  WHEN at.validation_status = 'approved' THEN COALESCE(at.validated_hours, 0)
+                  WHEN at.validation_status IN ('pending', 'rejected') THEN 0
+                  WHEN at.validated_hours IS NOT NULL THEN at.validated_hours
+                  WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                    AND at.actual_minutes IS NOT NULL
+                    AND at.actual_minutes >= 0
+                    AND at.actual_minutes <= 1440
+                    THEN at.actual_minutes / 60.0
+                  WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                    AND at.actual_minutes IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0
+                  WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false) THEN 0
+                  ELSE EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0
+                END
               ELSE 0
             END
           ),
@@ -518,7 +627,23 @@ export class TeachersRepository {
           SUM(
             CASE
               WHEN at.status IN ('present', 'late', 'excused') THEN
-                (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0)
+                (
+                  CASE
+                    WHEN at.validation_status = 'approved' THEN COALESCE(at.validated_hours, 0)
+                    WHEN at.validation_status IN ('pending', 'rejected') THEN 0
+                    WHEN at.validated_hours IS NOT NULL THEN at.validated_hours
+                    WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                      AND at.actual_minutes IS NOT NULL
+                      AND at.actual_minutes >= 0
+                      AND at.actual_minutes <= 1440
+                      THEN at.actual_minutes / 60.0
+                    WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                      AND at.actual_minutes IS NOT NULL
+                      THEN EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0
+                    WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false) THEN 0
+                    ELSE EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0
+                  END
+                )
                 * COALESCE(t.hourly_rate, 0)
               ELSE 0
             END
@@ -532,6 +657,10 @@ export class TeachersRepository {
       WHERE at.teacher_id = ${teacherId}
         AND at.date >= ${dateFrom}
         AND at.date <= ${dateTo}
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_exceptions se
+          WHERE se.schedule_id = s.id AND se.exception_date = at.date
+        )
     `);
 
     const row = getRows<{
@@ -571,23 +700,36 @@ export class TeachersRepository {
       hours_done: number;
     }>
   > {
-    const subjectFilter = params.subject ? sql`AND s.subject = ${params.subject}` : sql``;
+    const subjectFilter = params.subject
+      ? sql`AND ${normalizeSubjectSql(sql`s.subject`)} = ${normalizeSubjectSql(sql`${params.subject}`)}`
+      : sql``;
     const classFilter = params.class_id ? sql`AND s.class_id = ${params.class_id}::uuid` : sql``;
     const teacherFilter = params.teacher_id ? sql`AND s.teacher_id = ${params.teacher_id}::uuid` : sql``;
     const statusFilter = params.status_filter ?? null;
 
     const result = await this.db.execute(sql`
-      WITH active_period AS (
-        SELECT id
-        FROM schedule_periods
-        WHERE is_active = true
-          AND valid_from <= ${params.to}::date
-          AND valid_to >= ${params.from}::date
-        ORDER BY created_at DESC
+      WITH feature_flags AS (
+        SELECT COALESCE(f.use_real_hours, false) AS use_real_hours
+        FROM public.tenants tenant_ctx
+        LEFT JOIN public.school_sms_features f ON f.tenant_id = tenant_ctx.id
+        WHERE tenant_ctx.schema_name = current_schema()
         LIMIT 1
       ),
       dates AS (
         SELECT generate_series(${params.from}::date, ${params.to}::date, INTERVAL '1 day')::date AS date
+      ),
+      active_period_by_day AS (
+        SELECT d.date, sp.id AS period_id
+        FROM dates d
+        LEFT JOIN LATERAL (
+          SELECT id
+          FROM schedule_periods
+          WHERE is_active = true
+            AND valid_from <= d.date
+            AND valid_to >= d.date
+          ORDER BY created_at DESC
+          LIMIT 1
+        ) sp ON true
       ),
       scheduled AS (
         SELECT
@@ -601,15 +743,18 @@ export class TeachersRepository {
           s.subject,
           s.class_id,
           ts.end_time AS slot_end_time,
-          EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600 AS slot_hours
-        FROM dates d
-        INNER JOIN active_period ap ON true
+          (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0)::numeric AS slot_hours
+        FROM active_period_by_day d
         INNER JOIN schedules s
-          ON s.schedule_period_id = ap.id
+          ON s.schedule_period_id = d.period_id
           AND s.day_of_week = EXTRACT(ISODOW FROM d.date)::int
           AND s.is_active = true
           AND (s.start_date IS NULL OR s.start_date <= d.date)
           AND (s.end_date IS NULL OR s.end_date > d.date)
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = d.date
+          )
         INNER JOIN teachers t ON t.id = s.teacher_id
         INNER JOIN users u ON u.id = t.user_id
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id
@@ -617,6 +762,47 @@ export class TeachersRepository {
         ${subjectFilter}
         ${classFilter}
         ${teacherFilter}
+      ),
+      scored AS (
+        SELECT
+          sc.*,
+          at.id AS attendance_id,
+          at.status,
+          at.validation_status,
+          at.room_mismatch,
+          at.checked_in_at,
+          rollcall.has_rollcall,
+          CASE
+            WHEN at.status IN ('present', 'late', 'excused') THEN
+              CASE
+                WHEN at.validation_status = 'approved' THEN COALESCE(at.validated_hours, 0)
+                WHEN at.validation_status IN ('pending', 'rejected') THEN 0
+                WHEN at.validated_hours IS NOT NULL THEN at.validated_hours
+                WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                  AND at.actual_minutes IS NOT NULL
+                  AND at.actual_minutes >= 0
+                  AND at.actual_minutes <= 1440
+                  THEN at.actual_minutes / 60.0
+                WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                  AND at.actual_minutes IS NOT NULL
+                  THEN sc.slot_hours
+                WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false) THEN 0
+                ELSE sc.slot_hours
+              END
+            ELSE 0
+          END::numeric AS hours_done_for_slot,
+          ((sc.date::timestamp + sc.slot_end_time)::timestamp <= (NOW() AT TIME ZONE 'Africa/Abidjan')) AS slot_has_ended
+        FROM scheduled sc
+        LEFT JOIN attendances_teacher at
+          ON at.schedule_id = sc.schedule_id
+          AND at.date = sc.date
+        LEFT JOIN LATERAL (
+          SELECT true AS has_rollcall
+          FROM attendances_student ast
+          WHERE ast.schedule_id = sc.schedule_id
+            AND ast.date = sc.date
+          LIMIT 1
+        ) rollcall ON true
       )
       SELECT
         sc.teacher_id::text AS teacher_id,
@@ -625,77 +811,73 @@ export class TeachersRepository {
         sc.teacher_type::text AS teacher_type,
         sc.subjects,
         COUNT(sc.schedule_id)::int AS total_scheduled,
-        COUNT(CASE WHEN at.status IN ('present', 'late', 'excused') THEN 1 END)::int AS present_count,
+        COUNT(CASE WHEN sc.status IN ('present', 'late', 'excused') THEN 1 END)::int AS present_count,
         COUNT(
           CASE
-            WHEN at.status = 'absent' THEN 1
-            WHEN at.id IS NULL
-              AND ((sc.date::timestamp + sc.slot_end_time)::timestamp <= (NOW() AT TIME ZONE 'Africa/Abidjan'))
+            WHEN sc.status = 'absent' THEN 1
+            WHEN sc.attendance_id IS NULL AND sc.slot_has_ended
+            THEN 1
+            WHEN sc.validation_status IN ('approved', 'rejected')
+              AND sc.slot_has_ended
+              AND sc.hours_done_for_slot < sc.slot_hours
             THEN 1
           END
         )::int AS absent_count,
-        COUNT(CASE WHEN at.status = 'late' THEN 1 END)::int AS late_count,
-        COUNT(CASE WHEN at.room_mismatch = true THEN 1 END)::int AS room_mismatch_count,
+        COUNT(CASE WHEN sc.status = 'late' THEN 1 END)::int AS late_count,
+        COUNT(CASE WHEN sc.room_mismatch = true THEN 1 END)::int AS room_mismatch_count,
         COUNT(
           CASE
-            WHEN rollcall.has_rollcall = true
-              AND at.status IN ('present', 'late', 'excused')
+            WHEN sc.has_rollcall = true
+              AND sc.status IN ('present', 'late', 'excused')
             THEN 1
           END
         )::int AS rollcall_done_count,
         COUNT(
           CASE
-            WHEN rollcall.has_rollcall IS DISTINCT FROM true
-              AND at.status IN ('present', 'late', 'excused')
-              AND at.checked_in_at IS NOT NULL
+            WHEN sc.has_rollcall IS DISTINCT FROM true
+              AND sc.status IN ('present', 'late', 'excused')
+              AND sc.checked_in_at IS NOT NULL
             THEN 1
           END
         )::int AS rollcall_missing_count,
         ROUND(
-          100.0 * COUNT(CASE WHEN at.status IN ('present', 'late', 'excused') THEN 1 END)::numeric
+          100.0 * COUNT(CASE WHEN sc.status IN ('present', 'late', 'excused') THEN 1 END)::numeric
           / NULLIF(COUNT(sc.schedule_id), 0),
           2
         )::float AS attendance_rate,
         ROUND(SUM(sc.slot_hours)::numeric, 2)::float AS hours_scheduled,
         ROUND(
-          SUM(CASE WHEN at.status IN ('present', 'late', 'excused') THEN sc.slot_hours ELSE 0 END)::numeric,
+          SUM(sc.hours_done_for_slot)::numeric,
           2
         )::float AS hours_done
-      FROM scheduled sc
-      LEFT JOIN attendances_teacher at
-        ON at.schedule_id = sc.schedule_id
-        AND at.date = sc.date
-      LEFT JOIN LATERAL (
-        SELECT true AS has_rollcall
-        FROM attendances_student ast
-        WHERE ast.schedule_id = sc.schedule_id
-          AND ast.date = sc.date
-        LIMIT 1
-      ) rollcall ON true
+      FROM scored sc
       GROUP BY sc.teacher_id, sc.teacher_name, sc.teacher_matricule, sc.teacher_type, sc.subjects
       HAVING
         CASE
           WHEN ${statusFilter} = 'absent'
             THEN COUNT(
               CASE
-                WHEN at.status = 'absent' THEN 1
-                WHEN at.id IS NULL
-                  AND ((sc.date::timestamp + sc.slot_end_time)::timestamp <= (NOW() AT TIME ZONE 'Africa/Abidjan'))
+                WHEN sc.status = 'absent' THEN 1
+                WHEN sc.attendance_id IS NULL AND sc.slot_has_ended
+                THEN 1
+                WHEN sc.validation_status IN ('approved', 'rejected')
+                  AND sc.slot_has_ended
+                  AND sc.hours_done_for_slot < sc.slot_hours
                 THEN 1
               END
             ) > 0
           WHEN ${statusFilter} = 'room_mismatch'
-            THEN COUNT(CASE WHEN at.room_mismatch = true THEN 1 END) > 0
+            THEN COUNT(CASE WHEN sc.room_mismatch = true THEN 1 END) > 0
           WHEN ${statusFilter} = 'rollcall_missing'
             THEN COUNT(
               CASE
-                WHEN rollcall.has_rollcall IS DISTINCT FROM true
-                  AND at.checked_in_at IS NOT NULL
+                WHEN sc.has_rollcall IS DISTINCT FROM true
+                  AND sc.checked_in_at IS NOT NULL
                 THEN 1
               END
             ) > 0
           WHEN ${statusFilter} = 'late'
-            THEN COUNT(CASE WHEN at.status = 'late' THEN 1 END) > 0
+            THEN COUNT(CASE WHEN sc.status = 'late' THEN 1 END) > 0
           ELSE true
         END
       ORDER BY sc.teacher_name ASC

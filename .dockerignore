@@ -1,0 +1,47 @@
+# Builds locaux
+client/dist
+dist
+
+# Logs et données locales
+logs
+data
+exports
+uploads
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Git
+.git
+.gitignore
+
+# Docker & CI/CD
+Dockerfile
+docker-compose.yaml
+.dockerignore
+.gitlab-ci.yml
+.github
+
+# Environnement et Secrets (Sécurité ++)
+config.env.*
+config.env
+.env*
+!.env.example
+
+# OS (Mac, Windows)
+.DS_Store
+Thumbs.db
+
+# IDE (VS Code, WebStorm)
+.vscode
+.idea
+*.swp
+*.swo
+
+# Documentation et tests (Optionnel mais recommandé pour le poids)
+README.md
+docs
+tests
+scripts/
+**/*.test.js
+**/*.spec.js

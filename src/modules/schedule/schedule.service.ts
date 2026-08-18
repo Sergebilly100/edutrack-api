@@ -204,7 +204,7 @@ export const getWeeklySchedulesForDate = async (
   const weekStart = formatDate(weekStartDate);
   const weekEnd = formatDate(weekEndDate);
 
-  const [period, teachers, classes, rooms, timeSlots] = await Promise.all([
+  const [period, teachers, classes, rooms, timeSlots] = await Promise.all([ // 
     findActiveSchedulePeriodByWeek(db, weekStart, weekEnd),
     listTeachersCatalog(db),
     listClassesCatalog(db),
@@ -212,7 +212,7 @@ export const getWeeklySchedulesForDate = async (
     listTimeSlotsCatalog(db),
   ]);
 
-  if (!period) {
+  if (!period) { // 
     return {
       date: isoDate,
       period: null,
@@ -223,7 +223,7 @@ export const getWeeklySchedulesForDate = async (
       timeSlots,
     };
   }
-
+  // 
   const schedules = await listSchedulesForPeriod(db, {
     periodId: period.id,
     date: isoDate,

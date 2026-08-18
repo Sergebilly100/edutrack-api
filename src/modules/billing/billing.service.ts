@@ -43,6 +43,7 @@ type DailyBreakdownRow = {
   start_time: string;
   end_time: string;
   attendance_status: string | null;
+  validation_status: 'not_required' | 'pending' | 'approved' | 'rejected' | null;
   checked_in_at: string | null;
   room_scan_end_at: string | null;
   late_minutes: number | null;
@@ -80,6 +81,7 @@ const buildDailyRows = (daily: DailyBreakdownRow[]) => {
       startTime: row.start_time,
       endTime: row.end_time,
       attendanceStatus,
+      validationStatus: row.validation_status,
       checkedInAt: row.checked_in_at,
       checkedOutAt: row.room_scan_end_at,
       lateMinutes: row.late_minutes,
@@ -105,6 +107,10 @@ const computeTeacherFinancials = (
       acc.hoursDone += row.hoursDone;
       if (row.attendanceStatus === 'absent') {
         acc.absenceHours += row.hoursPlanned;
+      } else if (row.validationStatus === 'rejected') {
+        acc.absenceHours += row.hoursPlanned;
+      } else if (row.validationStatus === 'approved') {
+        acc.absenceHours += Math.max(0, row.hoursPlanned - row.hoursDone);
       }
       // Heures encore à venir = heures PLANIFIÉES des séances pas encore passées.
       // Une séance déjà passée (present/late/excused/absent) ne laisse aucune
@@ -227,6 +233,9 @@ export class BillingService {
       throw new BillingModuleError('Teacher not found', 404, 'TEACHER_NOT_FOUND');
     }
 
+    // le détail jour par jour des heures planifiées et effectuées, avec les statuts de pointage (présent/absent/late/excused/not_marked) pour chaque cours du mois, utilisé pour afficher la timeline de pointage dans le détail du salaire du prof. 
+    // Les heures planifiées et effectuées sont calculées à partir de l'emploi du temps (et non pas à partir des données d'assiduité) : si un cours de 2h est planifié mais que le prof a été absent, on affiche quand même 2h planifiées et 0h effectuées, avec un statut "absent" (et pas 0h planifiées et 0h effectuées) 
+    // - c'est la règle qui prévaut pour le calcul du salaire : c'est parce qu'il avait 2h de cours planifiées qu'on considère qu'il doit être payé pour ces 2h, même s'il n'a pas fait le travail (sauf si le statut de pointage est "absent" ou "excused", auquel cas les heures ne sont pas payées).
     const daily = await this.repository.listTeacherDailyBreakdown(teacherId, monthStart, monthEnd);
     const rows = buildDailyRows(daily as DailyBreakdownRow[]);
     const totals = rows.reduce(

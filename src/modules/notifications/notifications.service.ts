@@ -47,6 +47,7 @@ import {
 } from './notifications.repository.js';
 import { SubscriptionsRepository } from '../subscriptions/subscriptions.repository.js';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
+import { formatDecimalHours } from '../../shared/utils/time.js';
 
 type NotificationsServiceDeps = {
   withTenantSchema: <T>(
@@ -92,13 +93,13 @@ const SMS_TEMPLATE_STUDENT_ABSENT_TYPE = 'student_absent_parent';
 const SMS_TEMPLATE_PAYMENT_REMINDER_TYPE = 'payment_reminder';
 
 const DEFAULT_STUDENT_ABSENT_TEMPLATE =
-  'IvoirEdu: {studentFirstName} absent(e) en {subject} le {date}. Contact école: {schoolPhone}';
+  'IvoirEdu: {studentFirstName} absent(e) en {subject} le {date}. Connectez-vous à votre espace parent pour plus d\'informations. Contact école: {schoolPhone}';
 const DEFAULT_PAYMENT_REMINDER_TEMPLATE =
   'IvoirEdu: relance paiement {schoolName}. Échéance {dueDate}, période {periodLabel}, reste {remainingAmountFcfa} FCFA.';
 const DEFAULT_STUDENT_ABSENT_EMAIL_SUBJECT = 'Absence {studentLabel} - IvoirEdu';
 const DEFAULT_STUDENT_LABEL = 'élève';
 const DEFAULT_STUDENT_ABSENT_EMAIL_TEMPLATE =
-  'Votre enfant {studentFirstName} est absent(e) en {subject} le {date}. Contact école: {schoolPhone}.';
+  'Votre enfant {studentFirstName} est absent(e) en {subject} le {date}. Connectez-vous à votre espace parent pour plus d\'informations. \n Contact école: {schoolPhone}.';
 
 const loadSmsPlatformConfig = async (): Promise<SmsPlatformRuntimeConfig> => {
   const now = Date.now();
@@ -1010,7 +1011,7 @@ export class NotificationsService {
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
       const validatedHoursLabel =
         payload.validatedHours > 0
-          ? `${payload.validatedHours.toFixed(2).replace('.00', '')}h validées`
+          ? `${formatDecimalHours(payload.validatedHours)} validées`
           : 'heures validées';
 
       // SMS attendance_approved désactivé (décision produit 2026-05) - canal email + in-app uniquement.
@@ -1172,7 +1173,7 @@ export class NotificationsService {
       if (payload.teacherEmail) {
         const emailText = isSanction
           ? `Votre cours ${payload.courseName} du ${payload.date} n'a pas pu être comptabilisé (scan de fin manquant). Motif : ${payload.reason}. Veuillez vous présenter à l'administration.`
-          : `Vous avez un avertissement pour absence de scan de fin : ${payload.courseName} du ${payload.date}. Motif : ${payload.reason}. Votre salaire n'est pas impacté.`;
+          : `Vous avez un avertissement pour absence de scan de fin : ${payload.courseName} du ${payload.date}. Motif : ${payload.reason}. Rendez-vous à l'administration de l'établissement pour plus d'informations.`;
         const emailQueueRef = buildQueueRef(payload.schemaName, isSanction ? 'scan_end_sanction' : 'scan_end_warning');
         await this.deps.repository.insertNotificationLog(tenantDb, {
           type: isSanction ? 'scan_end_sanction' : 'scan_end_warning',
@@ -1211,7 +1212,7 @@ export class NotificationsService {
     if (!payload.schemaName) return;
 
     // Message conservé pour le canal in-app (référencé par le UI prof) - pas d'envoi SMS.
-    void `[IvoirEdu] La sanction pour ${payload.courseName} du ${payload.date} a été annulée. Votre cours est de nouveau comptabilisé.`;
+    void `[IvoirEdu] La sanction pour ${payload.courseName} du ${payload.date} a été annulée. Votre cours est de nouveau comptabilisé. Rendez-vous à l'administration de l'établissement pour plus d'informations.`;
     const tasks: Array<Promise<void>> = [];
 
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
@@ -1244,7 +1245,7 @@ export class NotificationsService {
       // }
 
       if (payload.teacherEmail) {
-        const emailText = `La sanction appliquée pour ${payload.courseName} du ${payload.date} a été annulée. Motif de l'annulation : ${payload.cancelReason}. Votre cours est de nouveau comptabilisé dans votre salaire.`;
+        const emailText = `La sanction appliquée pour ${payload.courseName} du ${payload.date} a été annulée. Motif de l'annulation : ${payload.cancelReason}. Votre cours est de nouveau comptabilisé dans votre salaire. Rendez-vous à l'administration de l'établissement pour plus d'informations.`;
         const emailQueueRef = buildQueueRef(payload.schemaName, 'scan_end_sanction_cancelled');
         await this.deps.repository.insertNotificationLog(tenantDb, {
           type: 'scan_end_sanction_cancelled',

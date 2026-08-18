@@ -159,6 +159,7 @@ type StudentAbsenceDetailDbRow = {
   id: string;
   date: string;
   subject: string;
+  teacher_name: string | null;
   class_name: string;
   start_time: string;
   end_time: string;
@@ -254,6 +255,23 @@ const toNumber = (value: string | number | null | undefined): number => {
   }
   return 0;
 };
+
+const normalizeSubjectSql = (value: SQL): SQL => sql`
+  btrim(
+    lower(
+      regexp_replace(
+        translate(
+          ${value}::text,
+          'àáâäãåçèéêëìíîïñòóôöõùúûüýÿÀÁÂÄÃÅÇÈÉÊËÌÍÎÏÑÒÓÔÖÕÙÚÛÜÝŸ',
+          'aaaaaaceeeeiiiinooooouuuuyyAAAAAACEEEEIIIINOOOOOUUUUYY'
+        ),
+        '[^a-z0-9]+',
+        ' ',
+        'g'
+      )
+    )
+  )
+`;
 
 const toSmsStatus = (
   value: 'queued' | 'sent' | 'failed' | 'delivered' | null
@@ -381,6 +399,10 @@ export class StudentsRepository {
           AND sp.is_active = true
           AND sp.valid_from <= ${input.date}::date
           AND sp.valid_to >= ${input.date}::date
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = ${input.date}::date
+          )
         LIMIT 1
       ) AS has_access
     `);
@@ -581,6 +603,10 @@ export class StudentsRepository {
               AND n.recipient_phone IN (s.parent_phone, s.parent_phone_2)
               AND COALESCE(n.sent_at::date, n.created_at::date) = a.date::date
               AND (a.schedule_id IS NULL OR n.related_id = a.schedule_id)
+              AND NOT EXISTS (
+                SELECT 1 FROM schedule_exceptions se
+                WHERE se.schedule_id = s.id AND se.exception_date = a.date
+              )
             ORDER BY n.created_at DESC
             LIMIT 1
           ) sms_log ON true
@@ -887,6 +913,10 @@ export class StudentsRepository {
             AND n.related_id = a.schedule_id
             AND n.recipient_phone = s.parent_phone
             AND COALESCE(n.sent_at::date, n.created_at::date) = a.date::date
+            AND NOT EXISTS (
+              SELECT 1 FROM schedule_exceptions se
+              WHERE se.schedule_id = n.related_id AND se.exception_date = a.date
+            )
           ORDER BY n.created_at DESC
           LIMIT 1
         ) sms_log ON true
@@ -933,6 +963,10 @@ export class StudentsRepository {
           AND n.related_id = a.schedule_id
           AND n.recipient_phone = s.parent_phone
           AND COALESCE(n.sent_at::date, n.created_at::date) = a.date::date
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = n.related_id AND se.exception_date = a.date
+          )
         ORDER BY n.created_at DESC
         LIMIT 1
       ) sms_log ON true
@@ -975,33 +1009,42 @@ export class StudentsRepository {
     }
 
     const subjectScheduledFilter = query.subject
-      ? sql`AND s.subject = ${query.subject}`
+      ? sql`AND ${normalizeSubjectSql(sql`s.subject`)} = ${normalizeSubjectSql(sql`${query.subject}`)}`
       : sql``;
-    const subjectAbsenceFilter = query.subject ? sql`AND s.subject = ${query.subject}` : sql``;
+    const subjectAbsenceFilter = query.subject
+      ? sql`AND ${normalizeSubjectSql(sql`s.subject`)} = ${normalizeSubjectSql(sql`${query.subject}`)}`
+      : sql``;
 
     const result = await this.db.execute(sql`
-      WITH active_period AS (
-        SELECT id
-        FROM schedule_periods
-        WHERE is_active = true
-          AND valid_from <= ${query.to}::date
-          AND valid_to >= ${query.from}::date
-        ORDER BY created_at DESC
-        LIMIT 1
-      ),
-      dates AS (
+      WITH dates AS (
         SELECT generate_series(${query.from}::date, ${query.to}::date, INTERVAL '1 day')::date AS date
+      ),
+      active_period_by_day AS (
+        SELECT d.date, sp.id AS period_id
+        FROM dates d
+        LEFT JOIN LATERAL (
+          SELECT id
+          FROM schedule_periods
+          WHERE is_active = true
+            AND valid_from <= d.date
+            AND valid_to >= d.date
+          ORDER BY created_at DESC
+          LIMIT 1
+        ) sp ON true
       ),
       class_scheduled AS (
         SELECT s.class_id, COUNT(*)::int AS total
-        FROM dates d
-        INNER JOIN active_period ap ON true
+        FROM active_period_by_day d
         INNER JOIN schedules s
-          ON s.schedule_period_id = ap.id
+          ON s.schedule_period_id = d.period_id
          AND s.day_of_week = EXTRACT(ISODOW FROM d.date)::int
          AND s.is_active = true
          AND (s.start_date IS NULL OR s.start_date <= d.date)
          AND (s.end_date IS NULL OR s.end_date >= d.date)
+         AND NOT EXISTS (
+           SELECT 1 FROM schedule_exceptions se
+           WHERE se.schedule_id = s.id AND se.exception_date = d.date
+         )
         ${subjectScheduledFilter}
         GROUP BY s.class_id
       ),
@@ -1025,6 +1068,10 @@ export class StudentsRepository {
         ) nl ON true
         WHERE ast.status IN ('absent', 'excused')
           AND ast.date BETWEEN ${query.from}::date AND ${query.to}::date
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = ast.date
+          )
           ${subjectAbsenceFilter}
       ),
       student_absences AS (
@@ -1083,13 +1130,16 @@ export class StudentsRepository {
     studentId: string,
     query: StudentAbsencesQuery
   ): Promise<StudentAbsenceDetailRecord[]> {
-    const subjectFilter = query.subject ? sql`AND s.subject = ${query.subject}` : sql``;
+    const subjectFilter = query.subject
+      ? sql`AND ${normalizeSubjectSql(sql`s.subject`)} = ${normalizeSubjectSql(sql`${query.subject}`)}`
+      : sql``;
 
     const result = await this.db.execute(sql`
       SELECT
         ast.id,
         ast.date::text AS date,
         s.subject,
+        u.name AS teacher_name,
         c.name AS class_name,
         ts.start_time::text AS start_time,
         ts.end_time::text AS end_time,
@@ -1107,6 +1157,8 @@ export class StudentsRepository {
       LEFT JOIN schedules s ON s.id = ast.schedule_id
       LEFT JOIN classes c ON c.id = s.class_id
       LEFT JOIN time_slots ts ON ts.id = s.time_slot_id
+      LEFT JOIN teachers t ON t.id = s.teacher_id
+      LEFT JOIN users u ON u.id = t.user_id
       LEFT JOIN LATERAL (
         SELECT n.status, n.sent_at
         FROM notifications_log n
@@ -1128,6 +1180,10 @@ export class StudentsRepository {
       WHERE ast.student_id = ${studentId}::uuid
         AND ast.status IN ('absent', 'excused')
         AND ast.date BETWEEN ${query.from}::date AND ${query.to}::date
+        AND NOT EXISTS (
+          SELECT 1 FROM schedule_exceptions se
+          WHERE se.schedule_id = s.id AND se.exception_date = ast.date
+        )
         ${subjectFilter}
       ORDER BY ast.date DESC
     `);
@@ -1136,6 +1192,7 @@ export class StudentsRepository {
       id: row.id,
       date: row.date,
       subject: row.subject ?? 'Non renseigné',
+      teacherName: row.teacher_name ?? 'Professeur non renseigné',
       className: row.class_name ?? 'Non renseignée',
       startTime: row.start_time ?? '-',
       endTime: row.end_time ?? '-',

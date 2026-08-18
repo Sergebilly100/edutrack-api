@@ -1,0 +1,277 @@
+---
+- name: Déployer et enregistrer l'application
+  hosts: "{{ environ }}"
+  become: true
+
+  vars:
+    all_apps_folder: "/opt/apps/backends"
+    apps_folder: "{{ all_apps_folder }}/{{ app_name }}"
+    logs_base_dir: "/var/log/apps"
+    log_folder: "{{ logs_base_dir }}/{{ environ }}/{{ app_name }}"
+    alloy_folder: "/etc/alloy"
+    docker_run_script: "{{ apps_folder }}/{{ app_name }}-backend-{{ environ }}.sh"    
+    env_file: "/{{ apps_folder }}/.env.{{ environ }}"
+    rewrite_path: "/"
+    health_path: "/"
+
+  tasks:
+
+      # ------------------------------------------------------------------
+    # 1. Vérifier que les dossiers apps, frontend, backends existent dans /opt/
+    # ------------------------------------------------------------------
+    - name: Créer le dossier de l'application si absent
+      ansible.builtin.file:
+        path: "{{ apps_folder }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Créer le dossier pour les logs de l'apps
+      ansible.builtin.file:
+        path: "{{ log_folder }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # ------------------------------------------------------------------
+    # 2. Copie du fichier env
+    # ------------------------------------------------------------------
+    - name: Copy env file
+      copy:
+        src: config.env.{{ environ }}
+        dest: "{{ env_file }}"
+
+
+    # ------------------------------------------------------------------
+    # 3. Supprimer l'ancien container
+    # ------------------------------------------------------------------
+    - name: Supprimer l'ancien container si existant
+      community.docker.docker_container:
+        name: "{{ app_name }}-{{ environ }}"
+        state: absent
+        force_kill: true
+
+    # ------------------------------------------------------------------
+    # 4. Supprimer l'ancienne image
+    # ------------------------------------------------------------------
+    - name: Supprimer l'ancienne image si existante
+      community.docker.docker_image:
+        name: "{{ registry_url }}/{{ environ }}/{{ app_name }}:{{ image_tag }}"
+        state: absent
+        force_absent: true
+
+    # ------------------------------------------------------------------
+    # 4-a. S'assurer que le réseau Docker existe
+    # ------------------------------------------------------------------
+    - name: Créer le réseau Docker si besoin
+      community.docker.docker_network:
+        name: "dev-ivoiredu-api"
+        state: present
+        driver: bridge
+
+    # ------------------------------------------------------------------
+    # 5. Démarrer le nouveau container
+    # ------------------------------------------------------------------
+    - name: Démarrer le nouveau container
+      community.docker.docker_container:
+        name: "{{ app_name }}-{{ environ }}"
+        image: "{{ registry_url }}/{{ environ }}/{{ app_name }}:{{ image_tag }}"
+        state: started
+        restart_policy: unless-stopped
+        env_file: "{{ env_file }}"
+        volumes:
+          - "{{ log_folder }}:/app/logs"
+        ports:
+          - "{{ inventory_hostname }}:{{ app_port }}:3000"
+        networks:
+          - name: "dev-ivoiredu-api"
+        log_driver: json-file
+        log_options:
+          max-size: "50m"
+          max-file: "5"
+          tag: "{{ app_name }}-{{ environ }}"
+
+    # ------------------------------------------------------------------
+    # 6. Vérifier que le container tourne 
+    # ------------------------------------------------------------------
+    - name: Vérifier que le container est démarré
+      community.docker.docker_container_info:
+        name: "{{ app_name }}-{{ environ }}"
+      register: container_info
+      retries: 5
+      delay: 3
+      until: container_info.container.State.Running == true
+
+    # ------------------------------------------------------------------
+    # 6.a. Lien symbolique des logs Docker vers le dossier de logs
+    # ------------------------------------------------------------------
+    - name: Créer un lien symbolique et ouvrir les permissions pour Alloy
+      ansible.builtin.shell: |
+        DOCKER_LOG=$(docker inspect --format='{{ '{{' }}.LogPath{{ '}}' }}' "{{ app_name }}-{{ environ }}")
+        ln -sf "${DOCKER_LOG}" "{{ log_folder }}/stdout.log"
+
+        # Permettre la traversée de tout le chemin Docker pour lire les logs
+        CONTAINER_DIR=$(dirname "${DOCKER_LOG}")
+        chmod o+x /var/lib/docker
+        chmod o+x /var/lib/docker/containers
+        chmod o+x "${CONTAINER_DIR}"
+      args:
+        executable: /bin/bash
+
+    # ------------------------------------------------------------------
+    # 7. Vérifier que l'app répond
+    # ------------------------------------------------------------------
+    # - name: Vérifier que l'application répond sur /health
+    #   ansible.builtin.uri:
+    #     url: "http://{{ inventory_hostname }}:{{ app_port }}/health"
+    #     method: GET
+    #     status_code: 200
+    #   retries: 3
+    #   delay: 3
+    #   register: health_check
+    #   until: health_check.status == 200
+    #   ignore_errors: true
+
+    # - name: Vérifier que l'application répond sur /
+    #   ansible.builtin.uri:
+    #     url: "http://{{ inventory_hostname }}:{{ app_port }}/"
+    #     method: GET
+    #     status_code: 200
+    #   retries: 5
+    #   delay: 3
+    #   register: root_check
+    #   until: root_check.status == 200
+    #   when: health_check is failed
+
+    # - name: Échouer si aucun endpoint ne répond
+    #   ansible.builtin.fail:
+    #     msg: "L'application {{ app_name }}-{{ environ }} ne répond ni sur /health ni sur /"
+    #   when: health_check is failed and root_check is failed
+
+    # ------------------------------------------------------------------
+    # 7.a. Génération du script de deploiement
+    # ------------------------------------------------------------------
+
+    - name: Générer le script de redéploiement {{ app_name }}-{{ environ }}.sh
+      ansible.builtin.copy:
+        dest: "{{ docker_run_script }}"
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          set -e
+
+          CONTAINER="{{ app_name }}-{{ environ }}"
+          IMAGE="{{ registry_url }}/{{ environ }}/{{ app_name }}:{{ image_tag }}"
+
+          echo "[1/5] Arrêt et suppression de l'ancien container..."
+          docker rm -f "${CONTAINER}" 2>/dev/null || true
+
+          echo "[2/5] Pull de l'image..."
+          docker pull "${IMAGE}"
+
+          echo "[2b/5] Vérification du réseau Docker..."
+          docker network inspect dev-ivoiredu-api >/dev/null 2>&1 || docker network create dev-ivoiredu-api
+
+          echo "[3/5] Démarrage du container..."
+          docker run -d \
+            --name "${CONTAINER}" \
+            --restart unless-stopped \
+            --env-file {{ env_file }} \
+            -v {{ log_folder }}:/app/logs \
+            --log-driver json-file \
+            --log-opt max-size=50m \
+            --log-opt max-file=5 \
+            --log-opt tag="{{ app_name }}-{{ environ }}" \
+            -p {{ inventory_hostname }}:{{ app_port }}:3000 \
+            --network dev-ivoiredu-api \
+            "${IMAGE}"
+
+          echo "[4/5] Vérification du container..."
+          sleep 3
+          if docker ps --filter "name=${CONTAINER}" --filter "status=running" -q | grep -q .; then
+            echo "${CONTAINER} est en cours d'exécution"
+          else
+            echo "${CONTAINER} n'a pas démarré"
+            docker logs "${CONTAINER}"
+            exit 1
+          fi
+
+          echo "[5/5] Enregistrement du service dans Consul..."
+          curl -sf -X PUT \
+            -H "X-Consul-Token: {{ consul_http_token }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "ID": "{{ app_name }}-{{ environ }}-{{ inventory_hostname }}",
+              "Name": "{{ app_name }}-{{ environ }}",
+              "Address": "{{ inventory_hostname }}",
+              "Port": {{ app_port }},
+              "Tags": [
+                "app={{ app_name }}",
+                "env={{ environ }}",
+                "version={{ image_tag }}",
+                "type=api",
+                "backend",
+                "backend=bk_{{ app_name | replace('-', '_') }}_{{ environ }}",
+                "rewrite={{ rewrite_path }}"
+              ],
+              "Check": {
+                "Name": "TCP health check for {{ app_name }}-{{ environ }}",
+                "TCP": "{{ inventory_hostname }}:{{ app_port }}",
+                "Interval": "10s",
+                "Timeout": "5s",
+                "DeregisterCriticalServiceAfter": "30m"
+              }
+            }' \
+            http://{{ inventory_hostname }}:8500/v1/agent/service/register \
+            && echo "Service enregistré dans Consul" \
+            || { echo "Echec de l'enregistrement Consul"; exit 1; }
+
+    # ------------------------------------------------------------------
+    # 8. Enregistrer dans Consul
+    # ------------------------------------------------------------------
+    - name: Enregistrer le service dans Consul
+      ansible.builtin.uri:
+        url: "http://{{ inventory_hostname }}:8500/v1/agent/service/register"
+        method: PUT
+        headers:
+          X-Consul-Token: "{{ consul_http_token }}"
+        body_format: json
+        body:
+          ID: "{{ app_name }}-{{ environ }}-{{ inventory_hostname }}"
+          Name: "{{ app_name }}-{{ environ }}"
+          Address: "{{ inventory_hostname }}"
+          Port: "{{ app_port | int }}"
+          Tags:
+            - "app={{ app_name }}"
+            - "env={{ environ }}"
+            - "version={{ image_tag }}"
+            - "type=api"
+            - "backend"
+            - "backend=bk_{{ app_name | replace('-', '_') }}_{{ environ }}"
+            - "rewrite={{ rewrite_path }}"
+          Check:
+            Name: "TCP health check for {{ app_name }}-{{ environ }}"
+            TCP: "{{ inventory_hostname }}:{{ app_port | int }}"
+            Interval: "10s"
+            Timeout: "5s"
+            DeregisterCriticalServiceAfter: "30m"
+        status_code: 200
+  
+    # ------------------------------------------------------------------
+    # 9. Vérifier que le service est healthy dans Consul
+    # ------------------------------------------------------------------
+    - name: Vérifier le service dans Consul
+      ansible.builtin.uri:
+        url: "http://{{ inventory_hostname }}:8500/v1/health/service/{{ app_name }}-{{ environ }}?passing=true"
+        headers:
+          X-Consul-Token: "{{ consul_http_token }}"
+        method: GET
+        status_code: 200
+      register: consul_check
+      retries: 5
+      delay: 5
+      until: consul_check.status == 200

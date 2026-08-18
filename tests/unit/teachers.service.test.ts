@@ -21,11 +21,13 @@ const repository = {
   listTeachers: vi.fn(),
   getTeacherById: vi.fn(),
   countActiveUsers: vi.fn(),
+  listSubjectCatalog: vi.fn(),
   createTeacher: vi.fn(),
   updateTeacher: vi.fn(),
   softDeleteTeacher: vi.fn(),
   getTeacherStats: vi.fn(),
   getAttendanceStats: vi.fn(),
+  listTeachingOptions: vi.fn(),
   hasOutstandingUnpaidSalaryRecords: vi.fn(),
 };
 
@@ -62,6 +64,7 @@ describe('teachers.service', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    repository.listSubjectCatalog.mockResolvedValue([]);
     service = new TeachersService(repository as never);
   });
 
@@ -141,6 +144,21 @@ describe('teachers.service', () => {
       const result = await service.createTeacher(input as never, { schemaName: 'school_test' });
 
       expect(result.id).toBe('teacher-1');
+    });
+
+    it('réutilise les matières existantes similaires lors de la création', async () => {
+      repository.countActiveUsers.mockResolvedValue(0);
+      repository.listSubjectCatalog.mockResolvedValue(['Français']);
+      repository.createTeacher.mockResolvedValue({ ...baseTeacher, subjects: ['Français'] });
+
+      await service.createTeacher(
+        { ...input, subjects: ['Francais'] } as never,
+        { schemaName: 'school_test' }
+      );
+
+      expect(repository.createTeacher).toHaveBeenCalledWith(
+        expect.objectContaining({ subjects: ['Français'] })
+      );
     });
 
     it('mappe une collision de téléphone en 409 PHONE_ALREADY_EXISTS', async () => {

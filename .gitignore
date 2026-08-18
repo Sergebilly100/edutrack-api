@@ -11,6 +11,10 @@ dist
 !.env.example
 !.env.test.example
 
+# Config files
+config.*
+config.env.*
+
 # Private keys
 *.pem
 *.key
@@ -47,3 +51,12 @@ exports/*.pdf
 exports/*.xlsx
 tmp/*.pdf
 tmp/*.xlsx
+
+# Scripts
+scripts/
+
+# Tests
+tests/
+
+# Template xls
+templates/

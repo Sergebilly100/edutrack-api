@@ -8,6 +8,7 @@ const repository = {
   listTeacherDirectory: vi.fn(),
   listRooms: vi.fn(),
   listTimeSlots: vi.fn(),
+  findOrCreateTimeSlot: vi.fn(),
   findActiveSchedulePeriodId: vi.fn(),
   findSchedulePeriodById: vi.fn(),
   findOverlappingSchedulePeriods: vi.fn(),
@@ -93,6 +94,12 @@ beforeEach(() => {
       end_time: '09:00:00',
     },
   ]);
+  repository.findOrCreateTimeSlot.mockResolvedValue({
+    id: 'slot-created',
+    label: '09:00 – 10:30',
+    start_time: '09:00:00',
+    end_time: '10:30:00',
+  });
   repository.findActiveSchedulePeriodId.mockResolvedValue('period-1');
   repository.findSchedulePeriodById.mockResolvedValue({
     id: 'period-1',
@@ -457,7 +464,7 @@ describe('import.service - schedule dry-run', () => {
     });
   });
 
-  it('créneau dans le passé → erreur "date/heure passée"', async () => {
+  it('créneau dans le passé → avertissement et ligne ignorée', async () => {
     // System time = 2026-04-01 08:00 UTC; slot start = 07:30 → already past
     const service = new ImportService(repository);
 
@@ -477,9 +484,42 @@ describe('import.service - schedule dry-run', () => {
     repository.findActiveSchedulePeriodId.mockResolvedValueOnce('period-1');
 
     const report = await service.dryRun('schedule', await toWorkbookBuffer(rows), db);
+    expect(report.valid).toBe(0);
     expect(report.errors).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ column: 'Jour*', message: expect.stringContaining('passée') }),
+        expect.objectContaining({
+          column: 'Jour*',
+          message: expect.stringContaining('passée'),
+          severity: 'warning',
+        }),
+      ])
+    );
+  });
+
+  it('créneau avec occurrences passées et futures → avertissement mais ligne valide', async () => {
+    const service = new ImportService(repository);
+
+    const rows = [
+      { 'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': 'Mathématiques', 'Jour*': 'Lundi', 'Créneau*': '7h30 - 9h00', Salle: 'Salle A1' },
+    ];
+
+    repository.findSchedulePeriodById.mockResolvedValueOnce({
+      id: 'period-1',
+      valid_from: '2026-03-30',
+      valid_to: '2026-04-30',
+    });
+    repository.findActiveSchedulePeriodId.mockResolvedValueOnce('period-1');
+
+    const report = await service.dryRun('schedule', await toWorkbookBuffer(rows), db);
+
+    expect(report.valid).toBe(1);
+    expect(report.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          column: 'Jour*',
+          message: expect.stringContaining('passée'),
+          severity: 'warning',
+        }),
       ])
     );
   });
@@ -499,6 +539,55 @@ describe('import.service - schedule dry-run', () => {
     expect(report.errors).toEqual(
       expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining('ambigu') })])
     );
+  });
+
+  it('prof avec accent différent → ligne valide', async () => {
+    repository.listTeacherDirectory.mockResolvedValueOnce([
+      { teacher_id: 'teacher-accent', user_id: 'user-accent', name: 'Jean Traoré', username: 'traore.jean', subjects: ['Mathématiques'] },
+    ]);
+    const service = new ImportService(repository);
+
+    const rows = [
+      { 'Nom professeur*': 'Jean Traore', 'Classe*': '3ème A', 'Matière*': 'Mathématiques', 'Jour*': 'Lundi', 'Créneau*': '7h30 - 9h00', Salle: 'Salle A1' },
+    ];
+
+    const report = await service.dryRun('schedule', await toWorkbookBuffer(rows), db, {
+      schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-04' },
+    });
+
+    expect(report.valid).toBe(1);
+    expect(report.errors).toHaveLength(0);
+  });
+
+  it('créneau avec séparateur et format différents → match par heures', async () => {
+    const service = new ImportService(repository);
+
+    const rows = [
+      { 'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': 'Mathématiques', 'Jour*': 'Lundi', 'Créneau*': '07:30–09:00', Salle: 'Salle A1' },
+    ];
+
+    const report = await service.dryRun('schedule', await toWorkbookBuffer(rows), db, {
+      schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-04' },
+    });
+
+    expect(report.valid).toBe(1);
+    expect(report.errors).toHaveLength(0);
+  });
+
+  it('créneau absent mais parsable → dry-run valide pour création en confirm', async () => {
+    repository.listTimeSlots.mockResolvedValueOnce([]);
+    const service = new ImportService(repository);
+
+    const rows = [
+      { 'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': 'Mathématiques', 'Jour*': 'Lundi', 'Créneau*': '09h00 - 10h30', Salle: 'Salle A1' },
+    ];
+
+    const report = await service.dryRun('schedule', await toWorkbookBuffer(rows), db, {
+      schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-04' },
+    });
+
+    expect(report.valid).toBe(1);
+    expect(report.errors).toHaveLength(0);
   });
 
   it('weekStart === weekEnd → IMPORT_INVALID_PERIOD_RANGE', async () => {
@@ -612,6 +701,69 @@ describe('import.service - schedule confirm', () => {
       expect.anything(),
       'period-1',
       expect.any(Array)
+    );
+  });
+
+  it('créneau absent en base → créé automatiquement puis utilisé', async () => {
+    repository.listTimeSlots.mockResolvedValue([]);
+    const service = new ImportService(repository);
+    const rows = [
+      { 'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': 'Mathématiques', 'Jour*': 'Lundi', 'Créneau*': '09h00 - 10h30', Salle: 'Salle A1' },
+    ];
+
+    const report = await service.confirm('schedule', await toWorkbookBuffer(rows), db, {
+      schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-04' },
+    });
+
+    expect(report.imported).toBe(1);
+    expect(repository.findOrCreateTimeSlot).toHaveBeenCalledWith(expect.anything(), {
+      label: '09:00 – 10:30',
+      startTime: '09:00:00',
+      endTime: '10:30:00',
+    });
+    expect(repository.upsertSchedule).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ timeSlotId: 'slot-created' })
+    );
+  });
+
+  it('créneaux passés en confirm → ignorés sans bloquer les créneaux valides', async () => {
+    repository.findSchedulePeriodById.mockResolvedValue({
+      id: 'period-1',
+      valid_from: '2026-03-30',
+      valid_to: '2026-04-02',
+    });
+    repository.findActiveSchedulePeriodId.mockResolvedValue('period-1');
+    repository.listTimeSlots.mockResolvedValue([
+      {
+        id: 'slot-1',
+        label: '7h30 - 9h00',
+        start_time: '07:30:00',
+        end_time: '09:00:00',
+      },
+      {
+        id: 'slot-2',
+        label: '09h00 - 10h30',
+        start_time: '09:00:00',
+        end_time: '10:30:00',
+      },
+    ]);
+    const service = new ImportService(repository);
+    const rows = [
+      { 'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': 'Mathématiques', 'Jour*': 'Lundi', 'Créneau*': '7h30 - 9h00', Salle: 'Salle A1' },
+      { 'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': 'Physique', 'Jour*': 'Mercredi', 'Créneau*': '09h00 - 10h30', Salle: 'Salle A1' },
+    ];
+
+    const report = await service.confirm('schedule', await toWorkbookBuffer(rows), db);
+
+    expect(report.imported).toBe(1);
+    expect(report.updated).toBe(0);
+    expect(repository.upsertSchedule).toHaveBeenCalledTimes(1);
+    expect(repository.upsertSchedule).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ subject: 'Physique' }),
+      expect.objectContaining({ startDate: '2026-04-01' })
     );
   });
 

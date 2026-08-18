@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   getAuthHeaders,
   getSeedContext,
   queryTenant,
+  queryPublic,
   request,
   tenantTable,
   TEST_SCHEMA_NAME,
@@ -43,6 +44,17 @@ const insertPendingAttendance = async (overrides: Record<string, unknown> = {}):
   return id;
 };
 
+const ensureScheduleExceptionsTable = async (): Promise<void> => {
+  await queryTenant(`
+    CREATE TABLE IF NOT EXISTS ${tenantTable('schedule_exceptions')} (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      schedule_id uuid NOT NULL REFERENCES ${tenantTable('schedules')}(id) ON DELETE CASCADE,
+      exception_date date NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+};
+
 const insertCheckedInAttendance = async (): Promise<string> => {
   const context = getSeedContext();
   const rows = await queryTenant<{ id: string }>(
@@ -60,9 +72,69 @@ const insertCheckedInAttendance = async (): Promise<string> => {
   return id;
 };
 
+const insertEndScannedAttendanceWithoutCheckout = async (): Promise<string> => {
+  const context = getSeedContext();
+  const rows = await queryTenant<{ id: string }>(
+    `
+      INSERT INTO ${tenantTable('attendances_teacher')} (
+        teacher_id,
+        schedule_id,
+        date,
+        status,
+        checked_in_at,
+        room_scan_end_at,
+        actual_minutes,
+        validation_status,
+        validated_hours
+      )
+      SELECT
+        $1,
+        $2,
+        $3::date,
+        'present',
+        $3::date + ts.start_time + INTERVAL '1 minute',
+        $3::date + ts.start_time + INTERVAL '4 minutes',
+        NULL,
+        'not_required',
+        NULL
+      FROM ${tenantTable('schedules')} s
+      INNER JOIN ${tenantTable('time_slots')} ts ON ts.id = s.time_slot_id
+      WHERE s.id = $2
+      RETURNING id
+    `,
+    [context.teacherId, context.scheduleId, pastDate]
+  );
+  const id = rows[0]?.id;
+  if (!id) throw new Error('[test] Failed to insert end-scanned attendance');
+  return id;
+};
+
+const setUseRealHours = async (enabled: boolean): Promise<void> => {
+  await queryPublic(
+    `
+      WITH tenant_row AS (
+        INSERT INTO public.tenants (name, subdomain, schema_name)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (schema_name)
+        DO UPDATE SET updated_at = NOW()
+        RETURNING id
+      )
+      INSERT INTO public.school_sms_features (tenant_id, use_real_hours)
+      SELECT id, $4
+      FROM tenant_row
+      ON CONFLICT ON CONSTRAINT school_sms_features_tenant_unique
+      DO UPDATE SET use_real_hours = EXCLUDED.use_real_hours
+    `,
+    [`Integration ${TEST_SCHEMA_NAME}`, TEST_SCHEMA_NAME, TEST_SCHEMA_NAME, enabled]
+  );
+};
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('validations routes integration (real db)', () => {
+  beforeEach(async () => {
+    await ensureScheduleExceptionsTable();
+  });
 
   // ── GET /api/v1/validations/pending ──────────────────────────────────────
 
@@ -89,6 +161,26 @@ describe('validations routes integration (real db)', () => {
         .set(headers);
 
       expect(response.status).toBe(403);
+    });
+
+    it('remonte en heures courtes un scan de fin sans checkout ni actual_minutes', async () => {
+      await setUseRealHours(true);
+      const id = await insertEndScannedAttendanceWithoutCheckout();
+      const headers = await getAuthHeaders('director');
+
+      const response = await request()
+        .get('/api/v1/validations/pending')
+        .set(headers);
+
+      expect(response.status).toBe(200);
+      const item = response.body.short_hours.find(
+        (row: { attendanceId: string }) => row.attendanceId === id
+      );
+      expect(item).toMatchObject({
+        attendanceId: id,
+        kind: 'short_hours',
+        actualMinutes: 3,
+      });
     });
   });
 
@@ -157,6 +249,77 @@ describe('validations routes integration (real db)', () => {
         `DELETE FROM ${tenantTable('attendances_teacher')} WHERE id = $1`,
         [id]
       );
+    });
+  });
+
+  // ── GET /api/v1/validations/history ─────────────────────────────────────
+
+  describe('GET /api/v1/validations/history', () => {
+    it('retourne les heures courtes validées quand aucun mois n’est fourni', async () => {
+      const id = await insertPendingAttendance({
+        validation_status: 'approved',
+        validated_hours: 0.5,
+        validated_at: '2024-03-15T10:00:00Z',
+        geo_status: null,
+      });
+      const headers = await getAuthHeaders('director');
+
+      try {
+        const response = await request()
+          .get('/api/v1/validations/history?kind=short_hours&page=1&limit=50')
+          .set(headers);
+
+        expect(response.status).toBe(200);
+        expect(Array.isArray(response.body.items)).toBe(true);
+        expect(response.body.items).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              attendanceId: id,
+              kind: 'short_hours',
+              actualMinutes: 30,
+            }),
+          ])
+        );
+      } finally {
+        await queryTenant(
+          `DELETE FROM ${tenantTable('attendances_teacher')} WHERE id = $1`,
+          [id]
+        );
+      }
+    });
+
+    it('retourne les présences GPS suspectes quand aucun mois n’est fourni', async () => {
+      const id = await insertPendingAttendance({
+        actual_minutes: 120,
+        validation_status: 'approved',
+        validated_hours: 1,
+        validated_at: '2024-03-15T10:00:00Z',
+        geo_status: 'suspicious',
+      });
+      const headers = await getAuthHeaders('director');
+
+      try {
+        const response = await request()
+          .get('/api/v1/validations/history?kind=gps_suspicious&page=1&limit=50')
+          .set(headers);
+
+        expect(response.status).toBe(200);
+        expect(Array.isArray(response.body.items)).toBe(true);
+        expect(response.body.items).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              attendanceId: id,
+              kind: 'gps_suspicious',
+              actualMinutes: 120,
+            }),
+          ])
+        );
+      } finally {
+        await queryTenant(
+          `DELETE FROM ${tenantTable('attendances_teacher')} WHERE id = $1`,
+          [id]
+        );
+      }
     });
   });
 

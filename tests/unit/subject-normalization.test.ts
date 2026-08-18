@@ -18,6 +18,10 @@ describe('subject-normalization', () => {
     expect(canonicalizeSubject('Mathematiques', known)).toBe('Mathématique');
   });
 
+  it('réutilise une matière accentuée existante lors de la création directe', () => {
+    expect(canonicalizeSubjectList(['Francais'], ['Français'])).toEqual(['Français']);
+  });
+
   it('déduplique une liste de matières proches', () => {
     const result = canonicalizeSubjectList(['Mathématiques', 'Mathematiques', 'Français', 'Francais']);
     expect(result).toEqual(['Mathématique', 'Français']);

@@ -52,6 +52,7 @@ type TeacherDailyRow = {
   hours_planned: string | number;
   hours_done: string | number;
   attendance_status: 'present' | 'absent' | 'late' | null;
+  validation_status: 'not_required' | 'pending' | 'approved' | 'rejected' | null;
   checked_in_at: string | null;
   room_scan_end_at: string | null;
   late_minutes: number | null;
@@ -164,15 +165,20 @@ export class BillingRepository {
          AND (s.start_date IS NULL OR s.start_date <= md.d)
          AND (s.end_date IS NULL OR s.end_date > md.d)
          AND s.day_of_week = EXTRACT(ISODOW FROM md.d)::int
+         AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = md.d
+          )
         INNER JOIN time_slots ts ON ts.id = s.time_slot_id
         GROUP BY s.teacher_id
       ),
 
-      -- CTE 4: Calcule les heures EFFECTUÉES (hours_done) selon 3 priorités :
+      -- CTE 4: Calcule les heures EFFECTUÉES (hours_done) selon 4 priorités :
       --   1. Si validation_status='approved' → utiliser validated_hours (validation manuelle directeur)
       --   2. Si validation_status IN ('pending','rejected') → 0 (heures rejetées ou en attente = pas comptabilisées)
-      --   3. Si use_real_hours=true ET actual_minutes valide → utiliser actual_minutes / 60
-      --   4. Sinon → utiliser la durée planifiée du créneau (fallback)
+      --   3. Si validated_hours est renseigné → utiliser cette valeur (auto-validation du créneau complet)
+      --   4. Si use_real_hours=true ET actual_minutes valide → utiliser actual_minutes / 60
+      --   5. Sinon → utiliser la durée planifiée du créneau (fallback hors heures réelles)
       -- Seules les présences avec status IN ('present', 'late', 'excused') sont comptées
       done_hours AS (
         SELECT
@@ -182,6 +188,7 @@ export class BillingRepository {
               CASE
                 WHEN at.validation_status = 'approved' THEN COALESCE(at.validated_hours, 0)
                 WHEN at.validation_status IN ('pending', 'rejected') THEN 0
+                WHEN at.validated_hours IS NOT NULL THEN at.validated_hours
                 WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
                   AND at.actual_minutes IS NOT NULL
                   -- Validation: actual_minutes doit être dans [0, 1440]
@@ -189,6 +196,10 @@ export class BillingRepository {
                   AND at.actual_minutes >= 0
                   AND at.actual_minutes <= 1440
                   THEN at.actual_minutes / 60.0
+                WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                  AND at.actual_minutes IS NOT NULL
+                  THEN EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0
+                WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false) THEN 0
                 ELSE EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0
               END
             ),
@@ -247,11 +258,16 @@ export class BillingRepository {
               CASE
                 WHEN at.validation_status = 'approved' THEN COALESCE(at.validated_hours, 0)
                 WHEN at.validation_status IN ('pending', 'rejected') THEN 0
+                WHEN at.validated_hours IS NOT NULL THEN at.validated_hours
                 WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
                   AND at.actual_minutes IS NOT NULL
                   AND at.actual_minutes >= 0
                   AND at.actual_minutes <= 1440
                   THEN at.actual_minutes / 60.0
+                WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+                  AND at.actual_minutes IS NOT NULL
+                  THEN EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0
+                WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false) THEN 0
                 ELSE EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0
               END
             ),
@@ -366,16 +382,22 @@ export class BillingRepository {
         ts.label AS slot_label,
         (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0)::numeric(8,2) AS hours_planned,
         at.status::text AS attendance_status,
+        at.validation_status::text AS validation_status,
         at.checked_in_at::text,
         COALESCE(at.checked_out_at, at.room_scan_end_at)::text AS room_scan_end_at,
         CASE
           WHEN at.validation_status = 'approved' THEN COALESCE(at.validated_hours, 0)::numeric(8,2)
           WHEN at.validation_status IN ('pending', 'rejected') THEN 0::numeric(8,2)
+          WHEN at.validated_hours IS NOT NULL THEN at.validated_hours::numeric(8,2)
           WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
             AND at.actual_minutes IS NOT NULL
             AND at.actual_minutes >= 0
             AND at.actual_minutes <= 1440
             THEN (at.actual_minutes / 60.0)::numeric(8,2)
+          WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false)
+            AND at.actual_minutes IS NOT NULL
+            THEN (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0)::numeric(8,2)
+          WHEN COALESCE((SELECT use_real_hours FROM feature_flags), false) THEN 0::numeric(8,2)
           ELSE (EXTRACT(EPOCH FROM (ts.end_time - ts.start_time)) / 3600.0)::numeric(8,2)
         END AS hours_done,
         at.late_minutes,
@@ -390,6 +412,10 @@ export class BillingRepository {
        AND (s.start_date IS NULL OR s.start_date <= md.d)
        AND (s.end_date IS NULL OR s.end_date > md.d)
        AND s.day_of_week = EXTRACT(ISODOW FROM md.d)::int
+       AND NOT EXISTS (
+          SELECT 1 FROM schedule_exceptions se
+          WHERE se.schedule_id = s.id AND se.exception_date = md.d
+        )
        AND s.teacher_id = ${teacherId}
       INNER JOIN classes c ON c.id = s.class_id
       INNER JOIN time_slots ts ON ts.id = s.time_slot_id
