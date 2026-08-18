@@ -8,7 +8,7 @@
 > commercialisé sous la marque **IvoirEdu**. Le code et les dépôts conservent encore le
 > préfixe `edutrack-` ; les deux noms désignent le même projet.
 
-Version : **1.0.0**
+Version : **1.0.0** stable.
 
 ---
 
