@@ -1,6 +1,7 @@
 import { AcademicRepository } from './academic.repository.js';
 import {
   getSchoolYearConsistencyIssue,
+  getDefaultEndOfYearReviewStartDate,
   type CreateClassInput,
   type CreateLevelInput,
   type CreateSchoolYearInput,
@@ -61,10 +62,15 @@ export class AcademicService {
   }
 
   async createSchoolYear(input: CreateSchoolYearInput) {
-    assertSchoolYearConsistency(input);
+    const normalizedInput = {
+      ...input,
+      endOfYearReviewStartDate:
+        input.endOfYearReviewStartDate ?? getDefaultEndOfYearReviewStartDate(input.endDate),
+    };
+    assertSchoolYearConsistency(normalizedInput);
 
     try {
-      return await this.repository.createSchoolYear(input);
+      return await this.repository.createSchoolYear(normalizedInput);
     } catch (error) {
       const dbError = getDbError(error);
       if (
@@ -95,9 +101,10 @@ export class AcademicService {
     }
 
     assertSchoolYearConsistency({
-      label: input.label ?? current.label,
-      startDate: input.startDate ?? current.startDate,
-      endDate: input.endDate ?? current.endDate,
+      label: current.label,
+      startDate: current.startDate,
+      endDate: current.endDate,
+      endOfYearReviewStartDate: input.endOfYearReviewStartDate,
     });
 
     try {

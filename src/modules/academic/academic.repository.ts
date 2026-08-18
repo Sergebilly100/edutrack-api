@@ -34,6 +34,7 @@ export const mapSchoolYear = (row: SchoolYearRow): SchoolYearItem => ({
   label: row.label,
   startDate: row.start_date,
   endDate: row.end_date,
+  endOfYearReviewStartDate: row.end_of_year_review_start_date,
   status: row.status,
   createdAt: toIsoDateTime(row.created_at),
   updatedAt: toIsoDateTime(row.updated_at),
@@ -75,7 +76,7 @@ export class AcademicRepository {
 
   async listSchoolYears(): Promise<SchoolYearItem[]> {
     const result = await this.db.execute<SchoolYearRow>(sql`
-      SELECT id, label, start_date::text, end_date::text, status, created_at, updated_at
+      SELECT id, label, start_date::text, end_date::text, end_of_year_review_start_date::text, status, created_at, updated_at
       FROM school_years
       ORDER BY start_date DESC, created_at DESC
     `);
@@ -84,7 +85,7 @@ export class AcademicRepository {
 
   async findSchoolYearById(id: string): Promise<SchoolYearItem | null> {
     const result = await this.db.execute<SchoolYearRow>(sql`
-      SELECT id, label, start_date::text, end_date::text, status, created_at, updated_at
+      SELECT id, label, start_date::text, end_date::text, end_of_year_review_start_date::text, status, created_at, updated_at
       FROM school_years
       WHERE id = ${id}::uuid
       LIMIT 1
@@ -95,7 +96,7 @@ export class AcademicRepository {
 
   async getActiveSchoolYear(): Promise<SchoolYearItem | null> {
     const result = await this.db.execute<SchoolYearRow>(sql`
-      SELECT id, label, start_date::text, end_date::text, status, created_at, updated_at
+      SELECT id, label, start_date::text, end_date::text, end_of_year_review_start_date::text, status, created_at, updated_at
       FROM school_years
       WHERE status = 'active'
       LIMIT 1
@@ -106,9 +107,9 @@ export class AcademicRepository {
 
   async createSchoolYear(input: CreateSchoolYearInput): Promise<SchoolYearItem> {
     const result = await this.db.execute<SchoolYearRow>(sql`
-      INSERT INTO school_years (label, start_date, end_date, status)
-      VALUES (${input.label}, ${input.startDate}::date, ${input.endDate}::date, ${input.status}::school_year_status)
-      RETURNING id, label, start_date::text, end_date::text, status, created_at, updated_at
+      INSERT INTO school_years (label, start_date, end_date, end_of_year_review_start_date, status)
+      VALUES (${input.label}, ${input.startDate}::date, ${input.endDate}::date, ${input.endOfYearReviewStartDate ?? null}::date, ${input.status}::school_year_status)
+      RETURNING id, label, start_date::text, end_date::text, end_of_year_review_start_date::text, status, created_at, updated_at
     `);
     const row = getRows(result)[0];
     if (!row) {
@@ -124,13 +125,10 @@ export class AcademicRepository {
     const result = await this.db.execute<SchoolYearRow>(sql`
       UPDATE school_years
       SET
-        label = CASE WHEN ${input.label !== undefined} THEN ${input.label ?? null} ELSE label END,
-        start_date = CASE WHEN ${input.startDate !== undefined} THEN ${input.startDate ?? null}::date ELSE start_date END,
-        end_date = CASE WHEN ${input.endDate !== undefined} THEN ${input.endDate ?? null}::date ELSE end_date END,
-        status = CASE WHEN ${input.status !== undefined} THEN ${input.status ?? null}::school_year_status ELSE status END,
+        end_of_year_review_start_date = ${input.endOfYearReviewStartDate}::date,
         updated_at = now()
       WHERE id = ${id}::uuid
-      RETURNING id, label, start_date::text, end_date::text, status, created_at, updated_at
+      RETURNING id, label, start_date::text, end_date::text, end_of_year_review_start_date::text, status, created_at, updated_at
     `);
     const row = getRows(result)[0];
     return row ? mapSchoolYear(row) : null;
@@ -141,7 +139,7 @@ export class AcademicRepository {
       DELETE FROM school_years
       WHERE id = ${id}::uuid
         AND status <> 'active'
-      RETURNING id, label, start_date::text, end_date::text, status, created_at, updated_at
+      RETURNING id, label, start_date::text, end_date::text, end_of_year_review_start_date::text, status, created_at, updated_at
     `);
     const row = getRows(result)[0];
     return row ? mapSchoolYear(row) : null;

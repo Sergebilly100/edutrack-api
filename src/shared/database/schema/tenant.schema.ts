@@ -105,6 +105,12 @@ export const schoolYearStatusEnum = tenant.enum('school_year_status', [
   'closed',
 ]);
 
+export const classDecisionTypeEnum = tenant.enum('class_decision_type', [
+  'promoted',
+  'repeat',
+  'expelled',
+]);
+
 export const users = tenant.table('users', {
   id: uuid('id').defaultRandom().primaryKey(),
   role: userRoleEnum('role').notNull(),
@@ -160,6 +166,7 @@ export const schoolYears = tenant.table(
     label: varchar('label', { length: 25 }).notNull(),
     startDate: date('start_date').notNull(),
     endDate: date('end_date').notNull(),
+    endOfYearReviewStartDate: date('end_of_year_review_start_date').notNull(),
     status: schoolYearStatusEnum('status').notNull().default('draft'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
       .notNull()
@@ -177,6 +184,10 @@ export const schoolYears = tenant.table(
     schoolYearsValidDates: check(
       'school_years_valid_dates',
       sql`${table.startDate} < ${table.endDate}`
+    ),
+    schoolYearsReviewBeforeEnd: check(
+      'school_years_review_before_end',
+      sql`${table.endOfYearReviewStartDate} < ${table.endDate}`
     ),
   })
 );
@@ -258,6 +269,29 @@ export const students = tenant.table(
   },
   (table) => ({
     studentsClassIdx: index('idx_students_class').on(table.classId),
+  })
+);
+
+export const classDecisions = tenant.table(
+  'class_decisions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    studentId: uuid('student_id').notNull().references(() => students.id, { onDelete: 'cascade' }),
+    schoolYearId: uuid('school_year_id').notNull().references(() => schoolYears.id, { onDelete: 'cascade' }),
+    suggestedDecision: classDecisionTypeEnum('suggested_decision'),
+    finalDecision: classDecisionTypeEnum('final_decision'),
+    validatedByUserId: uuid('validated_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    validatedAt: timestamp('validated_at', { withTimezone: true, mode: 'date' }),
+    nextLevelId: uuid('next_level_id').references(() => levels.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    classDecisionsStudentYearUnique: unique('class_decisions_student_year_unique').on(
+      table.studentId,
+      table.schoolYearId
+    ),
+    classDecisionsSchoolYearIdx: index('idx_class_decisions_school_year').on(table.schoolYearId),
   })
 );
 

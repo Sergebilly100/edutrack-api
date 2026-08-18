@@ -23,6 +23,13 @@ export type SchoolYearConsistencyInput = {
   label: string;
   startDate: string;
   endDate: string;
+  endOfYearReviewStartDate?: string;
+};
+
+export const getDefaultEndOfYearReviewStartDate = (endDate: string): string => {
+  const date = new Date(`${endDate}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() - 30);
+  return date.toISOString().slice(0, 10);
 };
 
 export const getSchoolYearConsistencyIssue = (
@@ -38,6 +45,13 @@ export const getSchoolYearConsistencyIssue = (
 
   if (input.startDate >= input.endDate) {
     return 'School year start date must be before end date';
+  }
+
+  if (
+    input.endOfYearReviewStartDate !== undefined &&
+    (!isValidIsoDate(input.endOfYearReviewStartDate) || input.endOfYearReviewStartDate >= input.endDate)
+  ) {
+    return 'End-of-year review start date must be before school year end date';
   }
 
   const expectedLabel = `${input.startDate.slice(5, 7)}/${input.startDate.slice(0, 4)} - ${input.endDate.slice(5, 7)}/${input.endDate.slice(0, 4)}`;
@@ -71,20 +85,16 @@ export const createSchoolYearBodySchema = z
     label: z.string().trim().regex(SCHOOL_YEAR_LABEL_REGEX),
     startDate: isoDateSchema,
     endDate: isoDateSchema,
+    endOfYearReviewStartDate: isoDateSchema.optional(),
     status: schoolYearStatusSchema.default('draft'),
   })
   .superRefine(addSchoolYearConsistencyIssue);
 
 export const updateSchoolYearBodySchema = z
   .object({
-    label: z.string().trim().regex(SCHOOL_YEAR_LABEL_REGEX).optional(),
-    startDate: isoDateSchema.optional(),
-    endDate: isoDateSchema.optional(),
-    status: schoolYearStatusSchema.optional(),
+    endOfYearReviewStartDate: isoDateSchema,
   })
-  .refine((input) => Object.values(input).some((value) => value !== undefined), {
-    message: 'At least one field is required',
-  });
+  .strict();
 
 export const levelIdParamsSchema = z.object({
   id: z.string().uuid(),
@@ -142,6 +152,7 @@ export type SchoolYearRow = {
   label: string;
   start_date: string;
   end_date: string;
+  end_of_year_review_start_date: string;
   status: SchoolYearStatus;
   created_at: Date | string;
   updated_at: Date | string;
@@ -152,6 +163,7 @@ export type SchoolYearItem = {
   label: string;
   startDate: string;
   endDate: string;
+  endOfYearReviewStartDate: string;
   status: SchoolYearStatus;
   createdAt: string;
   updatedAt: string;

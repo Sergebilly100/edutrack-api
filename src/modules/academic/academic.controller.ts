@@ -8,7 +8,6 @@ import {
   classIdParamsSchema,
   createClassBodySchema,
   createLevelBodySchema,
-  createSchoolYearBodySchema,
   listClassesQuerySchema,
   levelIdParamsSchema,
   schoolYearIdParamsSchema,
@@ -65,23 +64,6 @@ export default async function academicController(app: FastifyInstance): Promise<
       }
     }
   );
-  // creation d'une année scolaire
-  app.post(
-    '/api/v1/school-years',
-    { preHandler: requirePermission('school_years.create') },
-    async (request, reply) => {
-      try {
-        const claims = request.claims!;
-        const body = createSchoolYearBodySchema.parse(request.body ?? {});
-        const schoolYear = await withTenantSchema(claims.schemaName, (tenantDb) =>
-          buildAcademicService(tenantDb).createSchoolYear(body)
-        );
-        return reply.code(201).send({ schoolYear });
-      } catch (error) {
-        return handleError(request, reply, error);
-      }
-    }
-  );
   // modification d'une année scolaire
   app.patch(
     '/api/v1/school-years/:id',
@@ -93,23 +75,6 @@ export default async function academicController(app: FastifyInstance): Promise<
         const body = updateSchoolYearBodySchema.parse(request.body ?? {});
         const schoolYear = await withTenantSchema(claims.schemaName, (tenantDb) =>
           buildAcademicService(tenantDb).updateSchoolYear(params.id, body)
-        );
-        return reply.send({ schoolYear });
-      } catch (error) {
-        return handleError(request, reply, error);
-      }
-    }
-  );
-  // suppression d'une année scolaire
-  app.delete(
-    '/api/v1/school-years/:id',
-    { preHandler: requirePermission('school_years.edit') },
-    async (request, reply) => {
-      try {
-        const claims = request.claims!;
-        const params = schoolYearIdParamsSchema.parse(request.params ?? {});
-        const schoolYear = await withTenantSchema(claims.schemaName, (tenantDb) =>
-          buildAcademicService(tenantDb).deleteSchoolYear(params.id)
         );
         return reply.send({ schoolYear });
       } catch (error) {

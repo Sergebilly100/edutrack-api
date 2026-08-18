@@ -57,6 +57,14 @@ scripts/
 
 # Tests
 tests/
+!tests/
+tests/*
+!tests/unit/
+tests/unit/*
+!tests/unit/class-decisions.service.test.ts
+!tests/integration/
+tests/integration/*
+!tests/integration/class-decisions.routes.test.ts
 
 # Template xls
 templates/
