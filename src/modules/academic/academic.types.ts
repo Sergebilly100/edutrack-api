@@ -110,6 +110,10 @@ export const classIdParamsSchema = z.object({
   id: z.string().uuid(),
 });
 
+export const listClassesQuerySchema = z.object({
+  schoolYearId: z.string().uuid().optional(),
+});
+
 export const createClassBodySchema = z.object({
   name: z.string().trim().min(1).max(100),
   levelId: z.string().uuid(),

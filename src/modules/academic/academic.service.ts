@@ -249,12 +249,22 @@ export class AcademicService {
     }
   }
 
-  async listClassesForActiveYear() {
-    const [activeSchoolYear, classes] = await Promise.all([
+  async listClasses(schoolYearId?: string) {
+    const [activeSchoolYear, requestedSchoolYear] = await Promise.all([
       this.repository.getActiveSchoolYear(),
-      this.repository.listClassesForActiveYear(),
+      schoolYearId ? this.repository.findSchoolYearById(schoolYearId) : Promise.resolve(null),
     ]);
-    return { activeSchoolYear, classes };
+
+    if (schoolYearId && !requestedSchoolYear) {
+      throw new AcademicModuleError('School year not found', 404, 'SCHOOL_YEAR_NOT_FOUND');
+    }
+
+    const schoolYear = requestedSchoolYear ?? activeSchoolYear;
+    const classes = schoolYear
+      ? await this.repository.listClassesBySchoolYear(schoolYear.id)
+      : [];
+
+    return { schoolYear, activeSchoolYear, classes };
   }
 
   async createClass(input: CreateClassInput) {

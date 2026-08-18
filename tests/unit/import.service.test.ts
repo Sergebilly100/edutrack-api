@@ -112,7 +112,7 @@ beforeEach(() => {
   repository.deactivateStudentsByIds.mockResolvedValue(0);
   repository.listExistingTeachers.mockResolvedValue([]);
   repository.deactivateTeachersByIds.mockResolvedValue(0);
-  repository.upsertStudent.mockResolvedValue('inserted');
+  repository.upsertStudent.mockResolvedValue({ result: 'inserted' });
   repository.upsertTeacher.mockResolvedValue('inserted');
   repository.upsertSchedule.mockResolvedValue({ result: 'inserted', id: 'schedule-new' });
   repository.deactivateSchedulesByPeriodExcluding.mockResolvedValue(0);
@@ -243,7 +243,14 @@ describe('import.service - students confirm', () => {
     });
     repository.upsertStudent.mockImplementationOnce(async (_db, _row, factory) => {
       await factory();
-      return 'inserted';
+      return {
+        result: 'inserted',
+        createdParent: {
+          parentId: 'parent-1',
+          fullName: 'Parent Awa',
+          phone: '2250700000001',
+        },
+      };
     });
     const service = new ImportService(repository, createParentCredentials);
     const rows = [
@@ -259,6 +266,13 @@ describe('import.service - students confirm', () => {
     const report = await service.confirm('students', await toWorkbookBuffer(rows), db);
 
     expect(report.imported).toBe(1);
+    expect(report.pendingParentAccess).toEqual([
+      {
+        parentId: 'parent-1',
+        fullName: 'Parent Awa',
+        phone: '2250700000001',
+      },
+    ]);
     expect(createParentCredentials).toHaveBeenCalledOnce();
     expect(repository.upsertStudent).toHaveBeenCalledWith(
       expect.anything(),
@@ -282,6 +296,38 @@ describe('import.service - students confirm', () => {
     expect(report.updated).toBe(0);
     expect(report.errors).toHaveLength(0);
     expect(repository.upsertStudent).toHaveBeenCalledTimes(20);
+  });
+
+  it('ne retourne qu’une fois un parent créé et partagé par plusieurs élèves', async () => {
+    const createdParent = {
+      parentId: 'parent-shared',
+      fullName: 'Parent commun',
+      phone: '2250700000009',
+    };
+    repository.upsertStudent
+      .mockResolvedValueOnce({ result: 'inserted', createdParent })
+      .mockResolvedValueOnce({ result: 'inserted' });
+    const service = new ImportService(repository);
+    const rows = [
+      {
+        'Prénom*': 'Awa',
+        'Nom*': 'Kouassi',
+        'Classe*': '3ème A',
+        'Nom parent': createdParent.fullName,
+        'Téléphone parent': createdParent.phone,
+      },
+      {
+        'Prénom*': 'Yao',
+        'Nom*': 'Kouassi',
+        'Classe*': '3ème A',
+        'Nom parent': createdParent.fullName,
+        'Téléphone parent': createdParent.phone,
+      },
+    ];
+
+    const report = await service.confirm('students', await toWorkbookBuffer(rows), db);
+
+    expect(report.pendingParentAccess).toEqual([createdParent]);
   });
 
   it('invalide → IMPORT_VALIDATION_FAILED, aucun write DB', async () => {

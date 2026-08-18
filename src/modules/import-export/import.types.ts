@@ -51,6 +51,11 @@ export type ConfirmReport = {
   preview: Record<string, string>[];
   deactivated?: number;
   importMode?: ImportMode;
+  pendingParentAccess?: Array<{
+    parentId: string;
+    fullName: string;
+    phone: string;
+  }>;
 };
 
 export type StudentImportRow = {

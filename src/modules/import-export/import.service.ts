@@ -1471,6 +1471,10 @@ export class ImportService {
       let imported = 0;
       let updated = 0;
       let deactivated = 0;
+      const pendingParentAccess = new Map<
+        string,
+        { parentId: string; fullName: string; phone: string }
+      >();
 
       for (const row of validation.rows) {
         const result = await this.repository.upsertStudent(
@@ -1478,10 +1482,13 @@ export class ImportService {
           row,
           this.createParentCredentials
         );
-        if (result === 'inserted') {
+        if (result.result === 'inserted') {
           imported += 1;
         } else {
           updated += 1;
+        }
+        if (result.createdParent) {
+          pendingParentAccess.set(result.createdParent.parentId, result.createdParent);
         }
       }
 
@@ -1522,6 +1529,7 @@ export class ImportService {
         preview: validation.report.preview,
         deactivated,
         importMode: mode,
+        pendingParentAccess: Array.from(pendingParentAccess.values()),
       };
     };
 

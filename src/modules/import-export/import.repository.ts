@@ -143,7 +143,10 @@ export type ImportRepository = {
     db: QueryExecutor,
     row: StudentImportRow,
     createParentCredentials: () => Promise<TemporaryCredentials>
-  ) => Promise<'inserted' | 'updated'>;
+  ) => Promise<{
+    result: 'inserted' | 'updated';
+    createdParent?: { parentId: string; fullName: string; phone: string };
+  }>;
   upsertTeacher: (
     db: QueryExecutor,
     row: TeacherImportRow,
@@ -533,8 +536,9 @@ export const defaultImportRepository: ImportRepository = {
         WHERE id = ${existing.id}
       `);
 
+      let createdParent: { parentId: string; fullName: string; phone: string } | undefined;
       if (row.parentName && row.parentPhone) {
-        await ensureParentAccountForStudent(
+        const parent = await ensureParentAccountForStudent(
           db,
           {
             studentId: existing.id,
@@ -544,9 +548,16 @@ export const defaultImportRepository: ImportRepository = {
           },
           createParentCredentials
         );
+        if (parent.created) {
+          createdParent = {
+            parentId: parent.parentId,
+            fullName: parent.fullName,
+            phone: parent.phone,
+          };
+        }
       }
 
-      return 'updated';
+      return { result: 'updated', ...(createdParent ? { createdParent } : {}) };
     }
 
     const insertedResult = await db.execute(sql`
@@ -594,8 +605,9 @@ export const defaultImportRepository: ImportRepository = {
       throw new Error('Unable to insert imported student');
     }
 
+    let createdParent: { parentId: string; fullName: string; phone: string } | undefined;
     if (row.parentName && row.parentPhone) {
-      await ensureParentAccountForStudent(
+      const parent = await ensureParentAccountForStudent(
         db,
         {
           studentId: inserted.id,
@@ -605,9 +617,16 @@ export const defaultImportRepository: ImportRepository = {
         },
         createParentCredentials
       );
+      if (parent.created) {
+        createdParent = {
+          parentId: parent.parentId,
+          fullName: parent.fullName,
+          phone: parent.phone,
+        };
+      }
     }
 
-    return 'inserted';
+    return { result: 'inserted', ...(createdParent ? { createdParent } : {}) };
   },
 
   async upsertTeacher(db, row, params) {

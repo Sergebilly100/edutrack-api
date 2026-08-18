@@ -216,7 +216,7 @@ export class AcademicRepository {
     return getRows(result)[0]?.exists ?? false;
   }
 
-  async listClassesForActiveYear(): Promise<ClassItem[]> {
+  async listClassesBySchoolYear(schoolYearId: string): Promise<ClassItem[]> {
     const result = await this.db.execute<ClassRow>(sql`
       SELECT
         c.id,
@@ -234,10 +234,11 @@ export class AcademicRepository {
         c.updated_at
       FROM classes c
       INNER JOIN levels l ON l.id = c.level_id
-      INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
+      INNER JOIN school_years sy ON sy.id = c.school_year_id
       LEFT JOIN teachers t ON t.id = c.homeroom_teacher_id
       LEFT JOIN users u ON u.id = t.user_id
       WHERE c.is_active = true
+        AND c.school_year_id = ${schoolYearId}::uuid
       ORDER BY l.order_index ASC, c.name ASC
     `);
     return getRows(result).map(mapClass);

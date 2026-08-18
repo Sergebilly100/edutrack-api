@@ -9,6 +9,7 @@ import {
   createClassBodySchema,
   createLevelBodySchema,
   createSchoolYearBodySchema,
+  listClassesQuerySchema,
   levelIdParamsSchema,
   schoolYearIdParamsSchema,
   updateClassBodySchema,
@@ -191,8 +192,9 @@ export default async function academicController(app: FastifyInstance): Promise<
     async (request, reply) => {
       try {
         const claims = request.claims!;
+        const query = listClassesQuerySchema.parse(request.query ?? {});
         const result = await withTenantSchema(claims.schemaName, (tenantDb) =>
-          buildAcademicService(tenantDb).listClassesForActiveYear()
+          buildAcademicService(tenantDb).listClasses(query.schoolYearId)
         );
         return reply.send(result);
       } catch (error) {

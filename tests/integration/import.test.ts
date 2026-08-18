@@ -188,6 +188,12 @@ describe('import integration - students', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.imported).toBe(1);
+    expect(res.body.pendingParentAccess).toEqual([
+      expect.objectContaining({
+        fullName: `Parent ${prefix}`,
+        phone,
+      }),
+    ]);
 
     const links = await queryTenant<{
       parent_id: string;
