@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  ensureParentAccountForStudent,
+  ParentAccountsRepository,
+} from '../../src/modules/parents/parent-accounts.repository.js';
+import {
+  buildParentAccessSms,
+  createTemporaryParentCredentials,
+  ParentAccountsService,
+} from '../../src/modules/parents/parent-accounts.service.js';
 import { StudentsService } from '../../src/modules/students/students.service.js';
 
 // ─── Repository mock ──────────────────────────────────────────────────────────
@@ -26,8 +35,8 @@ const repository = {
 
 const eventEmitter = vi.fn();
 
-const buildService = () =>
-  new StudentsService(repository as never, { eventEmitter });
+const buildService = (dependencies: Record<string, unknown> = {}) =>
+  new StudentsService(repository as never, { eventEmitter, ...dependencies } as never);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -76,6 +85,55 @@ describe('listStudents()', () => {
 // ─── createStudent ────────────────────────────────────────────────────────────
 
 describe('createStudent()', () => {
+  it('retourne l’élève et déclenche les accès du nouveau parent', async () => {
+    const notifyParentAccess = vi.fn().mockResolvedValue(undefined);
+    const createParentCredentials = vi.fn().mockResolvedValue({
+      plainPassword: 'ABCD234567',
+      passwordHash: 'argon-hash',
+    });
+    const student = { id: 'student-1', firstName: 'Awa' };
+    repository.createStudent.mockResolvedValue({
+      student,
+      parentProvisioning: {
+        parentId: 'parent-1',
+        fullName: 'Parent Awa',
+        phone: '2250700000001',
+        created: true,
+        temporaryPassword: 'ABCD234567',
+      },
+    });
+
+    const result = await buildService({
+      notifyParentAccess,
+      createParentCredentials,
+    }).createStudent({} as never);
+
+    expect(result).toBe(student);
+    expect(notifyParentAccess).toHaveBeenCalledWith({
+      parentId: 'parent-1',
+      phone: '2250700000001',
+      temporaryPassword: 'ABCD234567',
+    });
+  });
+
+  it('ne fait pas échouer l’inscription si l’envoi SMS échoue', async () => {
+    repository.createStudent.mockResolvedValue({
+      student: { id: 'student-1' },
+      parentProvisioning: {
+        parentId: 'parent-1',
+        phone: '2250700000001',
+        created: true,
+        temporaryPassword: 'ABCD234567',
+      },
+    });
+
+    await expect(
+      buildService({
+        notifyParentAccess: vi.fn().mockRejectedValue(new Error('SMS unavailable')),
+      }).createStudent({} as never)
+    ).resolves.toMatchObject({ id: 'student-1' });
+  });
+
   it('lève CLASS_NOT_FOUND sur message "Class not found"', async () => {
     repository.createStudent.mockRejectedValue(new Error('Class not found'));
     await expect(buildService().createStudent({} as never)).rejects.toMatchObject({
@@ -446,5 +504,162 @@ describe('getStudentAbsences()', () => {
       from: '2026-04-01',
       to: '2026-04-30',
     });
+  });
+});
+
+describe('parent accounts provisioning', () => {
+  it('dédoublonne par téléphone et lie le parent existant sans générer de mot de passe', async () => {
+    const db = {
+      execute: vi
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: 'parent-1',
+              full_name: 'Parent Existant',
+              phone: '2250700000001',
+              access_sent_at: null,
+            },
+          ],
+        })
+        .mockResolvedValueOnce({ rows: [] }),
+    };
+    const createCredentials = vi.fn();
+
+    const result = await ensureParentAccountForStudent(
+      db,
+      {
+        studentId: 'student-2',
+        fullName: 'Nom du formulaire',
+        phone: '2250700000001',
+        email: 'parent@test.ci',
+      },
+      createCredentials
+    );
+
+    expect(result).toMatchObject({ parentId: 'parent-1', created: false });
+    expect(createCredentials).not.toHaveBeenCalled();
+    expect(db.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('crée un parent avec mot de passe temporaire puis le lie à l’élève', async () => {
+    const db = {
+      execute: vi
+        .fn()
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: 'parent-new',
+              full_name: 'Parent Nouveau',
+              phone: '2250700000002',
+              access_sent_at: null,
+            },
+          ],
+        })
+        .mockResolvedValueOnce({ rows: [] }),
+    };
+    const createCredentials = vi.fn().mockResolvedValue({
+      plainPassword: 'ABCD234567',
+      passwordHash: 'hash-parent',
+    });
+
+    const result = await ensureParentAccountForStudent(
+      db,
+      {
+        studentId: 'student-1',
+        fullName: 'Parent Nouveau',
+        phone: '2250700000002',
+      },
+      createCredentials
+    );
+
+    expect(result).toEqual({
+      parentId: 'parent-new',
+      fullName: 'Parent Nouveau',
+      phone: '2250700000002',
+      created: true,
+      temporaryPassword: 'ABCD234567',
+    });
+    expect(createCredentials).toHaveBeenCalledOnce();
+  });
+
+  it('génère et hashe indépendamment le mot de passe temporaire', async () => {
+    const passwordGenerator = vi.fn().mockReturnValue('SAFE234567');
+    const passwordHasher = vi.fn().mockResolvedValue('argon-hash');
+
+    const result = await createTemporaryParentCredentials({
+      passwordGenerator,
+      passwordHasher,
+    });
+
+    expect(passwordGenerator).toHaveBeenCalledWith(10);
+    expect(passwordHasher).toHaveBeenCalledWith('SAFE234567');
+    expect(result).toEqual({ plainPassword: 'SAFE234567', passwordHash: 'argon-hash' });
+  });
+});
+
+describe('parent access delivery', () => {
+  it('construit un SMS avec lien, téléphone, mot de passe et changement obligatoire', () => {
+    const message = buildParentAccessSms({
+      loginUrl: 'https://app.ivoiredu.ci/parent/login',
+      phone: '2250700000001',
+      temporaryPassword: 'ABCD234567',
+    });
+
+    expect(message).toContain('https://app.ivoiredu.ci/parent/login');
+    expect(message).toContain('2250700000001');
+    expect(message).toContain('ABCD234567');
+    expect(message).toContain('modifier');
+  });
+
+  it('met en file uniquement les parents dont les accès ne sont pas encore envoyés', async () => {
+    const parentAccountsRepository = {
+      listByIds: vi.fn().mockResolvedValue([
+        {
+          id: '11111111-1111-4111-8111-111111111111',
+          fullName: 'Parent Pending',
+          phone: '2250700000001',
+          accessSentAt: null,
+        },
+        {
+          id: '22222222-2222-4222-8222-222222222222',
+          fullName: 'Parent Sent',
+          phone: '2250700000002',
+          accessSentAt: '2026-08-18T10:00:00.000Z',
+        },
+      ]),
+      updateTemporaryPassword: vi.fn(),
+      insertAccessNotification: vi.fn(),
+      markAccessNotificationFailed: vi.fn(),
+    };
+    const smsQueue = { add: vi.fn().mockResolvedValue({ id: 'job-1' }) };
+    const service = new ParentAccountsService(
+      parentAccountsRepository as unknown as ParentAccountsRepository,
+      {
+        smsQueue,
+        appBaseUrl: 'https://app.ivoiredu.ci/',
+        passwordGenerator: () => 'ABCD234567',
+        passwordHasher: async () => 'argon-hash',
+      }
+    );
+
+    const result = await service.sendPendingAccess({
+      schemaName: 'school_test',
+      parentIds: [
+        '11111111-1111-4111-8111-111111111111',
+        '22222222-2222-4222-8222-222222222222',
+        '33333333-3333-4333-8333-333333333333',
+      ],
+    });
+
+    expect(result.queued).toBe(1);
+    expect(result.items).toEqual([
+      { parentId: '11111111-1111-4111-8111-111111111111', status: 'queued' },
+      { parentId: '22222222-2222-4222-8222-222222222222', status: 'already_sent' },
+      { parentId: '33333333-3333-4333-8333-333333333333', status: 'not_found' },
+    ]);
+    expect(parentAccountsRepository.updateTemporaryPassword).toHaveBeenCalledOnce();
+    expect(smsQueue.add).toHaveBeenCalledOnce();
   });
 });

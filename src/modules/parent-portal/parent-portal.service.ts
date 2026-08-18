@@ -64,7 +64,7 @@ export class ParentPortalService {
   async loginParent(input: {
     phone: string;
     password: string;
-  }): Promise<{ parentId: string; phone: string; full_name: string; email: string; studentIds: string[]; mustChangePassword: boolean }> {
+  }): Promise<{ parentId: string; phone: string; full_name: string; email: string | null; studentIds: string[]; mustChangePassword: boolean }> {
     const parent = await this.repository.findParentByPhone(input.phone);
     if (!parent || !parent.is_active) {
       throw new ParentPortalError('Invalid credentials', 401, 'UNAUTHORIZED');
@@ -75,12 +75,12 @@ export class ParentPortalService {
       throw new ParentPortalError('Invalid credentials', 401, 'UNAUTHORIZED');
     }
 
-    const studentIds = await this.repository.listActiveStudentIds(parent.id);
+    const studentIds = await this.repository.listLinkedStudentIds(parent.id);
     if (studentIds.length === 0) {
       throw new ParentPortalError(
-        "Votre abonnement a expiré. Contactez l'établissement.",
+        "Aucun élève n'est rattaché à ce compte. Contactez l'établissement.",
         403,
-        'SUBSCRIPTION_EXPIRED'
+        'NO_STUDENTS_LINKED'
       );
     }
 
@@ -103,12 +103,12 @@ export class ParentPortalService {
       throw new ParentPortalError('Invalid credentials', 401, 'UNAUTHORIZED');
     }
 
-    const studentIds = await this.repository.listActiveStudentIds(parent.id);
+    const studentIds = await this.repository.listLinkedStudentIds(parent.id);
     if (studentIds.length === 0) {
       throw new ParentPortalError(
-        "Votre abonnement a expiré. Contactez l'établissement.",
+        "Aucun élève n'est rattaché à ce compte. Contactez l'établissement.",
         403,
-        'SUBSCRIPTION_EXPIRED'
+        'NO_STUDENTS_LINKED'
       );
     }
 

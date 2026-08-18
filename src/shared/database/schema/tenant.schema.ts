@@ -64,6 +64,7 @@ export const notificationTypeEnum = tenant.enum('notification_type', [
   'scan_end_sanction_cancelled',
   'subscription_expiry_alert',
   'subscription_revenue_payout',
+  'parent_access_credentials',
   'payment_reminder',
   'custom',
 ]);
@@ -96,6 +97,12 @@ export const salaryStatusEnum = tenant.enum('salary_status', [
   'paid',
   'disputed',
   'nothing_to_pay',
+]);
+
+export const schoolYearStatusEnum = tenant.enum('school_year_status', [
+  'draft',
+  'active',
+  'closed',
 ]);
 
 export const users = tenant.table('users', {
@@ -146,15 +153,86 @@ export const teachers = tenant.table(
   })
 );
 
-export const classes = tenant.table('classes', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  name: varchar('name', { length: 100 }).notNull(),
-  level: varchar('level', { length: 50 }),
-  studentCount: integer('student_count').notNull().default(0),
-  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
-    .notNull()
-    .defaultNow(),
-});
+export const schoolYears = tenant.table(
+  'school_years',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    label: varchar('label', { length: 25 }).notNull(),
+    startDate: date('start_date').notNull(),
+    endDate: date('end_date').notNull(),
+    status: schoolYearStatusEnum('status').notNull().default('draft'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    schoolYearsLabelUnique: unique('school_years_label_unique').on(table.label),
+    schoolYearsStatusIdx: index('idx_school_years_status').on(table.status),
+    schoolYearsOneActiveIdx: uniqueIndex('school_years_one_active_idx')
+      .on(table.status)
+      .where(sql`${table.status} = 'active'`),
+    schoolYearsValidDates: check(
+      'school_years_valid_dates',
+      sql`${table.startDate} < ${table.endDate}`
+    ),
+  })
+);
+
+export const levels = tenant.table(
+  'levels',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    name: varchar('name', { length: 100 }).notNull(),
+    orderIndex: integer('order_index').notNull(),
+    isExamClass: boolean('is_exam_class').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    levelsNameUnique: unique('levels_name_unique').on(table.name),
+    levelsOrderIdx: index('idx_levels_order').on(table.orderIndex, table.name),
+  })
+);
+
+export const classes = tenant.table(
+  'classes',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    name: varchar('name', { length: 100 }).notNull(),
+    // Champ V1 conservé tant que les anciennes classes ne sont pas migrées.
+    level: varchar('level', { length: 50 }),
+    levelId: uuid('level_id').references(() => levels.id),
+    schoolYearId: uuid('school_year_id').references(() => schoolYears.id),
+    homeroomTeacherId: uuid('homeroom_teacher_id').references(() => teachers.id, {
+      onDelete: 'set null',
+    }),
+    studentCount: integer('student_count').notNull().default(0),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    classesSchoolYearIdx: index('idx_classes_school_year').on(table.schoolYearId),
+    classesLevelIdx: index('idx_classes_level').on(table.levelId),
+    classesHomeroomTeacherIdx: index('idx_classes_homeroom_teacher').on(
+      table.homeroomTeacherId
+    ),
+    classesActiveYearNameUnique: uniqueIndex('classes_active_year_name_unique')
+      .on(table.schoolYearId, table.name)
+      .where(sql`${table.isActive} = true AND ${table.schoolYearId} IS NOT NULL`),
+  })
+);
 
 export const students = tenant.table(
   'students',
@@ -630,12 +708,16 @@ export const parents = tenant.table(
     email: varchar('email', { length: 255 }),
     passwordHash: text('password_hash').notNull(),
     mustChangePassword: boolean('must_change_password').notNull().default(true),
+    accessSentAt: timestamp('access_sent_at', { withTimezone: true, mode: 'date' }),
     isActive: boolean('is_active').notNull().default(true),
     lastLoginAt: timestamp('last_login_at', { withTimezone: true, mode: 'date' }),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   },
   (table) => ({
     parentsPhoneIdx: index('idx_parents_phone').on(table.phone),
+    parentsAccessPendingIdx: index('idx_parents_access_pending')
+      .on(table.createdAt)
+      .where(sql`${table.accessSentAt} IS NULL`),
   })
 );
 
@@ -686,8 +768,7 @@ export const parentStudentLinks = tenant.table(
   {
     id: uuid('id').defaultRandom().primaryKey(),
     subscriptionId: uuid('subscription_id')
-      .notNull()
-      .references(() => parentSubscriptions.id, { onDelete: 'cascade' }),
+      .references(() => parentSubscriptions.id, { onDelete: 'set null' }),
     parentId: uuid('parent_id')
       .notNull()
       .references(() => parents.id, { onDelete: 'cascade' }),

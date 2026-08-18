@@ -65,6 +65,7 @@ export type NotificationType =
   | 'scan_end_sanction_cancelled'
   | 'subscription_expiry_alert'
   | 'subscription_revenue_payout'
+  | 'parent_access_credentials'
   | 'payment_reminder'
   | 'custom';
 
@@ -97,6 +98,13 @@ export type PermissionKey =
   | 'rooms.create'
   | 'rooms.edit'
   | 'rooms.delete'
+  | 'school_years.view'
+  | 'school_years.create'
+  | 'school_years.edit'
+  | 'classes.view'
+  | 'classes.create'
+  | 'classes.edit'
+  | 'classes.delete'
   | 'import.students'
   | 'import.teachers'
   | 'import.schedule'

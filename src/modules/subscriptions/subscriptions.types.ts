@@ -64,6 +64,10 @@ export const parentIdParamsSchema = z.object({
   parentId: z.string().uuid(),
 });
 
+export const sendParentAccessBodySchema = z.object({
+  parent_ids: z.array(z.string().uuid()).min(1).max(100),
+});
+
 export const cancelSubscriptionParamsSchema = z.object({
   parentId: z.string().uuid(),
   subscriptionId: z.string().uuid(),

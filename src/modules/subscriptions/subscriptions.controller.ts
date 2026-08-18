@@ -3,10 +3,18 @@ import { ZodError, z } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
 import {
+  authenticateRequest,
   requireDirectorOrSecretary,
   requirePermission,
 } from '../../shared/middleware/auth.middleware.js';
 import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
+import type { Queue } from 'bullmq';
+import type { NotificationJobData } from '../notifications/notifications.queue.js';
+import { ParentAccountsRepository } from '../parents/parent-accounts.repository.js';
+import {
+  ParentAccountsModuleError,
+  ParentAccountsService,
+} from '../parents/parent-accounts.service.js';
 import { SubscriptionsRepository } from './subscriptions.repository.js';
 import { SubscriptionsModuleError, SubscriptionsService } from './subscriptions.service.js';
 import {
@@ -19,6 +27,7 @@ import {
   revenuePaymentsQuerySchema,
   revenueHistoryQuerySchema,
   revenueSummaryQuerySchema,
+  sendParentAccessBodySchema,
   renewParentSubscriptionBodySchema,
   updateParentContactBodySchema,
   subscriptionClassesQuerySchema,
@@ -35,6 +44,13 @@ const handleError = (request: FastifyRequest, reply: FastifyReply, error: unknow
     });
   }
   if (error instanceof SubscriptionsModuleError) {
+    return reply.code(error.statusCode).send({
+      error: error.message,
+      code: error.code,
+      statusCode: error.statusCode,
+    });
+  }
+  if (error instanceof ParentAccountsModuleError) {
     return reply.code(error.statusCode).send({
       error: error.message,
       code: error.code,
@@ -62,9 +78,35 @@ const revenueExportBodySchema = z
     path: ['periodFrom'],
   });
 
+const requireParentAccessDispatchPermission = async (
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> => {
+  await authenticateRequest(request, reply);
+  if (reply.sent) return;
+
+  const permissions = request.permissions;
+  if (
+    permissions?.has('import.students') ||
+    permissions?.has('students.edit') ||
+    permissions?.has('subscriptions.password.reset')
+  ) {
+    return;
+  }
+
+  reply.code(403).send({
+    error: 'Permission to send parent access required',
+    code: 'FORBIDDEN',
+    statusCode: 403,
+  });
+};
+
 export default async function subscriptionsController(
   app: FastifyInstance,
-  options: { pdfQueue?: PdfExportQueueHandle } = {}
+  options: {
+    pdfQueue?: PdfExportQueueHandle;
+    smsQueue?: Queue<NotificationJobData>;
+  } = {}
 ): Promise<void> {
   app.get(
     '/api/v1/settings/sms-price',
@@ -196,6 +238,30 @@ export default async function subscriptionsController(
           });
         });
         return reply.code(201).send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/subscriptions/parents/access/send',
+    { preHandler: requireParentAccessDispatchPermission },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const body = sendParentAccessBodySchema.parse(request.body ?? {});
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          const service = new ParentAccountsService(
+            new ParentAccountsRepository(tenantDb),
+            { smsQueue: options.smsQueue }
+          );
+          return service.sendPendingAccess({
+            schemaName: claims.schemaName,
+            parentIds: body.parent_ids,
+          });
+        });
+        return reply.send(result);
       } catch (error) {
         return handleError(request, reply, error);
       }

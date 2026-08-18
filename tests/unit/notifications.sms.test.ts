@@ -19,7 +19,7 @@ describe('notifications.sms', () => {
     });
 
     expect(sms).toBe(
-      'IvoirEdu:Yao Marie en retard de 12min - Mathématiques (3ème A, 07h30-09h00). 2026-04-14'
+      'IvoirEdu: Yao Marie en retard de 12min - Mathématiques (3ème A, 07h30-09h00). 2026-04-14'
     );
     expect(sms.length).toBeLessThanOrEqual(SMS_MAX_LENGTH);
   });
@@ -48,13 +48,13 @@ describe('notifications.sms', () => {
     });
 
     expect(mismatch).toBe(
-      'IvoirEdu:Yao Marie a scanné salle Salle B2 au lieu de Salle A1 - SVT 09h15-10h45'
+      'IvoirEdu: Yao Marie a scanné salle Salle B2 au lieu de Salle A1 - SVT 09h15-10h45'
     );
     expect(missing).toBe(
-      "IvoirEdu:Yao Marie n'a pas scanné le QR de sa salle - SVT (4ème C) 09h15-10h45"
+      "IvoirEdu: Yao Marie n'a pas scanné le QR de sa salle - SVT (4ème C) 09h15-10h45"
     );
     expect(outOfTime).toBe(
-      'IvoirEdu:Scan QR hors horaire par Yao Marie - SVT 2026-04-14 09h15-10h45'
+      'IvoirEdu: Scan QR hors horaire par Yao Marie - SVT 2026-04-14 09h15-10h45'
     );
 
     expect(mismatch.length).toBeLessThanOrEqual(SMS_MAX_LENGTH);
@@ -125,7 +125,7 @@ describe('notifications.sms', () => {
     });
 
     expect(sms).toBe(
-      'IvoirEdu:Awa absent(e) en Mathématiques le 2026-04-14. Contact école: 2250700000001'
+      'IvoirEdu: Awa absent(e) en Mathématiques le 2026-04-14. Contact école: 2250700000001'
     );
     expect(sms.length).toBeLessThanOrEqual(SMS_MAX_LENGTH);
   });

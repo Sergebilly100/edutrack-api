@@ -1,5 +1,10 @@
 import { sql } from 'drizzle-orm';
 
+import {
+  ensureParentAccountForStudent,
+  type TemporaryCredentials,
+} from '../parents/parent-accounts.repository.js';
+
 import type {
   ImportType,
   ScheduleImportRow,
@@ -134,7 +139,11 @@ export type ImportRepository = {
     }>
   >;
   deactivateTeachersByIds: (db: QueryExecutor, ids: string[]) => Promise<number>;
-  upsertStudent: (db: QueryExecutor, row: StudentImportRow) => Promise<'inserted' | 'updated'>;
+  upsertStudent: (
+    db: QueryExecutor,
+    row: StudentImportRow,
+    createParentCredentials: () => Promise<TemporaryCredentials>
+  ) => Promise<'inserted' | 'updated'>;
   upsertTeacher: (
     db: QueryExecutor,
     row: TeacherImportRow,
@@ -177,8 +186,13 @@ export type ImportRepository = {
 export const defaultImportRepository: ImportRepository = {
   async listClasses(db) {
     const result = await db.execute(sql`
-      SELECT id, name
-      FROM classes
+      SELECT c.id, c.name
+      FROM classes c
+      WHERE c.is_active = true
+        AND (
+          c.school_year_id IS NULL
+          OR c.school_year_id = (SELECT id FROM school_years WHERE status = 'active' LIMIT 1)
+        )
     `);
 
     return getRows<ClassRow>(result);
@@ -475,7 +489,7 @@ export const defaultImportRepository: ImportRepository = {
     return Number.isFinite(value) ? value : 0;
   },
 
-  async upsertStudent(db, row) {
+  async upsertStudent(db, row, createParentCredentials) {
     const existingResult = row.matricule
       ? await db.execute(sql`
           SELECT id, matricule
@@ -490,6 +504,11 @@ export const defaultImportRepository: ImportRepository = {
             SELECT c.id
             FROM classes c
             WHERE LOWER(c.name) = LOWER(${row.className})
+              AND c.is_active = true
+              AND (
+                c.school_year_id IS NULL
+                OR c.school_year_id = (SELECT id FROM school_years WHERE status = 'active' LIMIT 1)
+              )
             LIMIT 1
           )
             AND LOWER(first_name) = LOWER(${row.firstName})
@@ -514,10 +533,23 @@ export const defaultImportRepository: ImportRepository = {
         WHERE id = ${existing.id}
       `);
 
+      if (row.parentName && row.parentPhone) {
+        await ensureParentAccountForStudent(
+          db,
+          {
+            studentId: existing.id,
+            fullName: row.parentName,
+            phone: row.parentPhone,
+            email: row.parentEmail,
+          },
+          createParentCredentials
+        );
+      }
+
       return 'updated';
     }
 
-    await db.execute(sql`
+    const insertedResult = await db.execute(sql`
       INSERT INTO students (
         class_id,
         matricule,
@@ -536,6 +568,11 @@ export const defaultImportRepository: ImportRepository = {
           SELECT c.id
           FROM classes c
           WHERE LOWER(c.name) = LOWER(${row.className})
+            AND c.is_active = true
+            AND (
+              c.school_year_id IS NULL
+              OR c.school_year_id = (SELECT id FROM school_years WHERE status = 'active' LIMIT 1)
+            )
           LIMIT 1
         ),
         ${row.matricule},
@@ -549,7 +586,26 @@ export const defaultImportRepository: ImportRepository = {
         ${row.parentPhone2},
         true
       )
+      RETURNING id::text AS id
     `);
+
+    const inserted = getRows<{ id: string }>(insertedResult)[0];
+    if (!inserted) {
+      throw new Error('Unable to insert imported student');
+    }
+
+    if (row.parentName && row.parentPhone) {
+      await ensureParentAccountForStudent(
+        db,
+        {
+          studentId: inserted.id,
+          fullName: row.parentName,
+          phone: row.parentPhone,
+          email: row.parentEmail,
+        },
+        createParentCredentials
+      );
+    }
 
     return 'inserted';
   },

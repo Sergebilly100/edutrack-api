@@ -138,7 +138,7 @@ describe('subscriptions.service', () => {
       repository.getStudentsByIds.mockResolvedValue([{ id: 'student-1' }, { id: 'student-2' }]);
       repository.findParentByPhone.mockResolvedValue(null);
       repository.computeStartsAndEnds.mockReturnValue({ startsAt: '2026-04-15', endsAt: '2026-05-15' });
-      repository.createParentWithSubscriptionTx.mockResolvedValue({ parentId: 'parent-1', subscriptionId: 'sub-1' });
+      repository.createParentWithSubscriptionTx.mockResolvedValue({ parentId: 'parent-1', subscriptionId: 'sub-1', parentCreated: true });
 
       const service = new SubscriptionsService(repository as never);
       const result = await service.createParentSubscription({
@@ -160,7 +160,7 @@ describe('subscriptions.service', () => {
       repository.getStudentsByIds.mockResolvedValue([{ id: 'student-1' }, { id: 'student-2' }]);
       repository.findParentByPhone.mockResolvedValue(null);
       repository.computeStartsAndEnds.mockReturnValue({ startsAt: '2026-04-15', endsAt: '2026-07-15' });
-      repository.createParentWithSubscriptionTx.mockResolvedValue({ parentId: 'parent-1', subscriptionId: 'sub-1' });
+      repository.createParentWithSubscriptionTx.mockResolvedValue({ parentId: 'parent-1', subscriptionId: 'sub-1', parentCreated: true });
 
       const service = new SubscriptionsService(repository as never);
       const result = await service.createParentSubscription({
@@ -172,21 +172,29 @@ describe('subscriptions.service', () => {
       expect(result.subscription.total_amount_fcfa).toBe(6000);
     });
 
-    it('lève PARENT_ALREADY_EXISTS si phone existant', async () => {
+    it('ajoute un abonnement au parent existant sans recréer ses accès', async () => {
       const repository = buildRepositoryMock();
       repository.getTenantIdBySchemaName.mockResolvedValue('tenant-1');
       repository.getSmsFeatureByTenantId.mockResolvedValue({ is_enabled: true, sms_unit_price_fcfa: 1000, sms_cap_per_student: 60 });
       repository.getStudentsByIds.mockResolvedValue([{ id: 'student-1' }]);
       repository.findParentByPhone.mockResolvedValue({ id: 'existing-parent' });
+      repository.computeStartsAndEnds.mockReturnValue({ startsAt: '2026-04-15', endsAt: '2026-05-15' });
+      repository.createParentWithSubscriptionTx.mockResolvedValue({
+        parentId: 'existing-parent',
+        subscriptionId: 'sub-1',
+        parentCreated: false,
+      });
 
       const service = new SubscriptionsService(repository as never);
-      await expect(
-        service.createParentSubscription({
-          schemaName: 'school_test',
-          actorUserId: 'user-1',
-          payload: { full_name: 'Dup Parent', phone: '2250709990001', student_ids: ['student-1'], duration_months: 1, payment_method: 'cash', paid_now: true },
-        })
-      ).rejects.toMatchObject({ code: 'PARENT_ALREADY_EXISTS' });
+      const result = await service.createParentSubscription({
+        schemaName: 'school_test',
+        actorUserId: 'user-1',
+        payload: { full_name: 'Dup Parent', phone: '2250709990001', student_ids: ['student-1'], duration_months: 1, payment_method: 'cash', paid_now: true },
+      });
+
+      expect(result.parent.id).toBe('existing-parent');
+      expect(result.credentials).toBeNull();
+      expect(result.subscription.id).toBe('sub-1');
     });
 
     it('lève SMS_FEATURE_NOT_ENABLED si feature désactivée', async () => {

@@ -441,8 +441,8 @@ describe('attendance.service', () => {
   });
 
   it('submitStudentAttendance() lève ROLLCALL_WINDOW_CLOSED si délai dépassé', async () => {
-    // Temps fixé APRÈS fin du créneau 09:00 + 15 min
-    vi.setSystemTime(new Date('2026-04-14T09:20:00.000Z'));
+    // Temps fixé APRÈS la grâce offline de 7 jours suivant la fin du créneau.
+    vi.setSystemTime(new Date('2026-04-21T09:01:00.000Z'));
     repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1' });
     repository.findScheduleContextForTeacher.mockResolvedValue({
       scheduleId: 'schedule-1',

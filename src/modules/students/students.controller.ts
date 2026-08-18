@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 
 import { z } from 'zod';
+import type { Queue } from 'bullmq';
 
 import { withTenantSchema } from '../../shared/database/db.js';
 import {
@@ -48,6 +49,7 @@ const requireStudentsListAccess = async (
   }
 };
 import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
+import type { NotificationJobData } from '../notifications/notifications.queue.js';
 
 import { StudentsModuleError, buildStudentsService } from './students.service.js';
 import {
@@ -95,7 +97,10 @@ const absenceExportQuerySchema = absenceStatsQuerySchema.extend({
 
 export default async function studentsController(
   app: FastifyInstance,
-  options: { pdfQueue?: PdfExportQueueHandle } = {}
+  options: {
+    pdfQueue?: PdfExportQueueHandle;
+    smsQueue?: Queue<NotificationJobData>;
+  } = {}
 ): Promise<void> {
   // ─── Students CRUD ──────────────────────────────────────────────────────────
 
@@ -139,7 +144,10 @@ export default async function studentsController(
         const body = createStudentBodySchema.parse(request.body ?? {});
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-          return buildStudentsService(tenantDb).createStudent(body);
+          return buildStudentsService(tenantDb, undefined, {
+            schemaName: claims.schemaName,
+            smsQueue: options.smsQueue,
+          }).createStudent(body);
         });
 
         return reply.code(201).send({ data: result });
@@ -259,7 +267,10 @@ export default async function studentsController(
         const body = updateStudentBodySchema.parse(request.body ?? {});
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-          return buildStudentsService(tenantDb).updateStudent(params.id, body);
+          return buildStudentsService(tenantDb, undefined, {
+            schemaName: claims.schemaName,
+            smsQueue: options.smsQueue,
+          }).updateStudent(params.id, body);
         });
 
         return reply.send({ data: result });

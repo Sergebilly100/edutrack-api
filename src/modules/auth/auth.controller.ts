@@ -10,7 +10,6 @@ import {
   resolveTenantFromHostname,
 } from '../../shared/tenancy/tenant-host.js';
 import {
-  assertParentPortalEnabled,
   changePassword,
   getMe,
   login,
@@ -553,8 +552,6 @@ export default async function authController(app: FastifyInstance): Promise<void
           throw new Error('Tenant not found');
         }
 
-        await assertParentPortalEnabled(db, tenant.id);
-
         const lockState = await isLoginLocked(schemaName, body.phone);
         if (lockState.locked) {
           return reply.code(429).send({
@@ -636,8 +633,7 @@ export default async function authController(app: FastifyInstance): Promise<void
         }
         if (error instanceof ParentPortalError) {
           return reply.code(error.statusCode).send({
-            error: error.code === 'SUBSCRIPTION_EXPIRED' ? 'SUBSCRIPTION_EXPIRED' : error.message,
-            message: error.code === 'SUBSCRIPTION_EXPIRED' ? error.message : undefined,
+            error: error.message,
             code: error.code,
             statusCode: error.statusCode,
           });

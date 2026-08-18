@@ -4,6 +4,7 @@ import ExcelJS from 'exceljs';
 
 import { emit } from '../../shared/events/event-bus.js';
 import { generateUsername } from '../../shared/utils/username.js';
+import { createTemporaryParentCredentials } from '../parents/parent-accounts.service.js';
 import {
   canonicalizeSubject,
   canonicalizeSubjectList,
@@ -677,7 +678,10 @@ const validateStudentRow = (
 // ---------------------------------------------------------------------------
 
 export class ImportService {
-  constructor(private readonly repository: ImportRepository = defaultImportRepository) {}
+  constructor(
+    private readonly repository: ImportRepository = defaultImportRepository,
+    private readonly createParentCredentials = createTemporaryParentCredentials
+  ) {}
 
   // dryRun effectue une validation des données du fichier Excel pour le type d'import spécifié, sans appliquer de changements en base.
   async dryRun(
@@ -1469,7 +1473,11 @@ export class ImportService {
       let deactivated = 0;
 
       for (const row of validation.rows) {
-        const result = await this.repository.upsertStudent(executor, row);
+        const result = await this.repository.upsertStudent(
+          executor,
+          row,
+          this.createParentCredentials
+        );
         if (result === 'inserted') {
           imported += 1;
         } else {

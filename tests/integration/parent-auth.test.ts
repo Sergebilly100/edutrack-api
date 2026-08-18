@@ -2,6 +2,7 @@ import argon2 from 'argon2';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
+  getAuthHeaders,
   getSeedContext,
   queryPublic,
   queryTenant,
@@ -184,7 +185,7 @@ describe('parent auth + parent routes integration', () => {
     expect(response.status).toBe(401);
   });
 
-  it('POST /auth/login/parent avec souscription expirée → 403 + message FR', async () => {
+  it('POST /auth/login/parent avec souscription expirée → accès de base autorisé', async () => {
     const expiredPhone = '2250709992222';
     const expiredHash = await argon2.hash('2222');
 
@@ -209,26 +210,31 @@ describe('parent auth + parent routes integration', () => {
       `,
       [parentId, context.directorUserId]
     );
+    await queryTenant(
+      `
+        INSERT INTO ${tenantTable('parent_student_links')} (subscription_id, parent_id, student_id)
+        VALUES (NULL, $1::uuid, $2::uuid)
+      `,
+      [parentId, otherStudentId]
+    );
 
     const response = await request()
       .post('/api/v1/auth/login/parent')
       .set('x-tenant-schema', TEST_SCHEMA_NAME)
       .send({ phone: expiredPhone, password: '2222' });
 
-    expect(response.status).toBe(403);
-    expect(response.body.code).toBe('SUBSCRIPTION_EXPIRED');
-    expect(response.body.message).toContain('abonnement a expiré');
+    expect(response.status).toBe(200);
+    expect(response.body.user?.studentIds).toContain(otherStudentId);
   });
 
-  it('POST /auth/login/parent feature désactivée → 403 SERVICE_NOT_AVAILABLE', async () => {
+  it('POST /auth/login/parent feature SMS désactivée → accès de base autorisé', async () => {
     await queryPublic(
       `UPDATE public.school_sms_features SET is_enabled = false WHERE tenant_id = (SELECT id FROM public.tenants WHERE schema_name = $1 LIMIT 1)`,
       [TEST_SCHEMA_NAME]
     );
 
     const response = await loginParent();
-    expect(response.status).toBe(403);
-    expect(response.body.code).toBe('SERVICE_NOT_AVAILABLE');
+    expect(response.status).toBe(200);
 
     await queryPublic(
       `UPDATE public.school_sms_features SET is_enabled = true WHERE tenant_id = (SELECT id FROM public.tenants WHERE schema_name = $1 LIMIT 1)`,
@@ -369,5 +375,167 @@ describe('parent auth + parent routes integration', () => {
       .get('/api/v1/parent/students')
       .set('authorization', `Bearer ${token}`);
     expect(allowed.status).toBe(200);
+  });
+});
+
+describe('parent provisioning on student enrollment', () => {
+  let pendingParentId = '';
+
+  it('création élève → parent créé, lié et SMS d’accès mis en file', async () => {
+    const headers = await getAuthHeaders('director');
+    const [{ id: classId }] = await queryTenant<{ id: string }>(
+      `SELECT id::text AS id FROM ${tenantTable('classes')} ORDER BY created_at ASC LIMIT 1`
+    );
+    const suffix = Math.random().toString().slice(2, 9).padEnd(7, '0');
+    const phone = `22507${suffix}1`;
+
+    const response = await request()
+      .post('/api/v1/students')
+      .set(headers)
+      .send({
+        class_id: classId,
+        first_name: 'Provisioning',
+        last_name: `Student-${suffix}`,
+        parent_name: `Parent ${suffix}`,
+        parent_phone: phone,
+        parent_email: `parent-${suffix}@test.ci`,
+      });
+
+    expect(response.status).toBe(201);
+    const studentId = response.body.data.id as string;
+
+    const rows = await queryTenant<{
+      parent_id: string;
+      phone: string;
+      must_change_password: boolean;
+      access_sent_at: string | null;
+      subscription_id: string | null;
+    }>(
+      `
+        SELECT
+          p.id::text AS parent_id,
+          p.phone,
+          p.must_change_password,
+          p.access_sent_at::text,
+          psl.subscription_id::text
+        FROM ${tenantTable('parents')} p
+        INNER JOIN ${tenantTable('parent_student_links')} psl ON psl.parent_id = p.id
+        WHERE p.phone = $1 AND psl.student_id = $2::uuid
+      `,
+      [phone, studentId]
+    );
+
+    expect(rows).toHaveLength(1);
+    pendingParentId = rows[0]!.parent_id;
+    expect(rows[0]).toMatchObject({
+      phone,
+      must_change_password: true,
+      access_sent_at: null,
+      subscription_id: null,
+    });
+
+    const notifications = await queryTenant<{ count: number }>(
+      `
+        SELECT COUNT(*)::int AS count
+        FROM ${tenantTable('notifications_log')}
+        WHERE type = 'parent_access_credentials'
+          AND related_id = $1::uuid
+          AND status = 'queued'
+      `,
+      [rows[0]!.parent_id]
+    );
+    expect(notifications[0]?.count).toBe(1);
+  });
+
+  it('endpoint d’envoi différé accepte plusieurs IDs et met les accès en file', async () => {
+    const headers = await getAuthHeaders('director');
+    const missingId = '33333333-3333-4333-8333-333333333333';
+
+    const response = await request()
+      .post('/api/v1/subscriptions/parents/access/send')
+      .set(headers)
+      .send({ parent_ids: [pendingParentId, missingId] });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(response.body.queued).toBe(1);
+    expect(response.body.items).toEqual([
+      { parentId: pendingParentId, status: 'queued' },
+      { parentId: missingId, status: 'not_found' },
+    ]);
+  });
+
+  it('deux élèves avec le même téléphone partagent un seul compte parent', async () => {
+    const headers = await getAuthHeaders('director');
+    const [{ id: classId }] = await queryTenant<{ id: string }>(
+      `SELECT id::text AS id FROM ${tenantTable('classes')} ORDER BY created_at ASC LIMIT 1`
+    );
+    const suffix = Math.random().toString().slice(2, 9).padEnd(7, '0');
+    const phone = `22505${suffix}2`;
+
+    for (const index of [1, 2]) {
+      const response = await request()
+        .post('/api/v1/students')
+        .set(headers)
+        .send({
+          class_id: classId,
+          first_name: `Sibling-${index}`,
+          last_name: suffix,
+          parent_name: `Parent ${suffix}`,
+          parent_phone: phone,
+        });
+      expect(response.status).toBe(201);
+    }
+
+    const [result] = await queryTenant<{ parents_count: number; links_count: number }>(
+      `
+        SELECT
+          COUNT(DISTINCT p.id)::int AS parents_count,
+          COUNT(psl.id)::int AS links_count
+        FROM ${tenantTable('parents')} p
+        INNER JOIN ${tenantTable('parent_student_links')} psl ON psl.parent_id = p.id
+        WHERE p.phone = $1
+      `,
+      [phone]
+    );
+
+    expect(result).toEqual({ parents_count: 1, links_count: 2 });
+  });
+
+  it('mise à jour élève avec contact principal → crée et lie le parent', async () => {
+    const headers = await getAuthHeaders('director');
+    const [{ id: classId }] = await queryTenant<{ id: string }>(
+      `SELECT id::text AS id FROM ${tenantTable('classes')} ORDER BY created_at ASC LIMIT 1`
+    );
+    const suffix = Math.random().toString().slice(2, 9).padEnd(7, '0');
+    const phone = `22509${suffix}3`;
+    const created = await request()
+      .post('/api/v1/students')
+      .set(headers)
+      .send({
+        class_id: classId,
+        first_name: 'ContactLater',
+        last_name: suffix,
+      });
+    expect(created.status).toBe(201);
+
+    const updated = await request()
+      .put(`/api/v1/students/${created.body.data.id}`)
+      .set(headers)
+      .send({
+        parent_name: `Parent Later ${suffix}`,
+        parent_phone: phone,
+      });
+
+    expect(updated.status).toBe(200);
+    const [{ count }] = await queryTenant<{ count: number }>(
+      `
+        SELECT COUNT(*)::int AS count
+        FROM ${tenantTable('parents')} p
+        INNER JOIN ${tenantTable('parent_student_links')} psl ON psl.parent_id = p.id
+        WHERE p.phone = $1 AND psl.student_id = $2::uuid
+      `,
+      [phone, created.body.data.id]
+    );
+    expect(count).toBe(1);
   });
 });

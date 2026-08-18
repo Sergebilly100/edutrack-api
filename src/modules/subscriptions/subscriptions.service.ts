@@ -155,6 +155,7 @@ export class SubscriptionsService {
           full_name: row.full_name,
           phone: row.phone,
           email: row.email,
+          access_sent_at: row.access_sent_at,
           created_by: row.created_by,
           created_by_name: row.created_by_name,
           latest_subscription: row.subscription_id
@@ -225,11 +226,6 @@ export class SubscriptionsService {
       throw new SubscriptionsModuleError('Some students were not found', 400, 'INVALID_STUDENT_IDS');
     }
 
-    const existingParent = await this.repository.findParentByPhone(input.payload.phone);
-    if (existingParent) {
-      throw new SubscriptionsModuleError('Parent already exists', 409, 'PARENT_ALREADY_EXISTS');
-    }
-
     const tempPassword = generateInitialPassword(10);
     const passwordHash = await argon2.hash(tempPassword);
     const actorUserId = await this.resolveActorUserId(input.actorUserId);
@@ -242,8 +238,9 @@ export class SubscriptionsService {
 
     let parentId: string;
     let subscriptionId: string;
+    let parentCreated: boolean;
     try {
-      ({ parentId, subscriptionId } = await this.repository.createParentWithSubscriptionTx({
+      ({ parentId, subscriptionId, parentCreated } = await this.repository.createParentWithSubscriptionTx({
         fullName: input.payload.full_name,
         phone: input.payload.phone,
         email: input.payload.email,
@@ -262,7 +259,11 @@ export class SubscriptionsService {
     } catch (error) {
       const code = (error as { code?: string } | null)?.code;
       if (code === '23505') {
-        throw new SubscriptionsModuleError('Parent already exists', 409, 'PARENT_ALREADY_EXISTS');
+        throw new SubscriptionsModuleError(
+          'Subscription conflicts with an existing active link',
+          409,
+          'SUBSCRIPTION_LINK_CONFLICT'
+        );
       }
       throw error;
     }
@@ -275,10 +276,12 @@ export class SubscriptionsService {
         starts_at: startsAt,
         ends_at: endsAt,
       },
-      credentials: {
-        phone: input.payload.phone,
-        temp_password: tempPassword,
-      },
+      credentials: parentCreated
+        ? {
+            phone: input.payload.phone,
+            temp_password: tempPassword,
+          }
+        : null,
       students,
     };
   }

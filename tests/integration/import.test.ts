@@ -55,6 +55,17 @@ const attachSchedule = async (req: Test, rows: Record<string, string>[]) =>
 
 const uniquePrefix = () => `int_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 
+const nextFullWeek = (offsetWeeks = 0): { monday: string; sunday: string } => {
+  const monday = new Date();
+  monday.setUTCHours(0, 0, 0, 0);
+  const daysUntilNextMonday = ((8 - monday.getUTCDay()) % 7) || 7;
+  monday.setUTCDate(monday.getUTCDate() + daysUntilNextMonday + offsetWeeks * 7);
+  const sunday = new Date(monday);
+  sunday.setUTCDate(sunday.getUTCDate() + 6);
+  const toIso = (date: Date) => date.toISOString().slice(0, 10);
+  return { monday: toIso(monday), sunday: toIso(sunday) };
+};
+
 // ---------------------------------------------------------------------------
 // Students
 // ---------------------------------------------------------------------------
@@ -152,6 +163,68 @@ describe('import integration - students', () => {
       [`${prefix}_f_%`]
     );
     expect(Number(count)).toBe(5);
+  });
+
+  it('POST /api/v1/import/students/confirm - crée et lie le parent sans envoyer de SMS', async () => {
+    const headers = await getAuthHeaders('director');
+    const { className } = getSeedContext();
+    const prefix = uniquePrefix();
+    const phone = `22501${Math.random().toString().slice(2, 10).padEnd(8, '0')}`;
+    const rows = [
+      {
+        'Prénom*': `${prefix}_child`,
+        'Nom*': 'ImportParent',
+        'Classe*': className,
+        'Nom parent': `Parent ${prefix}`,
+        'Téléphone parent': phone,
+        'Email parent': `${prefix}@test.ci`,
+      },
+    ];
+
+    const res = await attachStudents(
+      request().post('/api/v1/import/students/confirm').set(headers),
+      rows
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.imported).toBe(1);
+
+    const links = await queryTenant<{
+      parent_id: string;
+      access_sent_at: string | null;
+      must_change_password: boolean;
+      subscription_id: string | null;
+    }>(
+      `
+        SELECT
+          p.id::text AS parent_id,
+          p.access_sent_at::text,
+          p.must_change_password,
+          psl.subscription_id::text
+        FROM ${tenantTable('parents')} p
+        INNER JOIN ${tenantTable('parent_student_links')} psl ON psl.parent_id = p.id
+        INNER JOIN ${tenantTable('students')} s ON s.id = psl.student_id
+        WHERE p.phone = $1 AND s.first_name = $2
+      `,
+      [phone, `${prefix}_child`]
+    );
+    expect(links).toHaveLength(1);
+    expect(links[0]).toMatchObject({
+      access_sent_at: null,
+      must_change_password: true,
+      subscription_id: null,
+    });
+
+    const [{ count }] = await queryTenant<{ count: number }>(
+      `
+        SELECT COUNT(*)::int AS count
+        FROM ${tenantTable('notifications_log')}
+        WHERE type = 'parent_access_credentials'
+          AND related_id = $1::uuid
+      `,
+      [links[0]!.parent_id]
+    );
+    expect(count).toBe(0);
   });
 
   it('POST /api/v1/import/students/confirm - mode replace désactive les absents', async () => {
@@ -346,20 +419,14 @@ describe('import integration - schedule', () => {
     // Dates relatives à aujourd'hui : le lundi de la semaine PROCHAINE (toujours
     // futur), sinon le validateur rejette le créneau passé (test sinon fragile
     // avec des dates codées en dur qui deviennent passées avec le temps).
-    const nextMonday = new Date();
-    nextMonday.setUTCHours(0, 0, 0, 0);
-    const daysUntilNextMonday = ((8 - nextMonday.getUTCDay()) % 7) || 7;
-    nextMonday.setUTCDate(nextMonday.getUTCDate() + daysUntilNextMonday);
-    const followingMonday = new Date(nextMonday);
-    followingMonday.setUTCDate(followingMonday.getUTCDate() + 7);
-    const toIso = (d: Date) => d.toISOString().slice(0, 10);
+    const period = nextFullWeek();
 
     const res = await attachSchedule(
       request()
         .post('/api/v1/import/schedule/dry-run')
         .set(headers)
-        .field('week_start', toIso(nextMonday))
-        .field('week_end', toIso(followingMonday)),
+        .field('week_start', period.monday)
+        .field('week_end', period.sunday),
       rows
     );
 
@@ -382,7 +449,7 @@ describe('import integration - schedule', () => {
       []
     );
 
-    // First import to create the period
+    // First import to create a distinct future period
     const rows = [
       {
         'Nom professeur*': teacherName,
@@ -393,13 +460,14 @@ describe('import integration - schedule', () => {
         Salle: 'Salle A1',
       },
     ];
+    const period = nextFullWeek(1);
 
     const firstRes = await attachSchedule(
       request()
         .post('/api/v1/import/schedule/confirm')
         .set(headers)
-        .field('week_start', '2026-07-06')
-        .field('week_end', '2026-07-13'),
+        .field('week_start', period.monday)
+        .field('week_end', period.sunday),
       rows
     );
     expect(firstRes.status).toBe(200);
@@ -409,8 +477,8 @@ describe('import integration - schedule', () => {
       request()
         .post('/api/v1/import/schedule/confirm')
         .set(headers)
-        .field('week_start', '2026-07-06')
-        .field('week_end', '2026-07-13')
+        .field('week_start', period.monday)
+        .field('week_end', period.sunday)
         .field('conflict_acknowledged', 'false'),
       rows
     );

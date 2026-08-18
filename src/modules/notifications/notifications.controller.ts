@@ -32,6 +32,7 @@ const notificationTypes: NotificationType[] = [
   'scan_end_sanction_cancelled',
   'subscription_expiry_alert',
   'subscription_revenue_payout',
+  'parent_access_credentials',
   'payment_reminder',
   'custom',
 ];
@@ -154,9 +155,11 @@ export default async function notificationsController(
             channel: string;
             message: string;
             recipient_phone: string | null;
+            related_id: string | null;
             status: string;
           }>(sql`
-            SELECT id::text, type::text, channel::text, message, recipient_phone, status::text
+            SELECT id::text, type::text, channel::text, message, recipient_phone,
+                   related_id::text AS related_id, status::text
             FROM notifications_log
             WHERE id = ${params.id}::uuid
             LIMIT 1
@@ -194,6 +197,9 @@ export default async function notificationsController(
           schemaName: claims.schemaName,
           recipientPhone: row.recipient_phone,
           queueRef,
+          ...(row.type === 'parent_access_credentials' && row.related_id
+            ? { parentAccessSentUpdate: { parentId: row.related_id } }
+            : {}),
         });
 
         return reply.send({ success: true, queueRef });

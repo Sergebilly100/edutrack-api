@@ -2,6 +2,13 @@ import { db as defaultGlobalDb } from '../../shared/database/db.js';
 import { emit } from '../../shared/events/event-bus.js';
 import type { StudentAbsentPayload } from '../../shared/events/events.types.js';
 
+import { ParentAccountsRepository } from '../parents/parent-accounts.repository.js';
+import {
+  createTemporaryParentCredentials,
+  ParentAccountsService,
+} from '../parents/parent-accounts.service.js';
+import type { NotificationJobData } from '../notifications/notifications.queue.js';
+
 import { StudentsRepository } from './students.repository.js';
 import type {
   AbsenceStatsQuery,
@@ -38,11 +45,19 @@ type EventEmitter = (event: 'student.absent', payload: StudentAbsentPayload) => 
 type ServiceDependencies = {
   eventEmitter: EventEmitter;
   defaultSchoolPhone: string;
+  createParentCredentials: typeof createTemporaryParentCredentials;
+  notifyParentAccess: (input: {
+    parentId: string;
+    phone: string;
+    temporaryPassword: string;
+  }) => Promise<void>;
 };
 
 const DEFAULT_DEPENDENCIES: ServiceDependencies = {
   eventEmitter: emit,
   defaultSchoolPhone: process.env.DEFAULT_SCHOOL_PHONE ?? '2250000000000',
+  createParentCredentials: createTemporaryParentCredentials,
+  notifyParentAccess: async () => undefined,
 };
 
 const toPaginationMeta = (page: number, limit: number, total: number): PaginationMeta => ({
@@ -93,7 +108,24 @@ export class StudentsService {
 
   async createStudent(input: CreateStudentInput): Promise<StudentRecord> {
     try {
-      return await this.repository.createStudent(input);
+      const result = await this.repository.createStudent(
+        input,
+        this.deps.createParentCredentials
+      );
+      const parent = result.parentProvisioning;
+      if (parent?.created && parent.temporaryPassword) {
+        try {
+          await this.deps.notifyParentAccess({
+            parentId: parent.parentId,
+            phone: parent.phone,
+            temporaryPassword: parent.temporaryPassword,
+          });
+        } catch {
+          // La création élève/parent est validée même si le fournisseur ou la
+          // file SMS est indisponible. access_sent_at reste NULL pour un retry.
+        }
+      }
+      return result.student;
     } catch (error) {
       if (error instanceof Error && error.message === 'Class not found') {
         throw new StudentsModuleError('Class not found', 404, 'CLASS_NOT_FOUND');
@@ -114,9 +146,25 @@ export class StudentsService {
 
   async updateStudent(studentId: string, input: UpdateStudentInput): Promise<StudentRecord> {
     try {
-      const student = await this.repository.updateStudent(studentId, input);
-      if (!student) throw new StudentsModuleError('Student not found', 404, 'STUDENT_NOT_FOUND');
-      return student;
+      const result = await this.repository.updateStudent(
+        studentId,
+        input,
+        this.deps.createParentCredentials
+      );
+      if (!result) throw new StudentsModuleError('Student not found', 404, 'STUDENT_NOT_FOUND');
+      const parent = result.parentProvisioning;
+      if (parent?.created && parent.temporaryPassword) {
+        try {
+          await this.deps.notifyParentAccess({
+            parentId: parent.parentId,
+            phone: parent.phone,
+            temporaryPassword: parent.temporaryPassword,
+          });
+        } catch {
+          // Non-bloquant : le compte reste identifiable par access_sent_at NULL.
+        }
+      }
+      return result.student;
     } catch (error) {
       if (error instanceof StudentsModuleError) throw error;
       if (isMatriculeUniqueViolation(error)) {
@@ -295,5 +343,27 @@ export class StudentsService {
 
 export const buildStudentsService = (
   tenantDb: ConstructorParameters<typeof StudentsRepository>[0],
-  globalDb: ConstructorParameters<typeof StudentsRepository>[1] = defaultGlobalDb
-) => new StudentsService(new StudentsRepository(tenantDb, globalDb));
+  globalDb: ConstructorParameters<typeof StudentsRepository>[1] = defaultGlobalDb,
+  options: {
+    schemaName?: string;
+    smsQueue?: {
+      add: (
+        name: string,
+        data: NotificationJobData,
+        options?: Record<string, unknown>
+      ) => Promise<unknown>;
+    };
+  } = {}
+) => {
+  const parentAccounts = new ParentAccountsService(
+    new ParentAccountsRepository(tenantDb),
+    { smsQueue: options.smsQueue }
+  );
+
+  return new StudentsService(new StudentsRepository(tenantDb, globalDb), {
+    notifyParentAccess: async (input) => {
+      if (!options.schemaName) return;
+      await parentAccounts.queuePreparedAccess({ schemaName: options.schemaName, ...input });
+    },
+  });
+};

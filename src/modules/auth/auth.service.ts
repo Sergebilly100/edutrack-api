@@ -630,10 +630,9 @@ export const refreshAccessToken = async (
   const studentRows = await db.execute(sql`
     SELECT DISTINCT psl.student_id::text AS student_id
     FROM parent_student_links psl
-    INNER JOIN parent_subscriptions ps ON ps.id = psl.subscription_id
+    INNER JOIN students s ON s.id = psl.student_id
     WHERE psl.parent_id = ${parent.id}::uuid
-      AND ps.status = 'active'
-      AND ps.ends_at >= CURRENT_DATE
+      AND s.is_active = true
   `);
   const studentIds = getRows<{ student_id: string }>(studentRows).map((row) => row.student_id);
   if (studentIds.length === 0) {

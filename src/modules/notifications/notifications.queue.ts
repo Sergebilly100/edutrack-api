@@ -57,6 +57,9 @@ export type NotificationSmsJobData = {
     scheduleId: string;
     date: string;
   };
+  parentAccessSentUpdate?: {
+    parentId: string;
+  };
 };
 
 export type NotificationEmailJobData = {
@@ -481,6 +484,22 @@ export const processNotificationJob = async (
 
         if (data.qrAlertSentUpdate) {
           await deps.repository.markQrAlertSent(tenantDb, data.qrAlertSentUpdate);
+        }
+        if (data.parentAccessSentUpdate) {
+          await tenantDb.execute(sql`
+            UPDATE parents
+            SET access_sent_at = NOW()
+            WHERE id = ${data.parentAccessSentUpdate.parentId}::uuid
+          `);
+          // Le SMS doit contenir le secret le temps de son traitement/retry,
+          // mais il n'a plus à rester en clair dans l'historique après succès.
+          await tenantDb.execute(sql`
+            UPDATE notifications_log
+            SET message = '[Identifiants parent envoyes]'
+            WHERE provider_ref = ${smsResult.providerRef ?? data.queueRef}
+              AND related_id = ${data.parentAccessSentUpdate.parentId}::uuid
+              AND type = 'parent_access_credentials'
+          `);
         }
         return;
       }

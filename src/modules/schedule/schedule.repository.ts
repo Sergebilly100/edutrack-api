@@ -715,9 +715,14 @@ export const listClassesCatalog = async (
   db: QueryExecutor
 ): Promise<ClassCatalogItem[]> => {
   const result = await db.execute<ClassCatalogRow>(sql`
-    SELECT id, name
-    FROM classes
-    ORDER BY name ASC
+    SELECT c.id, c.name
+    FROM classes c
+    WHERE c.is_active = true
+      AND (
+        c.school_year_id IS NULL
+        OR c.school_year_id = (SELECT id FROM school_years WHERE status = 'active' LIMIT 1)
+      )
+    ORDER BY c.name ASC
   `);
 
   return getRows<ClassCatalogRow>(result).map(mapClassCatalogItem);

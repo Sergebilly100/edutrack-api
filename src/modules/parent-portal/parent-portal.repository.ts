@@ -8,7 +8,7 @@ type ParentRow = {
   id: string;
   phone: string;
   full_name: string;
-  email: string;
+  email: string | null;
   password_hash: string;
   must_change_password: boolean;
   is_active: boolean;
@@ -97,22 +97,19 @@ export class ParentPortalRepository {
     `);
   }
 
-  async listActiveStudentIds(parentId: string): Promise<string[]> {
-    const businessToday = todayInBusinessTimezone();
+  async listLinkedStudentIds(parentId: string): Promise<string[]> {
     const result = await this.db.execute<{ student_id: string }>(sql`
       SELECT DISTINCT psl.student_id::text AS student_id
       FROM parent_student_links psl
-      INNER JOIN parent_subscriptions ps ON ps.id = psl.subscription_id
+      INNER JOIN students s ON s.id = psl.student_id
       WHERE psl.parent_id = ${parentId}::uuid
-        AND ps.status = 'active'
-        AND ps.ends_at >= ${businessToday}::date
+        AND s.is_active = true
     `);
 
     return result.rows.map((row) => row.student_id);
   }
 
   async listStudentsByParent(parentId: string): Promise<StudentSummaryRow[]> {
-    const businessToday = todayInBusinessTimezone();
     const result = await this.db.execute<StudentSummaryRow>(sql`
       SELECT
         DISTINCT s.id::text AS id,
@@ -120,12 +117,10 @@ export class ParentPortalRepository {
         s.last_name,
         c.name AS class_name
       FROM parent_student_links psl
-      INNER JOIN parent_subscriptions ps ON ps.id = psl.subscription_id
       INNER JOIN students s ON s.id = psl.student_id
       INNER JOIN classes c ON c.id = s.class_id
       WHERE psl.parent_id = ${parentId}::uuid
-        AND ps.status = 'active'
-        AND ps.ends_at >= ${businessToday}::date
+        AND s.is_active = true
       ORDER BY s.last_name ASC, s.first_name ASC
     `);
 

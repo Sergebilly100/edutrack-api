@@ -430,6 +430,7 @@ const truncateAttendanceTables = async (): Promise<void> => {
 const initApp = async (): Promise<FastifyInstance> => {
   const [
     { default: authController },
+    { default: academicController },
     { default: adminController },
     { default: attendanceController },
     { default: billingController },
@@ -438,11 +439,13 @@ const initApp = async (): Promise<FastifyInstance> => {
     { default: permissionsController },
     { default: teachersController },
     { default: subscriptionsController },
+    { default: studentsController },
     { default: parentPortalController },
     { default: validationsController },
     { default: roomsController },
   ] = await Promise.all([
     import('../../src/modules/auth/auth.controller.js'),
+    import('../../src/modules/academic/academic.controller.js'),
     import('../../src/modules/admin/admin.controller.js'),
     import('../../src/modules/attendance/attendance.controller.js'),
     import('../../src/modules/billing/billing.controller.js'),
@@ -451,6 +454,7 @@ const initApp = async (): Promise<FastifyInstance> => {
     import('../../src/modules/permissions/permissions.controller.js'),
     import('../../src/modules/teachers/teachers.controller.js'),
     import('../../src/modules/subscriptions/subscriptions.controller.js'),
+    import('../../src/modules/students/students.controller.js'),
     import('../../src/modules/parent-portal/parent-portal.controller.js'),
     import('../../src/modules/validations/validations.controller.js'),
     import('../../src/modules/rooms/rooms.controller.js'),
@@ -462,8 +466,12 @@ const initApp = async (): Promise<FastifyInstance> => {
       fileSize: 5 * 1024 * 1024,
     },
   });
+  const smsQueue = {
+    add: async () => ({ id: 'integration-notification-job' }),
+  };
 
   testApp.register(authController);
+  testApp.register(academicController);
   testApp.register(adminController);
   testApp.register(attendanceController);
   testApp.register(billingController);
@@ -471,7 +479,8 @@ const initApp = async (): Promise<FastifyInstance> => {
   testApp.register(importExportController);
   testApp.register(permissionsController);
   testApp.register(teachersController);
-  testApp.register(subscriptionsController);
+  testApp.register(subscriptionsController, { smsQueue: smsQueue as never });
+  testApp.register(studentsController, { smsQueue: smsQueue as never });
   testApp.register(parentPortalController);
   testApp.register(validationsController);
   testApp.register(roomsController);

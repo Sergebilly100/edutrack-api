@@ -29,6 +29,7 @@ type ParentListRow = {
   full_name: string;
   phone: string;
   email: string | null;
+  access_sent_at: string | null;
   subscription_id: string | null;
   status: SubscriptionStatus | null;
   ends_at: string | null;
@@ -56,6 +57,7 @@ type ParentDetailRow = {
   phone: string;
   email: string | null;
   is_active: boolean;
+  access_sent_at: string | null;
   created_at: string;
 };
 
@@ -505,6 +507,7 @@ export class SubscriptionsRepository {
         p.full_name,
         p.phone,
         p.email,
+        p.access_sent_at::text AS access_sent_at,
         COALESCE(mr.month_subscription_id, ls.subscription_id)::text AS subscription_id,
         COALESCE(mr.month_status, ls.status) AS status,
         COALESCE(mr.month_ends_at, ls.ends_at::text) AS ends_at,
@@ -604,7 +607,12 @@ export class SubscriptionsRepository {
         COUNT(s.id)::int AS students_count
       FROM classes c
       LEFT JOIN students s ON s.class_id = c.id AND s.is_active = true
-      WHERE (${searchLike}::text IS NULL OR c.name ILIKE ${searchLike})
+      WHERE c.is_active = true
+        AND (
+          c.school_year_id IS NULL
+          OR c.school_year_id = (SELECT id FROM school_years WHERE status = 'active' LIMIT 1)
+        )
+        AND (${searchLike}::text IS NULL OR c.name ILIKE ${searchLike})
       GROUP BY c.id, c.name
       ORDER BY c.name ASC
     `);
@@ -793,7 +801,8 @@ export class SubscriptionsRepository {
 
   async getParentById(parentId: string): Promise<ParentDetailRow | null> {
     const result = await this.tenantDb.execute<ParentDetailRow>(sql`
-      SELECT id::text, full_name, phone, email, is_active, created_at::text
+      SELECT id::text, full_name, phone, email, is_active,
+             access_sent_at::text AS access_sent_at, created_at::text
       FROM parents
       WHERE id = ${parentId}::uuid
       LIMIT 1
@@ -1671,14 +1680,19 @@ export class SubscriptionsRepository {
     studentIds: string[];
     paidNow: boolean;
     paymentMethod: string;
-  }): Promise<{ parentId: string; subscriptionId: string }> {
+  }): Promise<{ parentId: string; subscriptionId: string; parentCreated: boolean }> {
     return this.tenantDb.transaction(async (tx) => {
-      const parentResult = await tx.execute<{ id: string }>(sql`
+      const parentResult = await tx.execute<{ id: string; created: boolean }>(sql`
         INSERT INTO parents (full_name, phone, email, password_hash, must_change_password, is_active)
         VALUES (${params.fullName}, ${params.phone}, ${params.email ?? null}, ${params.passwordHash}, true, true)
-        RETURNING id::text
+        ON CONFLICT (phone)
+        DO UPDATE SET
+          email = COALESCE(parents.email, EXCLUDED.email),
+          is_active = true
+        RETURNING id::text, (xmax = 0) AS created
       `);
       const parentId = parentResult.rows[0]!.id;
+      const parentCreated = parentResult.rows[0]!.created;
 
       const subResult = await tx.execute<{ id: string }>(sql`
         INSERT INTO parent_subscriptions (
@@ -1693,11 +1707,19 @@ export class SubscriptionsRepository {
       const subscriptionId = subResult.rows[0]!.id;
 
       for (const studentId of params.studentIds) {
-        await tx.execute(sql`
-          INSERT INTO parent_student_links (subscription_id, parent_id, student_id)
-          VALUES (${subscriptionId}::uuid, ${parentId}::uuid, ${studentId}::uuid)
-          ON CONFLICT (parent_id, student_id) DO UPDATE SET subscription_id = EXCLUDED.subscription_id
+        const updatedLink = await tx.execute<{ id: string }>(sql`
+          UPDATE parent_student_links
+          SET subscription_id = ${subscriptionId}::uuid
+          WHERE parent_id = ${parentId}::uuid
+            AND student_id = ${studentId}::uuid
+          RETURNING id::text
         `);
+        if (updatedLink.rows.length === 0) {
+          await tx.execute(sql`
+            INSERT INTO parent_student_links (subscription_id, parent_id, student_id)
+            VALUES (${subscriptionId}::uuid, ${parentId}::uuid, ${studentId}::uuid)
+          `);
+        }
       }
 
       if (params.paidNow) {
@@ -1707,7 +1729,7 @@ export class SubscriptionsRepository {
         `);
       }
 
-      return { parentId, subscriptionId };
+      return { parentId, subscriptionId, parentCreated };
     });
   }
 

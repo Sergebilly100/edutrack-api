@@ -123,7 +123,7 @@ describe('subscriptions integration (real db)', () => {
         paid_now: true,
       });
 
-    expect(response.status).toBe(201);
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
     expect(response.body.parent?.id).toBeTruthy();
     expect(response.body.subscription?.id).toBeTruthy();
     expect(typeof response.body.credentials?.temp_password).toBe('string');
@@ -169,7 +169,7 @@ describe('subscriptions integration (real db)', () => {
     );
   });
 
-  it('POST /api/v1/subscriptions/parents (phone déjà existant) → 409', async () => {
+  it('POST /api/v1/subscriptions/parents (phone déjà existant) → ajoute l’abonnement', async () => {
     const headers = await getAuthHeaders('director');
     const response = await request()
       .post('/api/v1/subscriptions/parents')
@@ -183,7 +183,15 @@ describe('subscriptions integration (real db)', () => {
         paid_now: true,
       });
 
-    expect(response.status).toBe(409);
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
+    expect(response.body.parent?.id).toBe(createdParentId);
+    expect(response.body.credentials).toBeNull();
+
+    const [{ count }] = await queryTenant<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM ${tenantTable('parent_subscriptions')} WHERE parent_id = $1::uuid`,
+      [createdParentId]
+    );
+    expect(count).toBe(2);
   });
 
   it('GET /api/v1/subscriptions/parents/:id retourne le dossier (abos + élèves + paiements)', async () => {

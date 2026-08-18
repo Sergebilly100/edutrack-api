@@ -106,6 +106,31 @@ describe('notifications.queue', () => {
     expect(repository.markQrAlertSent).not.toHaveBeenCalled();
   });
 
+  it('date l’envoi des accès parent seulement après succès du SMS', async () => {
+    await processNotificationJob(
+      {
+        type: 'send-sms',
+        to: '2250700000001',
+        recipientPhone: '2250700000001',
+        message: 'Identifiants parent',
+        notificationType: 'parent_access_credentials',
+        schemaName: 'school_sainte_marie',
+        relatedId: '11111111-1111-4111-8111-111111111111',
+        queueRef: 'parent-access-ref',
+        parentAccessSentUpdate: {
+          parentId: '11111111-1111-4111-8111-111111111111',
+        },
+      },
+      { repository, smsSender, emailSender }
+    );
+
+    expect(tenantDb.execute).toHaveBeenCalledTimes(2);
+    expect(repository.updateNotificationLogStatus).toHaveBeenCalledWith(
+      tenantDb,
+      expect.objectContaining({ queueRef: 'parent-access-ref', status: 'sent' })
+    );
+  });
+
   it('envoie le résumé quotidien profs aux directeurs des écoles actives (email uniquement)', async () => {
     mocks.dbExecute.mockResolvedValueOnce({
       rows: [

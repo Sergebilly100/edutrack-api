@@ -1,5 +1,11 @@
 import { sql, type SQL } from 'drizzle-orm';
 
+import {
+  ensureParentAccountForStudent,
+  type ParentProvisioningResult,
+  type TemporaryCredentials,
+} from '../parents/parent-accounts.repository.js';
+
 import type {
   AbsenceStatsQuery,
   AttendanceHistoryQuery,
@@ -22,6 +28,15 @@ import type {
 
 export type QueryExecutor = {
   execute: (query: ReturnType<typeof sql>) => Promise<unknown>;
+};
+
+type TransactionalQueryExecutor = QueryExecutor & {
+  transaction?: <T>(run: (tx: QueryExecutor) => Promise<T>) => Promise<T>;
+};
+
+export type StudentMutationResult = {
+  student: StudentRecord;
+  parentProvisioning: ParentProvisioningResult | null;
 };
 
 // ─── Raw DB row types ─────────────────────────────────────────────────────────
@@ -318,11 +333,16 @@ const makeWhereClause = (conditions: SQL[]): SQL => {
 
 const deduplicateIds = (ids: string[]): string[] => Array.from(new Set(ids));
 
+const runInTransaction = async <T>(
+  db: TransactionalQueryExecutor,
+  run: (executor: QueryExecutor) => Promise<T>
+): Promise<T> => (db.transaction ? db.transaction(run) : run(db));
+
 // ─── Repository ───────────────────────────────────────────────────────────────
 
 export class StudentsRepository {
   constructor(
-    private readonly db: QueryExecutor,
+    private readonly db: TransactionalQueryExecutor,
     private readonly globalDb: QueryExecutor
   ) {}
 
@@ -411,39 +431,58 @@ export class StudentsRepository {
     return row?.has_access ?? false;
   }
 
-  async createStudent(input: CreateStudentInput): Promise<StudentRecord> {
-    const result = await this.db.execute(sql`
-      INSERT INTO students (
-        class_id, first_name, last_name, matricule, birth_date,
-        parent_name, parent_phone, parent_email,
-        parent_name_2, parent_phone_2,
-        notes, is_active
-      )
-      VALUES (
-        ${input.class_id}, ${input.first_name}, ${input.last_name},
-        ${input.matricule ?? null}, ${input.birth_date ?? null},
-        ${input.parent_name}, ${input.parent_phone}, ${input.parent_email ?? null},
-        ${input.parent_name_2}, ${input.parent_phone_2},
-        ${input.notes}, ${input.is_active}
-      )
-      RETURNING
-        id, class_id,
-        (SELECT name FROM classes WHERE id = class_id) AS class_name,
-        first_name, last_name, matricule, birth_date::text AS birth_date,
-        parent_name, parent_phone, parent_email,
-        parent_name_2, parent_phone_2,
-        notes, is_active, created_at
-    `);
+  async createStudent(
+    input: CreateStudentInput,
+    createCredentials: () => Promise<TemporaryCredentials>
+  ): Promise<StudentMutationResult> {
+    return runInTransaction(this.db, async (executor) => {
+      const result = await executor.execute(sql`
+        INSERT INTO students (
+          class_id, first_name, last_name, matricule, birth_date,
+          parent_name, parent_phone, parent_email,
+          parent_name_2, parent_phone_2,
+          notes, is_active
+        )
+        VALUES (
+          ${input.class_id}, ${input.first_name}, ${input.last_name},
+          ${input.matricule ?? null}, ${input.birth_date ?? null},
+          ${input.parent_name}, ${input.parent_phone}, ${input.parent_email ?? null},
+          ${input.parent_name_2}, ${input.parent_phone_2},
+          ${input.notes}, ${input.is_active}
+        )
+        RETURNING
+          id, class_id,
+          (SELECT name FROM classes WHERE id = class_id) AS class_name,
+          first_name, last_name, matricule, birth_date::text AS birth_date,
+          parent_name, parent_phone, parent_email,
+          parent_name_2, parent_phone_2,
+          notes, is_active, created_at
+      `);
 
-    const created = getRows<StudentRow>(result)[0];
-    if (!created) throw new Error('Unable to create student');
-    if (!created.class_name) throw new Error('Class not found');
+      const created = getRows<StudentRow>(result)[0];
+      if (!created) throw new Error('Unable to create student');
+      if (!created.class_name) throw new Error('Class not found');
 
-    if (created.is_active) {
-      await this.adjustClassStudentCount(created.class_id, 1);
-    }
+      if (created.is_active) {
+        await this.adjustClassStudentCount(created.class_id, 1, executor);
+      }
 
-    return mapStudent(created);
+      const parentProvisioning =
+        created.parent_name && created.parent_phone
+          ? await ensureParentAccountForStudent(
+              executor,
+              {
+                studentId: created.id,
+                fullName: created.parent_name,
+                phone: created.parent_phone,
+                email: created.parent_email,
+              },
+              createCredentials
+            )
+          : null;
+
+      return { student: mapStudent(created), parentProvisioning };
+    });
   }
 
   async findStudentById(studentId: string): Promise<StudentRecord | null> {
@@ -466,9 +505,11 @@ export class StudentsRepository {
 
   async updateStudent(
     studentId: string,
-    input: UpdateStudentInput
-  ): Promise<StudentRecord | null> {
-    const currentResult = await this.db.execute(sql`
+    input: UpdateStudentInput,
+    createCredentials: () => Promise<TemporaryCredentials>
+  ): Promise<StudentMutationResult | null> {
+    return runInTransaction(this.db, async (executor) => {
+    const currentResult = await executor.execute(sql`
       SELECT id, class_id, first_name, last_name, matricule, birth_date::text AS birth_date,
              parent_name, parent_phone, parent_email,
              parent_name_2, parent_phone_2,
@@ -500,7 +541,7 @@ export class StudentsRepository {
       input.parent_phone_2 !== undefined ? input.parent_phone_2 : current.parent_phone_2;
     const nextNotes = input.notes !== undefined ? input.notes : current.notes;
 
-    const updateResult = await this.db.execute(sql`
+    const updateResult = await executor.execute(sql`
       UPDATE students
       SET
         class_id = ${nextClassId},
@@ -522,13 +563,31 @@ export class StudentsRepository {
     if (!getRows<{ id: string }>(updateResult)[0]) return null;
 
     if (current.class_id !== nextClassId) {
-      if (current.is_active) await this.adjustClassStudentCount(current.class_id, -1);
-      if (nextIsActive) await this.adjustClassStudentCount(nextClassId, 1);
+      if (current.is_active) await this.adjustClassStudentCount(current.class_id, -1, executor);
+      if (nextIsActive) await this.adjustClassStudentCount(nextClassId, 1, executor);
     } else if (current.is_active !== nextIsActive) {
-      await this.adjustClassStudentCount(nextClassId, nextIsActive ? 1 : -1);
+      await this.adjustClassStudentCount(nextClassId, nextIsActive ? 1 : -1, executor);
     }
 
-    return this.findStudentById(studentId);
+    const student = await this.findStudentByIdWithExecutor(studentId, executor);
+    if (!student) return null;
+
+    const parentProvisioning =
+      nextParentName && nextParentPhone
+        ? await ensureParentAccountForStudent(
+            executor,
+            {
+              studentId,
+              fullName: nextParentName,
+              phone: nextParentPhone,
+              email: nextParentEmail,
+            },
+            createCredentials
+          )
+        : null;
+
+    return { student, parentProvisioning };
+    });
   }
 
   async softDeleteStudent(studentId: string): Promise<StudentRecord | null> {
@@ -1211,8 +1270,33 @@ export class StudentsRepository {
     }));
   }
 
-  private async adjustClassStudentCount(classId: string, delta: number): Promise<void> {
-    await this.db.execute(sql`
+  private async findStudentByIdWithExecutor(
+    studentId: string,
+    executor: QueryExecutor
+  ): Promise<StudentRecord | null> {
+    const result = await executor.execute(sql`
+      SELECT
+        s.id, s.class_id, c.name AS class_name,
+        s.first_name, s.last_name, s.matricule, s.birth_date::text AS birth_date,
+        s.parent_name, s.parent_phone, s.parent_email,
+        s.parent_name_2, s.parent_phone_2,
+        s.notes, s.is_active, s.created_at
+      FROM students s
+      INNER JOIN classes c ON c.id = s.class_id
+      WHERE s.id = ${studentId}
+      LIMIT 1
+    `);
+
+    const row = getRows<StudentRow>(result)[0];
+    return row ? mapStudent(row) : null;
+  }
+
+  private async adjustClassStudentCount(
+    classId: string,
+    delta: number,
+    executor: QueryExecutor = this.db
+  ): Promise<void> {
+    await executor.execute(sql`
       UPDATE classes
       SET student_count = GREATEST(student_count + ${delta}, 0)
       WHERE id = ${classId}

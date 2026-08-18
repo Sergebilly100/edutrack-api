@@ -21,6 +21,7 @@ initSentry();
 initWebPush();
 
 import adminController from './modules/admin/admin.controller.js';
+import academicController from './modules/academic/academic.controller.js';
 import attendanceController from './modules/attendance/attendance.controller.js';
 import { emitStudentAbsent } from './modules/attendance/attendance.events.js';
 import { runAttendanceMissingQrScanHandler } from './modules/attendance/attendance.worker-handler.js';
@@ -250,11 +251,12 @@ app.addHook('onRequest', async (request, reply) => {
 
 app.register(authController);
 app.register(adminController, { deadLetterQueue });
+app.register(academicController);
 app.register(attendanceController, { pdfQueue: billingPdfQueue, notifQueue: notificationsQueue });
 app.register(dashboardController);
 app.register(notificationsController, { smsQueue: notificationsQueue });
 app.register(billingController, { billingPdfQueue })
-app.register(studentsController, { pdfQueue: billingPdfQueue });
+app.register(studentsController, { pdfQueue: billingPdfQueue, smsQueue: notificationsQueue });
 app.register(teachersController, { pdfQueue: billingPdfQueue });
 app.register(validationsController);
 app.register(scheduleController);
@@ -263,7 +265,7 @@ app.register(documentsController);
 app.register(schoolController);
 app.register(importExportController);
 app.register(permissionsController);
-app.register(subscriptionsController, { pdfQueue: billingPdfQueue });
+app.register(subscriptionsController, { pdfQueue: billingPdfQueue, smsQueue: notificationsQueue });
 app.register(parentPortalController);
 app.register(pushController);
 

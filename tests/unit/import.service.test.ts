@@ -236,6 +236,37 @@ describe('import.service - students dry-run', () => {
 // ---------------------------------------------------------------------------
 
 describe('import.service - students confirm', () => {
+  it('fournit des identifiants temporaires au repository sans déclencher de SMS', async () => {
+    const createParentCredentials = vi.fn().mockResolvedValue({
+      plainPassword: 'ABCD234567',
+      passwordHash: 'argon-hash',
+    });
+    repository.upsertStudent.mockImplementationOnce(async (_db, _row, factory) => {
+      await factory();
+      return 'inserted';
+    });
+    const service = new ImportService(repository, createParentCredentials);
+    const rows = [
+      {
+        'Prénom*': 'Awa',
+        'Nom*': 'Kouassi',
+        'Classe*': '3ème A',
+        'Nom parent': 'Parent Awa',
+        'Téléphone parent': '2250700000001',
+      },
+    ];
+
+    const report = await service.confirm('students', await toWorkbookBuffer(rows), db);
+
+    expect(report.imported).toBe(1);
+    expect(createParentCredentials).toHaveBeenCalledOnce();
+    expect(repository.upsertStudent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ parentName: 'Parent Awa', parentPhone: '2250700000001' }),
+      expect.any(Function)
+    );
+  });
+
   it('20 lignes valides → imported=20, upsertStudent appelé 20 fois', async () => {
     const service = new ImportService(repository);
     const rows = Array.from({ length: 20 }, (_, i) => ({
@@ -552,7 +583,7 @@ describe('import.service - schedule dry-run', () => {
     ];
 
     const report = await service.dryRun('schedule', await toWorkbookBuffer(rows), db, {
-      schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-04' },
+      schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-03' },
     });
 
     expect(report.valid).toBe(1);
@@ -567,7 +598,7 @@ describe('import.service - schedule dry-run', () => {
     ];
 
     const report = await service.dryRun('schedule', await toWorkbookBuffer(rows), db, {
-      schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-04' },
+      schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-03' },
     });
 
     expect(report.valid).toBe(1);
@@ -583,7 +614,7 @@ describe('import.service - schedule dry-run', () => {
     ];
 
     const report = await service.dryRun('schedule', await toWorkbookBuffer(rows), db, {
-      schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-04' },
+      schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-03' },
     });
 
     expect(report.valid).toBe(1);
@@ -622,12 +653,12 @@ describe('import.service - schedule confirm', () => {
 
     const workbook = await toWorkbookBuffer(rows);
     const dryRun = await service.dryRun('schedule', workbook, db, {
-      schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-04' },
+      schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-03' },
     });
     expect(dryRun.errors).toEqual([]);
 
     const report = await service.confirm('schedule', workbook, db, {
-      schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-04' },
+      schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-03' },
     });
 
     expect(report.imported).toBe(3);
@@ -651,7 +682,7 @@ describe('import.service - schedule confirm', () => {
 
   it('conflits non acknowledges → IMPORT_CONFLICT_ACK_REQUIRED', async () => {
     repository.findOverlappingSchedulePeriods.mockResolvedValueOnce([
-      { id: 'period-existing', name: 'EDT S15', valid_from: '2026-04-13', valid_to: '2026-04-20' },
+      { id: 'period-existing', name: 'EDT S15', valid_from: '2026-04-13', valid_to: '2026-04-19' },
     ]);
     const service = new ImportService(repository);
     const rows = [
@@ -660,7 +691,7 @@ describe('import.service - schedule confirm', () => {
 
     await expect(
       service.confirm('schedule', await toWorkbookBuffer(rows), db, {
-        schedulePeriod: { weekStart: '2026-04-13', weekEnd: '2026-04-20' },
+        schedulePeriod: { weekStart: '2026-04-13', weekEnd: '2026-04-19' },
         conflictAcknowledged: false,
       })
     ).rejects.toMatchObject<Partial<ImportModuleError>>({
@@ -671,7 +702,7 @@ describe('import.service - schedule confirm', () => {
 
   it('conflits avec conflictAcknowledged=true → import réussi', async () => {
     repository.findOverlappingSchedulePeriods.mockResolvedValueOnce([
-      { id: 'period-existing', name: 'EDT S15', valid_from: '2026-04-13', valid_to: '2026-04-20' },
+      { id: 'period-existing', name: 'EDT S15', valid_from: '2026-04-13', valid_to: '2026-04-19' },
     ]);
     const service = new ImportService(repository);
     const rows = [
@@ -679,7 +710,7 @@ describe('import.service - schedule confirm', () => {
     ];
 
     const report = await service.confirm('schedule', await toWorkbookBuffer(rows), db, {
-      schedulePeriod: { weekStart: '2026-04-13', weekEnd: '2026-04-20' },
+      schedulePeriod: { weekStart: '2026-04-13', weekEnd: '2026-04-19' },
       conflictAcknowledged: true,
     });
 
@@ -693,7 +724,7 @@ describe('import.service - schedule confirm', () => {
     ];
 
     await service.confirm('schedule', await toWorkbookBuffer(rows), db, {
-      schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-04' },
+      schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-03' },
       mode: 'replace',
     });
 
@@ -712,7 +743,7 @@ describe('import.service - schedule confirm', () => {
     ];
 
     const report = await service.confirm('schedule', await toWorkbookBuffer(rows), db, {
-      schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-04' },
+      schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-03' },
     });
 
     expect(report.imported).toBe(1);

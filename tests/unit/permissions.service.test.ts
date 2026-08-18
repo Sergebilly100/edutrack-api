@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   hash: vi.fn(),
   getPlanLimitsBySchemaName: vi.fn(),
+  recordPasswordReset: vi.fn(),
 }));
 
 vi.mock('argon2', () => ({
@@ -13,6 +14,10 @@ vi.mock('../../src/shared/utils/users-limit.js', () => ({
   getPlanLimitsBySchemaName: mocks.getPlanLimitsBySchemaName,
   buildUsersLimitReachedMessage: (current: number, max: number) => `Limite ${current}/${max}`,
   getMaxUsersBySchemaName: vi.fn(),
+}));
+
+vi.mock('../../src/shared/auth/token-version.js', () => ({
+  recordPasswordReset: mocks.recordPasswordReset,
 }));
 
 import {
@@ -43,6 +48,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.hash.mockResolvedValue('hashed-password');
   mocks.getPlanLimitsBySchemaName.mockResolvedValue({ max_users: 100, max_admin_positions: 10 });
+  mocks.recordPasswordReset.mockResolvedValue(undefined);
   repository.countActiveUsers.mockResolvedValue(0);
   repository.countActiveAdministrativeUsers.mockResolvedValue(0);
   repository.getSchoolConfigBySchemaName.mockResolvedValue({
@@ -472,6 +478,7 @@ describe('permissions.service resetAdministrativeUserPassword', () => {
     const service = new PermissionsService(repository as never);
     const result = await service.resetAdministrativeUserPassword('user-1', {
       newPassword: 'NewPass123',
+      schemaName: 'school_sainte_marie',
     });
 
     expect(result).toEqual({ updated: true });
@@ -487,7 +494,10 @@ describe('permissions.service resetAdministrativeUserPassword', () => {
     const service = new PermissionsService(repository as never);
 
     await expect(
-      service.resetAdministrativeUserPassword('user-999', { newPassword: 'NewPass123' })
+      service.resetAdministrativeUserPassword('user-999', {
+        newPassword: 'NewPass123',
+        schemaName: 'school_sainte_marie',
+      })
     ).rejects.toMatchObject<Partial<PermissionsModuleError>>({
       code: 'ADMIN_USER_NOT_FOUND',
       statusCode: 404,
