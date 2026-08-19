@@ -6,6 +6,7 @@ import { withTenantSchema } from '../../shared/database/db.js';
 import { requirePermission } from '../../shared/middleware/auth.middleware.js';
 import { deleteFromR2, isR2Configured, presignDownload, uploadBuffer } from '../../shared/storage/r2.js';
 import { buildEnrollmentsService, EnrollmentsModuleError } from './enrollments.service.js';
+import { emitEnrollmentDocumentsMissing } from './enrollments.events.js';
 import {
   createEnrollmentBodySchema,
   createRequiredDocumentTypeBodySchema,
@@ -86,6 +87,26 @@ export default async function enrollmentsController(app: FastifyInstance): Promi
   app.get('/api/v1/students/:studentId/enrollment-documents', { preHandler: requirePermission('enrollments.view') }, async (request, reply) => {
     try { const { studentId } = studentParamsSchema.parse(request.params); return reply.send({ documents: await withService(request, (service) => service.listStudentDocuments(studentId)) }); }
     catch (error) { return handleError(request, reply, error); }
+  });
+  app.post('/api/v1/students/:studentId/enrollment-documents/verify', { preHandler: requirePermission('enrollments.edit') }, async (request, reply) => {
+    try {
+      const { studentId } = studentParamsSchema.parse(request.params);
+      const result = await withService(request, (service) => service.verifyStudentDocuments(studentId));
+      if (result.notification) {
+        emitEnrollmentDocumentsMissing({
+          tenantId: request.claims!.tenantId ?? request.claims!.schemaName,
+          schemaName: request.claims!.schemaName,
+          studentId,
+          ...result.notification,
+        });
+      }
+      return reply.send({
+        documents: result.documents,
+        missingMandatoryDocuments: result.missingMandatoryDocuments,
+        dossierComplete: result.dossierComplete,
+        notificationQueued: result.notification !== null,
+      });
+    } catch (error) { return handleError(request, reply, error); }
   });
   app.post('/api/v1/students/:studentId/enrollment-documents', { preHandler: requirePermission('enrollments.edit') }, async (request, reply) => {
     try { const { studentId } = studentParamsSchema.parse(request.params); const body = upsertStudentDocumentBodySchema.parse(request.body); return reply.code(201).send({ document: await withService(request, (service) => service.upsertStudentDocument({ studentId, ...body })) }); }

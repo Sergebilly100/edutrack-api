@@ -181,6 +181,34 @@ export class EnrollmentsService {
     return { deleted: true };
   }
   async listStudentDocuments(studentId: string) { return (await this.repository.listStudentDocuments(studentId)).map(mapDocument); }
+  async verifyStudentDocuments(studentId: string) {
+    const [student, documents] = await Promise.all([
+      this.repository.getStudentNotificationContext(studentId),
+      this.repository.listStudentDocuments(studentId),
+    ]);
+    if (!student) throw new EnrollmentsModuleError('Student not found', 404, 'STUDENT_NOT_FOUND');
+
+    const mappedDocuments = deduplicateRequiredDocuments(documents).map(mapDocument);
+    const missingMandatoryDocuments = mappedDocuments.filter(
+      (document) => document.isMandatory && document.status !== 'provided'
+    );
+    const parentPhones = [...new Set([student.parent_phone, student.parent_phone_2].filter(
+      (phone): phone is string => Boolean(phone)
+    ))];
+
+    return {
+      documents: mappedDocuments,
+      missingMandatoryDocuments,
+      dossierComplete: missingMandatoryDocuments.length === 0,
+      notification: missingMandatoryDocuments.length > 0 && parentPhones.length > 0
+        ? {
+            studentFirstName: student.first_name,
+            parentPhones,
+            missingDocumentNames: missingMandatoryDocuments.map((document) => document.documentTypeName),
+          }
+        : null,
+    };
+  }
   async getStudentDocument(id: string) {
     const document = await this.repository.findStudentDocument(id);
     if (!document) throw new EnrollmentsModuleError('Student document not found', 404, 'STUDENT_DOCUMENT_NOT_FOUND');

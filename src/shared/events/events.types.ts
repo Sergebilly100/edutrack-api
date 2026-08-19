@@ -90,6 +90,15 @@ export type StudentAbsentPayload = {
   schoolPhone: string;
 };
 
+export type EnrollmentDocumentsMissingPayload = {
+  tenantId: string;
+  schemaName: string;
+  studentId: string;
+  studentFirstName: string;
+  parentPhones: string[];
+  missingDocumentNames: string[];
+};
+
 export type SubscriptionExpiredPayload = {
   tenantId: string;
   schemaName: string;
@@ -242,6 +251,7 @@ export type EventMap = {
     | TeacherEndScanWarningPayload
     | TeacherAbsentPayload;
   'student.absent': StudentAbsentPayload;
+  'enrollment.documents_missing': EnrollmentDocumentsMissingPayload;
   'subscription.expired': SubscriptionExpiredPayload;
   'subscription.revenue_payout': SubscriptionRevenuePayoutPayload;
   'room.created': RoomCreatedPayload;
@@ -262,4 +272,3 @@ export type EventMap = {
  * Seuls ces events peuvent être passés à emit().
  */
 export type EmittableEventMap = Omit<EventMap, 'teacher.*' | 'room.*'>;
-

@@ -180,4 +180,30 @@ describe('notifications event-bus integration', () => {
       })
     );
   });
+
+  it('emit(enrollment.documents_missing) queue un SMS non bloquant par parent', async () => {
+    emit('enrollment.documents_missing', {
+      tenantId: 'tenant-1',
+      schemaName: 'school_sainte_marie',
+      studentId: 'student-1',
+      studentFirstName: 'Mariam',
+      parentPhones: ['2250700000007', '2250500000008'],
+      missingDocumentNames: ['Extrait de naissance', 'Photo'],
+    });
+
+    await vi.waitFor(() => expect(smsQueue.add).toHaveBeenCalledTimes(2));
+    expect(smsQueue.add).toHaveBeenCalledWith(
+      'send-sms',
+      expect.objectContaining({
+        notificationType: 'enrollment_documents_missing',
+        relatedId: 'student-1',
+        message: expect.stringContaining('Extrait de naissance, Photo'),
+      }),
+      expect.any(Object)
+    );
+    expect(repository.insertNotificationLog).toHaveBeenCalledWith(
+      tenantDb,
+      expect.objectContaining({ type: 'enrollment_documents_missing', status: 'queued' })
+    );
+  });
 });

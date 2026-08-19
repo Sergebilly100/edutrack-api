@@ -13,6 +13,7 @@ import {
 } from '../../shared/utils/business-time.js';
 import type {
   EventMap,
+  EnrollmentDocumentsMissingPayload,
   StudentAbsentPayload,
   SubscriptionExpiredPayload,
   SubscriptionRevenuePayoutPayload,
@@ -55,11 +56,11 @@ type NotificationsServiceDeps = {
     callback: (tenantDb: TenantDbLike) => Promise<T>
   ) => Promise<T>;
   eventBus: {
-    on: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'teacher.qr_invalid' | 'teacher.attendance_rejected' | 'teacher.attendance_approved' | 'teacher.end_scan_action' | 'teacher.sanction_cancelled' | 'teacher.end_scan_warning' | 'student.absent' | 'subscription.expired' | 'subscription.revenue_payout'>>(
+    on: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'teacher.qr_invalid' | 'teacher.attendance_rejected' | 'teacher.attendance_approved' | 'teacher.end_scan_action' | 'teacher.sanction_cancelled' | 'teacher.end_scan_warning' | 'student.absent' | 'enrollment.documents_missing' | 'subscription.expired' | 'subscription.revenue_payout'>>(
       event: K,
       handler: (payload: EventMap[K]) => void
     ) => void;
-    off: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'teacher.qr_invalid' | 'teacher.attendance_rejected' | 'teacher.attendance_approved' | 'teacher.end_scan_action' | 'teacher.sanction_cancelled' | 'teacher.end_scan_warning' | 'student.absent' | 'subscription.expired' | 'subscription.revenue_payout'>>(
+    off: <K extends keyof Pick<EventMap, 'teacher.late' | 'teacher.qr_alert' | 'teacher.qr_invalid' | 'teacher.attendance_rejected' | 'teacher.attendance_approved' | 'teacher.end_scan_action' | 'teacher.sanction_cancelled' | 'teacher.end_scan_warning' | 'student.absent' | 'enrollment.documents_missing' | 'subscription.expired' | 'subscription.revenue_payout'>>(
       event: K,
       handler: (payload: EventMap[K]) => void
     ) => void;
@@ -668,6 +669,17 @@ export class NotificationsService {
     });
   };
 
+  private readonly enrollmentDocumentsMissingListener = (
+    payload: EventMap['enrollment.documents_missing']
+  ): void => {
+    void this.handleEnrollmentDocumentsMissing(payload).catch((error) => {
+      logger.error(
+        { err: error instanceof Error ? error.message : String(error) },
+        '[notifications] failed to process enrollment.documents_missing'
+      );
+    });
+  };
+
   private readonly subscriptionExpiredListener = (
     payload: EventMap['subscription.expired']
   ): void => {
@@ -741,6 +753,7 @@ export class NotificationsService {
     this.deps.eventBus.on('teacher.sanction_cancelled', this.teacherSanctionCancelledListener);
     this.deps.eventBus.on('teacher.end_scan_warning', this.teacherEndScanWarningListener);
     this.deps.eventBus.on('student.absent', this.studentAbsentListener);
+    this.deps.eventBus.on('enrollment.documents_missing', this.enrollmentDocumentsMissingListener);
     this.deps.eventBus.on('subscription.expired', this.subscriptionExpiredListener);
     this.deps.eventBus.on('subscription.revenue_payout', this.subscriptionRevenuePayoutListener);
   }
@@ -762,6 +775,7 @@ export class NotificationsService {
     this.deps.eventBus.off('teacher.sanction_cancelled', this.teacherSanctionCancelledListener);
     this.deps.eventBus.off('teacher.end_scan_warning', this.teacherEndScanWarningListener);
     this.deps.eventBus.off('student.absent', this.studentAbsentListener);
+    this.deps.eventBus.off('enrollment.documents_missing', this.enrollmentDocumentsMissingListener);
     this.deps.eventBus.off('subscription.expired', this.subscriptionExpiredListener);
     this.deps.eventBus.off('subscription.revenue_payout', this.subscriptionRevenuePayoutListener);
   }
@@ -1757,6 +1771,48 @@ export class NotificationsService {
             type: 'email',
           });
         }
+      }
+    });
+  }
+
+  async handleEnrollmentDocumentsMissing(
+    payload: EnrollmentDocumentsMissingPayload
+  ): Promise<void> {
+    const uniquePhones = [...new Set(payload.parentPhones.filter(Boolean))];
+    if (uniquePhones.length === 0 || payload.missingDocumentNames.length === 0) return;
+
+    const message = `IvoirEdu : le dossier de ${payload.studentFirstName} est incomplet. Pièces manquantes : ${payload.missingDocumentNames.join(', ')}. Merci de les transmettre à l'établissement.`;
+
+    await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
+      for (const phone of uniquePhones) {
+        const queueRef = buildQueueRef(payload.schemaName, 'enrollment_documents_missing');
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'enrollment_documents_missing',
+          channel: 'sms',
+          recipientPhone: phone,
+          message,
+          status: 'queued',
+          providerRef: queueRef,
+          relatedId: payload.studentId,
+        });
+        await this.deps.smsQueue.add(
+          'send-sms',
+          toSmsJobData({
+            queueRef,
+            to: phone,
+            message,
+            notificationType: 'enrollment_documents_missing',
+            schemaName: payload.schemaName,
+            relatedId: payload.studentId,
+          }),
+          {
+            jobId: queueRef,
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 5_000 },
+            removeOnComplete: true,
+            removeOnFail: { count: 1000 },
+          }
+        );
       }
     });
   }

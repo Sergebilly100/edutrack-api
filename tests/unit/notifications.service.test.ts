@@ -98,6 +98,7 @@ const ALL_EVENTS = [
   'teacher.sanction_cancelled',
   'teacher.end_scan_warning',
   'student.absent',
+  'enrollment.documents_missing',
   'subscription.expired',
   'subscription.revenue_payout',
 ];

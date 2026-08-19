@@ -65,6 +65,7 @@ export const notificationTypeEnum = tenant.enum('notification_type', [
   'subscription_expiry_alert',
   'subscription_revenue_payout',
   'parent_access_credentials',
+  'enrollment_documents_missing',
   'payment_reminder',
   'custom',
 ]);

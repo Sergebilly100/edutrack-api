@@ -65,6 +65,26 @@ export class EnrollmentsRepository {
     return rows<{ id: string; is_active: boolean; lifecycle_status: string; current_school_year_id: string | null; current_level_id: string | null; final_decision: 'promoted' | 'repeat' | 'expelled' | null; next_level_id: string | null }>(result)[0] ?? null;
   }
 
+  async getStudentNotificationContext(studentId: string) {
+    const result = await this.db.execute<{
+      id: string;
+      first_name: string;
+      parent_phone: string | null;
+      parent_phone_2: string | null;
+    }>(sql`
+      SELECT id, first_name, parent_phone, parent_phone_2
+      FROM students
+      WHERE id = ${studentId}::uuid
+      LIMIT 1
+    `);
+    return rows<{
+      id: string;
+      first_name: string;
+      parent_phone: string | null;
+      parent_phone_2: string | null;
+    }>(result)[0] ?? null;
+  }
+
   async getClassContext(classId: string) {
     const result = await this.db.execute<{ id: string; level_id: string | null; school_year_id: string | null; is_active: boolean }>(sql`
       SELECT id, level_id, school_year_id, is_active FROM classes WHERE id = ${classId}::uuid LIMIT 1
