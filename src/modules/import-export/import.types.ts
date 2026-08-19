@@ -51,6 +51,8 @@ export type ConfirmReport = {
   preview: Record<string, string>[];
   deactivated?: number;
   importMode?: ImportMode;
+  parentAccountsCreated?: number;
+  parentAccountsReused?: number;
   pendingParentAccess?: Array<{
     parentId: string;
     fullName: string;

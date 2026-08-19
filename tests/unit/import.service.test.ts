@@ -245,10 +245,12 @@ describe('import.service - students confirm', () => {
       await factory();
       return {
         result: 'inserted',
-        createdParent: {
+        parentProvisioning: {
           parentId: 'parent-1',
           fullName: 'Parent Awa',
           phone: '2250700000001',
+          created: true,
+          temporaryPassword: 'ABCD234567',
         },
       };
     });
@@ -266,6 +268,8 @@ describe('import.service - students confirm', () => {
     const report = await service.confirm('students', await toWorkbookBuffer(rows), db);
 
     expect(report.imported).toBe(1);
+    expect(report.parentAccountsCreated).toBe(1);
+    expect(report.parentAccountsReused).toBe(0);
     expect(report.pendingParentAccess).toEqual([
       {
         parentId: 'parent-1',
@@ -298,36 +302,53 @@ describe('import.service - students confirm', () => {
     expect(repository.upsertStudent).toHaveBeenCalledTimes(20);
   });
 
-  it('ne retourne qu’une fois un parent créé et partagé par plusieurs élèves', async () => {
-    const createdParent = {
+  it('compte séparément le parent créé puis réutilisé par un autre élève', async () => {
+    const parentProvisioning = {
       parentId: 'parent-shared',
       fullName: 'Parent commun',
       phone: '2250700000009',
+      created: true,
+      temporaryPassword: 'ABCD234567',
     };
     repository.upsertStudent
-      .mockResolvedValueOnce({ result: 'inserted', createdParent })
-      .mockResolvedValueOnce({ result: 'inserted' });
+      .mockResolvedValueOnce({ result: 'inserted', parentProvisioning })
+      .mockResolvedValueOnce({
+        result: 'inserted',
+        parentProvisioning: {
+          ...parentProvisioning,
+          created: false,
+          temporaryPassword: undefined,
+        },
+      });
     const service = new ImportService(repository);
     const rows = [
       {
         'Prénom*': 'Awa',
         'Nom*': 'Kouassi',
         'Classe*': '3ème A',
-        'Nom parent': createdParent.fullName,
-        'Téléphone parent': createdParent.phone,
+        'Nom parent': parentProvisioning.fullName,
+        'Téléphone parent': parentProvisioning.phone,
       },
       {
         'Prénom*': 'Yao',
         'Nom*': 'Kouassi',
         'Classe*': '3ème A',
-        'Nom parent': createdParent.fullName,
-        'Téléphone parent': createdParent.phone,
+        'Nom parent': parentProvisioning.fullName,
+        'Téléphone parent': parentProvisioning.phone,
       },
     ];
 
     const report = await service.confirm('students', await toWorkbookBuffer(rows), db);
 
-    expect(report.pendingParentAccess).toEqual([createdParent]);
+    expect(report.parentAccountsCreated).toBe(1);
+    expect(report.parentAccountsReused).toBe(1);
+    expect(report.pendingParentAccess).toEqual([
+      {
+        parentId: parentProvisioning.parentId,
+        fullName: parentProvisioning.fullName,
+        phone: parentProvisioning.phone,
+      },
+    ]);
   });
 
   it('invalide → IMPORT_VALIDATION_FAILED, aucun write DB', async () => {

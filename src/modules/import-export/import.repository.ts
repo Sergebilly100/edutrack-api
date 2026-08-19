@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 
 import {
   ensureParentAccountForStudent,
+  type ParentProvisioningResult,
   type TemporaryCredentials,
 } from '../parents/parent-accounts.repository.js';
 
@@ -145,7 +146,7 @@ export type ImportRepository = {
     createParentCredentials: () => Promise<TemporaryCredentials>
   ) => Promise<{
     result: 'inserted' | 'updated';
-    createdParent?: { parentId: string; fullName: string; phone: string };
+    parentProvisioning?: ParentProvisioningResult;
   }>;
   upsertTeacher: (
     db: QueryExecutor,
@@ -536,9 +537,9 @@ export const defaultImportRepository: ImportRepository = {
         WHERE id = ${existing.id}
       `);
 
-      let createdParent: { parentId: string; fullName: string; phone: string } | undefined;
+      let parentProvisioning: ParentProvisioningResult | undefined;
       if (row.parentName && row.parentPhone) {
-        const parent = await ensureParentAccountForStudent(
+        parentProvisioning = await ensureParentAccountForStudent(
           db,
           {
             studentId: existing.id,
@@ -548,16 +549,12 @@ export const defaultImportRepository: ImportRepository = {
           },
           createParentCredentials
         );
-        if (parent.created) {
-          createdParent = {
-            parentId: parent.parentId,
-            fullName: parent.fullName,
-            phone: parent.phone,
-          };
-        }
       }
 
-      return { result: 'updated', ...(createdParent ? { createdParent } : {}) };
+      return {
+        result: 'updated',
+        ...(parentProvisioning ? { parentProvisioning } : {}),
+      };
     }
 
     const insertedResult = await db.execute(sql`
@@ -605,9 +602,9 @@ export const defaultImportRepository: ImportRepository = {
       throw new Error('Unable to insert imported student');
     }
 
-    let createdParent: { parentId: string; fullName: string; phone: string } | undefined;
+    let parentProvisioning: ParentProvisioningResult | undefined;
     if (row.parentName && row.parentPhone) {
-      const parent = await ensureParentAccountForStudent(
+      parentProvisioning = await ensureParentAccountForStudent(
         db,
         {
           studentId: inserted.id,
@@ -617,16 +614,12 @@ export const defaultImportRepository: ImportRepository = {
         },
         createParentCredentials
       );
-      if (parent.created) {
-        createdParent = {
-          parentId: parent.parentId,
-          fullName: parent.fullName,
-          phone: parent.phone,
-        };
-      }
     }
 
-    return { result: 'inserted', ...(createdParent ? { createdParent } : {}) };
+    return {
+      result: 'inserted',
+      ...(parentProvisioning ? { parentProvisioning } : {}),
+    };
   },
 
   async upsertTeacher(db, row, params) {

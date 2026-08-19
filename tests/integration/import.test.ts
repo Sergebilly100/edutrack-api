@@ -188,6 +188,8 @@ describe('import integration - students', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.imported).toBe(1);
+    expect(res.body.parentAccountsCreated).toBe(1);
+    expect(res.body.parentAccountsReused).toBe(0);
     expect(res.body.pendingParentAccess).toEqual([
       expect.objectContaining({
         fullName: `Parent ${prefix}`,
@@ -231,6 +233,76 @@ describe('import integration - students', () => {
       [links[0]!.parent_id]
     );
     expect(count).toBe(0);
+  });
+
+  it('POST /api/v1/import/students/confirm - réutilise un parent existant par téléphone sans SMS', async () => {
+    const headers = await getAuthHeaders('director');
+    const { className } = getSeedContext();
+    const prefix = uniquePrefix();
+    const phone = `22505${Math.random().toString().slice(2, 10).padEnd(8, '0')}`;
+    const firstRows = [
+      {
+        'Prénom*': `${prefix}_first_child`,
+        'Nom*': 'SharedParent',
+        'Classe*': className,
+        'Nom parent': `Parent ${prefix}`,
+        'Téléphone parent': phone,
+      },
+    ];
+    const secondRows = [
+      {
+        'Prénom*': `${prefix}_second_child`,
+        'Nom*': 'SharedParent',
+        'Classe*': className,
+        'Nom parent': `Parent ${prefix}`,
+        'Téléphone parent': phone,
+      },
+    ];
+
+    const first = await attachStudents(
+      request().post('/api/v1/import/students/confirm').set(headers),
+      firstRows
+    );
+    expect(first.status).toBe(200);
+    expect(first.body.parentAccountsCreated).toBe(1);
+
+    const second = await attachStudents(
+      request().post('/api/v1/import/students/confirm').set(headers),
+      secondRows
+    );
+
+    expect(second.status).toBe(200);
+    expect(second.body.parentAccountsCreated).toBe(0);
+    expect(second.body.parentAccountsReused).toBe(1);
+    expect(second.body.pendingParentAccess).toEqual([]);
+
+    const [{ parent_count, link_count, notification_count }] = await queryTenant<{
+      parent_count: number;
+      link_count: number;
+      notification_count: number;
+    }>(
+      `
+        SELECT
+          (SELECT COUNT(*)::int FROM ${tenantTable('parents')} WHERE phone = $1) AS parent_count,
+          (
+            SELECT COUNT(*)::int
+            FROM ${tenantTable('parent_student_links')} psl
+            INNER JOIN ${tenantTable('parents')} p ON p.id = psl.parent_id
+            INNER JOIN ${tenantTable('students')} s ON s.id = psl.student_id
+            WHERE p.phone = $1 AND s.first_name IN ($2, $3)
+          ) AS link_count,
+          (
+            SELECT COUNT(*)::int
+            FROM ${tenantTable('notifications_log')} nl
+            INNER JOIN ${tenantTable('parents')} p ON p.id = nl.related_id
+            WHERE p.phone = $1 AND nl.type = 'parent_access_credentials'
+          ) AS notification_count
+      `,
+      [phone, `${prefix}_first_child`, `${prefix}_second_child`]
+    );
+    expect(parent_count).toBe(1);
+    expect(link_count).toBe(2);
+    expect(notification_count).toBe(0);
   });
 
   it('POST /api/v1/import/students/confirm - mode replace désactive les absents', async () => {

@@ -1471,6 +1471,8 @@ export class ImportService {
       let imported = 0;
       let updated = 0;
       let deactivated = 0;
+      const createdParentIds = new Set<string>();
+      const reusedParentIds = new Set<string>();
       const pendingParentAccess = new Map<
         string,
         { parentId: string; fullName: string; phone: string }
@@ -1487,8 +1489,15 @@ export class ImportService {
         } else {
           updated += 1;
         }
-        if (result.createdParent) {
-          pendingParentAccess.set(result.createdParent.parentId, result.createdParent);
+        if (result.parentProvisioning?.created) {
+          createdParentIds.add(result.parentProvisioning.parentId);
+          pendingParentAccess.set(result.parentProvisioning.parentId, {
+            parentId: result.parentProvisioning.parentId,
+            fullName: result.parentProvisioning.fullName,
+            phone: result.parentProvisioning.phone,
+          });
+        } else if (result.parentProvisioning) {
+          reusedParentIds.add(result.parentProvisioning.parentId);
         }
       }
 
@@ -1529,6 +1538,8 @@ export class ImportService {
         preview: validation.report.preview,
         deactivated,
         importMode: mode,
+        parentAccountsCreated: createdParentIds.size,
+        parentAccountsReused: reusedParentIds.size,
         pendingParentAccess: Array.from(pendingParentAccess.values()),
       };
     };
