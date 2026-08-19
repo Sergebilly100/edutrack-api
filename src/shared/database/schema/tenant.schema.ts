@@ -106,6 +106,21 @@ export const schoolYearStatusEnum = tenant.enum('school_year_status', [
   'closed',
 ]);
 
+export const gradingPeriodTypeEnum = tenant.enum('grading_period_type', [
+  'trimester',
+  'semester',
+]);
+
+export const evaluationTypeEnum = tenant.enum('evaluation_type', [
+  'scheduled',
+  'spontaneous',
+]);
+
+export const classSubjectCompletionStatusEnum = tenant.enum(
+  'class_subject_completion_status',
+  ['in_progress', 'completed']
+);
+
 export const classDecisionTypeEnum = tenant.enum('class_decision_type', [
   'promoted',
   'repeat',
@@ -686,6 +701,148 @@ export const schedules = tenant.table(
     schedulesClassDayIdx: index('idx_schedules_class_day')
       .on(table.classId, table.dayOfWeek)
       .where(sql`${table.isActive} = true`),
+  })
+);
+
+export const subjects = tenant.table(
+  'subjects',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    levelId: uuid('level_id').notNull().references(() => levels.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: 100 }).notNull(),
+    coefficient: numeric('coefficient', { precision: 8, scale: 3 }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    subjectsLevelNameUnique: unique('subjects_level_name_unique').on(table.levelId, table.name),
+    subjectsLevelIdx: index('idx_subjects_level').on(table.levelId, table.name),
+    subjectsCoefficientPositive: check('subjects_coefficient_positive', sql`${table.coefficient} > 0`),
+  })
+);
+
+export const teacherSubjectAssignments = tenant.table(
+  'teacher_subject_assignments',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    teacherId: uuid('teacher_id').notNull().references(() => teachers.id, { onDelete: 'cascade' }),
+    subjectId: uuid('subject_id').notNull().references(() => subjects.id, { onDelete: 'cascade' }),
+    classId: uuid('class_id').notNull().references(() => classes.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    teacherSubjectAssignmentsUnique: unique('teacher_subject_assignments_unique').on(
+      table.teacherId,
+      table.subjectId,
+      table.classId
+    ),
+    teacherSubjectAssignmentsTeacherIdx: index('idx_teacher_subject_assignments_teacher').on(table.teacherId),
+    teacherSubjectAssignmentsClassIdx: index('idx_teacher_subject_assignments_class').on(table.classId, table.subjectId),
+  })
+);
+
+export const gradingPeriods = tenant.table(
+  'grading_periods',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    schoolYearId: uuid('school_year_id').notNull().references(() => schoolYears.id, { onDelete: 'cascade' }),
+    type: gradingPeriodTypeEnum('type').notNull(),
+    orderIndex: integer('order_index').notNull(),
+    label: varchar('label', { length: 100 }).notNull(),
+    startDate: date('start_date', { mode: 'string' }).notNull(),
+    endDate: date('end_date', { mode: 'string' }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    gradingPeriodsYearOrderUnique: unique('grading_periods_year_order_unique').on(table.schoolYearId, table.orderIndex),
+    gradingPeriodsYearLabelUnique: unique('grading_periods_year_label_unique').on(table.schoolYearId, table.label),
+    gradingPeriodsYearIdx: index('idx_grading_periods_year').on(table.schoolYearId, table.orderIndex),
+    gradingPeriodsValidDates: check('grading_periods_valid_dates', sql`${table.startDate} <= ${table.endDate}`),
+    gradingPeriodsOrderPositive: check('grading_periods_order_positive', sql`${table.orderIndex} > 0`),
+  })
+);
+
+export const evaluations = tenant.table(
+  'evaluations',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    lessonSlotId: uuid('lesson_slot_id').notNull().references(() => schedules.id),
+    subjectId: uuid('subject_id').notNull().references(() => subjects.id),
+    classId: uuid('class_id').notNull().references(() => classes.id),
+    gradingPeriodId: uuid('grading_period_id').notNull().references(() => gradingPeriods.id),
+    teacherId: uuid('teacher_id').notNull().references(() => teachers.id),
+    type: evaluationTypeEnum('type').notNull(),
+    coefficient: numeric('coefficient', { precision: 8, scale: 3 }).notNull(),
+    label: varchar('label', { length: 150 }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    evaluationsPeriodSubjectClassIdx: index('idx_evaluations_period_subject_class').on(table.gradingPeriodId, table.subjectId, table.classId),
+    evaluationsTeacherIdx: index('idx_evaluations_teacher').on(table.teacherId),
+    evaluationsCoefficientPositive: check('evaluations_coefficient_positive', sql`${table.coefficient} > 0`),
+  })
+);
+
+export const evaluationGrades = tenant.table(
+  'evaluation_grades',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    evaluationId: uuid('evaluation_id').notNull().references(() => evaluations.id, { onDelete: 'cascade' }),
+    studentId: uuid('student_id').notNull().references(() => students.id, { onDelete: 'cascade' }),
+    score: numeric('score', { precision: 8, scale: 3 }).notNull(),
+    maxScore: numeric('max_score', { precision: 8, scale: 3 }).notNull(),
+    comment: text('comment'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    evaluationGradesEvaluationStudentUnique: unique('evaluation_grades_evaluation_student_unique').on(table.evaluationId, table.studentId),
+    evaluationGradesStudentIdx: index('idx_evaluation_grades_student').on(table.studentId),
+    evaluationGradesScoreNonNegative: check('evaluation_grades_score_non_negative', sql`${table.score} >= 0`),
+    evaluationGradesMaxScorePositive: check('evaluation_grades_max_score_positive', sql`${table.maxScore} > 0`),
+    evaluationGradesScoreWithinMax: check('evaluation_grades_score_within_max', sql`${table.score} <= ${table.maxScore}`),
+  })
+);
+
+export const classSubjectCompletion = tenant.table(
+  'class_subject_completion',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    classId: uuid('class_id').notNull().references(() => classes.id, { onDelete: 'cascade' }),
+    subjectId: uuid('subject_id').notNull().references(() => subjects.id, { onDelete: 'cascade' }),
+    gradingPeriodId: uuid('grading_period_id').notNull().references(() => gradingPeriods.id, { onDelete: 'cascade' }),
+    status: classSubjectCompletionStatusEnum('status').notNull().default('in_progress'),
+    completedAt: timestamp('completed_at', { withTimezone: true, mode: 'date' }),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    classSubjectCompletionUnique: unique('class_subject_completion_unique').on(table.classId, table.subjectId, table.gradingPeriodId),
+    classSubjectCompletionPeriodClassIdx: index('idx_class_subject_completion_period_class').on(table.gradingPeriodId, table.classId),
+  })
+);
+
+export const studentPeriodAverages = tenant.table(
+  'student_period_averages',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    studentId: uuid('student_id').notNull().references(() => students.id, { onDelete: 'cascade' }),
+    subjectId: uuid('subject_id').references(() => subjects.id, { onDelete: 'cascade' }),
+    gradingPeriodId: uuid('grading_period_id').notNull().references(() => gradingPeriods.id, { onDelete: 'cascade' }),
+    average: numeric('average', { precision: 8, scale: 3 }).notNull(),
+    rank: integer('rank'),
+    computedAt: timestamp('computed_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    studentPeriodAveragesSubjectUnique: uniqueIndex('student_period_averages_subject_unique')
+      .on(table.studentId, table.subjectId, table.gradingPeriodId)
+      .where(sql`${table.subjectId} IS NOT NULL`),
+    studentPeriodAveragesGeneralUnique: uniqueIndex('student_period_averages_general_unique')
+      .on(table.studentId, table.gradingPeriodId)
+      .where(sql`${table.subjectId} IS NULL`),
+    studentPeriodAveragesPeriodIdx: index('idx_student_period_averages_period').on(table.gradingPeriodId, table.subjectId),
+    studentPeriodAveragesRankPositive: check('student_period_averages_rank_positive', sql`${table.rank} IS NULL OR ${table.rank} > 0`),
   })
 );
 
