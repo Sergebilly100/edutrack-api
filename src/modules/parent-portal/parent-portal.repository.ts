@@ -104,6 +104,7 @@ export class ParentPortalRepository {
       INNER JOIN students s ON s.id = psl.student_id
       WHERE psl.parent_id = ${parentId}::uuid
         AND s.is_active = true
+        AND s.lifecycle_status = 'active'
     `);
 
     return result.rows.map((row) => row.student_id);
@@ -121,10 +122,26 @@ export class ParentPortalRepository {
       INNER JOIN classes c ON c.id = s.class_id
       WHERE psl.parent_id = ${parentId}::uuid
         AND s.is_active = true
+        AND s.lifecycle_status = 'active'
       ORDER BY s.last_name ASC, s.first_name ASC
     `);
 
     return result.rows;
+  }
+
+  async parentCanAccessStudent(parentId: string, studentId: string): Promise<boolean> {
+    const result = await this.db.execute<{ allowed: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1
+        FROM parent_student_links psl
+        INNER JOIN students s ON s.id = psl.student_id
+        WHERE psl.parent_id = ${parentId}::uuid
+          AND psl.student_id = ${studentId}::uuid
+          AND s.is_active = true
+          AND s.lifecycle_status = 'active'
+      ) AS allowed
+    `);
+    return result.rows[0]?.allowed ?? false;
   }
 
   async getStudentClassId(studentId: string): Promise<string | null> {

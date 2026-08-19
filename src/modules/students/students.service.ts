@@ -51,6 +51,7 @@ type ServiceDependencies = {
     phone: string;
     temporaryPassword: string;
   }) => Promise<void>;
+  schemaName?: string;
 };
 
 const DEFAULT_DEPENDENCIES: ServiceDependencies = {
@@ -107,6 +108,9 @@ export class StudentsService {
   }
 
   async createStudent(input: CreateStudentInput): Promise<StudentRecord> {
+    if (input.is_assigned !== null && this.deps.schemaName && !(await this.repository.isStudentAssignmentEnabled(this.deps.schemaName))) {
+      throw new StudentsModuleError('Le statut affecté est désactivé pour cette école', 409, 'STUDENT_ASSIGNMENT_DISABLED');
+    }
     try {
       const result = await this.repository.createStudent(
         input,
@@ -145,6 +149,9 @@ export class StudentsService {
   }
 
   async updateStudent(studentId: string, input: UpdateStudentInput): Promise<StudentRecord> {
+    if (input.is_assigned !== undefined && input.is_assigned !== null && this.deps.schemaName && !(await this.repository.isStudentAssignmentEnabled(this.deps.schemaName))) {
+      throw new StudentsModuleError('Le statut affecté est désactivé pour cette école', 409, 'STUDENT_ASSIGNMENT_DISABLED');
+    }
     try {
       const result = await this.repository.updateStudent(
         studentId,
@@ -361,6 +368,7 @@ export const buildStudentsService = (
   );
 
   return new StudentsService(new StudentsRepository(tenantDb, globalDb), {
+    schemaName: options.schemaName,
     notifyParentAccess: async (input) => {
       if (!options.schemaName) return;
       await parentAccounts.queuePreparedAccess({ schemaName: options.schemaName, ...input });

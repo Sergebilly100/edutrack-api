@@ -35,6 +35,10 @@ export const PERMISSION_KEYS = [
   'school_years.edit',
   'class_decisions.view',
   'class_decisions.validate',
+  'enrollments.view',
+  'enrollments.create',
+  'enrollments.edit',
+  'enrollments.confirm_payment',
   'classes.view',
   'classes.create',
   'classes.edit',
@@ -151,6 +155,7 @@ export const updateSchoolConfigBodySchema = z
       .nullable()
       .optional(),
     allowTeacherQrSkip: z.boolean().optional(),
+    studentAssignmentEnabled: z.boolean().optional(),
   })
   .refine(
     (value) =>
@@ -159,7 +164,8 @@ export const updateSchoolConfigBodySchema = z
       value.teachingType !== undefined ||
       value.logoUrl !== undefined ||
       value.activeSchoolYear !== undefined ||
-      value.allowTeacherQrSkip !== undefined,
+      value.allowTeacherQrSkip !== undefined ||
+      value.studentAssignmentEnabled !== undefined,
     {
       message: 'At least one field must be provided',
     }

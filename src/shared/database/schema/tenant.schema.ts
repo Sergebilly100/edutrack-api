@@ -111,6 +111,30 @@ export const classDecisionTypeEnum = tenant.enum('class_decision_type', [
   'expelled',
 ]);
 
+export const studentLifecycleStatusEnum = tenant.enum('student_lifecycle_status', [
+  'active',
+  'expelled',
+  'transferred',
+]);
+
+export const studentDocumentStatusEnum = tenant.enum('student_document_status', [
+  'missing',
+  'provided',
+  'to_renew',
+]);
+
+export const enrollmentTypeEnum = tenant.enum('enrollment_type', [
+  'new_registration',
+  're_registration',
+]);
+
+export const enrollmentStatusEnum = tenant.enum('enrollment_status', [
+  'pending_cashier',
+  'pending_dossier',
+  'confirmed',
+  'blocked_unpaid',
+]);
+
 export const users = tenant.table('users', {
   id: uuid('id').defaultRandom().primaryKey(),
   role: userRoleEnum('role').notNull(),
@@ -226,6 +250,8 @@ export const classes = tenant.table(
     }),
     studentCount: integer('student_count').notNull().default(0),
     isActive: boolean('is_active').notNull().default(true),
+    isAssigned: boolean('is_assigned'),
+    lifecycleStatus: studentLifecycleStatusEnum('lifecycle_status').notNull().default('active'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
       .notNull()
       .defaultNow(),
@@ -292,6 +318,71 @@ export const classDecisions = tenant.table(
       table.schoolYearId
     ),
     classDecisionsSchoolYearIdx: index('idx_class_decisions_school_year').on(table.schoolYearId),
+  })
+);
+
+export const requiredDocumentTypes = tenant.table(
+  'required_document_types',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    levelId: uuid('level_id').notNull().references(() => levels.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: 150 }).notNull(),
+    isMandatory: boolean('is_mandatory').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    requiredDocumentTypesLevelNameUnique: unique('required_document_types_level_name_unique').on(
+      table.levelId,
+      table.name
+    ),
+    requiredDocumentTypesLevelIdx: index('idx_required_document_types_level').on(table.levelId),
+  })
+);
+
+export const studentDocuments = tenant.table(
+  'student_documents',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    studentId: uuid('student_id').notNull().references(() => students.id, { onDelete: 'cascade' }),
+    documentTypeId: uuid('document_type_id').notNull().references(() => requiredDocumentTypes.id, { onDelete: 'cascade' }),
+    status: studentDocumentStatusEnum('status').notNull().default('missing'),
+    fileUrl: text('file_url'),
+    r2Key: varchar('r2_key', { length: 500 }),
+    providedAt: timestamp('provided_at', { withTimezone: true, mode: 'date' }),
+    notes: text('notes'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    studentDocumentsStudentTypeUnique: unique('student_documents_student_type_unique').on(
+      table.studentId,
+      table.documentTypeId
+    ),
+    studentDocumentsStudentIdx: index('idx_student_documents_student').on(table.studentId),
+  })
+);
+
+export const enrollments = tenant.table(
+  'enrollments',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    studentId: uuid('student_id').notNull().references(() => students.id, { onDelete: 'cascade' }),
+    classId: uuid('class_id').notNull().references(() => classes.id),
+    schoolYearId: uuid('school_year_id').notNull().references(() => schoolYears.id),
+    type: enrollmentTypeEnum('type').notNull(),
+    status: enrollmentStatusEnum('status').notNull(),
+    enrolledAt: timestamp('enrolled_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    confirmedByUserId: uuid('confirmed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    enrollmentsStudentYearUnique: unique('enrollments_student_year_unique').on(
+      table.studentId,
+      table.schoolYearId
+    ),
+    enrollmentsYearStatusIdx: index('idx_enrollments_year_status').on(table.schoolYearId, table.status),
   })
 );
 

@@ -61,6 +61,15 @@ const toDateWithTime = (date: string, time: string): Date => new Date(`${date}T$
 export class ParentPortalService {
   constructor(private readonly repository: ParentPortalRepository) {}
 
+  private async assertStudentAccess(studentId: string, context: ServiceContext): Promise<void> {
+    if (
+      !context.allowedStudentIds.includes(studentId) ||
+      !(await this.repository.parentCanAccessStudent(context.parentId, studentId))
+    ) {
+      throw new ParentPortalError('Student access denied', 403, 'STUDENT_ACCESS_DENIED');
+    }
+  }
+
   async loginParent(input: {
     phone: string;
     password: string;
@@ -125,9 +134,7 @@ export class ParentPortalService {
   }
 
   async getStudentSchedule(input: { studentId: string; week: string }, context: ServiceContext) {
-    if (!context.allowedStudentIds.includes(input.studentId)) {
-      throw new ParentPortalError('Student access denied', 403, 'STUDENT_ACCESS_DENIED');
-    }
+    await this.assertStudentAccess(input.studentId, context);
 
     const classId = await this.repository.getStudentClassId(input.studentId);
     if (!classId) {
@@ -191,9 +198,7 @@ export class ParentPortalService {
   }
 
   async listStudentAbsences(input: { studentId: string; month: string }, context: ServiceContext) {
-    if (!context.allowedStudentIds.includes(input.studentId)) {
-      throw new ParentPortalError('Student access denied', 403, 'STUDENT_ACCESS_DENIED');
-    }
+    await this.assertStudentAccess(input.studentId, context);
 
     const { monthStart, monthEnd } = monthBounds(input.month);
     return this.repository.listAbsencesByStudentAndMonth({
@@ -204,9 +209,7 @@ export class ParentPortalService {
   }
 
   async getStudentStats(input: { studentId: string }, context: ServiceContext) {
-    if (!context.allowedStudentIds.includes(input.studentId)) {
-      throw new ParentPortalError('Student access denied', 403, 'STUDENT_ACCESS_DENIED');
-    }
+    await this.assertStudentAccess(input.studentId, context);
 
     const now = new Date();
     const day = now.getUTCDay() || 7;

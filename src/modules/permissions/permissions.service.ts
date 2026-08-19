@@ -112,6 +112,7 @@ export class PermissionsService {
         allowTeacherQrSkip: schoolConfig.allow_teacher_qr_skip,
         logoUrl: schoolConfig.logo_url,
         activeSchoolYear: schoolConfig.active_school_year,
+        studentAssignmentEnabled: schoolConfig.student_assignment_enabled,
       },
       limits: {
         maxAdminPositions: schoolConfig.max_admin_positions,
@@ -136,6 +137,7 @@ export class PermissionsService {
       logoUrl?: string | null;
       activeSchoolYear?: string | null;
       allowTeacherQrSkip?: boolean;
+      studentAssignmentEnabled?: boolean;
     }
   ) {
     await this.repository.updateSchoolConfig(schemaName, input);

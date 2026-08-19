@@ -39,6 +39,7 @@ type SchoolConfigRow = {
   allow_teacher_qr_skip: boolean;
   logo_url: string | null;
   active_school_year: string | null;
+  student_assignment_enabled: boolean;
 };
 
 type AssignableUserRow = {
@@ -146,6 +147,7 @@ export class PermissionsRepository {
         COALESCE(tenants.allow_teacher_qr_skip, false) AS allow_teacher_qr_skip,
         tenants.logo_url,
         tenants.active_school_year
+        , COALESCE(features.student_assignment_enabled, false) AS student_assignment_enabled
       FROM public.tenants tenants
       LEFT JOIN public.school_sms_features features ON features.tenant_id = tenants.id
       WHERE tenants.schema_name = ${schemaName}
@@ -579,6 +581,7 @@ export class PermissionsRepository {
       logoUrl?: string | null;
       activeSchoolYear?: string | null;
       allowTeacherQrSkip?: boolean;
+      studentAssignmentEnabled?: boolean;
     }
   ): Promise<void> {
     await this.db.execute(sql`
@@ -605,6 +608,18 @@ export class PermissionsRepository {
         updated_at = NOW()
       WHERE schema_name = ${schemaName}
     `);
+
+    if (input.studentAssignmentEnabled !== undefined) {
+      await this.db.execute(sql`
+        INSERT INTO public.school_sms_features (tenant_id, student_assignment_enabled)
+        SELECT id, ${input.studentAssignmentEnabled}
+        FROM public.tenants
+        WHERE schema_name = ${schemaName}
+        ON CONFLICT (tenant_id) DO UPDATE SET
+          student_assignment_enabled = EXCLUDED.student_assignment_enabled,
+          updated_at = NOW()
+      `);
+    }
   }
 
   async updateMaxAdminPositions(schemaName: string, maxAdminPositions: number): Promise<void> {

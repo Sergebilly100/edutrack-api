@@ -56,6 +56,8 @@ type StudentRow = {
   parent_phone_2: string | null;
   notes: string | null;
   is_active: boolean;
+  is_assigned: boolean | null;
+  lifecycle_status: 'active' | 'expelled' | 'transferred';
   created_at: Date;
 };
 
@@ -75,6 +77,8 @@ type ExistingStudentRow = {
   parent_phone_2: string | null;
   notes: string | null;
   is_active: boolean;
+  is_assigned: boolean | null;
+  lifecycle_status: 'active' | 'expelled' | 'transferred';
 };
 
 type ScheduleRow = {
@@ -237,6 +241,8 @@ const mapStudent = (row: StudentRow): StudentRecord => ({
   parentPhone2: row.parent_phone_2,
   note: row.notes,
   isActive: row.is_active,
+  isAssigned: row.is_assigned,
+  lifecycleStatus: row.lifecycle_status,
   createdAt: toIsoDateTime(row.created_at),
 });
 
@@ -357,6 +363,17 @@ export class StudentsRepository {
     return getRows<TenantIdentityRow>(result)[0]?.id ?? null;
   }
 
+  async isStudentAssignmentEnabled(schemaName: string): Promise<boolean> {
+    const result = await this.globalDb.execute(sql`
+      SELECT COALESCE(features.student_assignment_enabled, false) AS enabled
+      FROM public.tenants tenants
+      LEFT JOIN public.school_sms_features features ON features.tenant_id = tenants.id
+      WHERE tenants.schema_name = ${schemaName}
+      LIMIT 1
+    `);
+    return getRows<{ enabled: boolean }>(result)[0]?.enabled ?? false;
+  }
+
   async listStudents(query: StudentsListQuery): Promise<{ rows: StudentRecord[]; total: number }> {
     const offset = (query.page - 1) * query.limit;
     const where = makeWhereClause(buildStudentsWhere(query));
@@ -378,6 +395,8 @@ export class StudentsRepository {
           s.parent_phone_2,
           s.notes,
           s.is_active,
+          s.is_assigned,
+          s.lifecycle_status,
           s.created_at
         FROM students s
         INNER JOIN classes c ON c.id = s.class_id
@@ -441,14 +460,15 @@ export class StudentsRepository {
           class_id, first_name, last_name, matricule, birth_date,
           parent_name, parent_phone, parent_email,
           parent_name_2, parent_phone_2,
-          notes, is_active
+          notes, is_active, is_assigned, lifecycle_status
         )
         VALUES (
           ${input.class_id}, ${input.first_name}, ${input.last_name},
           ${input.matricule ?? null}, ${input.birth_date ?? null},
           ${input.parent_name}, ${input.parent_phone}, ${input.parent_email ?? null},
           ${input.parent_name_2}, ${input.parent_phone_2},
-          ${input.notes}, ${input.is_active}
+          ${input.notes}, ${input.lifecycle_status === 'active' ? input.is_active : false},
+          ${input.is_assigned}, ${input.lifecycle_status}::student_lifecycle_status
         )
         RETURNING
           id, class_id,
@@ -456,7 +476,7 @@ export class StudentsRepository {
           first_name, last_name, matricule, birth_date::text AS birth_date,
           parent_name, parent_phone, parent_email,
           parent_name_2, parent_phone_2,
-          notes, is_active, created_at
+          notes, is_active, is_assigned, lifecycle_status, created_at
       `);
 
       const created = getRows<StudentRow>(result)[0];
@@ -492,7 +512,7 @@ export class StudentsRepository {
         s.first_name, s.last_name, s.matricule, s.birth_date::text AS birth_date,
         s.parent_name, s.parent_phone, s.parent_email,
         s.parent_name_2, s.parent_phone_2,
-        s.notes, s.is_active, s.created_at
+        s.notes, s.is_active, s.is_assigned, s.lifecycle_status, s.created_at
       FROM students s
       INNER JOIN classes c ON c.id = s.class_id
       WHERE s.id = ${studentId}
@@ -513,7 +533,7 @@ export class StudentsRepository {
       SELECT id, class_id, first_name, last_name, matricule, birth_date::text AS birth_date,
              parent_name, parent_phone, parent_email,
              parent_name_2, parent_phone_2,
-             notes, is_active
+             notes, is_active, is_assigned, lifecycle_status
       FROM students
       WHERE id = ${studentId}
       LIMIT 1
@@ -523,7 +543,13 @@ export class StudentsRepository {
     if (!current) return null;
 
     const nextClassId = input.class_id ?? current.class_id;
-    const nextIsActive = input.is_active ?? current.is_active;
+    const nextLifecycleStatus = input.lifecycle_status ?? current.lifecycle_status;
+    const nextIsActive = nextLifecycleStatus === 'active'
+      ? (input.is_active ?? current.is_active)
+      : false;
+    const nextIsAssigned = input.is_assigned === undefined
+      ? current.is_assigned
+      : input.is_assigned;
     // undefined = conserver ; null/valeur = écraser.
     const nextMatricule = input.matricule === undefined ? current.matricule : input.matricule;
     const matriculeSql = nextMatricule === null ? sql`NULL` : sql`${nextMatricule}`;
@@ -555,7 +581,9 @@ export class StudentsRepository {
         parent_name_2 = ${nextParentName2},
         parent_phone_2 = ${nextParentPhone2},
         notes = ${nextNotes},
-        is_active = ${nextIsActive}
+        is_active = ${nextIsActive},
+        is_assigned = ${nextIsAssigned},
+        lifecycle_status = ${nextLifecycleStatus}::student_lifecycle_status
       WHERE id = ${studentId}
       RETURNING id
     `);
@@ -603,7 +631,7 @@ export class StudentsRepository {
         s.first_name, s.last_name, s.matricule, s.birth_date::text AS birth_date,
         s.parent_name, s.parent_phone, s.parent_email,
         s.parent_name_2, s.parent_phone_2,
-        s.notes, s.is_active, s.created_at
+        s.notes, s.is_active, s.is_assigned, s.lifecycle_status, s.created_at
     `);
 
     const row = getRows<StudentRow>(result)[0];
@@ -746,6 +774,8 @@ export class StudentsRepository {
       className: student.className,
       classId: student.classId,
       isActive: student.isActive,
+      isAssigned: student.isAssigned,
+      lifecycleStatus: student.lifecycleStatus,
       parentPhone: student.parentPhone,
       parentEmail: student.parentEmail ?? null,
       parentPhone2: student.parentPhone2,
@@ -1280,7 +1310,7 @@ export class StudentsRepository {
         s.first_name, s.last_name, s.matricule, s.birth_date::text AS birth_date,
         s.parent_name, s.parent_phone, s.parent_email,
         s.parent_name_2, s.parent_phone_2,
-        s.notes, s.is_active, s.created_at
+        s.notes, s.is_active, s.is_assigned, s.lifecycle_status, s.created_at
       FROM students s
       INNER JOIN classes c ON c.id = s.class_id
       WHERE s.id = ${studentId}

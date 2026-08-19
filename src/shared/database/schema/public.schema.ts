@@ -183,6 +183,7 @@ export const schoolSmsFeatures = pgTable(
     geoCheckEnabled: boolean('geo_check_enabled').notNull().default(false),
     checkoutToleranceMinutes: integer('checkout_tolerance_minutes').notNull().default(5),
     requireEndScan: boolean("require_end_scan").default(false).notNull(),
+    studentAssignmentEnabled: boolean('student_assignment_enabled').notNull().default(false),
     activatedAt: timestamp('activated_at', { withTimezone: true, mode: 'date' }),
     activatedBy: uuid('activated_by'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),

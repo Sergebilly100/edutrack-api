@@ -34,6 +34,7 @@ import dashboardController from './modules/dashboard/dashboard.controller.js';
 import { createBillingPdfQueue } from './modules/billing/billing.queue.js'
 import { createBillingPdfWorker } from './modules/billing/billing.queue.js';
 import documentsController from './modules/documents/documents.controller.js';
+import enrollmentsController from './modules/enrollments/enrollments.controller.js';
 import importExportController from './modules/import-export/import.controller.js';
 import notificationsController from './modules/notifications/notifications.controller.js';
 import permissionsController from './modules/permissions/permissions.controller.js';
@@ -264,6 +265,7 @@ app.register(validationsController);
 app.register(scheduleController);
 app.register(roomsController);
 app.register(documentsController);
+app.register(enrollmentsController);
 app.register(schoolController);
 app.register(importExportController);
 app.register(permissionsController);

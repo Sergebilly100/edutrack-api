@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const PHONE_CI_REGEX = /^225\d{10}$/;
 export const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+export const studentLifecycleStatusSchema = z.enum(['active', 'expelled', 'transferred']);
 
 // ─── Shared validators ────────────────────────────────────────────────────────
 
@@ -46,6 +47,8 @@ export const createStudentBodySchema = z.object({
   parent_phone_2: parentPhone2Schema.optional().default(null),
   notes: z.string().trim().max(5000).nullable().optional().default(null),
   is_active: z.boolean().optional().default(true),
+  is_assigned: z.boolean().nullable().optional().default(null),
+  lifecycle_status: studentLifecycleStatusSchema.optional().default('active'),
 });
 
 export const updateStudentParamsSchema = z.object({
@@ -66,6 +69,8 @@ export const updateStudentBodySchema = z
     parent_phone_2: parentPhone2Schema.optional(),
     notes: z.string().trim().max(5000).nullable().optional(),
     is_active: z.boolean().optional(),
+    is_assigned: z.boolean().nullable().optional(),
+    lifecycle_status: studentLifecycleStatusSchema.optional(),
   })
   .refine((payload) => Object.keys(payload).length > 0, {
     message: 'At least one field is required',
@@ -146,6 +151,8 @@ export type StudentRecord = {
   parentPhone2: string | null;
   note?: string | null;
   isActive: boolean;
+  isAssigned: boolean | null;
+  lifecycleStatus: z.infer<typeof studentLifecycleStatusSchema>;
   createdAt: string;
 };
 
@@ -186,6 +193,8 @@ export type StudentDetailRecord = {
   className: string;
   classId: string;
   isActive: boolean;
+  isAssigned: boolean | null;
+  lifecycleStatus: z.infer<typeof studentLifecycleStatusSchema>;
   parentPhone: string | null;
   parentEmail: string | null;
   parentPhone2: string | null;
