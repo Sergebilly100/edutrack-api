@@ -194,6 +194,10 @@ const canReadPdfJob = (
     return request.permissions?.has('subscriptions.revenue') === true;
   }
 
+  if (jobType === 'tuition-receipt') {
+    return request.permissions?.has('payments.view') === true;
+  }
+
   return false;
 };
 

@@ -6,9 +6,12 @@ import { withTenantSchema } from '../../shared/database/db.js';
 import { requirePermission } from '../../shared/middleware/auth.middleware.js';
 import { deleteFromR2, isR2Configured, presignDownload, uploadBuffer } from '../../shared/storage/r2.js';
 import { buildEnrollmentsService, EnrollmentsModuleError } from './enrollments.service.js';
+import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
+import { FinanceModuleError } from '../finance/finance.service.js';
 import { emitEnrollmentDocumentsMissing } from './enrollments.events.js';
 import {
   createEnrollmentBodySchema,
+  confirmEnrollmentPaymentBodySchema,
   createRequiredDocumentTypeBodySchema,
   enrollmentListQuerySchema,
   requiredDocumentListQuerySchema,
@@ -23,6 +26,7 @@ import {
 const handleError = (request: FastifyRequest, reply: FastifyReply, error: unknown) => {
   if (error instanceof ZodError) return reply.code(400).send({ error: 'Invalid request', code: 'VALIDATION_ERROR', statusCode: 400, details: error.issues });
   if (error instanceof EnrollmentsModuleError) return reply.code(error.statusCode).send({ error: error.message, code: error.code, statusCode: error.statusCode });
+  if (error instanceof FinanceModuleError) return reply.code(error.statusCode).send({ error: error.message, code: error.code, statusCode: error.statusCode });
   request.log.error({ err: error }, '[enrollments] Unexpected error');
   return reply.code(500).send({ error: 'Internal server error', code: 'INTERNAL_ERROR', statusCode: 500 });
 };
@@ -30,7 +34,10 @@ const handleError = (request: FastifyRequest, reply: FastifyReply, error: unknow
 const withService = <T>(request: FastifyRequest, run: (service: ReturnType<typeof buildEnrollmentsService>) => Promise<T>) =>
   withTenantSchema(request.claims!.schemaName, (db) => run(buildEnrollmentsService(db)));
 
-export default async function enrollmentsController(app: FastifyInstance): Promise<void> {
+export default async function enrollmentsController(
+  app: FastifyInstance,
+  options: { pdfQueue?: PdfExportQueueHandle } = {}
+): Promise<void> {
   app.get('/api/v1/enrollments', { preHandler: requirePermission('enrollments.view') }, async (request, reply) => {
     try {
       const query = enrollmentListQuerySchema.parse(request.query ?? {});
@@ -58,7 +65,19 @@ export default async function enrollmentsController(app: FastifyInstance): Promi
   });
 
   app.post('/api/v1/enrollments/:id/confirm-payment', { preHandler: requirePermission('enrollments.confirm_payment') }, async (request, reply) => {
-    try { const { id } = uuidParamsSchema.parse(request.params); return reply.send(await withService(request, (service) => service.confirmPayment(id, request.user!.userId))); }
+    try {
+      const { id } = uuidParamsSchema.parse(request.params);
+      const body = confirmEnrollmentPaymentBodySchema.parse(request.body);
+      const result = await withService(request, (service) => service.confirmPayment(id, request.user!.userId, body));
+      const job = options.pdfQueue
+        ? await options.pdfQueue.add('tuition-receipt', {
+            type: 'tuition-receipt',
+            schemaName: request.claims!.schemaName,
+            paymentId: result.payment.id,
+          }, { removeOnComplete: 100, removeOnFail: 100 })
+        : null;
+      return reply.send({ ...result, receiptJobId: job?.id });
+    }
     catch (error) { return handleError(request, reply, error); }
   });
 

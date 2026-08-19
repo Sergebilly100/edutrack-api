@@ -1,5 +1,7 @@
 import { EnrollmentsRepository, type EnrollmentRow, type StudentDocumentRow } from './enrollments.repository.js';
 import type { EnrollmentStatus, EnrollmentType, StudentDocumentStatus } from './enrollments.types.js';
+import { buildFinanceService } from '../finance/finance.service.js';
+import type { PaymentMethod } from '../finance/finance.types.js';
 
 export class EnrollmentsModuleError extends Error {
   constructor(message: string, public readonly statusCode: number, public readonly code: string) {
@@ -54,7 +56,19 @@ export const canTransitionEnrollment = (from: EnrollmentStatus, to: EnrollmentSt
 };
 
 export class EnrollmentsService {
-  constructor(private readonly repository: EnrollmentsRepository) {}
+  constructor(
+    private readonly repository: EnrollmentsRepository,
+    private readonly finance?: {
+      recordEnrollmentPayment(input: {
+        enrollmentId: string;
+        actorUserId: string;
+        method: PaymentMethod;
+        providerReference?: string;
+        schoolReceiptReference?: string;
+      }): Promise<{ payment: { id: string } & Record<string, unknown> }>;
+      getFinancialStatus(studentId: string, schoolYearId: string): Promise<{ remainingDue: number }>;
+    }
+  ) {}
 
   async listEnrollments(filters: { schoolYearId?: string; status?: EnrollmentStatus; type?: EnrollmentType }) {
     return (await this.repository.listEnrollments(filters)).map(mapEnrollment);
@@ -96,7 +110,22 @@ export class EnrollmentsService {
       }
     }
 
-    const status = resolveInitialEnrollmentStatus(input.type, input.hasPreviousYearUnpaid);
+    let hasPreviousYearUnpaid = false;
+    if (input.type === 're_registration') {
+      if (!student.current_school_year_id || !this.finance) {
+        throw new EnrollmentsModuleError(
+          'Previous-year financial status is unavailable',
+          409,
+          'PREVIOUS_FINANCIAL_STATUS_UNAVAILABLE'
+        );
+      }
+      const financialStatus = await this.finance.getFinancialStatus(
+        input.studentId,
+        student.current_school_year_id
+      );
+      hasPreviousYearUnpaid = financialStatus.remainingDue > 0;
+    }
+    const status = resolveInitialEnrollmentStatus(input.type, hasPreviousYearUnpaid);
     try {
       const created = await this.repository.createEnrollment({ ...input, status });
       if (!created) throw new Error('Failed to create enrollment');
@@ -134,17 +163,31 @@ export class EnrollmentsService {
     return mapEnrollment(updated!);
   }
 
-  async confirmPayment(id: string, userId: string) {
+  async confirmPayment(id: string, userId: string, input: {
+    method: PaymentMethod;
+    providerReference?: string;
+    schoolReceiptReference?: string;
+  }) {
     const current = await this.repository.findEnrollment(id);
     if (!current) throw new EnrollmentsModuleError('Enrollment not found', 404, 'ENROLLMENT_NOT_FOUND');
     if (!canTransitionEnrollment(current.status, 'confirmed')) {
       throw new EnrollmentsModuleError('Payment cannot be confirmed for this enrollment', 409, 'PAYMENT_CONFIRMATION_BLOCKED');
     }
-    const enrollment = await this.repository.updateEnrollment(id, { status: 'confirmed', confirmedByUserId: userId });
+    if (!this.finance) {
+      throw new EnrollmentsModuleError('Financial module is unavailable', 503, 'FINANCE_MODULE_UNAVAILABLE');
+    }
+    const { payment } = await this.finance.recordEnrollmentPayment({
+      enrollmentId: id,
+      actorUserId: userId,
+      ...input,
+    });
+    const enrollment = await this.repository.findEnrollment(id);
+    if (!enrollment) throw new EnrollmentsModuleError('Enrollment not found', 404, 'ENROLLMENT_NOT_FOUND');
     const documents = await this.repository.listStudentDocuments(current.student_id);
     const missingMandatoryDocuments = documents.filter((document) => document.is_mandatory && document.status !== 'provided').map(mapDocument);
     return {
       enrollment: mapEnrollment(enrollment!),
+      payment,
       missingMandatoryDocuments,
       documentWarning: missingMandatoryDocuments.length > 0
         ? 'Paiement confirmé. Des pièces obligatoires restent à fournir.'
@@ -240,4 +283,4 @@ export class EnrollmentsService {
 }
 
 export const buildEnrollmentsService = (db: ConstructorParameters<typeof EnrollmentsRepository>[0]) =>
-  new EnrollmentsService(new EnrollmentsRepository(db));
+  new EnrollmentsService(new EnrollmentsRepository(db), buildFinanceService(db));

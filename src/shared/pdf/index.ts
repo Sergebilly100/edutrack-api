@@ -35,3 +35,5 @@ export type {
 } from './templates/teacher-attendance.js';
 export { renderRevenueReport } from './templates/revenue.js';
 export type { RevenuePayload, RevenueRow } from './templates/revenue.js';
+export { renderTuitionReceipt } from './templates/tuition-receipt.js';
+export type { TuitionReceiptPayload } from './templates/tuition-receipt.js';

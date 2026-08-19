@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import { confirmEnrollmentPaymentBodySchema } from '../finance/finance.types.js';
+
+export { confirmEnrollmentPaymentBodySchema };
 
 export const enrollmentTypeSchema = z.enum(['new_registration', 're_registration']);
 export const enrollmentStatusSchema = z.enum([

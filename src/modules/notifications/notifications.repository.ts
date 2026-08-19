@@ -25,7 +25,7 @@ export type QrAlertContext = LateAlertContext & {
 export type NotificationLogRow = {
   id: string;
   type: NotificationType;
-  channel: 'sms' | 'email';
+  channel: 'sms' | 'email' | 'in_app';
   message: string;
   sent_at: string | null;
   recipient_phone: string | null;

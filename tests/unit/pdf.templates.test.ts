@@ -7,6 +7,7 @@ import {
   renderSchoolSalaryBilan,
   renderTeacherMultiPeriodBilan,
   renderTeacherSalaryBilan,
+  renderTuitionReceipt,
   type SchoolSalarySummary,
   type TeacherSalaryDetails,
 } from '../../src/shared/pdf/index.js';
@@ -70,6 +71,25 @@ describe('pdf/templates - bilan salaire professeur', () => {
     const pages = await isValidPdf(
       await renderTeacherSalaryBilan(branding, { ...teacher(0), rows: [] })
     );
+    expect(pages).toBe(1);
+  });
+});
+
+describe('pdf/templates - reçu de scolarité', () => {
+  it('produit un reçu valide sans bloc signature/cachet', async () => {
+    const pages = await isValidPdf(await renderTuitionReceipt(branding, {
+      receiptNumber: 'REC-TEST-001',
+      studentName: 'Aya Kouamé',
+      className: '6e A',
+      schoolYearLabel: '2026-2027',
+      amount: 153_000,
+      currency: 'FCFA',
+      method: 'mobile_money',
+      createdAt: '2026-08-19T10:00:00.000Z',
+      schoolReceiptReference: 'CARNET-42',
+      remainingDue: 47_000,
+      subscriptionLines: [{ label: 'Accès plateforme', amount: 3_000 }],
+    }));
     expect(pages).toBe(1);
   });
 });

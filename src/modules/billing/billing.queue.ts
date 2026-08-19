@@ -17,6 +17,7 @@ import {
   renderTeacherHoursReport,
   renderTeacherMultiPeriodBilan,
   renderTeacherSalaryBilan,
+  renderTuitionReceipt,
   type DocumentBranding,
   type TeacherSalaryDetails,
 } from '../../shared/pdf/index.js';
@@ -27,6 +28,7 @@ import { buildStudentsService } from '../students/students.service.js';
 import { SubscriptionsRepository } from '../subscriptions/subscriptions.repository.js';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
 import { buildTeachersService } from '../teachers/teachers.service.js';
+import { buildFinanceService } from '../finance/finance.service.js';
 
 import { buildBillingService } from './billing.service.js';
 
@@ -242,6 +244,11 @@ export type BillingPdfJobData =
       schemaName: string;
       periodFrom: string;
       periodTo: string;
+    }
+  | {
+      type: 'tuition-receipt';
+      schemaName: string;
+      paymentId: string;
     };
 
 export type BillingPdfJobResult = {
@@ -429,6 +436,14 @@ export const processBillingPdfJob = async (
           paymentStatus: item.payment_status,
         })),
       });
+      const result = await persistPdf(bytes, fileName);
+      return { ...result, fileType: 'pdf' };
+    }
+
+    if (job.data.type === 'tuition-receipt') {
+      const payload = await buildFinanceService(tenantDb).getReceiptPayload(job.data.paymentId);
+      const fileName = `recu_${toSafeFilePart(payload.receiptNumber)}.pdf`;
+      const bytes = await renderTuitionReceipt(branding, payload);
       const result = await persistPdf(bytes, fileName);
       return { ...result, fileType: 'pdf' };
     }

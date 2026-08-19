@@ -136,6 +136,39 @@ export const enrollmentStatusEnum = tenant.enum('enrollment_status', [
   'blocked_unpaid',
 ]);
 
+export const financePaymentMethodEnum = tenant.enum('finance_payment_method', [
+  'mobile_money',
+  'cash',
+  'bank_transfer',
+]);
+
+export const paymentSourceEnum = tenant.enum('payment_source', [
+  'in_app_button',
+  'cashier_manual',
+  'bulk_import',
+  'migration_import',
+]);
+
+export const financePaymentStatusEnum = tenant.enum('finance_payment_status', [
+  'confirmed',
+  'waived_by_school',
+  'cancelled',
+]);
+
+export const mobileMoneyProviderEnum = tenant.enum('mobile_money_provider', [
+  'orange_money',
+  'mtn_momo',
+  'moov_money',
+  'wave',
+]);
+
+export const subscriptionPeriodEnum = tenant.enum('subscription_period', [
+  'monthly',
+  'quarterly',
+  'semester',
+  'annual',
+]);
+
 export const users = tenant.table('users', {
   id: uuid('id').defaultRandom().primaryKey(),
   role: userRoleEnum('role').notNull(),
@@ -384,6 +417,117 @@ export const enrollments = tenant.table(
       table.schoolYearId
     ),
     enrollmentsYearStatusIdx: index('idx_enrollments_year_status').on(table.schoolYearId, table.status),
+  })
+);
+
+export const tuitionPlans = tenant.table(
+  'tuition_plans',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    classId: uuid('class_id').notNull().references(() => classes.id, { onDelete: 'cascade' }),
+    totalAmount: numeric('total_amount', { precision: 12, scale: 2 }).notNull(),
+    currency: varchar('currency', { length: 10 }).notNull().default('FCFA'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    tuitionPlansClassUnique: unique('tuition_plans_class_unique').on(table.classId),
+    tuitionPlansAmountNonNegative: check('tuition_plans_amount_non_negative', sql`${table.totalAmount} >= 0`),
+  })
+);
+
+export const tuitionScheduleSteps = tenant.table(
+  'tuition_schedule_steps',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    tuitionPlanId: uuid('tuition_plan_id').notNull().references(() => tuitionPlans.id, { onDelete: 'cascade' }),
+    dueDate: date('due_date', { mode: 'string' }).notNull(),
+    cumulativeAmountExpected: numeric('cumulative_amount_expected', { precision: 12, scale: 2 }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    tuitionScheduleStepsPlanDateUnique: unique('tuition_schedule_steps_plan_date_unique').on(table.tuitionPlanId, table.dueDate),
+    tuitionScheduleStepsAmountNonNegative: check('tuition_schedule_steps_amount_non_negative', sql`${table.cumulativeAmountExpected} >= 0`),
+    tuitionScheduleStepsDueDateIdx: index('idx_tuition_schedule_steps_due_date').on(table.tuitionPlanId, table.dueDate),
+  })
+);
+
+export const studentTuitionOverrides = tenant.table(
+  'student_tuition_overrides',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    studentId: uuid('student_id').notNull().references(() => students.id, { onDelete: 'cascade' }),
+    schoolYearId: uuid('school_year_id').notNull().references(() => schoolYears.id, { onDelete: 'cascade' }),
+    overrideTotalAmount: numeric('override_total_amount', { precision: 12, scale: 2 }),
+    discountAmount: numeric('discount_amount', { precision: 12, scale: 2 }),
+    reason: text('reason').notNull(),
+    grantedByUserId: uuid('granted_by_user_id').notNull().references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    studentTuitionOverridesStudentYearUnique: unique('student_tuition_overrides_student_year_unique').on(table.studentId, table.schoolYearId),
+    studentTuitionOverridesOneValue: check('student_tuition_overrides_one_value', sql`(${table.overrideTotalAmount} IS NOT NULL AND ${table.discountAmount} IS NULL) OR (${table.overrideTotalAmount} IS NULL AND ${table.discountAmount} IS NOT NULL)`),
+  })
+);
+
+export const paymentProviderSettings = tenant.table(
+  'payment_provider_settings',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    provider: mobileMoneyProviderEnum('provider').notNull(),
+    merchantNumber: varchar('merchant_number', { length: 100 }).notNull(),
+    apiCredentials: jsonb('api_credentials').$type<Record<string, unknown>>().notNull(),
+    isActive: boolean('is_active').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    paymentProviderSettingsProviderUnique: unique('payment_provider_settings_provider_unique').on(table.provider),
+    paymentProviderSettingsActiveIdx: index('idx_payment_provider_settings_active').on(table.isActive),
+  })
+);
+
+export const payments = tenant.table(
+  'payments',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    studentId: uuid('student_id').notNull().references(() => students.id),
+    schoolYearId: uuid('school_year_id').notNull().references(() => schoolYears.id),
+    amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
+    method: financePaymentMethodEnum('method').notNull(),
+    source: paymentSourceEnum('source').notNull(),
+    status: financePaymentStatusEnum('status').notNull().default('confirmed'),
+    confirmedByUserId: uuid('confirmed_by_user_id').references(() => users.id),
+    providerReference: varchar('provider_reference', { length: 255 }),
+    schoolReceiptReference: varchar('school_receipt_reference', { length: 255 }),
+    receiptNumber: varchar('receipt_number', { length: 100 }).notNull(),
+    cancelledAt: timestamp('cancelled_at', { withTimezone: true, mode: 'date' }),
+    cancelledByUserId: uuid('cancelled_by_user_id').references(() => users.id),
+    cancellationReason: text('cancellation_reason'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    paymentsReceiptNumberUnique: unique('payments_receipt_number_unique').on(table.receiptNumber),
+    paymentsAmountPositive: check('payments_amount_positive', sql`${table.amount} > 0`),
+    paymentsStudentYearCreatedIdx: index('idx_payments_student_year_created').on(table.studentId, table.schoolYearId, table.createdAt),
+  })
+);
+
+export const subscriptionPlans = tenant.table(
+  'subscription_plans',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
+    period: subscriptionPeriodEnum('period').notNull(),
+    label: varchar('label', { length: 255 }).notNull(),
+    isMandatoryAtEnrollment: boolean('is_mandatory_at_enrollment').notNull().default(false),
+    imposedDuration: subscriptionPeriodEnum('imposed_duration'),
+    showOnReceiptAsSeparateLine: boolean('show_on_receipt_as_separate_line').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    subscriptionPlansAmountNonNegative: check('subscription_plans_amount_non_negative', sql`${table.amount} >= 0`),
   })
 );
 
@@ -660,7 +804,7 @@ export const notificationsLog = tenant.table(
   (table) => ({
     notificationsChannelCheck: check(
       'notifications_log_channel_check',
-      sql`${table.channel} IN ('sms', 'email')`
+      sql`${table.channel} IN ('sms', 'email', 'in_app')`
     ),
     notifStatusIdx: index('idx_notif_status')
       .on(table.status)

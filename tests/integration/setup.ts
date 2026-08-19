@@ -433,6 +433,7 @@ const initApp = async (): Promise<FastifyInstance> => {
     { default: academicController },
     { default: classDecisionsController },
     { default: enrollmentsController },
+    { default: financeController },
     { default: adminController },
     { default: attendanceController },
     { default: billingController },
@@ -450,6 +451,7 @@ const initApp = async (): Promise<FastifyInstance> => {
     import('../../src/modules/academic/academic.controller.js'),
     import('../../src/modules/class-decisions/class-decisions.controller.js'),
     import('../../src/modules/enrollments/enrollments.controller.js'),
+    import('../../src/modules/finance/finance.controller.js'),
     import('../../src/modules/admin/admin.controller.js'),
     import('../../src/modules/attendance/attendance.controller.js'),
     import('../../src/modules/billing/billing.controller.js'),
@@ -478,6 +480,7 @@ const initApp = async (): Promise<FastifyInstance> => {
   testApp.register(academicController);
   testApp.register(classDecisionsController);
   testApp.register(enrollmentsController);
+  testApp.register(financeController);
   testApp.register(adminController);
   testApp.register(attendanceController);
   testApp.register(billingController);
