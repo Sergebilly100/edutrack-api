@@ -167,6 +167,14 @@ export class TeachersService {
   }
 
   async createTeacher(input: CreateTeacherInput, context: { schemaName: string }) {
+    if (!input.phone?.trim() && !input.email?.trim()) {
+      throw new TeachersModuleError(
+        'Un téléphone ou un email est requis pour créer un professeur',
+        400,
+        'TEACHER_CONTACT_REQUIRED'
+      );
+    }
+
     const [currentCount, maxUsers] = await Promise.all([
       this.repository.countActiveUsers(),
       getMaxUsersBySchemaName(context.schemaName),
@@ -212,6 +220,16 @@ export class TeachersService {
       input.hourly_rate !== undefined ? input.hourly_rate : current.hourly_rate;
     const nextMonthlySalary =
       input.monthly_salary !== undefined ? input.monthly_salary : current.monthly_salary;
+    const nextPhone = input.phone !== undefined ? input.phone : current.phone;
+    const nextEmail = input.email !== undefined ? input.email : current.email;
+
+    if (!nextPhone?.trim() && !nextEmail?.trim()) {
+      throw new TeachersModuleError(
+        'Un téléphone ou un email est requis pour un professeur',
+        400,
+        'TEACHER_CONTACT_REQUIRED'
+      );
+    }
 
     if (nextType === 'vacataire' && nextHourlyRate === null) {
       throw new TeachersModuleError(

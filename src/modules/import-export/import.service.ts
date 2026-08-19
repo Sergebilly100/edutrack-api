@@ -957,6 +957,8 @@ export class ImportService {
       const matricule = normalizeCell(sheetRow.values['Matricule']);
       const lastName = normalizeCell(sheetRow.values['Nom*']);
       const firstName = normalizeCell(sheetRow.values['Prénom*']);
+      const phone = normalizeCell(sheetRow.values['Téléphone']);
+      const email = normalizeCell(sheetRow.values['Email']);
       const type = normalizeKey(sheetRow.values['Type*']);
       const subjectsRaw = normalizeCell(sheetRow.values['Matières*']);
       const hourlyRateRaw = normalizeCell(sheetRow.values['Taux horaire FCFA']);
@@ -985,6 +987,38 @@ export class ImportService {
 
       if (!firstName) {
         errors.push(makeError({ row: line, column: 'Prénom*', message: 'Prénom requis' }));
+      }
+
+      if (!phone && !email) {
+        errors.push(
+          makeError({
+            row: line,
+            column: 'Téléphone/Email',
+            message: 'Téléphone ou email requis pour un professeur',
+          })
+        );
+      }
+
+      if (phone && !IMPORT_PHONE_REGEX.test(phone)) {
+        errors.push(
+          makeError({
+            row: line,
+            column: 'Téléphone',
+            message: 'Téléphone invalide (format attendu: 225XXXXXXXXXX)',
+            value: phone,
+          })
+        );
+      }
+
+      if (email && !IMPORT_EMAIL_REGEX.test(email)) {
+        errors.push(
+          makeError({
+            row: line,
+            column: 'Email',
+            message: 'Email invalide',
+            value: email,
+          })
+        );
       }
 
       if (type !== 'vacataire' && type !== 'permanent') {
@@ -1099,6 +1133,8 @@ export class ImportService {
         matricule: matricule || null,
         lastName,
         firstName,
+        phone: phone || null,
+        email: email || null,
         type: type as 'vacataire' | 'permanent',
         subjects,
         hourlyRate,
@@ -1118,6 +1154,12 @@ export class ImportService {
       const changes: DiffPreviewItem['changes'] = {};
       if ((existing.matricule ?? null) !== (matricule || null)) {
         changes.matricule = { before: existing.matricule ?? null, after: matricule || null };
+      }
+      if ((existing.phone ?? null) !== (phone || null)) {
+        changes.phone = { before: existing.phone ?? null, after: phone || null };
+      }
+      if ((existing.email ?? null) !== (email || null)) {
+        changes.email = { before: existing.email ?? null, after: email || null };
       }
       if (existing.type !== (type as 'vacataire' | 'permanent')) {
         changes.type = { before: existing.type, after: type };

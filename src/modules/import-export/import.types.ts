@@ -77,6 +77,8 @@ export type TeacherImportRow = {
   matricule: string | null;
   lastName: string;
   firstName: string;
+  phone: string | null;
+  email: string | null;
   type: 'vacataire' | 'permanent';
   subjects: string[];
   hourlyRate: number | null;

@@ -20,22 +20,53 @@ export const teachersListQuerySchema = z.object({
 
 const teacherTypeSchema = z.enum(['vacataire', 'permanent']);
 
+const optionalPhoneSchema = z.preprocess(
+  (value) => (typeof value === 'string' && value.trim() === '' ? null : value),
+  z.string().trim().regex(PHONE_CI_REGEX).nullable().optional().default(null)
+);
+
+const optionalEmailSchema = z.preprocess(
+  (value) => (typeof value === 'string' && value.trim() === '' ? null : value),
+  z.string().trim().email().max(255).nullable().optional().default(null)
+);
+
+const updatePhoneSchema = z.preprocess(
+  (value) => (typeof value === 'string' && value.trim() === '' ? null : value),
+  z.string().trim().regex(PHONE_CI_REGEX).nullable().optional()
+);
+
+const updateEmailSchema = z.preprocess(
+  (value) => (typeof value === 'string' && value.trim() === '' ? null : value),
+  z.string().trim().email().max(255).nullable().optional()
+);
+
+const hasTeacherContact = (payload: { phone?: string | null; email?: string | null }): boolean =>
+  Boolean(payload.phone?.trim() || payload.email?.trim());
+
 const fullPayloadSchema = z
   .object({
     first_name: z.string().trim().min(1).max(100),
     last_name: z.string().trim().min(1).max(100),
     matricule: z.string().trim().min(1).max(50).nullable().optional().default(null),
-    phone: z.string().regex(PHONE_CI_REGEX).nullable().optional().default(null),
-    email: z.string().trim().email().max(255).nullable().optional().default(null),
+    phone: optionalPhoneSchema,
+    email: optionalEmailSchema,
     type: teacherTypeSchema,
     subjects: z.array(z.string().trim().min(1).max(100)).default([]),
     hourly_rate: z.number().int().min(0).nullable().optional().default(null),
     monthly_salary: z.number().int().min(0).nullable().optional().default(null),
   })
   .superRefine((payload, ctx) => {
+    if (!hasTeacherContact(payload)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ['phone'],
+        message: 'phone or email is required',
+      });
+    }
+
     if (payload.type === 'vacataire' && payload.hourly_rate === null) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['hourly_rate'],
         message: 'hourly_rate is required for vacataire',
       });
@@ -43,7 +74,7 @@ const fullPayloadSchema = z
 
     if (payload.type === 'permanent' && payload.monthly_salary === null) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['monthly_salary'],
         message: 'monthly_salary is required for permanent',
       });
@@ -52,8 +83,13 @@ const fullPayloadSchema = z
 
 const onboardingPayloadSchema = z.object({
   name: z.string().trim().min(1).max(200),
+  phone: optionalPhoneSchema,
+  email: optionalEmailSchema,
   type: teacherTypeSchema,
   subjects: z.array(z.string().trim().min(1).max(100)).default([]),
+}).refine(hasTeacherContact, {
+  path: ['phone'],
+  message: 'phone or email is required',
 });
 
 export const createTeacherBodySchema = z.union([fullPayloadSchema, onboardingPayloadSchema]);
@@ -63,8 +99,8 @@ export const updateTeacherBodySchema = z
     first_name: z.string().trim().min(1).max(100).optional(),
     last_name: z.string().trim().min(1).max(100).optional(),
     matricule: z.string().trim().min(1).max(50).nullable().optional(),
-    phone: z.string().regex(PHONE_CI_REGEX).nullable().optional(),
-    email: z.string().trim().email().max(255).nullable().optional(),
+    phone: updatePhoneSchema,
+    email: updateEmailSchema,
     type: teacherTypeSchema.optional(),
     subjects: z.array(z.string().trim().min(1).max(100)).optional(),
     hourly_rate: z.number().int().min(0).nullable().optional(),

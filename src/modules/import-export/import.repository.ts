@@ -132,6 +132,8 @@ export type ImportRepository = {
       name: string;
       username: string;
       matricule: string | null;
+      phone: string | null;
+      email: string | null;
       type: 'vacataire' | 'permanent';
       subjects: string[];
       hourlyRate: number | null;
@@ -436,6 +438,8 @@ export const defaultImportRepository: ImportRepository = {
         u.name,
         t.username,
         t.matricule,
+        u.phone,
+        u.email,
         t.type,
         t.subjects,
         t.hourly_rate,
@@ -452,6 +456,8 @@ export const defaultImportRepository: ImportRepository = {
       name: string;
       username: string;
       matricule: string | null;
+      phone: string | null;
+      email: string | null;
       type: 'vacataire' | 'permanent';
       subjects: string[] | null;
       hourly_rate: number | null;
@@ -464,6 +470,8 @@ export const defaultImportRepository: ImportRepository = {
       name: row.name,
       username: row.username,
       matricule: row.matricule,
+      phone: row.phone,
+      email: row.email,
       type: row.type,
       subjects: row.subjects ?? [],
       hourlyRate: row.hourly_rate,
@@ -640,7 +648,10 @@ export const defaultImportRepository: ImportRepository = {
     if (existing) {
       await db.execute(sql`
         UPDATE users
-        SET name = ${params.displayName}
+          name = ${params.displayName},
+          phone = ${row.phone},
+          email = ${row.email ?? null},
+          is_active = true
         WHERE id = ${existing.user_id}
       `);
 
@@ -680,8 +691,8 @@ export const defaultImportRepository: ImportRepository = {
       VALUES (
         'teacher',
         ${params.displayName},
-        null,
-        null,
+        ${row.phone},
+        ${row.email ?? null},
         ${params.passwordHash},
         true,
         true
