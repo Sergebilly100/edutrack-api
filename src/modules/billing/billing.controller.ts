@@ -201,6 +201,10 @@ const canReadPdfJob = (
     return request.permissions?.has('payments.view') === true;
   }
 
+  if (jobType === 'cash-journal') {
+    return request.permissions?.has('payments.view') === true;
+  }
+
   return false;
 };
 

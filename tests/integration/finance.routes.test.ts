@@ -249,6 +249,41 @@ describe('finance routes integration', () => {
     });
   });
 
+  it('génère le journal filtré et l’état de compte avec solde progressif', async () => {
+    const context = await createFinanceContext(`journal-${Date.now()}`);
+    for (const [amount, method] of [[20_000, 'cash'], [15_000, 'mobile_money']] as const) {
+      const response = await request().post('/api/v1/payments').set(context.headers).send({
+        studentId: context.studentId, schoolYearId: context.schoolYearId, amount, method,
+      });
+      expect(response.status).toBe(201);
+    }
+    const today = isoDate(0);
+    const journal = await request()
+      .get(`/api/v1/payments/cash-journal?school_year_id=${context.schoolYearId}&class_id=${context.classId}&from=${today}&to=${today}`)
+      .set(context.headers);
+    expect(journal.status, JSON.stringify(journal.body)).toBe(200);
+    expect(journal.body.journal.totals).toMatchObject({ cash: 20_000, mobile_money: 15_000, grandTotal: 35_000 });
+    expect(journal.body.journal.entries).toHaveLength(2);
+
+    const excel = await request()
+      .get(`/api/v1/payments/cash-journal/export?format=xlsx&school_year_id=${context.schoolYearId}&from=${today}&to=${today}`)
+      .set(context.headers);
+    expect(excel.status).toBe(200);
+    expect(excel.headers['content-type']).toContain('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+
+    const pdf = await request()
+      .get(`/api/v1/payments/cash-journal/export?format=pdf&school_year_id=${context.schoolYearId}&from=${today}&to=${today}`)
+      .set(context.headers);
+    expect(pdf.status).toBe(202);
+    expect(pdf.body.jobId).toBeTruthy();
+
+    const statement = await request()
+      .get(`/api/v1/students/${context.studentId}/account-statement?school_year_id=${context.schoolYearId}`)
+      .set(context.headers);
+    expect(statement.status, JSON.stringify(statement.body)).toBe(200);
+    expect(statement.body.statement.movements.map((item: { balanceAfter: number }) => item.balanceAfter)).toEqual([80_000, 65_000]);
+  });
+
   it('refuse une annulation sans justification puis conserve la trace complète', async () => {
     const context = await createFinanceContext(`cancel-${Date.now()}`);
     const recorded = await request().post('/api/v1/payments').set(context.headers).send({

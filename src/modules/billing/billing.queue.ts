@@ -18,6 +18,7 @@ import {
   renderTeacherMultiPeriodBilan,
   renderTeacherSalaryBilan,
   renderTuitionReceipt,
+  renderCashJournal,
   type DocumentBranding,
   type TeacherSalaryDetails,
 } from '../../shared/pdf/index.js';
@@ -250,6 +251,15 @@ export type BillingPdfJobData =
       schemaName: string;
       paymentId: string;
       parentId?: string;
+    }
+  | {
+      type: 'cash-journal';
+      schemaName: string;
+      schoolYearId?: string;
+      from?: string;
+      to?: string;
+      classId?: string;
+      method?: 'cash' | 'mobile_money' | 'bank_transfer';
     };
 
 export type BillingPdfJobResult = {
@@ -445,6 +455,33 @@ export const processBillingPdfJob = async (
       const payload = await buildFinanceService(tenantDb).getReceiptPayload(job.data.paymentId);
       const fileName = `recu_${toSafeFilePart(payload.receiptNumber)}.pdf`;
       const bytes = await renderTuitionReceipt(branding, payload);
+      const result = await persistPdf(bytes, fileName);
+      return { ...result, fileType: 'pdf' };
+    }
+
+    if (job.data.type === 'cash-journal') {
+      const journal = await buildFinanceService(tenantDb).getCashJournal({
+        schoolYearId: job.data.schoolYearId,
+        from: job.data.from,
+        to: job.data.to,
+        classId: job.data.classId,
+        method: job.data.method,
+      });
+      const fileName = `journal_caisse_${toSafeFilePart(job.data.from ?? 'debut')}_${toSafeFilePart(job.data.to ?? 'jour')}.pdf`;
+      const bytes = await renderCashJournal(branding, {
+        from: job.data.from,
+        to: job.data.to,
+        totals: journal.totals,
+        entries: journal.entries.map((entry) => ({
+          paymentDate: entry.paymentDate,
+          studentName: entry.studentName,
+          className: entry.className,
+          amount: entry.amount,
+          method: entry.method,
+          reference: entry.providerReference ?? entry.schoolReceiptReference ?? '',
+          status: entry.status,
+        })),
+      });
       const result = await persistPdf(bytes, fileName);
       return { ...result, fileType: 'pdf' };
     }

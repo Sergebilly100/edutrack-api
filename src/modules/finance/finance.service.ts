@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import ExcelJS from 'exceljs';
 
 import {
   calculateStudentTotalDue,
@@ -11,6 +12,7 @@ import {
   type FinanceDb,
   type PaymentRow,
 } from './finance.repository.js';
+import { calculateRunningBalances } from './finance.reports.js';
 import type {
   MobileMoneyProvider,
   PaymentMethod,
@@ -44,6 +46,7 @@ const mapPayment = (row: PaymentRow) => ({
   cancelledAt: iso(row.cancelled_at),
   cancelledByUserId: row.cancelled_by_user_id,
   cancellationReason: row.cancellation_reason,
+  paymentDate: row.payment_date,
   createdAt: iso(row.created_at),
 });
 
@@ -149,6 +152,95 @@ export class FinanceService {
   async listPayments(studentId: string, schoolYearId: string) {
     await this.getAmountDue(studentId, schoolYearId);
     return (await this.repository.listPayments(studentId, schoolYearId)).map(mapPayment);
+  }
+
+  async getStudentAccountStatement(studentId: string, schoolYearId: string) {
+    const due = await this.getAmountDue(studentId, schoolYearId);
+    const payments = (await this.repository.listPaymentsChronological(studentId, schoolYearId)).map(mapPayment);
+    return {
+      student: {
+        id: due.student_id,
+        name: due.student_name,
+        classId: due.class_id,
+        className: due.class_name,
+      },
+      schoolYearId,
+      currency: due.currency,
+      totalDue: due.totalDue,
+      movements: calculateRunningBalances(due.totalDue, payments.map((payment) => ({
+        ...payment,
+        paymentDate: payment.paymentDate,
+      }))),
+    };
+  }
+
+  async getCashJournal(filter: {
+    schoolYearId?: string;
+    from?: string;
+    to?: string;
+    classId?: string;
+    method?: PaymentMethod;
+  }) {
+    const entries = (await this.repository.listCashJournal(filter)).map((row) => ({
+      ...mapPayment(row),
+      studentMatricule: row.student_matricule,
+      studentName: row.student_name,
+      classId: row.class_id,
+      className: row.class_name,
+    }));
+    const confirmed = entries.filter((entry) => entry.status === 'confirmed');
+    const totals = {
+      cash: 0,
+      mobile_money: 0,
+      bank_transfer: 0,
+      grandTotal: 0,
+    };
+    for (const entry of confirmed) {
+      totals[entry.method] += entry.amount;
+      totals.grandTotal += entry.amount;
+    }
+    return { entries, totals, count: entries.length };
+  }
+
+  async exportCashJournalExcel(filter: {
+    schoolYearId?: string;
+    from?: string;
+    to?: string;
+    classId?: string;
+    method?: PaymentMethod;
+  }): Promise<Buffer> {
+    const journal = await this.getCashJournal(filter);
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'IvoirEdu';
+    const sheet = workbook.addWorksheet('Journal de caisse', { views: [{ state: 'frozen', ySplit: 1 }] });
+    sheet.columns = [
+      { header: 'Date', key: 'date', width: 14 },
+      { header: 'Matricule', key: 'matricule', width: 18 },
+      { header: 'Élève', key: 'student', width: 30 },
+      { header: 'Classe', key: 'className', width: 20 },
+      { header: 'Montant (FCFA)', key: 'amount', width: 18 },
+      { header: 'Mode', key: 'method', width: 18 },
+      { header: 'Référence', key: 'reference', width: 24 },
+      { header: 'Statut', key: 'status', width: 14 },
+    ];
+    for (const entry of journal.entries) {
+      sheet.addRow({
+        date: entry.paymentDate,
+        matricule: entry.studentMatricule ?? '',
+        student: entry.studentName,
+        className: entry.className,
+        amount: entry.amount,
+        method: entry.method,
+        reference: entry.providerReference ?? entry.schoolReceiptReference ?? '',
+        status: entry.status,
+      });
+    }
+    sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1D4ED8' } };
+    sheet.getColumn('amount').numFmt = '#,##0';
+    sheet.autoFilter = { from: 'A1', to: 'H1' };
+    const buffer = await workbook.xlsx.writeBuffer();
+    return Buffer.from(buffer);
   }
 
   async assertPaymentBelongsToStudent(paymentId: string, studentId: string) {

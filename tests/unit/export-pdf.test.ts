@@ -5,6 +5,7 @@ import {
   renderStudentAbsencesReport,
   renderTeacherAttendanceReport,
   renderTeacherHoursReport,
+  renderCashJournal,
   type RevenuePayload,
   type StudentAbsencesPayload,
   type TeacherAttendancePayload,
@@ -27,6 +28,17 @@ const expectPdf = (bytes: Uint8Array): void => {
 };
 
 describe('export PDF templates', () => {
+  it('renders the cash journal with filtered entries and totals', async () => {
+    expectPdf(await renderCashJournal(branding, {
+      from: '2026-08-01', to: '2026-08-31',
+      totals: { cash: 25_000, mobile_money: 15_000, bank_transfer: 0, grandTotal: 40_000 },
+      entries: [{
+        paymentDate: '2026-08-19', studentName: 'Awa Koné', className: '6ème A',
+        amount: 25_000, method: 'cash', reference: 'CAISSE-001', status: 'confirmed',
+      }],
+    }));
+  });
+
   describe('teacher hours report', () => {
     const base: TeacherHoursPayload = {
       teacher: { name: 'Awa Koné' },

@@ -506,13 +506,58 @@ export const payments = tenant.table(
     cancelledAt: timestamp('cancelled_at', { withTimezone: true, mode: 'date' }),
     cancelledByUserId: uuid('cancelled_by_user_id').references(() => users.id),
     cancellationReason: text('cancellation_reason'),
+    paymentDate: date('payment_date', { mode: 'string' }).notNull().default(sql`CURRENT_DATE`),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   },
   (table) => ({
     paymentsReceiptNumberUnique: unique('payments_receipt_number_unique').on(table.receiptNumber),
     paymentsAmountPositive: check('payments_amount_positive', sql`${table.amount} > 0`),
     paymentsStudentYearCreatedIdx: index('idx_payments_student_year_created').on(table.studentId, table.schoolYearId, table.createdAt),
+    paymentsJournalFiltersIdx: index('idx_payments_journal_filters').on(table.paymentDate, table.method, table.studentId),
   })
+);
+
+export const importMappingProfiles = tenant.table(
+  'import_mapping_profiles',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    importType: varchar('import_type', { length: 80 }).notNull(),
+    label: varchar('label', { length: 255 }),
+    createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    activeTypeUnique: uniqueIndex('import_mapping_profiles_one_active_type')
+      .on(table.importType)
+      .where(sql`${table.isActive} = true`),
+    typeUpdatedIdx: index('idx_import_mapping_profiles_type_updated').on(table.importType, table.updatedAt),
+  })
+);
+
+export const importMappingFields = tenant.table(
+  'import_mapping_fields',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    profileId: uuid('profile_id').notNull().references(() => importMappingProfiles.id, { onDelete: 'cascade' }),
+    sourceColumnLabel: varchar('source_column_label', { length: 255 }).notNull(),
+    targetField: varchar('target_field', { length: 100 }).notNull(),
+    isRequired: boolean('is_required').notNull().default(false),
+  },
+  (table) => ({
+    profileTargetUnique: unique('import_mapping_fields_profile_target_unique_constraint').on(table.profileId, table.targetField),
+  })
+);
+
+export const importMappingValueTranslations = tenant.table(
+  'import_mapping_value_translations',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    mappingFieldId: uuid('mapping_field_id').notNull().references(() => importMappingFields.id, { onDelete: 'cascade' }),
+    sourceValue: varchar('source_value', { length: 255 }).notNull(),
+    targetValue: varchar('target_value', { length: 255 }).notNull(),
+  }
 );
 
 export const subscriptionPlans = tenant.table(

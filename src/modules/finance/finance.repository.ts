@@ -31,7 +31,15 @@ export type PaymentRow = {
   cancelled_at: string | Date | null;
   cancelled_by_user_id: string | null;
   cancellation_reason: string | null;
+  payment_date: string;
   created_at: string | Date;
+};
+
+export type CashJournalRow = PaymentRow & {
+  student_matricule: string | null;
+  student_name: string;
+  class_id: string;
+  class_name: string;
 };
 
 export type AmountDueContext = {
@@ -199,16 +207,19 @@ export class FinanceRepository {
     providerReference?: string;
     schoolReceiptReference?: string;
     receiptNumber: string;
+    paymentDate?: string;
   }): Promise<PaymentRow> {
     const result = await this.db.execute<PaymentRow>(sql`
       INSERT INTO payments (
         student_id, school_year_id, amount, method, source, status,
-        confirmed_by_user_id, provider_reference, school_receipt_reference, receipt_number
+        confirmed_by_user_id, provider_reference, school_receipt_reference, receipt_number,
+        payment_date
       ) VALUES (
         ${input.studentId}::uuid, ${input.schoolYearId}::uuid, ${input.amount},
         ${input.method}::finance_payment_method, ${input.source}::payment_source, 'confirmed',
         ${input.confirmedByUserId ?? null}::uuid, ${input.providerReference ?? null},
-        ${input.schoolReceiptReference ?? null}, ${input.receiptNumber}
+        ${input.schoolReceiptReference ?? null}, ${input.receiptNumber},
+        COALESCE(${input.paymentDate ?? null}::date, CURRENT_DATE)
       )
       RETURNING *, id::text, student_id::text, school_year_id::text,
         confirmed_by_user_id::text, cancelled_by_user_id::text
@@ -234,9 +245,52 @@ export class FinanceRepository {
       FROM payments
       WHERE student_id = ${studentId}::uuid
         AND school_year_id = ${schoolYearId}::uuid
-      ORDER BY payments.created_at DESC, payments.id DESC
+      ORDER BY payments.payment_date DESC, payments.created_at DESC, payments.id DESC
     `);
     return rows<PaymentRow>(result);
+  }
+
+  async listPaymentsChronological(studentId: string, schoolYearId: string): Promise<PaymentRow[]> {
+    const result = await this.db.execute<PaymentRow>(sql`
+      SELECT p.*, p.id::text, p.student_id::text, p.school_year_id::text,
+             p.confirmed_by_user_id::text, p.cancelled_by_user_id::text,
+             p.payment_date::text
+      FROM payments p
+      WHERE p.student_id = ${studentId}::uuid
+        AND p.school_year_id = ${schoolYearId}::uuid
+      ORDER BY p.payment_date ASC, p.created_at ASC, p.id ASC
+    `);
+    return rows<PaymentRow>(result);
+  }
+
+  async listCashJournal(input: {
+    schoolYearId?: string;
+    from?: string;
+    to?: string;
+    classId?: string;
+    method?: PaymentMethod;
+  }): Promise<CashJournalRow[]> {
+    const result = await this.db.execute<CashJournalRow>(sql`
+      SELECT p.*, p.id::text, p.student_id::text, p.school_year_id::text,
+             p.confirmed_by_user_id::text, p.cancelled_by_user_id::text,
+             p.payment_date::text,
+             s.matricule AS student_matricule,
+             concat_ws(' ', s.first_name, s.last_name) AS student_name,
+             c.id::text AS class_id,
+             c.name AS class_name
+      FROM payments p
+      INNER JOIN students s ON s.id = p.student_id
+      LEFT JOIN enrollments e
+        ON e.student_id = s.id AND e.school_year_id = p.school_year_id
+      INNER JOIN classes c ON c.id = COALESCE(e.class_id, s.class_id)
+      WHERE (${input.schoolYearId ?? null}::uuid IS NULL OR p.school_year_id = ${input.schoolYearId ?? null}::uuid)
+        AND (${input.from ?? null}::date IS NULL OR p.payment_date >= ${input.from ?? null}::date)
+        AND (${input.to ?? null}::date IS NULL OR p.payment_date <= ${input.to ?? null}::date)
+        AND (${input.classId ?? null}::uuid IS NULL OR c.id = ${input.classId ?? null}::uuid)
+        AND (${input.method ?? null}::text IS NULL OR p.method::text = ${input.method ?? null})
+      ORDER BY p.payment_date DESC, p.created_at DESC, p.id DESC
+    `);
+    return rows<CashJournalRow>(result);
   }
 
   async cancelPayment(id: string, actorUserId: string, reason: string): Promise<PaymentRow | null> {

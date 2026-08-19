@@ -12,6 +12,7 @@ import {
 import type { PermissionKey } from '../../shared/types/index.js';
 import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
 import { buildFinanceService, FinanceModuleError } from './finance.service.js';
+import { buildPaymentImportService, PaymentImportError } from './payment-import.service.js';
 import {
   cancelPaymentBodySchema,
   createSubscriptionPlanBodySchema,
@@ -27,6 +28,9 @@ import {
   updateSubscriptionPlanBodySchema,
   upsertProviderSettingBodySchema,
   upsertTuitionPlanBodySchema,
+  cashJournalQuerySchema,
+  cashJournalExportQuerySchema,
+  paymentMappingProfileBodySchema,
 } from './finance.types.js';
 
 const handleError = (request: FastifyRequest, reply: FastifyReply, error: unknown) => {
@@ -36,6 +40,11 @@ const handleError = (request: FastifyRequest, reply: FastifyReply, error: unknow
     });
   }
   if (error instanceof FinanceModuleError) {
+    return reply.code(error.statusCode).send({
+      error: error.message, code: error.code, statusCode: error.statusCode,
+    });
+  }
+  if (error instanceof PaymentImportError) {
     return reply.code(error.statusCode).send({
       error: error.message, code: error.code, statusCode: error.statusCode,
     });
@@ -81,6 +90,16 @@ const enqueueReceipt = async (
   return job.id;
 };
 
+const readExcelFile = async (request: FastifyRequest): Promise<Buffer> => {
+  let fileBuffer: Buffer | null = null;
+  const parts = request.parts();
+  for await (const part of parts) {
+    if (part.type === 'file' && part.file && fileBuffer === null) fileBuffer = await part.toBuffer();
+  }
+  if (!fileBuffer) throw new PaymentImportError('Fichier Excel manquant', 400, 'IMPORT_FILE_REQUIRED');
+  return fileBuffer;
+};
+
 export default async function financeController(
   app: FastifyInstance,
   options: { pdfQueue?: PdfExportQueueHandle } = {}
@@ -116,6 +135,92 @@ export default async function financeController(
       const { school_year_id: schoolYearId } = schoolYearQuerySchema.parse(request.query);
       return reply.send({ payments: await withService(request, (service) =>
         service.listPayments(studentId, schoolYearId)) });
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.get('/api/v1/students/:studentId/account-statement', { preHandler: requirePermission('payments.view') }, async (request, reply) => {
+    try {
+      const { studentId } = studentFinancialParamsSchema.parse(request.params);
+      const { school_year_id: schoolYearId } = schoolYearQuerySchema.parse(request.query);
+      return reply.send({ statement: await withService(request, (service) =>
+        service.getStudentAccountStatement(studentId, schoolYearId)) });
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.get('/api/v1/payments/cash-journal', { preHandler: requirePermission('payments.view') }, async (request, reply) => {
+    try {
+      const query = cashJournalQuerySchema.parse(request.query ?? {});
+      return reply.send({ journal: await withService(request, (service) => service.getCashJournal({
+        schoolYearId: query.school_year_id, from: query.from, to: query.to,
+        classId: query.class_id, method: query.method,
+      })) });
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.get('/api/v1/payments/cash-journal/export', { preHandler: requirePermission('payments.view') }, async (request, reply) => {
+    try {
+      const query = cashJournalExportQuerySchema.parse(request.query ?? {});
+      const filter = {
+        schoolYearId: query.school_year_id, from: query.from, to: query.to,
+        classId: query.class_id, method: query.method,
+      };
+      if (query.format === 'xlsx') {
+        const bytes = await withService(request, (service) => service.exportCashJournalExcel(filter));
+        reply.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        reply.header('Content-Disposition', 'attachment; filename="journal-caisse.xlsx"');
+        return reply.send(bytes);
+      }
+      const job = await pdfQueue.add('cash-journal', {
+        type: 'cash-journal', schemaName: request.claims!.schemaName,
+        schoolYearId: query.school_year_id, from: query.from, to: query.to,
+        classId: query.class_id, method: query.method,
+      }, { removeOnComplete: 100, removeOnFail: 100 });
+      return reply.code(202).send({ jobId: job.id });
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.get('/api/v1/payment-import/profile', { preHandler: requirePermission('payments.record') }, async (request, reply) => {
+    try {
+      return reply.send({ profile: await withTenantSchema(request.claims!.schemaName, (db) =>
+        buildPaymentImportService(db).getProfile()) });
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.put('/api/v1/payment-import/profile', { preHandler: requirePermission('payments.record') }, async (request, reply) => {
+    try {
+      const body = paymentMappingProfileBodySchema.parse(request.body);
+      const profile = await withTenantSchema(request.claims!.schemaName, (db) =>
+        buildPaymentImportService(db).saveProfile({
+          label: body.label,
+          actorUserId: request.user!.userId,
+          fields: body.fields.map((field) => ({ ...field, isRequired: true })),
+        }));
+      return reply.send({ profile });
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.post('/api/v1/payment-import/analyze', { preHandler: requirePermission('payments.record') }, async (request, reply) => {
+    try {
+      const file = await readExcelFile(request);
+      return reply.send(await withTenantSchema(request.claims!.schemaName, (db) =>
+        buildPaymentImportService(db).analyze(file)));
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.post('/api/v1/payment-import/preview', { preHandler: requirePermission('payments.record') }, async (request, reply) => {
+    try {
+      const file = await readExcelFile(request);
+      return reply.send(await withTenantSchema(request.claims!.schemaName, (db) =>
+        buildPaymentImportService(db).preview(file)));
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.post('/api/v1/payment-import/confirm', { preHandler: requirePermission('payments.record') }, async (request, reply) => {
+    try {
+      const file = await readExcelFile(request);
+      const result = await withTenantSchema(request.claims!.schemaName, (db) =>
+        buildPaymentImportService(db).confirm(file, request.user!.userId));
+      return reply.code(201).send(result);
     } catch (error) { return handleError(request, reply, error); }
   });
 
@@ -196,6 +301,16 @@ export default async function financeController(
       const { school_year_id: schoolYearId } = schoolYearQuerySchema.parse(request.query);
       return reply.send({ payments: await withService(request, (service) =>
         service.listPayments(studentId, schoolYearId)) });
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.get('/api/v1/parent/students/:studentId/account-statement', { preHandler: requireParent }, async (request, reply) => {
+    try {
+      const { studentId } = studentFinancialParamsSchema.parse(request.params);
+      checkStudentAccess(request, studentId);
+      const { school_year_id: schoolYearId } = schoolYearQuerySchema.parse(request.query);
+      return reply.send({ statement: await withService(request, (service) =>
+        service.getStudentAccountStatement(studentId, schoolYearId)) });
     } catch (error) { return handleError(request, reply, error); }
   });
 
