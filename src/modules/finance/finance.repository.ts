@@ -91,7 +91,9 @@ export class FinanceRepository {
       INNER JOIN classes c
         ON c.id = COALESCE(e.class_id, s.class_id)
        AND c.school_year_id = ${schoolYearId}::uuid
-      INNER JOIN tuition_plans tp ON tp.class_id = c.id
+      INNER JOIN tuition_plans tp
+        ON tp.level_id = c.level_id
+       AND tp.school_year_id = ${schoolYearId}::uuid
       LEFT JOIN student_tuition_overrides sto
         ON sto.student_id = s.id
        AND sto.school_year_id = ${schoolYearId}::uuid
@@ -169,7 +171,9 @@ export class FinanceRepository {
       INNER JOIN classes c
         ON c.id = COALESCE(e.class_id, s.class_id)
        AND c.school_year_id = ${schoolYearId}::uuid
-      INNER JOIN tuition_plans tp ON tp.class_id = c.id
+      INNER JOIN tuition_plans tp
+        ON tp.level_id = c.level_id
+       AND tp.school_year_id = ${schoolYearId}::uuid
       LEFT JOIN LATERAL (
         SELECT cumulative_amount_expected
         FROM tuition_schedule_steps
@@ -221,6 +225,18 @@ export class FinanceRepository {
       FROM payments WHERE id = ${id}::uuid LIMIT 1
     `);
     return rows<PaymentRow>(result)[0] ?? null;
+  }
+
+  async listPayments(studentId: string, schoolYearId: string): Promise<PaymentRow[]> {
+    const result = await this.db.execute<PaymentRow>(sql`
+      SELECT *, id::text, student_id::text, school_year_id::text,
+             confirmed_by_user_id::text, cancelled_by_user_id::text
+      FROM payments
+      WHERE student_id = ${studentId}::uuid
+        AND school_year_id = ${schoolYearId}::uuid
+      ORDER BY payments.created_at DESC, payments.id DESC
+    `);
+    return rows<PaymentRow>(result);
   }
 
   async cancelPayment(id: string, actorUserId: string, reason: string): Promise<PaymentRow | null> {
@@ -300,13 +316,13 @@ export class FinanceRepository {
     `);
   }
 
-  async upsertTuitionPlan(classId: string, input: UpsertTuitionPlanInput) {
+  async upsertTuitionPlan(levelId: string, input: UpsertTuitionPlanInput) {
     return this.db.transaction(async (tx) => {
       const repository = new FinanceRepository(tx as FinanceDb);
       const result = await repository.db.execute<{ id: string }>(sql`
-        INSERT INTO tuition_plans (class_id, total_amount, currency)
-        VALUES (${classId}::uuid, ${input.totalAmount}, ${input.currency})
-        ON CONFLICT (class_id) DO UPDATE SET
+        INSERT INTO tuition_plans (level_id, school_year_id, total_amount, currency)
+        VALUES (${levelId}::uuid, ${input.schoolYearId}::uuid, ${input.totalAmount}, ${input.currency})
+        ON CONFLICT (level_id, school_year_id) DO UPDATE SET
           total_amount = EXCLUDED.total_amount,
           currency = EXCLUDED.currency,
           updated_at = NOW()
@@ -326,29 +342,41 @@ export class FinanceRepository {
 
   async getTuitionPlan(id: string) {
     const result = await this.db.execute(sql`
-      SELECT tp.*, tp.id::text, tp.class_id::text, c.name AS class_name,
+      SELECT tp.*, tp.id::text, tp.level_id::text, tp.school_year_id::text,
+        l.name AS level_name, sy.label AS school_year_label,
         COALESCE(json_agg(json_build_object(
           'id', tss.id::text,
           'dueDate', tss.due_date::text,
           'cumulativeAmountExpected', tss.cumulative_amount_expected
         ) ORDER BY tss.due_date) FILTER (WHERE tss.id IS NOT NULL), '[]'::json) AS schedule_steps
       FROM tuition_plans tp
-      INNER JOIN classes c ON c.id = tp.class_id
+      INNER JOIN levels l ON l.id = tp.level_id
+      INNER JOIN school_years sy ON sy.id = tp.school_year_id
       LEFT JOIN tuition_schedule_steps tss ON tss.tuition_plan_id = tp.id
       WHERE tp.id = ${id}::uuid
-      GROUP BY tp.id, c.name
+      GROUP BY tp.id, l.name, sy.label
     `);
     return rows(result)[0] ?? null;
   }
 
-  async listTuitionPlans(classId?: string) {
+  async listTuitionPlans(schoolYearId: string, levelId?: string) {
     const result = await this.db.execute(sql`
-      SELECT tp.id::text, tp.class_id::text, c.name AS class_name,
-             tp.total_amount, tp.currency, tp.created_at, tp.updated_at
+      SELECT tp.id::text, tp.level_id::text, l.name AS level_name,
+             tp.school_year_id::text, sy.label AS school_year_label,
+             tp.total_amount, tp.currency, tp.created_at, tp.updated_at,
+             COALESCE(json_agg(json_build_object(
+               'id', tss.id::text,
+               'dueDate', tss.due_date::text,
+               'cumulativeAmountExpected', tss.cumulative_amount_expected
+             ) ORDER BY tss.due_date) FILTER (WHERE tss.id IS NOT NULL), '[]'::json) AS schedule_steps
       FROM tuition_plans tp
-      INNER JOIN classes c ON c.id = tp.class_id
-      WHERE (${classId ?? null}::uuid IS NULL OR tp.class_id = ${classId ?? null}::uuid)
-      ORDER BY c.name
+      INNER JOIN levels l ON l.id = tp.level_id
+      INNER JOIN school_years sy ON sy.id = tp.school_year_id
+      LEFT JOIN tuition_schedule_steps tss ON tss.tuition_plan_id = tp.id
+      WHERE tp.school_year_id = ${schoolYearId}::uuid
+        AND (${levelId ?? null}::uuid IS NULL OR tp.level_id = ${levelId ?? null}::uuid)
+      GROUP BY tp.id, l.name, sy.label
+      ORDER BY l.name
     `);
     return rows(result);
   }
@@ -356,7 +384,7 @@ export class FinanceRepository {
   async listProviderSettings() {
     const result = await this.db.execute(sql`
       SELECT id::text, provider::text, merchant_number, is_active,
-             jsonb_object_length(api_credentials) > 0 AS has_credentials,
+             api_credentials <> '{}'::jsonb AS has_credentials,
              created_at, updated_at
       FROM payment_provider_settings ORDER BY provider
     `);
@@ -367,7 +395,17 @@ export class FinanceRepository {
     const result = await this.db.execute<{ provider: MobileMoneyProvider; merchant_number: string }>(sql`
       SELECT provider::text AS provider, merchant_number
       FROM payment_provider_settings
-      WHERE is_active = true AND jsonb_object_length(api_credentials) > 0
+      WHERE is_active = true AND api_credentials <> '{}'::jsonb
+      ORDER BY provider
+    `);
+    return rows<{ provider: MobileMoneyProvider; merchant_number: string }>(result);
+  }
+
+  async listManualPaymentChannels() {
+    const result = await this.db.execute<{ provider: MobileMoneyProvider; merchant_number: string }>(sql`
+      SELECT provider::text AS provider, merchant_number
+      FROM payment_provider_settings
+      WHERE length(trim(merchant_number)) > 0
       ORDER BY provider
     `);
     return rows<{ provider: MobileMoneyProvider; merchant_number: string }>(result);
@@ -385,11 +423,14 @@ export class FinanceRepository {
               ${JSON.stringify(input.apiCredentials)}::jsonb, ${input.isActive})
       ON CONFLICT (provider) DO UPDATE SET
         merchant_number = EXCLUDED.merchant_number,
-        api_credentials = EXCLUDED.api_credentials,
+        api_credentials = CASE
+          WHEN EXCLUDED.api_credentials <> '{}'::jsonb THEN EXCLUDED.api_credentials
+          ELSE payment_provider_settings.api_credentials
+        END,
         is_active = EXCLUDED.is_active,
         updated_at = NOW()
       RETURNING id::text, provider::text, merchant_number, is_active,
-                jsonb_object_length(api_credentials) > 0 AS has_credentials, created_at, updated_at
+                api_credentials <> '{}'::jsonb AS has_credentials, created_at, updated_at
     `);
     return rows(result)[0];
   }
@@ -444,7 +485,9 @@ export class FinanceRepository {
       INNER JOIN school_years sy ON sy.id = p.school_year_id
       LEFT JOIN enrollments e ON e.student_id = p.student_id AND e.school_year_id = p.school_year_id
       LEFT JOIN classes c ON c.id = COALESCE(e.class_id, s.class_id)
-      LEFT JOIN tuition_plans tp ON tp.class_id = c.id
+      LEFT JOIN tuition_plans tp
+        ON tp.level_id = c.level_id
+       AND tp.school_year_id = p.school_year_id
       WHERE p.id = ${paymentId}::uuid
       ORDER BY e.enrolled_at DESC NULLS LAST
       LIMIT 1

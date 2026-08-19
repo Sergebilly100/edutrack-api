@@ -66,7 +66,12 @@ export class EnrollmentsService {
         providerReference?: string;
         schoolReceiptReference?: string;
       }): Promise<{ payment: { id: string } & Record<string, unknown> }>;
-      getFinancialStatus(studentId: string, schoolYearId: string): Promise<{ remainingDue: number }>;
+      getFinancialStatus(studentId: string, schoolYearId: string): Promise<{
+        remainingDue: number;
+        currency?: string;
+        totalDue?: number;
+        confirmedPaid?: number;
+      }>;
     }
   ) {}
 
@@ -78,6 +83,22 @@ export class EnrollmentsService {
     const enrollment = await this.repository.findEnrollment(id);
     if (!enrollment) throw new EnrollmentsModuleError('Enrollment not found', 404, 'ENROLLMENT_NOT_FOUND');
     return mapEnrollment(enrollment);
+  }
+
+  async getPaymentSummary(id: string) {
+    const enrollment = await this.repository.findEnrollment(id);
+    if (!enrollment) throw new EnrollmentsModuleError('Enrollment not found', 404, 'ENROLLMENT_NOT_FOUND');
+    if (!this.finance) {
+      throw new EnrollmentsModuleError('Financial module is unavailable', 503, 'FINANCE_MODULE_UNAVAILABLE');
+    }
+    const status = await this.finance.getFinancialStatus(enrollment.student_id, enrollment.school_year_id);
+    return {
+      enrollment: mapEnrollment(enrollment),
+      amountDue: status.remainingDue,
+      currency: status.currency ?? 'FCFA',
+      totalDue: status.totalDue ?? status.remainingDue,
+      confirmedPaid: status.confirmedPaid ?? 0,
+    };
   }
 
   async createEnrollment(input: {

@@ -249,6 +249,7 @@ export type BillingPdfJobData =
       type: 'tuition-receipt';
       schemaName: string;
       paymentId: string;
+      parentId?: string;
     };
 
 export type BillingPdfJobResult = {

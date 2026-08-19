@@ -41,9 +41,9 @@ describe('enrollments integration', () => {
     const studentId = students[0]!.id;
 
     const tuitionPlan = await request()
-      .put(`/api/v1/tuition-plans/classes/${academic.targetClassId}`)
+      .put(`/api/v1/tuition-plans/levels/${academic.targetLevelId}`)
       .set(headers)
-      .send({ totalAmount: 120000, currency: 'FCFA', scheduleSteps: [] });
+      .send({ schoolYearId: academic.targetYearId, totalAmount: 120000, currency: 'FCFA', scheduleSteps: [] });
     expect(tuitionPlan.status).toBe(200);
 
     const documentType = await request().post('/api/v1/required-document-types').set(headers).send({
@@ -84,9 +84,9 @@ describe('enrollments integration', () => {
     `, [academic.currentClassId]);
     const studentId = students[0]!.id;
     const previousTuitionPlan = await request()
-      .put(`/api/v1/tuition-plans/classes/${academic.currentClassId}`)
+      .put(`/api/v1/tuition-plans/levels/${academic.currentLevelId}`)
       .set(headers)
-      .send({ totalAmount: 80000, currency: 'FCFA', scheduleSteps: [] });
+      .send({ schoolYearId: academic.previousYearId, totalAmount: 80000, currency: 'FCFA', scheduleSteps: [] });
     expect(previousTuitionPlan.status).toBe(200);
     const previousPayment = await request().post('/api/v1/payments').set(headers).send({
       studentId,
@@ -96,9 +96,9 @@ describe('enrollments integration', () => {
     });
     expect(previousPayment.status).toBe(201);
     const tuitionPlan = await request()
-      .put(`/api/v1/tuition-plans/classes/${academic.targetClassId}`)
+      .put(`/api/v1/tuition-plans/levels/${academic.targetLevelId}`)
       .set(headers)
-      .send({ totalAmount: 90000, currency: 'FCFA', scheduleSteps: [] });
+      .send({ schoolYearId: academic.targetYearId, totalAmount: 90000, currency: 'FCFA', scheduleSteps: [] });
     expect(tuitionPlan.status).toBe(200);
     await queryTenant(`
       INSERT INTO ${tenantTable('class_decisions')} (student_id, school_year_id, final_decision, next_level_id, validated_at)
@@ -142,11 +142,11 @@ describe('enrollments integration', () => {
     `, [academic.currentClassId]);
     const studentId = students[0]!.id;
 
-    await request().put(`/api/v1/tuition-plans/classes/${academic.currentClassId}`).set(headers).send({
-      totalAmount: 50000, currency: 'FCFA', scheduleSteps: [],
+    await request().put(`/api/v1/tuition-plans/levels/${academic.currentLevelId}`).set(headers).send({
+      schoolYearId: academic.previousYearId, totalAmount: 50000, currency: 'FCFA', scheduleSteps: [],
     });
-    await request().put(`/api/v1/tuition-plans/classes/${academic.targetClassId}`).set(headers).send({
-      totalAmount: 70000, currency: 'FCFA', scheduleSteps: [],
+    await request().put(`/api/v1/tuition-plans/levels/${academic.targetLevelId}`).set(headers).send({
+      schoolYearId: academic.targetYearId, totalAmount: 70000, currency: 'FCFA', scheduleSteps: [],
     });
     await queryTenant(`
       INSERT INTO ${tenantTable('class_decisions')}

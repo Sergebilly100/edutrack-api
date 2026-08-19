@@ -9,11 +9,15 @@ const uuidSchema = z.string().uuid();
 
 export const paymentIdParamsSchema = z.object({ id: uuidSchema }).strict();
 export const studentFinancialParamsSchema = z.object({ studentId: uuidSchema }).strict();
-export const tuitionPlanClassParamsSchema = z.object({ classId: uuidSchema }).strict();
+export const parentReceiptParamsSchema = z.object({ studentId: uuidSchema, id: uuidSchema }).strict();
+export const tuitionPlanLevelParamsSchema = z.object({ levelId: uuidSchema }).strict();
 export const subscriptionPlanParamsSchema = z.object({ id: uuidSchema }).strict();
 
 export const schoolYearQuerySchema = z.object({ school_year_id: uuidSchema });
-export const tuitionPlansQuerySchema = z.object({ class_id: uuidSchema.optional() });
+export const tuitionPlansQuerySchema = z.object({
+  school_year_id: uuidSchema,
+  level_id: uuidSchema.optional(),
+});
 
 export const recordPaymentBodySchema = z.object({
   studentId: uuidSchema,
@@ -51,6 +55,7 @@ export const grantTuitionOverrideBodySchema = z.object({
 });
 
 export const upsertTuitionPlanBodySchema = z.object({
+  schoolYearId: uuidSchema,
   totalAmount: moneySchema,
   currency: z.string().trim().min(3).max(10).default('FCFA'),
   scheduleSteps: z.array(z.object({
@@ -88,4 +93,3 @@ export type PaymentMethod = z.infer<typeof paymentMethodSchema>;
 export type MobileMoneyProvider = z.infer<typeof mobileMoneyProviderSchema>;
 export type UpsertTuitionPlanInput = z.infer<typeof upsertTuitionPlanBodySchema>;
 export type SubscriptionPlanInput = z.infer<typeof createSubscriptionPlanBodySchema>;
-

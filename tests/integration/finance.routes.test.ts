@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import argon2 from 'argon2';
 
 import {
   getAuthHeaders,
   getSeedContext,
+  queryPublic,
   queryTenant,
   request,
   tenantTable,
@@ -38,10 +40,11 @@ const createFinanceContext = async (suffix: string, totalAmount = 100_000) => {
 
   const headers = await getAuthHeaders('director');
   const plan = await request()
-    .put(`/api/v1/tuition-plans/classes/${classes[0]!.id}`)
+    .put(`/api/v1/tuition-plans/levels/${levels[0]!.id}`)
     .set(headers)
     .send({
       totalAmount,
+      schoolYearId: years[0]!.id,
       currency: 'FCFA',
       scheduleSteps: [{ dueDate: isoDate(-1), cumulativeAmountExpected: 60_000 }],
     });
@@ -50,8 +53,36 @@ const createFinanceContext = async (suffix: string, totalAmount = 100_000) => {
     headers,
     schoolYearId: years[0]!.id,
     classId: classes[0]!.id,
+    levelId: levels[0]!.id,
     studentId: students[0]!.id,
   };
+};
+
+const createParentHeaders = async (studentId: string, suffix: string) => {
+  const password = 'FinanceParent!2026';
+  const phone = `22505${suffix.replace(/\D/g, '').slice(-8).padStart(8, '0')}`;
+  const hash = await argon2.hash(password);
+  await queryPublic(`
+    INSERT INTO public.tenants (name, subdomain, schema_name, plan, status, max_users, onboarding_completed)
+    VALUES ('Integration Finance School', $1, $2, 'pro', 'active', 50, true)
+    ON CONFLICT (schema_name) DO UPDATE SET status = 'active', updated_at = NOW()
+  `, [`integration-finance-${suffix}`, TEST_SCHEMA_NAME]);
+  const parents = await queryTenant<{ id: string }>(`
+    INSERT INTO ${tenantTable('parents')}
+      (full_name, phone, password_hash, must_change_password, is_active)
+    VALUES ('Parent Finance', $1, $2, false, true)
+    RETURNING id::text
+  `, [phone, hash]);
+  await queryTenant(`
+    INSERT INTO ${tenantTable('parent_student_links')} (subscription_id, parent_id, student_id)
+    VALUES (NULL, $1::uuid, $2::uuid)
+  `, [parents[0]!.id, studentId]);
+  const login = await request()
+    .post('/api/v1/auth/login/parent')
+    .set('x-tenant-schema', TEST_SCHEMA_NAME)
+    .send({ phone, password });
+  expect(login.status, JSON.stringify(login.body)).toBe(200);
+  return { authorization: `Bearer ${login.body.accessToken as string}` };
 };
 
 describe('finance routes integration', () => {
@@ -68,6 +99,42 @@ describe('finance routes integration', () => {
         )
     `);
     expect(tables[0]!.count).toBe(6);
+    const columns = await queryTenant<{ column_name: string }>(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = current_schema() AND table_name = 'tuition_plans'
+      ORDER BY column_name
+    `);
+    expect(columns.map((column) => column.column_name)).toEqual(expect.arrayContaining(['level_id', 'school_year_id']));
+    expect(columns.map((column) => column.column_name)).not.toContain('class_id');
+  });
+
+  it('applique un même plan à toutes les classes du niveau pour une année scolaire', async () => {
+    const context = await createFinanceContext(`shared-level-${Date.now()}`);
+    const secondClass = await queryTenant<{ id: string }>(`
+      INSERT INTO ${tenantTable('classes')} (name, level_id, school_year_id, is_active)
+      VALUES ('finance-class-sibling', $1::uuid, $2::uuid, true)
+      RETURNING id::text
+    `, [context.levelId, context.schoolYearId]);
+    const secondStudent = await queryTenant<{ id: string }>(`
+      INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
+      VALUES ($1::uuid, 'Koffi', 'Même Niveau', $2)
+      RETURNING id::text
+    `, [secondClass[0]!.id, `LEVEL-${Date.now()}`]);
+
+    const status = await request()
+      .get(`/api/v1/students/${secondStudent[0]!.id}/financial-status?school_year_id=${context.schoolYearId}`)
+      .set(context.headers);
+    expect(status.status, JSON.stringify(status.body)).toBe(200);
+    expect(status.body.financialStatus.totalDue).toBe(100_000);
+
+    const plans = await request()
+      .get(`/api/v1/tuition-plans?school_year_id=${context.schoolYearId}`)
+      .set(context.headers);
+    expect(plans.status).toBe(200);
+    expect(plans.body.tuitionPlans).toEqual([
+      expect.objectContaining({ level_id: context.levelId, school_year_id: context.schoolYearId }),
+    ]);
   });
 
   it('enregistre le paiement complet du montant dû et prépare le reçu', async () => {
@@ -93,6 +160,76 @@ describe('finance routes integration', () => {
       standing: 'up_to_date',
     });
     expect(response.body.receiptJobId).toBeTruthy();
+
+    const history = await request()
+      .get(`/api/v1/students/${context.studentId}/payments?school_year_id=${context.schoolYearId}`)
+      .set(context.headers);
+    expect(history.status, JSON.stringify(history.body)).toBe(200);
+    expect(history.body.payments).toHaveLength(1);
+    expect(history.body.payments[0]).toMatchObject({ id: response.body.payment.id, amount: 100_000 });
+  });
+
+  it('isole le dossier financier parent et maintient le paiement direct désactivé', async () => {
+    const suffix = String(Date.now());
+    const linked = await createFinanceContext(`parent-linked-${suffix}`);
+    const other = await createFinanceContext(`parent-other-${suffix}`);
+    const recorded = await request().post('/api/v1/payments').set(linked.headers).send({
+      studentId: linked.studentId,
+      schoolYearId: linked.schoolYearId,
+      amount: 30_000,
+      method: 'cash',
+    });
+    expect(recorded.status).toBe(201);
+
+    const provider = await request().put('/api/v1/payment-provider-settings').set(linked.headers).send({
+      provider: 'orange_money',
+      merchantNumber: '0700000000',
+      apiCredentials: { token: 'integration-secret' },
+      isActive: true,
+    });
+    expect(provider.status, JSON.stringify(provider.body)).toBe(200);
+    expect(provider.body.setting.is_active).toBe(false);
+    const preserved = await request().put('/api/v1/payment-provider-settings').set(linked.headers).send({
+      provider: 'orange_money',
+      merchantNumber: '0700000000',
+      apiCredentials: {},
+      isActive: true,
+    });
+    expect(preserved.status).toBe(200);
+    expect(preserved.body.setting).toMatchObject({ is_active: false, has_credentials: true });
+
+    const parentHeaders = await createParentHeaders(linked.studentId, suffix);
+    const status = await request()
+      .get(`/api/v1/parent/students/${linked.studentId}/financial-status?school_year_id=${linked.schoolYearId}`)
+      .set(parentHeaders);
+    expect(status.status).toBe(200);
+    expect(status.body.financialStatus).toMatchObject({ confirmedPaid: 30_000, remainingDue: 70_000 });
+
+    const history = await request()
+      .get(`/api/v1/parent/students/${linked.studentId}/payments?school_year_id=${linked.schoolYearId}`)
+      .set(parentHeaders);
+    expect(history.status).toBe(200);
+    expect(history.body.payments).toHaveLength(1);
+
+    const forbidden = await request()
+      .get(`/api/v1/parent/students/${other.studentId}/payments?school_year_id=${other.schoolYearId}`)
+      .set(parentHeaders);
+    expect(forbidden.status).toBe(403);
+
+    const receipt = await request()
+      .post(`/api/v1/parent/students/${linked.studentId}/payments/${recorded.body.payment.id}/receipt`)
+      .set(parentHeaders);
+    expect(receipt.status).toBe(202);
+    expect(receipt.body.jobId).toBeTruthy();
+
+    const options = await request().get('/api/v1/parent/payment-options').set(parentHeaders);
+    expect(options.status).toBe(200);
+    expect(options.body).toMatchObject({
+      inAppPaymentActive: false,
+      disabledReason: 'temporarily_disabled',
+      manualPaymentChannels: [{ provider: 'orange_money', merchant_number: '0700000000' }],
+    });
+    expect(JSON.stringify(options.body)).not.toContain('integration-secret');
   });
 
   it('classe un paiement partiel sous le seuil cumulé comme en retard', async () => {

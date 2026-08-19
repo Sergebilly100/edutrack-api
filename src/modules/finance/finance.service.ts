@@ -55,7 +55,7 @@ export class FinanceService {
     const subscriptionPlans = await repository.listMandatorySubscriptionPlans();
     if (!context) {
       throw new FinanceModuleError(
-        'A tuition plan is required for the student class and school year',
+        'A tuition plan is required for the student level and school year',
         409,
         'TUITION_PLAN_REQUIRED'
       );
@@ -144,6 +144,20 @@ export class FinanceService {
       }
       return { payment: mapPayment(payment), financialStatus };
     });
+  }
+
+  async listPayments(studentId: string, schoolYearId: string) {
+    await this.getAmountDue(studentId, schoolYearId);
+    return (await this.repository.listPayments(studentId, schoolYearId)).map(mapPayment);
+  }
+
+  async assertPaymentBelongsToStudent(paymentId: string, studentId: string) {
+    const payment = await this.repository.findPayment(paymentId);
+    if (!payment) throw new FinanceModuleError('Payment not found', 404, 'PAYMENT_NOT_FOUND');
+    if (payment.student_id !== studentId) {
+      throw new FinanceModuleError('Payment does not belong to this student', 403, 'PAYMENT_ACCESS_DENIED');
+    }
+    return mapPayment(payment);
   }
 
   async recordEnrollmentPayment(input: {
@@ -263,7 +277,7 @@ export class FinanceService {
     }
   }
 
-  async upsertTuitionPlan(classId: string, input: UpsertTuitionPlanInput) {
+  async upsertTuitionPlan(levelId: string, input: UpsertTuitionPlanInput) {
     let previousDate = '';
     let previousAmount = -1;
     for (const step of input.scheduleSteps) {
@@ -285,27 +299,42 @@ export class FinanceService {
       previousAmount = step.cumulativeAmountExpected;
     }
     try {
-      return await this.repository.upsertTuitionPlan(classId, input);
+      return await this.repository.upsertTuitionPlan(levelId, input);
     } catch (error) {
       if ((error as { code?: string }).code === '23503') {
-        throw new FinanceModuleError('Class not found', 404, 'CLASS_NOT_FOUND');
+        throw new FinanceModuleError('Level or school year not found', 404, 'TUITION_SCOPE_NOT_FOUND');
       }
       throw error;
     }
   }
 
-  listTuitionPlans(classId?: string) { return this.repository.listTuitionPlans(classId); }
+  listTuitionPlans(schoolYearId: string, levelId?: string) {
+    return this.repository.listTuitionPlans(schoolYearId, levelId);
+  }
   listProviderSettings() { return this.repository.listProviderSettings(); }
   async getProviderAvailability() {
     const providers = await this.repository.getProviderAvailability();
-    return { inAppPaymentActive: providers.length > 0, providers };
+    return {
+      inAppPaymentActive: false,
+      disabledReason: 'temporarily_disabled' as const,
+      providers,
+    };
+  }
+  async getParentPaymentOptions() {
+    return {
+      inAppPaymentActive: false,
+      disabledReason: 'temporarily_disabled' as const,
+      manualPaymentChannels: await this.repository.listManualPaymentChannels(),
+    };
   }
   upsertProviderSetting(input: {
     provider: MobileMoneyProvider;
     merchantNumber: string;
     apiCredentials: Record<string, unknown>;
     isActive: boolean;
-  }) { return this.repository.upsertProviderSetting(input); }
+  }) {
+    return this.repository.upsertProviderSetting({ ...input, isActive: false });
+  }
   listSubscriptionPlans() { return this.repository.listSubscriptionPlans(); }
   createSubscriptionPlan(input: SubscriptionPlanInput) { return this.repository.createSubscriptionPlan(input); }
   async updateSubscriptionPlan(id: string, input: SubscriptionPlanInput) {

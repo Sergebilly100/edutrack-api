@@ -54,6 +54,11 @@ export default async function enrollmentsController(
     catch (error) { return handleError(request, reply, error); }
   });
 
+  app.get('/api/v1/enrollments/:id/payment-summary', { preHandler: requirePermission('enrollments.confirm_payment') }, async (request, reply) => {
+    try { const { id } = uuidParamsSchema.parse(request.params); return reply.send(await withService(request, (service) => service.getPaymentSummary(id))); }
+    catch (error) { return handleError(request, reply, error); }
+  });
+
   app.post('/api/v1/enrollments', { preHandler: requirePermission('enrollments.create') }, async (request, reply) => {
     try { const body = createEnrollmentBodySchema.parse(request.body); return reply.code(201).send(await withService(request, (service) => service.createEnrollment(body))); }
     catch (error) { return handleError(request, reply, error); }

@@ -195,6 +195,9 @@ const canReadPdfJob = (
   }
 
   if (jobType === 'tuition-receipt') {
+    if (request.claims?.role === 'parent') {
+      return job.data?.parentId === request.claims.sub;
+    }
     return request.permissions?.has('payments.view') === true;
   }
 
