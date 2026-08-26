@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { getAuthHeaders, queryTenant, request, tenantTable } from './setup.js';
+import { getAuthHeaders, queryTenant, request, tenantTable, TEST_SCHEMA_NAME } from './setup.js';
+import { withTenantSchema } from '../../src/shared/database/db.js';
+import { buildFinancialCacheService } from '../../src/modules/finance/financial-cache.service.js';
 
 const suffix = String(Date.now());
 
@@ -111,5 +113,61 @@ describe('financial cache integration (6a)', () => {
     expect(Number(cached.body.cached.total_paid)).toBe(100_000);
     expect(cached.body.cached.status).toBe('up_to_date');
     expect(cached.body.cached.days_late).toBeNull();
+  });
+
+  it('traite une remise comme couverture individuelle sans la compter au recouvrement', async () => {
+    const headers = await getAuthHeaders('director');
+    const years = await queryTenant<IdRow>(
+      `SELECT id::text FROM ${tenantTable('school_years')} WHERE label = $1 LIMIT 1`,
+      [`fc-${suffix}`]
+    );
+    const yearId = years[0]!.id;
+    const classes = await queryTenant<IdRow>(
+      `SELECT id::text FROM ${tenantTable('classes')} WHERE name LIKE 'FC class %' LIMIT 1`
+    );
+    const students = await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
+       VALUES ($1::uuid, 'Aya', 'Remise', $2) RETURNING id::text`,
+      [classes[0]!.id, `FC-WAIVED-${suffix}`]
+    );
+    const studentId = students[0]!.id;
+
+    await queryTenant(
+      `INSERT INTO ${tenantTable('payments')}
+        (student_id, school_year_id, amount, method, source, status, payment_date, receipt_number)
+       VALUES ($1::uuid, $2::uuid, 300000, 'cash', 'cashier_manual', 'waived_by_school', CURRENT_DATE, $3)`,
+      [studentId, yearId, `WAIVER-${suffix}`]
+    );
+    await withTenantSchema(TEST_SCHEMA_NAME, async (db) =>
+      buildFinancialCacheService(db).recalcStudent(studentId, yearId));
+
+    const financialStatus = await request()
+      .get(`/api/v1/students/${studentId}/financial-status?school_year_id=${yearId}`)
+      .set(headers);
+    expect(financialStatus.status, JSON.stringify(financialStatus.body)).toBe(200);
+    expect(financialStatus.body.financialStatus).toMatchObject({
+      confirmedPaid: 0,
+      waivedAmount: 300_000,
+      remainingDue: 0,
+      standing: 'up_to_date',
+    });
+
+    const cached = await request()
+      .get(`/api/v1/students/${studentId}/financial-cache?school_year_id=${yearId}`)
+      .set(headers);
+    expect(cached.status).toBe(200);
+    expect(cached.body.cached).toMatchObject({
+      total_paid: '0.00',
+      waived_amount: '300000.00',
+      status: 'waived',
+    });
+
+    const summary = await request()
+      .get(`/api/v1/finance/financial-summary?school_year_id=${yearId}`)
+      .set(headers);
+    expect(summary.status).toBe(200);
+    expect(Number(summary.body.school.total_paid)).toBe(100_000);
+    expect(Number(summary.body.school.total_expected_to_date)).toBe(200_000);
+    expect(Number(summary.body.school.recovery_rate)).toBe(0.5);
   });
 });

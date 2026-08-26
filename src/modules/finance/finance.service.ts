@@ -5,7 +5,7 @@ import {
   calculateStudentTotalDue,
   canCancelPayment,
   prorateSubscriptionAmount,
-  resolveFinancialStanding,
+  resolveIndividualFinancialStatus,
 } from './finance.calculations.js';
 import {
   FinanceRepository,
@@ -155,13 +155,20 @@ export class FinanceService {
     return repository.listLogs(limit);
   }
 
-  async getFinancialStatus(studentId: string, schoolYearId: string, asOfDate = todayIso()) {    const due = await this.getAmountDue(studentId, schoolYearId);
-    const confirmedPaid = await this.repository.getConfirmedPaid(studentId, schoolYearId);
+  async getFinancialStatus(studentId: string, schoolYearId: string, asOfDate = todayIso()) {
+    const due = await this.getAmountDue(studentId, schoolYearId);
+    const { confirmedPaid, waivedAmount } = await this.repository.getPaymentCoverage(studentId, schoolYearId);
     const cumulativeExpectedAtDate = await this.repository.getExpectedAtDate(
       studentId,
       schoolYearId,
       asOfDate
     );
+    const individualStatus = resolveIndividualFinancialStatus({
+      totalDue: due.totalDue,
+      cumulativeExpectedAtDate,
+      confirmedPaid,
+      waivedAmount,
+    });
     return {
       studentId,
       schoolYearId,
@@ -169,9 +176,11 @@ export class FinanceService {
       currency: due.currency,
       totalDue: due.totalDue,
       confirmedPaid,
-      remainingDue: Math.max(0, Math.round((due.totalDue - confirmedPaid) * 100) / 100),
+      waivedAmount,
+      coveredAmount: individualStatus.coveredAmount,
+      remainingDue: individualStatus.remainingDue,
       cumulativeExpectedAtDate,
-      standing: resolveFinancialStanding(confirmedPaid, cumulativeExpectedAtDate),
+      standing: individualStatus.standing,
     };
   }
 

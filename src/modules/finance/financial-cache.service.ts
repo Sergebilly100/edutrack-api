@@ -1,21 +1,22 @@
 import { FinancialCacheRepository } from './financial-cache.repository.js';
+import {
+  resolveIndividualFinancialStatus,
+  type FinancialCacheStatus,
+} from './finance.calculations.js';
 
-export type FinancialCacheStatus = 'up_to_date' | 'late' | 'waived';
+export type { FinancialCacheStatus } from './finance.calculations.js';
 
-/** Statut de cache : à jour si couvert à la date du jour, waived si couvert par remises. */
+/** @deprecated Use resolveIndividualFinancialStatus for individual status. */
 export const resolveCacheStatus = (input: {
   expectedToDate: number;
   paidConfirmed: number;
   waivedAmount: number;
-}): FinancialCacheStatus => {
-  // Une remise qui couvre entièrement le dû à date prime (l'élève n'est pas
-  // en retard de sa faute).
-  if (input.waivedAmount > 0 && input.waivedAmount >= input.expectedToDate && input.waivedAmount > input.paidConfirmed) {
-    return 'waived';
-  }
-  const effectivePaid = input.paidConfirmed + input.waivedAmount;
-  return effectivePaid >= input.expectedToDate ? 'up_to_date' : 'late';
-};
+}): FinancialCacheStatus => resolveIndividualFinancialStatus({
+  totalDue: input.expectedToDate,
+  cumulativeExpectedAtDate: input.expectedToDate,
+  confirmedPaid: input.paidConfirmed,
+  waivedAmount: input.waivedAmount,
+}).cacheStatus;
 
 /** Taux de recouvrement borné à [0, 1] ; 1 quand rien n'est encore attendu. */
 export const computeRecoveryRate = (totalPaid: number, totalExpectedToDate: number): number => {
@@ -90,11 +91,12 @@ export class FinancialCacheService {
     totalDueYear: number;
     earliestOverdueStepDueDate: string | null;
   }) {
-    const status = resolveCacheStatus({
-      expectedToDate: snapshot.expectedToDate,
-      paidConfirmed: snapshot.paidConfirmed,
+    const status = resolveIndividualFinancialStatus({
+      totalDue: snapshot.totalDueYear,
+      cumulativeExpectedAtDate: snapshot.expectedToDate,
+      confirmedPaid: snapshot.paidConfirmed,
       waivedAmount: snapshot.waivedAmount,
-    });
+    }).cacheStatus;
     const daysLate =
       status === 'late' && snapshot.earliestOverdueStepDueDate
         ? Math.max(

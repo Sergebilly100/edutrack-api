@@ -4,6 +4,7 @@ import {
   calculateStudentTotalDue,
   canCancelPayment,
   prorateSubscriptionAmount,
+  resolveIndividualFinancialStatus,
   resolveFinancialStanding,
 } from '../../src/modules/finance/finance.calculations.js';
 
@@ -41,10 +42,23 @@ describe('finance calculations', () => {
     expect(resolveFinancialStanding(49_999, 50_000)).toBe('late');
   });
 
+  it('considère une remise de l’école comme une couverture individuelle, sans paiement encaissé', () => {
+    expect(resolveIndividualFinancialStatus({
+      totalDue: 100_000,
+      cumulativeExpectedAtDate: 60_000,
+      confirmedPaid: 0,
+      waivedAmount: 100_000,
+    })).toMatchObject({
+      coveredAmount: 100_000,
+      remainingDue: 0,
+      standing: 'up_to_date',
+      cacheStatus: 'waived',
+    });
+  });
+
   it('autorise l’annulation seulement depuis un statut comptable actif', () => {
     expect(canCancelPayment('confirmed')).toBe(true);
     expect(canCancelPayment('waived_by_school')).toBe(true);
     expect(canCancelPayment('cancelled')).toBe(false);
   });
 });
-

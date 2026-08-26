@@ -31,6 +31,11 @@ describe('computeRecoveryRate (taux de recouvrement)', () => {
     expect(computeRecoveryRate(0, 100_000)).toBe(0);
   });
 
+  it('n’ajoute jamais une remise au montant effectivement collecté', () => {
+    // Le premier argument est exclusivement le total des paiements confirmed.
+    expect(computeRecoveryRate(0, 100_000)).toBe(0);
+  });
+
   it("renvoie 1 quand rien n'est encore attendu", () => {
     expect(computeRecoveryRate(25_000, 0)).toBe(1);
   });

@@ -134,6 +134,25 @@ export class FinanceRepository {
     return FinanceRepository.toNumber(rows<{ total: string | number }>(result)[0]?.total);
   }
 
+  async getPaymentCoverage(studentId: string, schoolYearId: string): Promise<{
+    confirmedPaid: number;
+    waivedAmount: number;
+  }> {
+    const result = await this.db.execute<{ confirmed_paid: string | number; waived_amount: string | number }>(sql`
+      SELECT COALESCE(SUM(amount) FILTER (WHERE status = 'confirmed'), 0) AS confirmed_paid,
+             COALESCE(SUM(amount) FILTER (WHERE status = 'waived_by_school'), 0) AS waived_amount
+      FROM payments
+      WHERE student_id = ${studentId}::uuid
+        AND school_year_id = ${schoolYearId}::uuid
+        AND status IN ('confirmed', 'waived_by_school')
+    `);
+    const coverage = rows<{ confirmed_paid: string | number; waived_amount: string | number }>(result)[0];
+    return {
+      confirmedPaid: FinanceRepository.toNumber(coverage?.confirmed_paid),
+      waivedAmount: FinanceRepository.toNumber(coverage?.waived_amount),
+    };
+  }
+
   async unblockReEnrollmentsAfterSettlement(studentId: string, previousSchoolYearId: string): Promise<number> {
     const result = await this.db.execute<{ id: string }>(sql`
       UPDATE enrollments e

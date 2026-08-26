@@ -1,5 +1,6 @@
 export type SubscriptionPeriod = 'monthly' | 'quarterly' | 'semester' | 'annual';
 export type FinancialStanding = 'up_to_date' | 'late';
+export type FinancialCacheStatus = FinancialStanding | 'waived';
 export type PaymentStatus = 'confirmed' | 'waived_by_school' | 'cancelled';
 
 const PERIOD_MONTHS: Record<SubscriptionPeriod, number> = {
@@ -34,18 +35,46 @@ export const calculateStudentTotalDue = (input: {
 };
 
 /**
- * Statut de paiement par CUMUL : un élève est à jour dès que le total confirmé
- * couvre le cumul attendu À LA DATE DU JOUR (dernière étape de l'échéancier due),
- * pas le total annuel. Les paiements sont libres : aucun rattachement à une
- * échéance individuelle. NB : les remises (waived_by_school) ne comptent PAS
- * ici — la variante tolérante aux remises vit dans financial-cache.service
- * (resolveCacheStatus) ; garder les deux sémantiques en tête avant d'unifier.
+ * Référence unique du statut individuel. Les remises de l'école couvrent la
+ * dette de l'élève, mais restent séparées des paiements effectivement encaissés
+ * pour les indicateurs de recouvrement.
  */
+export const resolveIndividualFinancialStatus = (input: {
+  totalDue: number;
+  cumulativeExpectedAtDate: number;
+  confirmedPaid: number;
+  waivedAmount: number;
+}) => {
+  const coveredAmount = roundMoney(input.confirmedPaid + input.waivedAmount);
+  const standing: FinancialStanding = coveredAmount >= input.cumulativeExpectedAtDate
+    ? 'up_to_date'
+    : 'late';
+  const cacheStatus: FinancialCacheStatus = standing === 'late'
+    ? 'late'
+    : input.waivedAmount > 0
+      && input.waivedAmount >= input.cumulativeExpectedAtDate
+      && input.waivedAmount > input.confirmedPaid
+      ? 'waived'
+      : 'up_to_date';
+
+  return {
+    coveredAmount,
+    remainingDue: Math.max(0, roundMoney(input.totalDue - coveredAmount)),
+    standing,
+    cacheStatus,
+  };
+};
+
+/** @deprecated Use resolveIndividualFinancialStatus for individual status. */
 export const resolveFinancialStanding = (
   confirmedPaid: number,
   cumulativeExpectedAtDate: number
-): FinancialStanding => confirmedPaid >= cumulativeExpectedAtDate ? 'up_to_date' : 'late';
+): FinancialStanding => resolveIndividualFinancialStatus({
+  totalDue: cumulativeExpectedAtDate,
+  cumulativeExpectedAtDate,
+  confirmedPaid,
+  waivedAmount: 0,
+}).standing;
 
 export const canCancelPayment = (status: PaymentStatus): boolean =>
   status === 'confirmed' || status === 'waived_by_school';
-

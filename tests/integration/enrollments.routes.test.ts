@@ -179,4 +179,47 @@ describe('enrollments integration', () => {
     expect(enrollment.status).toBe(200);
     expect(enrollment.body.enrollment.status).toBe('pending_cashier');
   });
+
+  it('ne bloque pas une réinscription quand une remise couvre la dette antérieure', async () => {
+    const headers = await getAuthHeaders('director');
+    const academic = await createAcademicContext('enr-waived');
+    const students = await queryTenant<{ id: string }>(`
+      INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
+      VALUES ($1::uuid, 'Aya', 'Remise', 'ENR-WAIVED-001') RETURNING id
+    `, [academic.currentClassId]);
+    const studentId = students[0]!.id;
+
+    await request().put(`/api/v1/tuition-plans/levels/${academic.currentLevelId}`).set(headers).send({
+      schoolYearId: academic.previousYearId, totalAmount: 50_000, currency: 'FCFA', scheduleSteps: [],
+    });
+    await request().put(`/api/v1/tuition-plans/levels/${academic.targetLevelId}`).set(headers).send({
+      schoolYearId: academic.targetYearId, totalAmount: 70_000, currency: 'FCFA', scheduleSteps: [],
+    });
+    await queryTenant(`
+      INSERT INTO ${tenantTable('class_decisions')}
+        (student_id, school_year_id, final_decision, next_level_id, validated_at)
+      VALUES ($1::uuid, $2::uuid, 'promoted', $3::uuid, NOW())
+    `, [studentId, academic.previousYearId, academic.targetLevelId]);
+    await queryTenant(`
+      INSERT INTO ${tenantTable('payments')}
+        (student_id, school_year_id, amount, method, source, status, payment_date, receipt_number)
+      VALUES ($1::uuid, $2::uuid, 50000, 'cash', 'cashier_manual', 'waived_by_school', CURRENT_DATE, 'ENR-WAIVED-REC')
+    `, [studentId, academic.previousYearId]);
+
+    const financialStatus = await request()
+      .get(`/api/v1/students/${studentId}/financial-status?school_year_id=${academic.previousYearId}`)
+      .set(headers);
+    expect(financialStatus.status).toBe(200);
+    expect(financialStatus.body.financialStatus).toMatchObject({ remainingDue: 0, standing: 'up_to_date' });
+
+    const creation = await request().post('/api/v1/enrollments').set(headers).send({
+      studentId,
+      classId: academic.targetClassId,
+      schoolYearId: academic.targetYearId,
+      type: 're_registration',
+      hasPreviousYearUnpaid: true,
+    });
+    expect(creation.status).toBe(201);
+    expect(creation.body.enrollment.status).toBe('pending_cashier');
+  });
 });
