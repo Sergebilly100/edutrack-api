@@ -127,6 +127,16 @@ export const classDecisionTypeEnum = tenant.enum('class_decision_type', [
   'expelled',
 ]);
 
+export const reportCardStatusEnum = tenant.enum('report_card_status', [
+  'generated',
+  'published',
+]);
+
+export const reportCardLineTypeEnum = tenant.enum('report_card_line_type', [
+  'subject',
+  'conduct',
+]);
+
 export const studentLifecycleStatusEnum = tenant.enum('student_lifecycle_status', [
   'active',
   'expelled',
@@ -1428,5 +1438,80 @@ export const smsUsageLog = tenant.table(
       table.month
     ),
     smsUsageStudentMonthIdx: index('idx_sms_usage_student_month').on(table.studentId, table.month),
+  })
+);
+
+export const reportCards = tenant.table(
+  'report_cards',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    studentId: uuid('student_id')
+      .notNull()
+      .references(() => students.id, { onDelete: 'cascade' }),
+    classId: uuid('class_id')
+      .notNull()
+      .references(() => classes.id),
+    gradingPeriodId: uuid('grading_period_id')
+      .notNull()
+      .references(() => gradingPeriods.id, { onDelete: 'cascade' }),
+    generalAverage: numeric('general_average', { precision: 8, scale: 3 }).notNull(),
+    rank: integer('rank').notNull(),
+    classAverage: numeric('class_average', { precision: 8, scale: 3 }).notNull(),
+    classMinAverage: numeric('class_min_average', { precision: 8, scale: 3 }).notNull(),
+    classMaxAverage: numeric('class_max_average', { precision: 8, scale: 3 }).notNull(),
+    classHeadcount: integer('class_headcount').notNull(),
+    classDecisionId: uuid('class_decision_id').references(() => classDecisions.id, {
+      onDelete: 'set null',
+    }),
+    status: reportCardStatusEnum('status').notNull().default('generated'),
+    generatedAt: timestamp('generated_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+    publishedAt: timestamp('published_at', { withTimezone: true, mode: 'date' }),
+    publishedByUserId: uuid('published_by_user_id').references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    reportCardsStudentPeriodUnique: unique('report_cards_student_period_unique').on(
+      table.studentId,
+      table.gradingPeriodId
+    ),
+    reportCardsClassPeriodIdx: index('idx_report_cards_class_period').on(
+      table.classId,
+      table.gradingPeriodId
+    ),
+  })
+);
+
+export const reportCardLines = tenant.table(
+  'report_card_lines',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    reportCardId: uuid('report_card_id')
+      .notNull()
+      .references(() => reportCards.id, { onDelete: 'cascade' }),
+    subjectId: uuid('subject_id').references(() => subjects.id, { onDelete: 'cascade' }),
+    lineType: reportCardLineTypeEnum('line_type').notNull(),
+    subjectAverage: numeric('subject_average', { precision: 8, scale: 3 }).notNull(),
+    subjectCoefficient: numeric('subject_coefficient', { precision: 8, scale: 3 }).notNull(),
+    subjectRank: integer('subject_rank'),
+    teacherComment: text('teacher_comment'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    reportCardLinesSubjectUnique: uniqueIndex('report_card_lines_subject_unique')
+      .on(table.reportCardId, table.subjectId)
+      .where(sql`subject_id IS NOT NULL`),
+    reportCardLinesConductUnique: uniqueIndex('report_card_lines_conduct_unique')
+      .on(table.reportCardId)
+      .where(sql`line_type = 'conduct'`),
+    reportCardLinesReportIdx: index('idx_report_card_lines_report').on(table.reportCardId),
   })
 );

@@ -676,6 +676,75 @@ export class PdfBuilder {
     this.cursorY = lineY - 18;
   }
 
+  /**
+   * Bloc cachet + signature avec images optionnelles uploadées par l'école.
+   * Réservé aux documents officiels signés (bulletins) — les reçus n'y ont
+   * PAS droit, même si les images existent.
+   */
+  async stampAndSignature(seals: {
+    stamp?: LoadedLogo | null;
+    signature?: LoadedLogo | null;
+  }): Promise<void> {
+    const { color, size } = this.theme;
+    const blockH = 90;
+    this.ensureSpace(blockH + 10);
+    const lineY = Math.max(this.cursorY - 56, this.contentBottom + 24);
+    const colW = (this.contentWidth - 40) / 2;
+    const sealHeight = 42;
+
+    const drawSeal = async (
+      x: number,
+      image: LoadedLogo | null | undefined,
+      label: string
+    ): Promise<void> => {
+      let embedded: Awaited<ReturnType<PDFDocument['embedPng']>> | null = null;
+      if (image) {
+        // Une image de cachet/signature corrompue ne doit jamais faire
+        // échouer la génération : on retombe sur le slot texte.
+        try {
+          embedded =
+            image.format === 'png'
+              ? await this.pdf.embedPng(image.bytes)
+              : await this.pdf.embedJpg(image.bytes);
+        } catch {
+          embedded = null;
+        }
+      }
+
+      const slotWidth = colW;
+      if (embedded) {
+        const scaled = embedded.scaleToFit(120, sealHeight);
+        this.page.drawImage(embedded, {
+          x: x + (slotWidth - scaled.width) / 2,
+          y: lineY + 4,
+          width: scaled.width,
+          height: scaled.height,
+          opacity: 0.9,
+        });
+      }
+      this.page.drawLine({
+        start: { x, y: lineY },
+        end: { x: x + slotWidth, y: lineY },
+        thickness: 0.75,
+        color: color.faint,
+      });
+      this.drawText(this.page, x, lineY - 12, label, {
+        font: this.fonts.medium,
+        size: size.small,
+        color: color.muted,
+        maxWidth: slotWidth,
+      });
+    };
+
+    await drawSeal(this.contentLeft, seals.stamp ?? null, 'Cachet de l’établissement');
+    await drawSeal(
+      this.contentLeft + colW + 40,
+      seals.signature ?? null,
+      `Signature - ${this.branding.signatoryTitle ?? 'Directeur'}`
+    );
+    this.cursorY = lineY - 18;
+  }
+
   /** Finalise : numérote « Page X / N » sur toutes les pages puis sérialise. */
   async save(): Promise<Uint8Array> {
     const pages = this.pdf.getPages();

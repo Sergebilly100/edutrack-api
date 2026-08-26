@@ -37,5 +37,10 @@ export { renderRevenueReport } from './templates/revenue.js';
 export type { RevenuePayload, RevenueRow } from './templates/revenue.js';
 export { renderTuitionReceipt } from './templates/tuition-receipt.js';
 export type { TuitionReceiptPayload } from './templates/tuition-receipt.js';
+export { renderReportCard } from './templates/report-card.js';
+export type {
+  ReportCardPdfPayload,
+  ReportCardLinePayload,
+} from './templates/report-card.js';
 export { renderCashJournal } from './templates/cash-journal.js';
 export type { CashJournalPdfPayload } from './templates/cash-journal.js';

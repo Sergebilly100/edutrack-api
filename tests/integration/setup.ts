@@ -433,6 +433,7 @@ const initApp = async (): Promise<FastifyInstance> => {
     { default: academicController },
     { default: classDecisionsController },
     { default: conductController },
+    { default: reportCardsController },
     { default: enrollmentsController },
     { default: financeController },
     { default: adminController },
@@ -452,6 +453,7 @@ const initApp = async (): Promise<FastifyInstance> => {
     import('../../src/modules/academic/academic.controller.js'),
     import('../../src/modules/class-decisions/class-decisions.controller.js'),
     import('../../src/modules/conduct/conduct.controller.js'),
+    import('../../src/modules/report-cards/report-cards.controller.js'),
     import('../../src/modules/enrollments/enrollments.controller.js'),
     import('../../src/modules/finance/finance.controller.js'),
     import('../../src/modules/admin/admin.controller.js'),
@@ -477,10 +479,14 @@ const initApp = async (): Promise<FastifyInstance> => {
   const smsQueue = {
     add: async () => ({ id: 'integration-notification-job' }),
   };
+  const reportCardPdfQueue = {
+    add: async () => ({ id: 'integration-report-card-pdf-job' }),
+  };
 
   testApp.register(authController);
   testApp.register(academicController);
   testApp.register(classDecisionsController);
+  testApp.register(reportCardsController, { pdfQueue: reportCardPdfQueue });
   testApp.register(conductController);
   testApp.register(enrollmentsController);
   testApp.register(financeController);

@@ -121,6 +121,7 @@ export type PermissionKey =
   | 'classes.edit'
   | 'classes.delete'
   | 'report_cards.view'
+  | 'report_cards.publish'
   | 'import.students'
   | 'import.teachers'
   | 'import.schedule'

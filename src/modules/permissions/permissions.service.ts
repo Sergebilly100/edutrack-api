@@ -161,6 +161,8 @@ export class PermissionsService {
       city?: string;
       teachingType?: string;
       logoUrl?: string | null;
+      stampImageUrl?: string | null;
+      signatureImageUrl?: string | null;
       activeSchoolYear?: string | null;
       allowTeacherQrSkip?: boolean;
       studentAssignmentEnabled?: boolean;

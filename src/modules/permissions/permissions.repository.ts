@@ -594,6 +594,8 @@ export class PermissionsRepository {
       city?: string;
       teachingType?: string;
       logoUrl?: string | null;
+      stampImageUrl?: string | null;
+      signatureImageUrl?: string | null;
       activeSchoolYear?: string | null;
       allowTeacherQrSkip?: boolean;
       studentAssignmentEnabled?: boolean;
@@ -610,6 +612,16 @@ export class PermissionsRepository {
           ELSE teaching_type
         END,
         logo_url = CASE WHEN ${input.logoUrl !== undefined} THEN ${input.logoUrl ?? null} ELSE logo_url END,
+        stamp_image_url = CASE
+          WHEN ${input.stampImageUrl !== undefined}
+            THEN ${input.stampImageUrl ?? null}
+          ELSE stamp_image_url
+        END,
+        signature_image_url = CASE
+          WHEN ${input.signatureImageUrl !== undefined}
+            THEN ${input.signatureImageUrl ?? null}
+          ELSE signature_image_url
+        END,
         active_school_year = CASE
           WHEN ${input.activeSchoolYear !== undefined}
             THEN ${input.activeSchoolYear ?? null}
