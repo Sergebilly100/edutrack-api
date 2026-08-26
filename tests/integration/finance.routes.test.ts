@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import argon2 from 'argon2';
 
+import { buildFinancialCacheService } from '../../src/modules/finance/financial-cache.service.js';
+import { withTenantSchema } from '../../src/shared/database/db.js';
 import {
   getAuthHeaders,
   getSeedContext,
@@ -258,12 +260,19 @@ describe('finance routes integration', () => {
       expect(response.status).toBe(201);
     }
     const today = isoDate(0);
+    await queryTenant(`
+      INSERT INTO ${tenantTable('payments')} (
+        student_id, school_year_id, amount, method, source, status, receipt_number, payment_date
+      ) VALUES ($1::uuid, $2::uuid, 20_000, 'cash', 'migration_import', 'confirmed', $3, CURRENT_DATE)
+    `, [context.studentId, context.schoolYearId, `MIG-${Date.now()}`]);
+
     const journal = await request()
       .get(`/api/v1/payments/cash-journal?school_year_id=${context.schoolYearId}&class_id=${context.classId}&from=${today}&to=${today}`)
       .set(context.headers);
     expect(journal.status, JSON.stringify(journal.body)).toBe(200);
     expect(journal.body.journal.totals).toMatchObject({ cash: 20_000, mobile_money: 15_000, grandTotal: 35_000 });
     expect(journal.body.journal.entries).toHaveLength(2);
+    expect(journal.body.journal.entries.some((entry: { source: string }) => entry.source === 'migration_import')).toBe(false);
 
     const excel = await request()
       .get(`/api/v1/payments/cash-journal/export?format=xlsx&school_year_id=${context.schoolYearId}&from=${today}&to=${today}`)
@@ -281,7 +290,25 @@ describe('finance routes integration', () => {
       .get(`/api/v1/students/${context.studentId}/account-statement?school_year_id=${context.schoolYearId}`)
       .set(context.headers);
     expect(statement.status, JSON.stringify(statement.body)).toBe(200);
-    expect(statement.body.statement.movements.map((item: { balanceAfter: number }) => item.balanceAfter)).toEqual([80_000, 65_000]);
+    expect(statement.body.statement.movements.map((item: { balanceAfter: number }) => item.balanceAfter)).toEqual([80_000, 65_000, 45_000]);
+
+    const financialStatus = await request()
+      .get(`/api/v1/students/${context.studentId}/financial-status?school_year_id=${context.schoolYearId}`)
+      .set(context.headers);
+    expect(financialStatus.status, JSON.stringify(financialStatus.body)).toBe(200);
+    expect(financialStatus.body.financialStatus).toMatchObject({ confirmedPaid: 55_000, remainingDue: 45_000 });
+
+    await withTenantSchema(TEST_SCHEMA_NAME, async (db) =>
+      buildFinancialCacheService(db).recalcStudent(context.studentId, context.schoolYearId));
+    const financialSummary = await request()
+      .get(`/api/v1/finance/financial-summary?school_year_id=${context.schoolYearId}`)
+      .set(context.headers);
+    expect(financialSummary.status, JSON.stringify(financialSummary.body)).toBe(200);
+    expect(Number(financialSummary.body.school.total_paid)).toBeGreaterThanOrEqual(55_000);
+    const classSummary = financialSummary.body.classes.find(
+      (summary: { class_id: string }) => summary.class_id === context.classId
+    );
+    expect(Number(classSummary.total_paid)).toBe(55_000);
   });
 
   it('refuse une annulation sans justification puis conserve la trace complète', async () => {

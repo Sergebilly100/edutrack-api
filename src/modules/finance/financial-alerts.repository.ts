@@ -166,6 +166,38 @@ export class FinancialAlertsRepository {
     `);
   }
 
+  /**
+   * Les notifications in-app financières suivent le même contrat que les
+   * remises : une notification déjà livrée, adressée au directeur actif.
+   */
+  async insertInAppPaymentReminder(input: {
+    studentId: string;
+    ruleId: string;
+    ruleType: FinancialAlertRule['type'];
+    message: string;
+  }): Promise<void> {
+    await this.db.execute(sql`
+      INSERT INTO notifications_log (
+        type, channel, recipient_id, recipient_phone, recipient_email,
+        message, metadata, status, related_id, sent_at
+      )
+      SELECT
+        'payment_reminder', 'in_app', u.id, COALESCE(u.phone, ''), u.email,
+        ${input.message},
+        ${JSON.stringify({
+          event: 'payment_reminder',
+          studentId: input.studentId,
+          ruleId: input.ruleId,
+          ruleType: input.ruleType,
+        })}::jsonb,
+        'delivered', ${input.studentId}::uuid, NOW()
+      FROM users u
+      WHERE u.role = 'director' AND u.is_active = true
+      ORDER BY u.created_at ASC
+      LIMIT 1
+    `);
+  }
+
   async listLogs(limit = 100) {
     const result = await this.db.execute<Record<string, string | number>>(sql`
       SELECT l.id::text, l.student_id::text,

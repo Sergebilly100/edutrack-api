@@ -12,7 +12,7 @@ const suffix = String(Date.now());
 type IdRow = { id: string };
 
 describe('financial alerts integration (6b)', () => {
-  it('envoie une relance pour un élève en retard et logue, pas pour un élève à jour', async () => {
+  it('crée une notification in-app pour une règle in_app, mais pas pour une règle sms', async () => {
     const headers = await getAuthHeaders('director');
 
     // Année active + classe + deux élèves (un en retard, un à jour)
@@ -89,6 +89,53 @@ describe('financial alerts integration (6b)', () => {
     // Un SMS a été mis en file via le contrat send-sms existant.
     expect(enqueued.length).toBeGreaterThanOrEqual(1);
     expect(enqueued[0]!['notificationType']).toBe('payment_reminder');
+
+    // Le canal SMS seul ne crée pas de notification in-app.
+    const smsOnlyNotifications = await queryTenant<{ id: string }>(
+      `SELECT id::text
+       FROM ${tenantTable('notifications_log')}
+       WHERE type = 'payment_reminder'
+         AND channel = 'in_app'
+         AND related_id = $1::uuid`,
+      [lateStudentId]
+    );
+    expect(smsOnlyNotifications).toHaveLength(0);
+
+    // Une règle in_app, elle, alimente le journal visible par le directeur.
+    const inAppUpsert = await request()
+      .put('/api/v1/financial-alert-rules/severe_late')
+      .set(headers)
+      .send({ daysOffset: 10, channel: 'in_app', isActive: true });
+    expect(inAppUpsert.status, JSON.stringify(inAppUpsert.body)).toBe(200);
+
+    const inAppRun = await withTenantSchema(TEST_SCHEMA_NAME, (tenantDb) =>
+      new FinancialAlertsService(new FinancialAlertsRepository(tenantDb), fakeSmsQueue).runDailyOnDb(
+        tenantDb,
+        TEST_SCHEMA_NAME
+      )
+    );
+    expect(inAppRun.sentCount).toBeGreaterThanOrEqual(1);
+
+    const inAppNotifications = await queryTenant<{
+      channel: string;
+      status: string;
+      recipient_id: string | null;
+      related_id: string;
+    }>(
+      `SELECT channel, status, recipient_id::text, related_id::text
+       FROM ${tenantTable('notifications_log')}
+       WHERE type = 'payment_reminder'
+         AND channel = 'in_app'
+         AND related_id = $1::uuid`,
+      [lateStudentId]
+    );
+    expect(inAppNotifications).toHaveLength(1);
+    expect(inAppNotifications[0]).toMatchObject({
+      channel: 'in_app',
+      status: 'delivered',
+      related_id: lateStudentId,
+    });
+    expect(inAppNotifications[0]!.recipient_id).not.toBeNull();
 
     // Anti-doublon : rejouer immédiatement ne renvoie rien.
     const secondRun = await withTenantSchema(TEST_SCHEMA_NAME, (tenantDb) =>

@@ -288,6 +288,7 @@ export class FinanceRepository {
         AND (${input.to ?? null}::date IS NULL OR p.payment_date <= ${input.to ?? null}::date)
         AND (${input.classId ?? null}::uuid IS NULL OR c.id = ${input.classId ?? null}::uuid)
         AND (${input.method ?? null}::text IS NULL OR p.method::text = ${input.method ?? null})
+        AND p.source <> 'migration_import'
       ORDER BY p.payment_date DESC, p.created_at DESC, p.id DESC
     `);
     return rows<CashJournalRow>(result);

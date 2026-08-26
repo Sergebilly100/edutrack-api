@@ -51,7 +51,6 @@ export class FinancialAlertsService {
     let skippedCount = 0;
 
     for (const reminder of due) {
-      if (reminder.channel === 'in_app') continue; // canal in-app : pas d'envoi SMS ici
       if (await repository.wasReminderSentRecently(reminder.studentId, reminder.ruleId)) {
         skippedCount += 1;
         continue;
@@ -63,6 +62,27 @@ export class FinancialAlertsService {
           : `Rappel - Scolarite de ${reminder.studentName} en retard. Merci de regulariser aupres de l'ecole.`;
 
       try {
+        if (reminder.channel === 'in_app' || reminder.channel === 'both') {
+          await repository.insertInAppPaymentReminder({
+            studentId: reminder.studentId,
+            ruleId: reminder.ruleId,
+            ruleType: reminder.ruleType,
+            message,
+          });
+        }
+
+        if (reminder.channel === 'in_app') {
+          await repository.insertAlertLog({
+            studentId: reminder.studentId,
+            ruleId: reminder.ruleId,
+            channel: reminder.channel,
+            status: 'sent',
+            message,
+          });
+          sentCount += 1;
+          continue;
+        }
+
         if (this.smsQueue && reminder.parentPhone) {
           const queueRef = `fin-alert-${reminder.ruleId}-${reminder.studentId}-${Date.now()}`;
           await this.smsQueue.add(
