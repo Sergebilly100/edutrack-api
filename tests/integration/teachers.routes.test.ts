@@ -9,9 +9,13 @@ const seedTeacher = async (overrides: Record<string, unknown> = {}): Promise<{ t
   const suffix = Math.random().toString(36).slice(2, 8);
 
   const users = await queryTenant<{ id: string }>(
-    `INSERT INTO ${tenantTable('users')} (role, name, phone, password_hash, is_active)
-     VALUES ('teacher', $1, NULL, $2, true) RETURNING id`,
-    [`${(overrides.last_name as string) ?? 'Test'} ${suffix}`, passwordHash]
+    `INSERT INTO ${tenantTable('users')} (role, name, phone, email, password_hash, is_active)
+     VALUES ('teacher', $1, NULL, $3, $2, true) RETURNING id`,
+    [
+      `${(overrides.last_name as string) ?? 'Test'} ${suffix}`,
+      passwordHash,
+      typeof overrides.email === 'string' ? overrides.email : null,
+    ]
   );
   const userId = users[0]?.id;
   if (!userId) throw new Error('Failed to seed user');
@@ -132,7 +136,7 @@ describe('teachers integration (real db)', () => {
   describe('PUT /api/v1/teachers/:id', () => {
     it('met a jour le taux horaire', async () => {
       const headers = await getAuthHeaders('director');
-      const { teacherId } = await seedTeacher({ last_name: 'Update' });
+      const { teacherId } = await seedTeacher({ last_name: 'Update', email: 'update.test@test.local' });
 
       const response = await request()
         .put(`/api/v1/teachers/${teacherId}`)
@@ -145,7 +149,7 @@ describe('teachers integration (real db)', () => {
 
     it('bloque le changement de type si salary pending existe', async () => {
       const headers = await getAuthHeaders('director');
-      const { teacherId } = await seedTeacher({ last_name: 'TypeChange' });
+      const { teacherId } = await seedTeacher({ last_name: 'TypeChange', email: 'typechange.test@test.local' });
 
       // Insérer un salary_record pending
       await queryTenant(
@@ -166,7 +170,7 @@ describe('teachers integration (real db)', () => {
 
     it('autorise le changement de type si tous les salaires sont payes', async () => {
       const headers = await getAuthHeaders('director');
-      const { teacherId } = await seedTeacher({ last_name: 'TypeOk' });
+      const { teacherId } = await seedTeacher({ last_name: 'TypeOk', email: 'typeok.test@test.local' });
 
       // Insérer un salary_record paid
       await queryTenant(

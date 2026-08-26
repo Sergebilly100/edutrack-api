@@ -41,6 +41,7 @@ describe('G5 users limit enforcement', () => {
         type: 'vacataire',
         subjects: ['Maths'],
         hourly_rate: 4000,
+        phone: '2250711111111',
       });
 
     expect(response.status).toBe(403);
@@ -80,6 +81,7 @@ describe('G5 users limit enforcement', () => {
         type: 'vacataire',
         subjects: ['Français'],
         hourly_rate: 3000,
+        phone: '2250722222222',
       });
 
     // 201 : quota profs (20) non atteint ; les 10 staff insérés n'ont pas d'impact

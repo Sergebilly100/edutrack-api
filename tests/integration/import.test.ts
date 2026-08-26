@@ -359,7 +359,7 @@ describe('import integration - teachers', () => {
     const headers = await getAuthHeaders('director');
 
     const rows = [
-      { 'Nom*': 'Ouattara', 'Prénom*': 'Abou', 'Type*': 'vacataire', 'Matières*': 'Mathématiques', 'Taux horaire FCFA': '5000' },
+      { 'Nom*': 'Ouattara', 'Prénom*': 'Abou', 'Type*': 'vacataire', 'Matières*': 'Mathématiques', 'Taux horaire FCFA': '5000', 'Téléphone': '2250700000099' },
     ];
 
     const res = await attachTeachers(
@@ -383,6 +383,7 @@ describe('import integration - teachers', () => {
         'Type*': 'vacataire',
         'Matières*': 'Physique',
         'Taux horaire FCFA': '4000',
+        'Email': `${prefix.toLowerCase()}@test.ci`,
       },
     ];
 
@@ -419,6 +420,7 @@ describe('import integration - teachers', () => {
         'Type*': 'vacataire',
         'Matières*': 'Physique',
         'Taux horaire FCFA': '4000',
+        'Email': `${prefix.toLowerCase()}-sec@test.ci`,
       },
     ];
 
