@@ -806,6 +806,96 @@ export const evaluationGrades = tenant.table(
   })
 );
 
+export const educatorAssignments = tenant.table(
+  'educator_assignments',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    classId: uuid('class_id').references(() => classes.id, { onDelete: 'cascade' }),
+    levelId: uuid('level_id').references(() => levels.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    assignedBy: uuid('assigned_by').references(() => users.id),
+    assignedAt: timestamp('assigned_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    educatorAssignmentClassUnique: uniqueIndex('educator_assignments_class_unique')
+      .on(table.classId)
+      .where(sql`class_id IS NOT NULL`),
+    educatorAssignmentLevelUnique: uniqueIndex('educator_assignments_level_unique')
+      .on(table.levelId)
+      .where(sql`level_id IS NOT NULL`),
+    educatorAssignmentUserIdx: index('idx_educator_assignments_user').on(table.userId),
+    educatorAssignmentTargetRequired: check(
+      'educator_assignments_target_required',
+      sql`(class_id IS NOT NULL)::int + (level_id IS NOT NULL)::int = 1`
+    ),
+  })
+);
+
+export const teacherConductInputs = tenant.table(
+  'teacher_conduct_inputs',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    studentId: uuid('student_id')
+      .notNull()
+      .references(() => students.id, { onDelete: 'cascade' }),
+    teacherId: uuid('teacher_id')
+      .notNull()
+      .references(() => teachers.id, { onDelete: 'cascade' }),
+    classId: uuid('class_id')
+      .notNull()
+      .references(() => classes.id),
+    gradingPeriodId: uuid('grading_period_id')
+      .notNull()
+      .references(() => gradingPeriods.id, { onDelete: 'cascade' }),
+    note: numeric('note', { precision: 5, scale: 2 }).notNull(),
+    observation: text('observation'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    teacherConductInputOncePerPeriod: unique(
+      'teacher_conduct_inputs_once_per_period'
+    ).on(table.studentId, table.teacherId, table.gradingPeriodId),
+    teacherConductInputsStudentIdx: index('idx_teacher_conduct_inputs_student').on(table.studentId),
+    teacherConductInputsNoteRange: check(
+      'teacher_conduct_inputs_note_range',
+      sql`${table.note} >= 0 AND ${table.note} <= 20`
+    ),
+  })
+);
+
+export const conductGrades = tenant.table(
+  'conduct_grades',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    studentId: uuid('student_id')
+      .notNull()
+      .references(() => students.id, { onDelete: 'cascade' }),
+    gradingPeriodId: uuid('grading_period_id')
+      .notNull()
+      .references(() => gradingPeriods.id, { onDelete: 'cascade' }),
+    note: numeric('note', { precision: 5, scale: 2 }).notNull(),
+    coefficient: numeric('coefficient', { precision: 8, scale: 3 }).notNull().default(sql`'1'`),
+    decidedByUserId: uuid('decided_by_user_id')
+      .notNull()
+      .references(() => users.id),
+    decidedAt: timestamp('decided_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    conductGradesStudentPeriodUnique: unique('conduct_grades_student_period_unique').on(
+      table.studentId,
+      table.gradingPeriodId
+    ),
+    conductGradesStudentIdx: index('idx_conduct_grades_student').on(table.studentId),
+    conductGradesNoteRange: check('conduct_grades_note_range', sql`${table.note} >= 0 AND ${table.note} <= 20`),
+    conductGradesCoefficientPositive: check('conduct_grades_coefficient_positive', sql`${table.coefficient} > 0`),
+  })
+);
+
 export const classSubjectCompletion = tenant.table(
   'class_subject_completion',
   {

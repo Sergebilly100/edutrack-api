@@ -39,6 +39,8 @@ const repository = {
   countAssignments: vi.fn(),
   listAssignedPermissions: vi.fn(),
   createPosition: vi.fn(),
+  updatePosition: vi.fn(),
+  findPositionHoldingExclusivePermission: vi.fn(),
   updateAdministrativeUserPasswordHash: vi.fn(),
   revokeAllUserRefreshTokens: vi.fn(),
   findAdministrativeUserById: vi.fn(),
@@ -553,5 +555,91 @@ describe('permissions.service withSmsTemplatePermissionGuard (via createPosition
         permissions: expect.arrayContaining(['settings.sms_templates']),
       })
     );
+  });
+});
+
+describe('permissions.service exclusivité conduct.finalize', () => {
+  it('refuse la création d\u2019un poste si un autre poste détient déjà conduct.finalize', async () => {
+    const service = new PermissionsService(repository as never);
+    repository.findPositionHoldingExclusivePermission.mockResolvedValue({ id: 'pos-1', name: 'Éducateur' });
+    repository.createPosition.mockResolvedValue({
+      id: 'pos-2',
+      name: 'Surveillant',
+      permissions: ['conduct.finalize'],
+      assignmentsCount: 0,
+    });
+
+    await expect(
+      service.createPosition({
+        name: 'Surveillant',
+        permissions: ['conduct.finalize'],
+        createdBy: 'user-1',
+        schemaName: 'school_test',
+      })
+    ).rejects.toMatchObject({
+      code: 'CONDUCT_FINALIZE_ALREADY_HELD',
+      statusCode: 409,
+      message: expect.stringContaining('déjà attribuée au poste Éducateur'),
+    });
+
+    expect(repository.createPosition).not.toHaveBeenCalled();
+  });
+
+  it('accepte la création du premier poste détenant conduct.finalize', async () => {
+    const service = new PermissionsService(repository as never);
+    repository.findPositionHoldingExclusivePermission.mockResolvedValue(null);
+    repository.createPosition.mockResolvedValue({
+      id: 'pos-1',
+      name: 'Éducateur',
+      permissions: ['conduct.finalize'],
+      assignmentsCount: 0,
+    });
+
+    const result = await service.createPosition({
+      name: 'Éducateur',
+      permissions: ['conduct.finalize'],
+      createdBy: 'user-1',
+      schemaName: 'school_test',
+    });
+
+    expect(result.position.name).toBe('Éducateur');
+  });
+
+  it("autorise un poste à conserver conduct.finalize lors d'une mise à jour de ses propres permissions", async () => {
+    const service = new PermissionsService(repository as never);
+    // Le seul détenteur est le poste lui-même (exclu de la vérification).
+    repository.findPositionHoldingExclusivePermission.mockResolvedValue(null);
+    repository.updatePosition.mockResolvedValue({
+      id: 'pos-1',
+      name: 'Éducateur',
+      permissions: ['conduct.finalize', 'students.view'],
+      assignmentsCount: 2,
+    });
+
+    const result = await service.updatePosition('pos-1', {
+      permissions: ['conduct.finalize', 'students.view'],
+      schemaName: 'school_test',
+    });
+
+    expect(result.position.permissions).toContain('conduct.finalize');
+    // Le poste courant est exclu de la recherche de conflit.
+    expect(repository.findPositionHoldingExclusivePermission).toHaveBeenCalledWith(
+      'conduct.finalize',
+      'pos-1'
+    );
+  });
+
+  it('ne vérifie pas l\u2019exclusivité pour les permissions ordinaires', async () => {
+    const service = new PermissionsService(repository as never);
+    repository.updatePosition.mockResolvedValue({
+      id: 'pos-1',
+      name: 'Secrétariat',
+      permissions: ['students.view'],
+      assignmentsCount: 0,
+    });
+
+    await service.updatePosition('pos-1', { permissions: ['students.view'], schemaName: 'school_test' });
+
+    expect(repository.findPositionHoldingExclusivePermission).not.toHaveBeenCalled();
   });
 });

@@ -65,9 +65,11 @@ tests/unit/*
 !tests/unit/enrollments.service.test.ts
 !tests/unit/finance.calculations.test.ts
 !tests/unit/academic-grading.calculations.test.ts
+!tests/unit/conduct.service.test.ts
 !tests/integration/
 tests/integration/*
 !tests/integration/admin.school-year.routes.test.ts
+!tests/integration/conduct.routes.test.ts
 !tests/integration/class-decisions.routes.test.ts
 !tests/integration/enrollments.routes.test.ts
 !tests/integration/finance.routes.test.ts

@@ -131,6 +131,21 @@ export class PermissionsRepository {
     return getRows(result).map(mapPosition);
   }
 
+  async findPositionHoldingExclusivePermission(
+    permission: PermissionKey,
+    excludePositionId?: string
+  ): Promise<{ id: string; name: string } | null> {
+    const result = await this.db.execute<{ id: string; name: string }>(sql`
+      SELECT id::text, name
+      FROM admin_positions
+      WHERE permissions @> ${JSON.stringify([permission])}::jsonb
+        AND (${excludePositionId ?? null}::uuid IS NULL OR id <> ${excludePositionId ?? null}::uuid)
+      LIMIT 1
+    `);
+    const [row] = getRows(result);
+    return row ?? null;
+  }
+
   async getSchoolConfigBySchemaName(schemaName: string): Promise<SchoolConfigRow | null> {
     // Columns logo_url, active_school_year, allow_teacher_qr_skip are guaranteed by the boot migration
     const result = await this.db.execute<SchoolConfigRow>(sql`

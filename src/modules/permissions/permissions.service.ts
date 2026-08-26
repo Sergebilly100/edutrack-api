@@ -84,6 +84,32 @@ export class PermissionsModuleError extends Error {
 export class PermissionsService {
   constructor(private readonly repository: PermissionsRepository) {}
 
+  // Règle d'exclusivité : la permission de finalisation de la conduite ne peut
+  // être détenue que par un seul poste actif à la fois dans l'école.
+  private static readonly EXCLUSIVE_PERMISSION: PermissionKey = 'conduct.finalize';
+
+  private async assertExclusivePermissionAvailable(
+    permissions: readonly PermissionKey[],
+    excludePositionId?: string
+  ): Promise<void> {
+    if (!permissions.includes(PermissionsService.EXCLUSIVE_PERMISSION)) {
+      return;
+    }
+
+    const holder = await this.repository.findPositionHoldingExclusivePermission(
+      PermissionsService.EXCLUSIVE_PERMISSION,
+      excludePositionId
+    );
+
+    if (holder) {
+      throw new PermissionsModuleError(
+        `Cette permission est déjà attribuée au poste ${holder.name}, retirez-la d'abord avant de l'attribuer à un autre poste`,
+        409,
+        'CONDUCT_FINALIZE_ALREADY_HELD'
+      );
+    }
+  }
+
   async getConfig(schemaName: string) {
     const [schoolConfig, positions, users, currentUsers, adminUsersCount] = await Promise.all([
       this.repository.getSchoolConfigBySchemaName(schemaName),
@@ -178,12 +204,15 @@ export class PermissionsService {
       throw new PermissionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
     }
 
+    const guardedPermissions = withFeaturePermissionGuards(input.permissions, {
+      canEditSmsTemplate: schoolConfig.can_edit_sms_template,
+      monetizeParentAlerts: schoolConfig.monetize_parent_alerts,
+    });
+    await this.assertExclusivePermissionAvailable(guardedPermissions);
+
     const position = await this.repository.createPosition({
       name: input.name,
-      permissions: withFeaturePermissionGuards(input.permissions, {
-        canEditSmsTemplate: schoolConfig.can_edit_sms_template,
-        monetizeParentAlerts: schoolConfig.monetize_parent_alerts,
-      }),
+      permissions: guardedPermissions,
       createdBy: input.createdBy,
     });
 
@@ -199,16 +228,21 @@ export class PermissionsService {
       throw new PermissionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
     }
 
+    const nextPermissions =
+      input.permissions !== undefined
+        ? withFeaturePermissionGuards(input.permissions, {
+            canEditSmsTemplate: schoolConfig.can_edit_sms_template,
+            monetizeParentAlerts: schoolConfig.monetize_parent_alerts,
+          })
+        : undefined;
+
+    if (nextPermissions) {
+      await this.assertExclusivePermissionAvailable(nextPermissions, positionId);
+    }
+
     const position = await this.repository.updatePosition(positionId, {
       ...(input.name !== undefined ? { name: input.name } : {}),
-      ...(input.permissions !== undefined
-        ? {
-            permissions: withFeaturePermissionGuards(input.permissions, {
-              canEditSmsTemplate: schoolConfig.can_edit_sms_template,
-              monetizeParentAlerts: schoolConfig.monetize_parent_alerts,
-            }),
-          }
-        : {}),
+      ...(nextPermissions ? { permissions: nextPermissions } : {}),
     });
 
     if (!position) {

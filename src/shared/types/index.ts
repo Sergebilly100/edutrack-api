@@ -103,6 +103,7 @@ export type PermissionKey =
   | 'school_years.edit'
   | 'class_decisions.view'
   | 'class_decisions.validate'
+  | 'conduct.finalize'
   | 'enrollments.view'
   | 'enrollments.create'
   | 'enrollments.edit'
