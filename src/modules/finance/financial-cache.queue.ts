@@ -4,6 +4,7 @@ import type { Redis } from 'ioredis';
 import { logger as appLogger } from '../../shared/observability/logger.js';
 import { withTenantSchema } from '../../shared/database/db.js';
 import { buildFinancialCacheService } from './financial-cache.service.js';
+import { buildRiskService } from '../risk/risk.service.js';
 
 export const FINANCIAL_CACHE_QUEUE_NAME = 'financial-cache';
 
@@ -11,12 +12,19 @@ export type FinancialCacheJobData = {
   schemaName: string;
 };
 
-export const processFinancialCacheJob = async (job: Job<FinancialCacheJobData>): Promise<{ studentCount: number }> => {
+export const processFinancialCacheJob = async (
+  job: Job<FinancialCacheJobData>
+): Promise<{ studentCount: number; risk: { students: number; teachers: number } }> => {
   appLogger.info({ jobId: job.id, schemaName: job.data.schemaName }, '[financial-cache] recalcul démarré');
   return withTenantSchema(job.data.schemaName, async (tenantDb) => {
     const result = await buildFinancialCacheService(tenantDb).recalcAll();
-    appLogger.info({ jobId: job.id, studentCount: result.studentCount }, '[financial-cache] recalcul terminé');
-    return result;
+    // Tâche 7a : le même job périodique recalcule aussi les alertes à risque.
+    const risk = await buildRiskService(tenantDb).recalculateAll();
+    appLogger.info(
+      { jobId: job.id, studentCount: result.studentCount, risk },
+      '[financial-cache] recalcul terminé'
+    );
+    return { studentCount: result.studentCount, risk };
   });
 };
 

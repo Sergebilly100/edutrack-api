@@ -114,6 +114,7 @@ export type PermissionKey =
   | 'payments.view'
   | 'payments.record'
   | 'payments.cancel'
+  | 'risk_alerts.edit'
   | 'financial_alerts.edit'
   | 'subscription_plans.view'
   | 'subscription_plans.edit'
