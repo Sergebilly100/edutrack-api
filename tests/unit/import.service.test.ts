@@ -413,6 +413,7 @@ describe('import.service - teachers dry-run', () => {
       'Type*': 'vacataire',
       'Matières*': 'Mathématiques, Physique',
       'Taux horaire FCFA': '5000',
+      'Téléphone': `2250700000${String(i).padStart(3, '0')}`,
     }));
 
     const report = await service.dryRun('teachers', await toWorkbookBuffer(rows), db);
@@ -427,8 +428,8 @@ describe('import.service - teachers dry-run', () => {
     const service = new ImportService(repository);
 
     const rows = [
-      { 'Nom*': 'Diallo', 'Prénom*': 'Ibrahim', 'Type*': 'vacataire', 'Matières*': 'Mathématiques', 'Taux horaire FCFA': '5000' },
-      { 'Nom*': 'Diallo', 'Prénom*': 'Ibrahim', 'Type*': 'vacataire', 'Matières*': 'Physique', 'Taux horaire FCFA': '4500' },
+      { 'Nom*': 'Diallo', 'Prénom*': 'Ibrahim', 'Type*': 'vacataire', 'Matières*': 'Mathématiques', 'Taux horaire FCFA': '5000', 'Téléphone': '2250700000001' },
+      { 'Nom*': 'Diallo', 'Prénom*': 'Ibrahim', 'Type*': 'vacataire', 'Matières*': 'Physique', 'Taux horaire FCFA': '4500', 'Téléphone': '2250700000002' },
     ];
 
     const dryRun = await service.dryRun('teachers', await toWorkbookBuffer(rows), db);
@@ -479,8 +480,8 @@ describe('import.service - teachers confirm', () => {
     const service = new ImportService(repository);
 
     const rows = [
-      { 'Nom*': 'Diallo', 'Prénom*': 'Ibrahim', 'Type*': 'vacataire', 'Matières*': 'Mathématiques', 'Taux horaire FCFA': '5000' },
-      { 'Nom*': 'Diallo', 'Prénom*': 'Ibrahim', 'Type*': 'vacataire', 'Matières*': 'Physique', 'Taux horaire FCFA': '4500' },
+      { 'Nom*': 'Diallo', 'Prénom*': 'Ibrahim', 'Type*': 'vacataire', 'Matières*': 'Mathématiques', 'Taux horaire FCFA': '5000', 'Téléphone': '2250700000001' },
+      { 'Nom*': 'Diallo', 'Prénom*': 'Ibrahim', 'Type*': 'vacataire', 'Matières*': 'Physique', 'Taux horaire FCFA': '4500', 'Téléphone': '2250700000002' },
     ];
 
     await service.confirm('teachers', await toWorkbookBuffer(rows), db);
@@ -512,7 +513,7 @@ describe('import.service - teachers confirm', () => {
 
     const service = new ImportService(repository);
     const rows = [
-      { 'Nom*': 'Diallo', 'Prénom*': 'Ibrahim', 'Type*': 'vacataire', 'Matières*': 'Mathématiques', 'Taux horaire FCFA': '5000' },
+      { 'Nom*': 'Diallo', 'Prénom*': 'Ibrahim', 'Type*': 'vacataire', 'Matières*': 'Mathématiques', 'Taux horaire FCFA': '5000', 'Téléphone': '2250700000001' },
     ];
 
     await service.confirm('teachers', await toWorkbookBuffer(rows), db, { mode: 'replace' });
