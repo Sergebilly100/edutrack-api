@@ -16,6 +16,7 @@ import {
   updateGradingPeriodBodySchema,
   updateSubjectBodySchema,
   upsertEvaluationGradeBodySchema,
+  evaluationsScopeQuerySchema,
 } from './academic-grading.types.js';
 import { AcademicModuleError, buildAcademicService } from './academic.service.js';
 import {
@@ -358,6 +359,26 @@ export default async function academicController(app: FastifyInstance): Promise<
           buildAcademicGradingService(tenantDb).deleteGradingPeriod(id)
         );
         return reply.code(204).send();
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.get(
+    '/api/v1/evaluations/scope',
+    { preHandler: requireTeacher },
+    async (request, reply) => {
+      try {
+        const query = evaluationsScopeQuerySchema.parse(request.query ?? {});
+        const result = await withTenantSchema(request.claims!.schemaName, (tenantDb) =>
+          buildAcademicGradingService(tenantDb).listEvaluationsForTeacher(
+            query.classId,
+            query.gradingPeriodId,
+            request.user!.userId
+          )
+        );
+        return reply.send(result);
       } catch (error) {
         return handleError(request, reply, error);
       }

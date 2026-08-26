@@ -450,4 +450,95 @@ export class AcademicGradingRepository {
       completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
     }));
   }
+
+  /** Créneaux de cours du prof pour une classe (base des évaluations rattachées). */
+  async listTeacherLessonSlotsForClass(teacherId: string, classId: string): Promise<
+    Array<{ id: string; dayOfWeek: number; startTime: string; endTime: string; subjectName: string }>
+  > {
+    const result = await this.db.execute<{
+      id: string; day_of_week: number; start_time: string; end_time: string; subject: string;
+    }>(sql`
+      SELECT DISTINCT sch.id::text, sch.day_of_week, ts.start_time::text, ts.end_time::text, sch.subject
+      FROM schedules sch
+      INNER JOIN time_slots ts ON ts.id = sch.time_slot_id
+      WHERE sch.teacher_id = ${teacherId}::uuid AND sch.class_id = ${classId}::uuid
+      ORDER BY sch.day_of_week, ts.start_time
+    `);
+    return rows(result).map((row) => ({
+      id: row.id,
+      dayOfWeek: row.day_of_week,
+      startTime: row.start_time.slice(0, 5),
+      endTime: row.end_time.slice(0, 5),
+      subjectName: row.subject,
+    }));
+  }
+
+  async findTeacherClassScope(teacherId: string, classId: string): Promise<{ levelId: string | null } | null> {
+    const result = await this.db.execute<{ level_id: string | null }>(sql`
+      SELECT c.level_id::text AS level_id
+      FROM classes c
+      WHERE c.id = ${classId}::uuid
+        AND EXISTS (
+          SELECT 1 FROM schedules sch
+          WHERE sch.teacher_id = ${teacherId}::uuid AND sch.class_id = c.id
+        )
+      LIMIT 1
+    `);
+    const row = rows(result)[0];
+    return row ? { levelId: row.level_id } : null;
+  }
+
+  /** Évaluations du prof pour une classe/période, avec les notes saisies. */
+  async listEvaluationsWithGrades(
+    teacherId: string,
+    classId: string,
+    gradingPeriodId: string
+  ): Promise<Array<{
+    id: string; label: string; type: 'scheduled' | 'spontaneous'; coefficient: number;
+    subjectId: string | null; subjectName: string | null;
+    grades: Array<{ studentId: string; score: number; maxScore: number; comment: string | null }>;
+  }>> {
+    const evaluationRows = rows(await this.db.execute<{
+      id: string; label: string; type: string; coefficient: string;
+      subject_id: string | null; subject_name: string | null;
+    }>(sql`
+      SELECT e.id::text, e.label, e.type::text, e.coefficient::text,
+             sub.id::text AS subject_id, sub.name AS subject_name
+      FROM evaluations e
+      LEFT JOIN subjects sub ON sub.id = e.subject_id
+      WHERE e.teacher_id = ${teacherId}::uuid
+        AND e.class_id = ${classId}::uuid
+        AND e.grading_period_id = ${gradingPeriodId}::uuid
+      ORDER BY e.created_at DESC
+    `));
+
+    if (evaluationRows.length === 0) return [];
+
+    const gradeRows = rows(await this.db.execute<{
+      evaluation_id: string; student_id: string; score: string; max_score: string; comment: string | null;
+    }>(sql`
+      SELECT eg.evaluation_id::text, eg.student_id::text, eg.score::text, eg.max_score::text, eg.comment
+      FROM evaluation_grades eg
+      INNER JOIN evaluations e ON e.id = eg.evaluation_id
+      WHERE e.teacher_id = ${teacherId}::uuid
+        AND e.class_id = ${classId}::uuid
+        AND e.grading_period_id = ${gradingPeriodId}::uuid
+    `));
+    const gradesByEvaluation = new Map<string, Array<{ studentId: string; score: number; maxScore: number; comment: string | null }>>();
+    for (const grade of gradeRows) {
+      const list = gradesByEvaluation.get(grade.evaluation_id) ?? [];
+      list.push({ studentId: grade.student_id, score: decimal(grade.score), maxScore: decimal(grade.max_score), comment: grade.comment });
+      gradesByEvaluation.set(grade.evaluation_id, list);
+    }
+
+    return evaluationRows.map((row) => ({
+      id: row.id,
+      label: row.label,
+      type: row.type as 'scheduled' | 'spontaneous',
+      coefficient: decimal(row.coefficient),
+      subjectId: row.subject_id,
+      subjectName: row.subject_name,
+      grades: gradesByEvaluation.get(row.id) ?? [],
+    }));
+  }
 }

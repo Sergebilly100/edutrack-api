@@ -116,3 +116,9 @@ export type GradingPeriodItem = {
   startDate: string;
   endDate: string;
 };
+
+export const evaluationsScopeQuerySchema = z.object({
+  classId: z.string().uuid(),
+  gradingPeriodId: z.string().uuid(),
+});
+export type EvaluationsScopeQuery = z.infer<typeof evaluationsScopeQuerySchema>;

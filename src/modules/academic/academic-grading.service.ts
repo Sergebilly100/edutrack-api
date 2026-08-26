@@ -188,8 +188,22 @@ export class AcademicGradingService {
     return teacherId;
   }
 
-  async createEvaluation(input: CreateEvaluationInput, userId: string) {
+  /** Espace de saisie prof : créneaux, matières et évaluations d'une classe/période. */
+  async listEvaluationsForTeacher(classId: string, gradingPeriodId: string, userId: string) {
     const teacherId = await this.teacherIdForUser(userId);
+    const scope = await this.repository.findTeacherClassScope(teacherId, classId);
+    if (!scope) {
+      throw new AcademicGradingError('Class is outside the teacher scope', 403, 'EVALUATION_SCOPE_FORBIDDEN');
+    }
+    const [lessonSlots, subjects, evaluations] = await Promise.all([
+      this.repository.listTeacherLessonSlotsForClass(teacherId, classId),
+      scope.levelId ? this.repository.listSubjects(scope.levelId) : Promise.resolve([]),
+      this.repository.listEvaluationsWithGrades(teacherId, classId, gradingPeriodId),
+    ]);
+    return { lessonSlots, subjects, evaluations };
+  }
+
+  async createEvaluation(input: CreateEvaluationInput, userId: string) {    const teacherId = await this.teacherIdForUser(userId);
     const [slot, subject, period] = await Promise.all([
       this.repository.getLessonSlotScope(input.lessonSlotId),
       this.repository.findSubject(input.subjectId),
