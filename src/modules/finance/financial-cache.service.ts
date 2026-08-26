@@ -76,6 +76,12 @@ export class FinancialCacheService {
     return this.repository.getStudentCachedStatus(studentId, yearId);
   }
 
+  async listClassStudentStatuses(classId: string, schoolYearId?: string) {
+    const yearId = schoolYearId ?? (await this.repository.getActiveSchoolYearId());
+    if (!yearId) return [];
+    return this.repository.listClassStudentStatuses(classId, yearId);
+  }
+
   private toCacheRow(snapshot: {
     studentId: string;
     expectedToDate: number;

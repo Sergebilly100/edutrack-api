@@ -122,6 +122,11 @@ export class FinanceService {
     return cache.getStudentCachedStatus(studentId, schoolYearId);
   }
 
+  async listClassStudentStatuses(classId: string, schoolYearId?: string) {
+    const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
+    return cache.listClassStudentStatuses(classId, schoolYearId);
+  }
+
   // ── Relances de paiement (Tâche 6b) ───────────────────────────────────────
   listFinancialAlertRules() {
     const repository = new FinancialAlertsRepository(this.repository.db);

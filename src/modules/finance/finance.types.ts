@@ -130,3 +130,8 @@ export const upsertFinancialAlertRuleBodySchema = z.object({
 export const financialAlertRuleTypeParamsSchema = z.object({
   type: z.enum(['preventive', 'late', 'severe_late']),
 });
+
+export const classFinancialStatusQuerySchema = z.object({
+  class_id: uuidSchema,
+  school_year_id: uuidSchema.optional(),
+});

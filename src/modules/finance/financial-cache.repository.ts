@@ -264,4 +264,35 @@ export class FinancialCacheRepository {
     `);
     return getRows(result)[0] ?? null;
   }
+
+  /** Drill-down classe : statut caché de chaque élève actif, trié par retard. */
+  async listClassStudentStatuses(classId: string, schoolYearId: string) {
+    const result = await this.db.execute<{
+      student_id: string;
+      full_name: string;
+      matricule: string | null;
+      total_expected_to_date: string;
+      total_paid: string;
+      total_due_year: string;
+      status: string;
+      days_late: number | null;
+    }>(sql`
+      SELECT s.id::text,
+             concat_ws(' ', s.first_name, s.last_name) AS full_name,
+             s.matricule,
+             sfs.total_expected_to_date::text,
+             sfs.total_paid::text,
+             sfs.total_due_year::text,
+             sfs.status::text,
+             sfs.days_late
+      FROM students s
+      INNER JOIN student_financial_status sfs ON sfs.student_id = s.id
+        AND sfs.school_year_id = ${schoolYearId}::uuid
+      WHERE s.class_id = ${classId}::uuid AND s.is_active = true
+      ORDER BY CASE sfs.status WHEN 'late' THEN 0 ELSE 1 END,
+               sfs.days_late DESC NULLS LAST,
+               s.last_name ASC
+    `);
+    return getRows(result);
+  }
 }

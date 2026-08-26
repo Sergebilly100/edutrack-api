@@ -13,7 +13,6 @@ import type { PermissionKey } from '../../shared/types/index.js';
 import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
 import { buildFinanceService, FinanceModuleError } from './finance.service.js';
 import { buildPaymentImportService, PaymentImportError } from './payment-import.service.js';
-import { FinancialAlertsRepository } from './financial-alerts.repository.js';
 import {
   cancelPaymentBodySchema,
   createSubscriptionPlanBodySchema,
@@ -23,6 +22,7 @@ import {
   recordPaymentBodySchema,
   schoolYearQuerySchema,
   financialSummaryQuerySchema,
+  classFinancialStatusQuerySchema,
   upsertFinancialAlertRuleBodySchema,
   financialAlertRuleTypeParamsSchema,
   studentFinancialParamsSchema,
@@ -299,8 +299,21 @@ export default async function financeController(
   );
 
   app.get(
-    '/api/v1/students/:studentId/financial-cache',
+    '/api/v1/finance/class-students-status',
     { preHandler: requirePermission('payments.view') },
+    async (request, reply) => {
+      try {
+        const query = classFinancialStatusQuerySchema.parse(request.query ?? {});
+        const students = await withService(request, (service) =>
+          service.listClassStudentStatuses(query.class_id, query.school_year_id)
+        );
+        return reply.send({ students });
+      } catch (error) { return handleError(request, reply, error); }
+    }
+  );
+
+  app.get(
+    '/api/v1/students/:studentId/financial-cache',    { preHandler: requirePermission('payments.view') },
     async (request, reply) => {
       try {
         const { studentId } = studentFinancialParamsSchema.parse(request.params);
