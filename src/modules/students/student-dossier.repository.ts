@@ -2,8 +2,6 @@ import { sql } from 'drizzle-orm';
 
 import type { TenantDb } from '../../shared/database/db.js';
 
-type Rows<T> = { rows?: T[] };
-
 export type DossierEvent = {
   type: 'enrollment' | 'payment' | 'report_card' | 'absence' | 'document';
   date: string;

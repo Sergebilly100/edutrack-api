@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 
 import type { TenantDb } from '../../shared/database/db.js';
 
+
 type Rows<T> = { rows?: T[] };
 
 const getRows = <T>(result: unknown): T[] => {

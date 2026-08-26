@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z, ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
-import { authenticateRequest, requirePermission } from '../../shared/middleware/auth.middleware.js';
+import { authenticateRequest } from '../../shared/middleware/auth.middleware.js';
 import type { PermissionKey } from '../../shared/types/index.js';
 import { buildDashboardActionsService } from './dashboard-actions.service.js';
 
