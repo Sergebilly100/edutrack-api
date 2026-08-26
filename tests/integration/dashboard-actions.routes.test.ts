@@ -53,6 +53,27 @@ describe('dashboard action items integration (7b)', () => {
     );
     expect(generated.generated).toBeGreaterThanOrEqual(2);
 
+    // Une condition persistante est recalculée à chaque cycle du worker : les
+    // items précédents deviennent historiques et ne doivent pas bloquer l'insert.
+    await expect(
+      withTenantSchema(TEST_SCHEMA_NAME ?? '', async (tenantDb) =>
+        buildDashboardActionsService(tenantDb).generateAll({
+          weeklyAbsenceCount: 4,
+          salaryPendingCount: 0,
+          pendingValidations: 2,
+          commissionOverdueCount: 0,
+        })
+      )
+    ).resolves.toEqual(expect.objectContaining({ generated: expect.any(Number) }));
+
+    const validationItemStates = await queryTenant<{ is_open: boolean }>(
+      `SELECT resolved_at IS NULL AS is_open
+       FROM ${tenantTable('dashboard_action_items')}
+       WHERE type = 'validations_pending'`
+    );
+    expect(validationItemStates.filter((item) => item.is_open)).toHaveLength(1);
+    expect(validationItemStates.filter((item) => !item.is_open)).toHaveLength(1);
+
     // Lecture direction : les items sont triés par priorité
     const list = await request().get('/api/v1/dashboard/action-items').set(headers);
     expect(list.status).toBe(200);
