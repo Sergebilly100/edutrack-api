@@ -14,6 +14,10 @@ import {
 } from './finance.repository.js';
 import { FinancialCacheRepository } from './financial-cache.repository.js';
 import { FinancialCacheService } from './financial-cache.service.js';
+import { FinancialAlertsRepository } from './financial-alerts.repository.js';
+
+export const FINANCIAL_ALERT_RULE_TYPES = ['preventive', 'late', 'severe_late'] as const;
+export type FinancialAlertRuleType = typeof FINANCIAL_ALERT_RULE_TYPES[number];
 import { calculateRunningBalances } from './finance.reports.js';
 import type {
   MobileMoneyProvider,
@@ -116,6 +120,34 @@ export class FinanceService {
   async getStudentFinancialCache(studentId: string, schoolYearId?: string) {
     const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
     return cache.getStudentCachedStatus(studentId, schoolYearId);
+  }
+
+  // ── Relances de paiement (Tâche 6b) ───────────────────────────────────────
+  listFinancialAlertRules() {
+    const repository = new FinancialAlertsRepository(this.repository.db);
+    return repository.listRules();
+  }
+
+  upsertFinancialAlertRule(
+    type: 'preventive' | 'late' | 'severe_late',
+    input: { daysOffset: number; channel: 'sms' | 'in_app' | 'both'; isActive: boolean },
+    actorUserId: string
+  ) {
+    if (!FINANCIAL_ALERT_RULE_TYPES.includes(type)) {
+      throw new FinanceModuleError('Type de relance inconnu', 400, 'INVALID_ALERT_RULE_TYPE');
+    }
+    const repository = new FinancialAlertsRepository(this.repository.db);
+    return repository.upsertRule({ type, ...input, createdByUserId: actorUserId });
+  }
+
+  deleteFinancialAlertRule(id: string) {
+    const repository = new FinancialAlertsRepository(this.repository.db);
+    return repository.deleteRule(id);
+  }
+
+  listFinancialAlertLogs(limit = 100) {
+    const repository = new FinancialAlertsRepository(this.repository.db);
+    return repository.listLogs(limit);
   }
 
   async getFinancialStatus(studentId: string, schoolYearId: string, asOfDate = todayIso()) {    const due = await this.getAmountDue(studentId, schoolYearId);

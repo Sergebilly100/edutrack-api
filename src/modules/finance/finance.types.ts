@@ -120,3 +120,13 @@ export type SubscriptionPlanInput = z.infer<typeof createSubscriptionPlanBodySch
 export const financialSummaryQuerySchema = z.object({
   school_year_id: uuidSchema.optional(),
 });
+
+export const upsertFinancialAlertRuleBodySchema = z.object({
+  daysOffset: z.number().int().min(0).max(365),
+  channel: z.enum(['sms', 'in_app', 'both']),
+  isActive: z.boolean(),
+});
+
+export const financialAlertRuleTypeParamsSchema = z.object({
+  type: z.enum(['preventive', 'late', 'severe_late']),
+});

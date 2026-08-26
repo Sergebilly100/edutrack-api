@@ -144,6 +144,27 @@ const financialCacheWorker = new Worker(
   }
 );
 attachFailedHandler(financialCacheWorker, 'financial-cache', { deadLetterQueue, logger: app.log });
+// Relances de paiement : job quotidien à faible activité (même plage que la
+// maintenance des abonnements, 08:00 Africa/Abidjan).
+const financialAlertsQueue = new Queue('financial-cache', { connection: sharedRedis });
+const financialAlertsWorker = new Worker(
+  'financial-cache',
+  async (job) => {
+    if (job.name !== 'daily-financial-alerts') return null;
+    const { runFinancialAlertsForSchema } = await import(
+      './modules/finance/financial-alerts.worker.js'
+    );
+    return runFinancialAlertsForSchema({
+      schemaName: (job.data as { schemaName?: string }).schemaName ?? '',
+      smsQueue: notificationsQueue,
+    });
+  },
+  {
+    connection: sharedRedis,
+    concurrency: 1,
+  }
+);
+attachFailedHandler(financialAlertsWorker, 'financial-cache', { deadLetterQueue, logger: app.log });
 const notificationsService = new NotificationsService({
   smsQueue: notificationsQueue,
 });
@@ -457,6 +478,14 @@ const start = async (): Promise<void> => {
         data: { type: 'validation-daily-summary-all' },
       }
     );
+    // Relances financières : quotidiennes, tôt le matin (faible activité).
+    for (const tenant of activeTenants) {
+      await financialAlertsQueue.upsertJobScheduler(
+        `financial-alerts-${tenant.id}`,
+        { pattern: '0 6 * * 1-6', tz: 'Africa/Abidjan' },
+        { name: 'daily-financial-alerts', data: { schemaName: tenant.schema_name } }
+      );
+    }
     // Cache financier : recalcul par lot sur les heures d'activité scolaire.
     for (const tenant of activeTenants) {
       await financialCacheQueue.upsertJobScheduler(

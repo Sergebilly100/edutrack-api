@@ -13,6 +13,7 @@ import type { PermissionKey } from '../../shared/types/index.js';
 import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
 import { buildFinanceService, FinanceModuleError } from './finance.service.js';
 import { buildPaymentImportService, PaymentImportError } from './payment-import.service.js';
+import { FinancialAlertsRepository } from './financial-alerts.repository.js';
 import {
   cancelPaymentBodySchema,
   createSubscriptionPlanBodySchema,
@@ -22,6 +23,8 @@ import {
   recordPaymentBodySchema,
   schoolYearQuerySchema,
   financialSummaryQuerySchema,
+  upsertFinancialAlertRuleBodySchema,
+  financialAlertRuleTypeParamsSchema,
   studentFinancialParamsSchema,
   subscriptionPlanParamsSchema,
   tuitionPlanLevelParamsSchema,
@@ -224,6 +227,58 @@ export default async function financeController(
       return reply.code(201).send(result);
     } catch (error) { return handleError(request, reply, error); }
   });
+
+  // ── Relances de paiement (Tâche 6b) ────────────────────────────────────────
+  app.get(
+    '/api/v1/financial-alert-rules',
+    { preHandler: requirePermission('payments.view') },
+    async (request, reply) => {
+      try {
+        const rules = await withService(request, (service) =>
+          service.listFinancialAlertRules()
+        );
+        return reply.send({ rules });
+      } catch (error) { return handleError(request, reply, error); }
+    }
+  );
+
+  app.put(
+    '/api/v1/financial-alert-rules/:type',
+    { preHandler: requirePermission('financial_alerts.edit') },
+    async (request, reply) => {
+      try {
+        const params = financialAlertRuleTypeParamsSchema.parse(request.params);
+        const body = upsertFinancialAlertRuleBodySchema.parse(request.body);
+        await withService(request, (service) =>
+          service.upsertFinancialAlertRule(params.type, body, request.user!.userId)
+        );
+        return reply.send({ success: true });
+      } catch (error) { return handleError(request, reply, error); }
+    }
+  );
+
+  app.delete(
+    '/api/v1/financial-alert-rules/:id',
+    { preHandler: requirePermission('financial_alerts.edit') },
+    async (request, reply) => {
+      try {
+        const { id } = paymentIdParamsSchema.parse(request.params);
+        const deleted = await withService(request, (service) => service.deleteFinancialAlertRule(id));
+        return reply.send({ deleted });
+      } catch (error) { return handleError(request, reply, error); }
+    }
+  );
+
+  app.get(
+    '/api/v1/financial-alert-logs',
+    { preHandler: requirePermission('payments.view') },
+    async (request, reply) => {
+      try {
+        const logs = await withService(request, (service) => service.listFinancialAlertLogs());
+        return reply.send({ logs });
+      } catch (error) { return handleError(request, reply, error); }
+    }
+  );
 
   // ── Cache financier (Tâche 6a) ─────────────────────────────────────────────
   app.get(

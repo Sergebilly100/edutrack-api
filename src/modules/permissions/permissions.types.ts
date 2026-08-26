@@ -46,6 +46,7 @@ export const PERMISSION_KEYS = [
   'payments.view',
   'payments.record',
   'payments.cancel',
+  'financial_alerts.edit',
   'subscription_plans.view',
   'subscription_plans.edit',
   'classes.view',
