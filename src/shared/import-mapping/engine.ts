@@ -1,3 +1,13 @@
+/**
+ * Moteur générique d'import par mapping de colonnes (Tâche 4c, réutilisé par
+ * l'import « prise en main » 8b via des profils import_type distincts).
+ *
+ * Principe : l'école fournit son fichier tel quel. Les en-têtes de colonnes
+ * sont normalisés (NFKC + trim + espaces + casse) puis ré-associes aux champs
+ * cibles du profil enregistré — indépendamment de l'ordre et de la casse.
+ * `translateMappedValue` gère en plus les valeurs à traduire (ex. modes de
+ * paiement : "Orange Money" → mobile_money).
+ */
 export type MappingValueTranslation = {
   sourceValue: string;
   targetValue: string;

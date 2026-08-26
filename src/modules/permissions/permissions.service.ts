@@ -86,6 +86,13 @@ export class PermissionsService {
 
   // Règle d'exclusivité : la permission de finalisation de la conduite ne peut
   // être détenue que par un seul poste actif à la fois dans l'école.
+  /**
+   * Permission à EXCLUSIVITÉ UNIQUE dans l'école : un seul poste actif peut
+   * détenir conduct.finalize (l'éducateur qui arrête la note définitive de
+   * conduite). Toutes les autres permissions restent partageables librement.
+   * La règle s'applique à createPosition ET updatePosition ; le poste en cours
+   * d'édition est exclu du conflit pour pouvoir conserver sa permission.
+   */
   private static readonly EXCLUSIVE_PERMISSION: PermissionKey = 'conduct.finalize';
 
   private async assertExclusivePermissionAvailable(

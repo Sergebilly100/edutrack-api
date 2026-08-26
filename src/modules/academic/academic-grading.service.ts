@@ -242,6 +242,14 @@ export class AcademicGradingService {
     return { grade, averages };
   }
 
+  /**
+   * Cascade de calcul à DEUX niveaux de coefficient :
+   * 1. Moyenne par matière = moyenne pondérée des notes par coefficient
+   *    d'ÉVALUATION (score/max_score × coef évaluation).
+   * 2. Moyenne générale = moyenne des moyennes de matières pondérée par le
+   *    coefficient de MATIÈRE (défini au niveau, partagé par toutes les classes).
+   * Chaque upsert de note déclenche un recalcul complet de l'élève/période.
+   */
   private async recalculateStudentPeriod(studentId: string, gradingPeriodId: string) {
     const gradeRows = await this.repository.listStudentPeriodGrades(studentId, gradingPeriodId);
     const groups = new Map<string, { subjectCoefficient: number; grades: Array<{ score: number; maxScore: number; coefficient: number }> }>();

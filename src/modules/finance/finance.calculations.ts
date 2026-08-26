@@ -33,6 +33,14 @@ export const calculateStudentTotalDue = (input: {
   return roundMoney(Math.max(0, tuitionAmount) + subscriptions);
 };
 
+/**
+ * Statut de paiement par CUMUL : un élève est à jour dès que le total confirmé
+ * couvre le cumul attendu À LA DATE DU JOUR (dernière étape de l'échéancier due),
+ * pas le total annuel. Les paiements sont libres : aucun rattachement à une
+ * échéance individuelle. NB : les remises (waived_by_school) ne comptent PAS
+ * ici — la variante tolérante aux remises vit dans financial-cache.service
+ * (resolveCacheStatus) ; garder les deux sémantiques en tête avant d'unifier.
+ */
 export const resolveFinancialStanding = (
   confirmedPaid: number,
   cumulativeExpectedAtDate: number
