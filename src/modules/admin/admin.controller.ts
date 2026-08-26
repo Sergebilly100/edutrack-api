@@ -71,7 +71,10 @@ import {
   updateSchoolSmsFeatureConfig,
   updateTenant,
 } from './admin.service.js';
+import { buildMidyearImportService, MidyearImportError } from '../finance/midyear-import.service.js';
 import { adminAuditOnSend } from '../../shared/middleware/admin-audit.middleware.js';
+import { sql } from 'drizzle-orm';
+import { withTenantSchema } from '../../shared/database/db.js';
 import {
   authenticateRequest,
   requireRole,
@@ -322,6 +325,56 @@ export default async function adminController(
       }
     }
   );
+
+  // ── Import « prise en main » (Tâche 8b) : moteur générique par mapping ────
+  const midyearFile = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+    action: 'analyze' | 'confirm',
+    routeImportType: string,
+  ): Promise<FastifyReply> => {
+    try {
+      const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+      const importType = z
+        .enum(['levels', 'subjects', 'rooms', 'classes', 'students', 'payments'])
+        .parse(routeImportType);
+      const data = await request.file();
+      if (!data) return reply.code(400).send({ error: 'No file provided', code: 'BAD_REQUEST', statusCode: 400 });
+      const chunks: Buffer[] = [];
+      for await (const chunk of data.file) chunks.push(chunk as Buffer);
+      const fileBuffer = Buffer.concat(chunks);
+
+      const schemaNameResult = await ensurePublicDb(request).execute<{ schema_name: string }>(
+        sql`SELECT schema_name FROM public.tenants WHERE id = ${tenantId} LIMIT 1`
+      );
+      const targetSchema = schemaNameResult.rows?.[0]?.schema_name;
+      if (!targetSchema) return reply.code(404).send({ error: 'Tenant not found', code: 'NOT_FOUND', statusCode: 404 });
+
+      const result = await withTenantSchema(targetSchema, async (tenantDb) => {
+        const service = buildMidyearImportService(tenantDb);
+        return action === 'analyze' ? service.analyze(importType, fileBuffer) : service.confirm(importType, fileBuffer);
+      });
+      return reply.send(result);
+    } catch (error) {
+      if (error instanceof MidyearImportError) {
+        return reply.code(error.statusCode).send({ error: error.message, code: error.code, statusCode: error.statusCode });
+      }
+      return handleError(reply, error, request);
+    }
+  };
+
+  for (const importType of ['levels', 'subjects', 'rooms', 'classes', 'students', 'payments'] as const) {
+    app.post(
+      `/api/v1/admin/schools/:tenantId/midyear-import/${importType}/analyze`,
+      { preHandler: preHandlers },
+      async (request, reply) => midyearFile(request, reply, 'analyze', importType),
+    );
+    app.post(
+      `/api/v1/admin/schools/:tenantId/midyear-import/${importType}/confirm`,
+      { preHandler: preHandlers },
+      async (request, reply) => midyearFile(request, reply, 'confirm', importType),
+    );
+  }
 
   app.patch(
     '/api/v1/admin/schools/:tenantId/mid-year-flag',
