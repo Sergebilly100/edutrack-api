@@ -12,6 +12,8 @@ import {
   type FinanceDb,
   type PaymentRow,
 } from './finance.repository.js';
+import { FinancialCacheRepository } from './financial-cache.repository.js';
+import { FinancialCacheService } from './financial-cache.service.js';
 import { calculateRunningBalances } from './finance.reports.js';
 import type {
   MobileMoneyProvider,
@@ -101,8 +103,22 @@ export class FinanceService {
     return this.amountDueWith(this.repository, studentId, schoolYearId);
   }
 
-  async getFinancialStatus(studentId: string, schoolYearId: string, asOfDate = todayIso()) {
-    const due = await this.getAmountDue(studentId, schoolYearId);
+  async getSchoolFinancialSummary(schoolYearId?: string) {
+    const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
+    return cache.getSchoolSummary(schoolYearId);
+  }
+
+  async listClassFinancialSummaries(schoolYearId?: string) {
+    const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
+    return cache.listClassSummaries(schoolYearId);
+  }
+
+  async getStudentFinancialCache(studentId: string, schoolYearId?: string) {
+    const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
+    return cache.getStudentCachedStatus(studentId, schoolYearId);
+  }
+
+  async getFinancialStatus(studentId: string, schoolYearId: string, asOfDate = todayIso()) {    const due = await this.getAmountDue(studentId, schoolYearId);
     const confirmedPaid = await this.repository.getConfirmedPaid(studentId, schoolYearId);
     const cumulativeExpectedAtDate = await this.repository.getExpectedAtDate(
       studentId,
@@ -145,6 +161,9 @@ export class FinanceService {
       if (financialStatus.remainingDue === 0) {
         await repository.unblockReEnrollmentsAfterSettlement(input.studentId, input.schoolYearId);
       }
+      await new FinancialCacheService(
+        new FinancialCacheRepository(tx as FinanceDb)
+      ).recalcStudent(input.studentId, input.schoolYearId);
       return { payment: mapPayment(payment), financialStatus };
     });
   }
@@ -294,6 +313,9 @@ export class FinanceService {
         receiptNumber: receiptNumber(),
       });
       await repository.confirmEnrollment(input.enrollmentId, input.actorUserId);
+      await new FinancialCacheService(
+        new FinancialCacheRepository(tx as FinanceDb)
+      ).recalcStudent(enrollment.student_id, enrollment.school_year_id);
       return { payment: mapPayment(payment) };
     });
   }
@@ -318,6 +340,9 @@ export class FinanceService {
           payment.school_year_id
         );
       }
+      await new FinancialCacheService(
+        new FinancialCacheRepository(tx as FinanceDb)
+      ).recalcStudent(payment.student_id, payment.school_year_id);
       return {
         payment: mapPayment(payment),
         financialStatus,

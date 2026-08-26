@@ -21,6 +21,7 @@ import {
   paymentIdParamsSchema,
   recordPaymentBodySchema,
   schoolYearQuerySchema,
+  financialSummaryQuerySchema,
   studentFinancialParamsSchema,
   subscriptionPlanParamsSchema,
   tuitionPlanLevelParamsSchema,
@@ -224,14 +225,49 @@ export default async function financeController(
     } catch (error) { return handleError(request, reply, error); }
   });
 
-  app.post('/api/v1/payments/:id/receipt', { preHandler: requirePermission('payments.view') }, async (request, reply) => {
-    try {
+  // ── Cache financier (Tâche 6a) ─────────────────────────────────────────────
+  app.get(
+    '/api/v1/finance/financial-summary',
+    { preHandler: requirePermission('payments.view') },
+    async (request, reply) => {
+      try {
+        const query = financialSummaryQuerySchema.parse(request.query ?? {});
+        const result = await withService(request, (service) =>
+          Promise.all([
+            service.getSchoolFinancialSummary(query.school_year_id),
+            service.listClassFinancialSummaries(query.school_year_id),
+          ]).then(([school, classes]) => ({ school, classes }))
+        );
+        return reply.send(result);
+      } catch (error) { return handleError(request, reply, error); }
+    }
+  );
+
+  app.get(
+    '/api/v1/students/:studentId/financial-cache',
+    { preHandler: requirePermission('payments.view') },
+    async (request, reply) => {
+      try {
+        const { studentId } = studentFinancialParamsSchema.parse(request.params);
+        const query = financialSummaryQuerySchema.parse(request.query ?? {});
+        const cached = await withService(request, (service) =>
+          service.getStudentFinancialCache(studentId, query.school_year_id)
+        );
+        return reply.send({ cached });
+      } catch (error) { return handleError(request, reply, error); }
+    }
+  );
+
+  app.post(
+    '/api/v1/payments/:id/receipt',
+    { preHandler: requirePermission('payments.view') },
+    async (request, reply) => {
       const { id } = paymentIdParamsSchema.parse(request.params);
       await withService(request, (service) => service.getReceiptPayload(id));
       const jobId = await enqueueReceipt(pdfQueue, request.claims!.schemaName, id);
       return reply.code(202).send({ jobId });
-    } catch (error) { return handleError(request, reply, error); }
-  });
+    }
+  );
 
   app.get('/api/v1/students/:studentId/financial-status', {
     preHandler: requireAnyPermission(['tuition.view', 'payments.view']),

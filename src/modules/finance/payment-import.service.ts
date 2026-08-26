@@ -8,6 +8,8 @@ import {
 import { parseMappingWorkbook } from '../../shared/import-mapping/workbook.js';
 import { FinanceRepository, type FinanceDb } from './finance.repository.js';
 import { PaymentImportRepository } from './payment-import.repository.js';
+import { FinancialCacheRepository } from './financial-cache.repository.js';
+import { FinancialCacheService } from './financial-cache.service.js';
 import type { PaymentMethod } from './finance.types.js';
 
 const PAYMENT_TARGETS = ['matricule', 'montant', 'date', 'reference', 'method'] as const;
@@ -162,6 +164,7 @@ export class PaymentImportService {
 
   async confirm(fileBuffer: Buffer, actorUserId: string) {
     const preview = await this.preview(fileBuffer);
+    const touchedStudents = new Set<string>();
     await this.repository.db.transaction(async (tx) => {
       const finance = new FinanceRepository(tx as FinanceDb);
       for (const row of preview.validRows) {
@@ -176,6 +179,12 @@ export class PaymentImportService {
           receiptNumber: `REC-${randomUUID()}`,
           paymentDate: row.paymentDate,
         });
+        touchedStudents.add(row.studentId);
+      }
+      // Recalcul ciblé du cache financier pour chaque élève importé.
+      const cache = new FinancialCacheService(new FinancialCacheRepository(tx as FinanceDb));
+      for (const studentId of touchedStudents) {
+        await cache.recalcStudent(studentId, preview.schoolYearId);
       }
     });
     return { createdCount: preview.validRows.length, errors: preview.errors, totalRows: preview.totalRows };

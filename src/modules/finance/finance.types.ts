@@ -116,3 +116,7 @@ export type PaymentMethod = z.infer<typeof paymentMethodSchema>;
 export type MobileMoneyProvider = z.infer<typeof mobileMoneyProviderSchema>;
 export type UpsertTuitionPlanInput = z.infer<typeof upsertTuitionPlanBodySchema>;
 export type SubscriptionPlanInput = z.infer<typeof createSubscriptionPlanBodySchema>;
+
+export const financialSummaryQuerySchema = z.object({
+  school_year_id: uuidSchema.optional(),
+});

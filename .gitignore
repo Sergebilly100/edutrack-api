@@ -67,11 +67,13 @@ tests/unit/*
 !tests/unit/academic-grading.calculations.test.ts
 !tests/unit/conduct.service.test.ts
 !tests/unit/report-cards.service.test.ts
+!tests/unit/financial-cache.service.test.ts
 !tests/integration/
 tests/integration/*
 !tests/integration/admin.school-year.routes.test.ts
 !tests/integration/conduct.routes.test.ts
 !tests/integration/report-cards.routes.test.ts
+!tests/integration/financial-cache.routes.test.ts
 !tests/integration/class-decisions.routes.test.ts
 !tests/integration/enrollments.routes.test.ts
 !tests/integration/finance.routes.test.ts

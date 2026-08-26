@@ -29,6 +29,7 @@ import attendanceController from './modules/attendance/attendance.controller.js'
 import { emitStudentAbsent } from './modules/attendance/attendance.events.js';
 import { runAttendanceMissingQrScanHandler } from './modules/attendance/attendance.worker-handler.js';
 import { runAbsenceMarkingForSchema } from './modules/attendance/attendance.absence-marking.worker.js';
+import { processFinancialCacheJob } from './modules/finance/financial-cache.queue.js';
 import { geoAutoApproveWorker, scheduleGeoAutoApprove } from './modules/attendance/attendance.geo-auto-approve.worker.js';
 import authController from './modules/auth/auth.controller.js';
 import billingController from './modules/billing/billing.controller.js'
@@ -130,6 +131,19 @@ const absenceMarkingWorker = new Worker(
 );
 attachFailedHandler(absenceMarkingWorker, 'absence-marking', { deadLetterQueue, logger: app.log });
 attachFailedHandler(geoAutoApproveWorker, 'geo-auto-approve', { deadLetterQueue, logger: app.log });
+const financialCacheQueue = new Queue('financial-cache', { connection: sharedRedis });
+const financialCacheWorker = new Worker(
+  'financial-cache',
+  async (job) => {
+    const result = await processFinancialCacheJob(job);
+    return result;
+  },
+  {
+    connection: sharedRedis,
+    concurrency: Number(process.env.FINANCIAL_CACHE_WORKER_CONCURRENCY ?? 2),
+  }
+);
+attachFailedHandler(financialCacheWorker, 'financial-cache', { deadLetterQueue, logger: app.log });
 const notificationsService = new NotificationsService({
   smsQueue: notificationsQueue,
 });
@@ -443,6 +457,14 @@ const start = async (): Promise<void> => {
         data: { type: 'validation-daily-summary-all' },
       }
     );
+    // Cache financier : recalcul par lot sur les heures d'activité scolaire.
+    for (const tenant of activeTenants) {
+      await financialCacheQueue.upsertJobScheduler(
+        `financial-cache-${tenant.id}`,
+        { pattern: '*/15 6-18 * * 1-6', tz: 'Africa/Abidjan' },
+        { name: 'recalculate-financial-cache', data: { schemaName: tenant.schema_name } }
+      );
+    }
     await app.listen({ port, host: '0.0.0.0' });
     console.log(`Server listening on port ${port}`);
   } catch (error) {
