@@ -82,6 +82,7 @@ tests/integration/*
 !tests/integration/risk.routes.test.ts
 !tests/integration/dashboard-actions.routes.test.ts
 !tests/integration/student-dossier.routes.test.ts
+!tests/integration/midyear-flag.routes.test.ts
 !tests/integration/class-decisions.routes.test.ts
 !tests/integration/enrollments.routes.test.ts
 !tests/integration/finance.routes.test.ts

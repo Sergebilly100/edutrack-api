@@ -304,6 +304,7 @@ export type SchoolDetailsResult = {
     directorTitle: string | null;
     canEditSmsTemplate: boolean;
     canExportData: boolean;
+    midYearOnboarding: boolean;
     activeSchoolYear: string | null;
     logoUrl: string | null;
     createdAt: string;

@@ -42,6 +42,7 @@ import {
   getSchoolSmsFeatureStats,
   getSmsFeatureGlobalStats,
   getSchoolDetails,
+  setMidYearFlag,
   getSchoolYearStatus,
   listSchoolCommissionPayments,
   sendSchoolPaymentReminder,
@@ -315,6 +316,21 @@ export default async function adminController(
         const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
         const payload = updateSchoolConfigBodySchema.parse(request.body);
         await updateSchoolConfig(ensurePublicDb(request), tenantId, payload);
+        return reply.send({ success: true });
+      } catch (error) {
+        return handleError(reply, error, request);
+      }
+    }
+  );
+
+  app.patch(
+    '/api/v1/admin/schools/:tenantId/mid-year-flag',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+        const body = z.object({ enabled: z.boolean() }).parse(request.body);
+        await setMidYearFlag(ensurePublicDb(request), tenantId, body.enabled);
         return reply.send({ success: true });
       } catch (error) {
         return handleError(reply, error, request);

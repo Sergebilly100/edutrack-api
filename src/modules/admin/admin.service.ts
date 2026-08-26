@@ -111,6 +111,7 @@ type SchoolLookupRow = {
   director_title: string | null;
   can_edit_sms_template: boolean;
   can_export_data: boolean;
+  mid_year_onboarding: boolean;
   active_school_year: string | null;
   logo_url: string | null;
   created_at: Date;
@@ -1386,6 +1387,7 @@ export const getSchoolDetails = async (
       COALESCE(t.director_title, 'Directeur') AS director_title,
       COALESCE(t.can_edit_sms_template, false) AS can_edit_sms_template,
       COALESCE(t.can_export_data, true) AS can_export_data,
+      COALESCE(t.mid_year_onboarding, false) AS mid_year_onboarding,
       t.active_school_year,
       t.logo_url,
       t.created_at,
@@ -1426,6 +1428,7 @@ export const getSchoolDetails = async (
       directorTitle: tenant.director_title,
       canEditSmsTemplate: tenant.can_edit_sms_template,
       canExportData: tenant.can_export_data,
+      midYearOnboarding: Boolean(tenant.mid_year_onboarding),
       activeSchoolYear: tenant.active_school_year,
       logoUrl: tenant.logo_url,
       createdAt: formatDateTime(tenant.created_at) ?? new Date(0).toISOString(),
@@ -1839,6 +1842,7 @@ export const getAdminMetrics = async (publicDb: TenantDb): Promise<AdminMetricsR
       COALESCE(t.director_title, 'Directeur') AS director_title,
       COALESCE(t.can_edit_sms_template, false) AS can_edit_sms_template,
       COALESCE(t.can_export_data, true) AS can_export_data,
+      COALESCE(t.mid_year_onboarding, false) AS mid_year_onboarding,
       t.active_school_year,
       t.logo_url,
       t.created_at,
@@ -3769,4 +3773,16 @@ export const createImpersonationToken = async (
     schemaName: tenant.schema_name,
     readOnly: true,
   };
+};
+
+export const setMidYearFlag = async (
+  publicDb: TenantDb,
+  tenantId: string,
+  enabled: boolean
+): Promise<void> => {
+  await publicDb.execute(sql`
+    UPDATE public.tenants
+    SET mid_year_onboarding = ${enabled}, updated_at = NOW()
+    WHERE id = ${tenantId}
+  `);
 };
