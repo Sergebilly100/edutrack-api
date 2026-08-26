@@ -1,5 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
+import { sql } from 'drizzle-orm';
+import { StudentDossierRepository } from './student-dossier.repository.js';
 
 import { z } from 'zod';
 import type { Queue } from 'bullmq';
@@ -392,4 +394,47 @@ export default async function studentsController(
       }
     );
   }
+
+  // ── Dossier élève (Tâche 7c) : timeline agrégée avec scoping par rôle ──────
+  app.get(
+    '/api/v1/students/:studentId/dossier',
+    { preHandler: authenticateRequest },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const studentId = String((request.params as Record<string, unknown>).studentId ?? '');
+        const role = claims.role;
+
+        // Parent : explicitement exclu du PRD pour cette vue.
+        if (role === 'parent' || role === 'super_admin') {
+          if (role === 'parent') return forbidden(reply, 'Acces non autorise');
+        }
+        if (role !== 'director' && role !== 'staff' && role !== 'teacher' && role !== 'super_admin') {
+          return forbidden(reply, 'Forbidden');
+        }
+
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          const repository = new StudentDossierRepository(tenantDb);
+          let teacherId: string | null = null;
+          if (role === 'teacher') {
+            // Un prof ne voit que l'academique/assiduite de ses matieres.
+            teacherId =
+              (
+                await tenantDb.execute<{ id: string }>(
+                  sql`SELECT t.id::text FROM teachers t WHERE t.user_id = ${request.user!.userId}::uuid LIMIT 1`
+                )
+              ).rows?.[0]?.id ?? 'no-match';
+          }
+          return repository.listEvents(studentId, role === 'teacher' ? teacherId : null);
+        });
+        return reply.send({ events: result });
+      } catch (error) {
+        if (error instanceof ZodError) {
+          return reply.code(400).send({ error: 'Invalid request', code: 'VALIDATION_ERROR', statusCode: 400 });
+        }
+        request.log.error({ err: error }, '[students] dossier error');
+        return reply.code(500).send({ error: 'Internal server error', code: 'INTERNAL_ERROR', statusCode: 500 });
+      }
+    }
+  );
 }
