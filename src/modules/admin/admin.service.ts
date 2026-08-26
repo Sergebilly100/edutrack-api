@@ -8,6 +8,8 @@ import {
   type CreateSchoolBody,
   type CreateTenantBody,
   type ListTenantsQuery,
+  type OpenSchoolYearBody,
+  type OpenedSchoolYear,
   type PlanCatalogItem,
   type ListSchoolsQuery,
   type RevenueMetricsResult,
@@ -16,6 +18,7 @@ import {
   type SchoolListResult,
   type SchoolPaymentReminderResult,
   type SchoolUsersResult,
+  type SchoolYearStatusResult,
   type SmsDashboardResult,
   type SmsPlatformAuditItem,
   type SmsPlatformConfigResult,
@@ -1448,6 +1451,147 @@ export const getSchoolDetails = async (
     },
     connectionHistory30d,
   };
+};
+
+// ────────────────────────────────────────────────────────────────────────
+// SECTION - ANNÉE SCOLAIRE (action super admin : bascule d'année)
+// ────────────────────────────────────────────────────────────────────────
+
+type SchoolYearRow = {
+  id: string;
+  label: string;
+  start_date: string;
+  end_date: string;
+  end_of_year_review_start_date: string | null;
+  window_open: boolean;
+};
+
+// Même règle que le module academic (fin - 30 jours) ; dupliquée ici car les
+// imports croisés entre modules sont interdits (voir AGENTS.md).
+const defaultEndOfYearReviewStartDate = (endDate: string): string => {
+  const date = new Date(`${endDate}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() - 30);
+  return date.toISOString().slice(0, 10);
+};
+
+const resolveTenantSchemaName = async (publicDb: TenantDb, tenantId: string): Promise<string> => {
+  const result = await publicDb.execute<{ schema_name: string }>(sql`
+    SELECT schema_name FROM public.tenants WHERE id = ${tenantId} LIMIT 1
+  `);
+  const row = getRows<{ schema_name: string }>(result)[0];
+  if (!row) {
+    throw new Error('Tenant not found');
+  }
+  return row.schema_name;
+};
+
+export const getSchoolYearStatus = async (
+  publicDb: TenantDb,
+  tenantId: string
+): Promise<SchoolYearStatusResult> => {
+  const schemaName = await resolveTenantSchemaName(publicDb, tenantId);
+
+  return withTenantSchema(schemaName, async (tenantDb) => {
+    const result = await tenantDb.execute<SchoolYearRow>(sql`
+      SELECT id::text, label, start_date::text, end_date::text,
+             end_of_year_review_start_date::text,
+             COALESCE(end_of_year_review_start_date, end_date) <= CURRENT_DATE AS window_open
+      FROM school_years
+      WHERE status = 'active'
+      LIMIT 1
+    `);
+    const row = getRows<SchoolYearRow>(result)[0];
+
+    return {
+      hasActiveYear: Boolean(row),
+      activeYear: row
+        ? {
+            id: row.id,
+            label: row.label,
+            startDate: row.start_date,
+            endDate: row.end_date,
+            endOfYearReviewStartDate: row.end_of_year_review_start_date,
+          }
+        : null,
+      isEndOfYearWindowOpen: row?.window_open ?? false,
+    };
+  });
+};
+
+export const openSchoolYear = async (
+  publicDb: TenantDb,
+  tenantId: string,
+  payload: OpenSchoolYearBody
+): Promise<OpenedSchoolYear> => {
+  const reviewStartDate =
+    payload.end_of_year_review_start_date ?? defaultEndOfYearReviewStartDate(payload.end_date);
+
+  if (payload.start_date >= payload.end_date) {
+    throw new Error('La date de début doit précéder la date de fin');
+  }
+  if (reviewStartDate >= payload.end_date) {
+    throw new Error('La revue de fin d\u2019année doit démarrer avant la fin de l\u2019année scolaire');
+  }
+
+  const schemaName = await resolveTenantSchemaName(publicDb, tenantId);
+
+  const opened = await withTenantSchema(schemaName, async (tenantDb) => {
+    return tenantDb.transaction(async (tx): Promise<OpenedSchoolYear> => {
+      const txDb = tx as TenantDb;
+
+      // Libellé unique par école : contrôle explicite avant insertion pour un
+      // message clair (l'index unique reste le garde-fou).
+      const existingLabel = await txDb.execute<{ id: string }>(sql`
+        SELECT id::text FROM school_years WHERE label = ${payload.label} LIMIT 1
+      `);
+      if (getRows<{ id: string }>(existingLabel).length > 0) {
+        throw new Error('Une année scolaire avec ce libellé existe déjà pour cette école');
+      }
+
+      const closedPrevious = await txDb.execute<{ label: string }>(sql`
+        UPDATE school_years
+        SET status = 'closed', updated_at = NOW()
+        WHERE status = 'active'
+        RETURNING label
+      `);
+      const previousLabel = getRows<{ label: string }>(closedPrevious)[0]?.label ?? null;
+
+      const inserted = await txDb.execute<SchoolYearRow & { status: string }>(sql`
+        INSERT INTO school_years (label, start_date, end_date, end_of_year_review_start_date, status)
+        VALUES (${payload.label}, ${payload.start_date}::date, ${payload.end_date}::date, ${reviewStartDate}::date, 'active')
+        RETURNING id::text, label, start_date::text, end_date::text,
+                  end_of_year_review_start_date::text, status
+      `);
+      const year = getRows<SchoolYearRow & { status: string }>(inserted)[0];
+      if (!year) {
+        throw new Error('Échec de la création de l\u2019année scolaire');
+      }
+
+      return {
+        id: year.id,
+        label: year.label,
+        startDate: year.start_date,
+        endDate: year.end_date,
+        endOfYearReviewStartDate: year.end_of_year_review_start_date,
+        status: 'active',
+        closedPreviousLabel: previousLabel,
+      };
+    });
+  });
+
+  // Synchronise l'affichage "année scolaire active" du tenant (format MM/YYYY - MM/YYYY)
+  const monthYear = (isoDate: string): string => {
+    const [year, month] = isoDate.split('-');
+    return `${month}/${year}`;
+  };
+  await publicDb.execute(sql`
+    UPDATE public.tenants
+    SET active_school_year = ${`${monthYear(opened.startDate)} - ${monthYear(opened.endDate)}`},
+        updated_at = NOW()
+    WHERE id = ${tenantId}
+  `);
+
+  return opened;
 };
 
 export const updateSchoolSubscription = async (

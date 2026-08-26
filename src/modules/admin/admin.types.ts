@@ -566,3 +566,38 @@ export type SmsPlatformAuditItem = {
   createdAt: string;
   details: Record<string, unknown>;
 };
+
+// ── Année scolaire (action super admin) ─────────────────────────────────────
+
+const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+export const openSchoolYearBodySchema = z.object({
+  label: z.string().trim().min(1).max(25),
+  start_date: z.string().regex(ISO_DATE_REGEX, 'Format attendu : AAAA-MM-JJ'),
+  end_date: z.string().regex(ISO_DATE_REGEX, 'Format attendu : AAAA-MM-JJ'),
+  end_of_year_review_start_date: z.string().regex(ISO_DATE_REGEX, 'Format attendu : AAAA-MM-JJ').optional(),
+});
+
+export type OpenSchoolYearBody = z.infer<typeof openSchoolYearBodySchema>;
+
+export type SchoolYearStatusResult = {
+  hasActiveYear: boolean;
+  activeYear: {
+    id: string;
+    label: string;
+    startDate: string;
+    endDate: string;
+    endOfYearReviewStartDate: string | null;
+  } | null;
+  isEndOfYearWindowOpen: boolean;
+};
+
+export type OpenedSchoolYear = {
+  id: string;
+  label: string;
+  startDate: string;
+  endDate: string;
+  endOfYearReviewStartDate: string | null;
+  status: 'active';
+  closedPreviousLabel: string | null;
+};

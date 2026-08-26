@@ -7,6 +7,7 @@ import {
   listSchoolsQuerySchema,
   listTenantsQuerySchema,
   maintenanceConfigSchema,
+  openSchoolYearBodySchema,
   smsFeatureActivateBodySchema,
   smsFeatureCommissionPaymentBodySchema,
   smsFeatureConfigBodySchema,
@@ -41,6 +42,7 @@ import {
   getSchoolSmsFeatureStats,
   getSmsFeatureGlobalStats,
   getSchoolDetails,
+  getSchoolYearStatus,
   listSchoolCommissionPayments,
   sendSchoolPaymentReminder,
   syncSchoolSmsCommission,
@@ -55,6 +57,7 @@ import {
   listSmsTemplates,
   listSchools,
   listTenants,
+  openSchoolYear,
   updateMaintenanceConfig,
   activateSchoolSmsFeature,
   recordSchoolCommissionReceived,
@@ -313,6 +316,35 @@ export default async function adminController(
         const payload = updateSchoolConfigBodySchema.parse(request.body);
         await updateSchoolConfig(ensurePublicDb(request), tenantId, payload);
         return reply.send({ success: true });
+      } catch (error) {
+        return handleError(reply, error, request);
+      }
+    }
+  );
+
+  app.get(
+    '/api/v1/admin/schools/:tenantId/school-year',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+        const result = await getSchoolYearStatus(ensurePublicDb(request), tenantId);
+        return reply.send(result);
+      } catch (error) {
+        return handleError(reply, error, request);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/admin/schools/:tenantId/school-year/open',
+    { preHandler: preHandlers },
+    async (request, reply) => {
+      try {
+        const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+        const payload = openSchoolYearBodySchema.parse(request.body);
+        const result = await openSchoolYear(ensurePublicDb(request), tenantId, payload);
+        return reply.code(201).send(result);
       } catch (error) {
         return handleError(reply, error, request);
       }
