@@ -190,3 +190,7 @@ export const STAFF_BASE_PERMISSIONS: readonly PermissionKey[] = [];
 
 // Backward-compatible alias during role transition.
 export const SECRETARY_BASE_PERMISSIONS = STAFF_BASE_PERMISSIONS;
+
+export const sealUploadQuerySchema = z.object({
+  kind: z.enum(['stamp', 'signature']),
+});

@@ -18,6 +18,7 @@ import {
   createAdministrativeUserBodySchema,
   createPositionBodySchema,
   positionIdParamsSchema,
+  sealUploadQuerySchema,
   resetAdministrativeUserPasswordBodySchema,
   removeAssignmentParamsSchema,
   updateAdministrativeUserBodySchema,
@@ -179,6 +180,58 @@ export default async function permissionsController(app: FastifyInstance): Promi
         });
 
         return reply.send({ ...result, logoUrl: url });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  // Upload du cachet ou de la signature de l'école (bulletins PDF uniquement).
+  app.post(
+    '/api/v1/permissions/config/school/seal',
+    { preHandler: requirePermission('settings.school') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const query = sealUploadQuerySchema.parse(request.query ?? {});
+
+        const data = await request.file();
+        if (!data) {
+          throw new PermissionsModuleError('No file provided', 400, 'BAD_REQUEST');
+        }
+
+        const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/webp']);
+        if (!ALLOWED_MIME.has(data.mimetype)) {
+          throw new PermissionsModuleError(
+            'Type de fichier non supporté. Utilisez PNG, JPEG ou WEBP.',
+            400,
+            'INVALID_FILE_TYPE'
+          );
+        }
+
+        const MAX_SIZE = 500 * 1024;
+        const chunks: Buffer[] = [];
+        let totalSize = 0;
+        for await (const chunk of data.file) {
+          totalSize += chunk.length;
+          if (totalSize > MAX_SIZE) {
+            throw new PermissionsModuleError('Fichier trop volumineux. Maximum 500 KB.', 400, 'FILE_TOO_LARGE');
+          }
+          chunks.push(chunk);
+        }
+        const buffer = Buffer.concat(chunks);
+
+        const ext = data.mimetype.split('/')[1]?.replace('jpeg', 'jpg') ?? 'png';
+        const key = `seals/${claims.schemaName}/${query.kind}/${randomUUID()}.${ext}`;
+        const { url } = await uploadToR2(key, buffer, data.mimetype);
+
+        await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          return buildPermissionsService(tenantDb).updateSchoolConfig(claims.schemaName,
+            query.kind === 'stamp' ? { stampImageUrl: url } : { signatureImageUrl: url },
+          );
+        });
+
+        return reply.send({ url });
       } catch (error) {
         return handleError(request, reply, error);
       }

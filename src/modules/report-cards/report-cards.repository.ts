@@ -290,6 +290,39 @@ export class ReportCardsRepository {
     return getRows<{ id: string }>(result).map((row) => row.id);
   }
 
+  async listCardsOfClass(classId: string, gradingPeriodId: string): Promise<
+    Array<{ id: string; studentName: string; generalAverage: number; rank: number; status: 'generated' | 'published' }>
+  > {
+    const result = await this.db.execute<{
+      id: string;
+      student_name: string;
+      general_average: string;
+      rank: number;
+      status: string;
+    }>(sql`
+      SELECT rc.id::text,
+             concat_ws(' ', s.first_name, s.last_name) AS student_name,
+             rc.general_average::text, rc.rank, rc.status::text
+      FROM report_cards rc
+      INNER JOIN students s ON s.id = rc.student_id
+      WHERE rc.class_id = ${classId}::uuid AND rc.grading_period_id = ${gradingPeriodId}::uuid
+      ORDER BY rc.rank ASC
+    `);
+    return getRows<{
+      id: string;
+      student_name: string;
+      general_average: string;
+      rank: number;
+      status: string;
+    }>(result).map((row) => ({
+      id: row.id,
+      studentName: row.student_name,
+      generalAverage: Number(row.general_average),
+      rank: row.rank,
+      status: row.status as 'generated' | 'published',
+    }));
+  }
+
   async listClassReadiness(gradingPeriodId: string, schoolYearId: string) {
     const result = await this.db.execute<{
       class_id: string;

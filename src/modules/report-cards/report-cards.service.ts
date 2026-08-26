@@ -176,6 +176,10 @@ export class ReportCardsService {
     await this.repository.publishCard(cardId, userId);
   }
 
+  async listClassCards(classId: string, gradingPeriodId: string) {
+    return this.repository.listCardsOfClass(classId, gradingPeriodId);
+  }
+
   async publishBulk(classId: string, gradingPeriodId: string, userId: string): Promise<{ publishedCount: number }> {
     const cardIds = await this.repository.listPublishableCardsOfClass(classId, gradingPeriodId);
     for (const id of cardIds) {

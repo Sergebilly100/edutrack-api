@@ -144,6 +144,24 @@ export default async function reportCardsController(
   );
 
   app.get(
+    '/api/v1/report-cards/class/:classId',
+    { preHandler: requirePermission('report_cards.view') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const classId = (request.params as { classId?: string }).classId ?? '';
+        const query = readinessQuerySchema.parse({ grading_period_id: (request.query as { grading_period_id?: string }).grading_period_id });
+        const cards = await withTenantSchema(claims.schemaName, (tenantDb) =>
+          buildReportCardsService(tenantDb).listClassCards(classId, query.grading_period_id)
+        );
+        return reply.send({ reportCards: cards });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.get(
     '/api/v1/report-cards/:id',
     { preHandler: requirePermission('report_cards.view') },
     async (request, reply) => {
@@ -177,6 +195,45 @@ export default async function reportCardsController(
         const job = await options.pdfQueue.add(
           'report-card',
           { type: 'report-card', schemaName: claims.schemaName, reportCardId: params.id },
+          { removeOnComplete: 20, removeOnFail: 50 }
+        );
+        return reply.code(202).send({ jobId: job.id });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/parent/students/:studentId/report-cards/:cardId/pdf',
+    { preHandler: requireParent },
+    async (request, reply) => {
+      try {
+        if (!options.pdfQueue) {
+          return reply.code(503).send({
+            error: 'File d\u2019export PDF indisponible',
+            code: 'PDF_QUEUE_UNAVAILABLE',
+            statusCode: 503,
+          });
+        }
+        const allowedStudentIds = request.allowedStudentIds ?? [];
+        const studentId = (request.params as { studentId?: string }).studentId ?? '';
+        const cardId = (request.params as { cardId?: string }).cardId ?? '';
+        if (!allowedStudentIds.includes(studentId)) {
+          return reply.code(403).send({
+            error: 'Cet élève n\u2019est pas rattaché à votre compte',
+            code: 'STUDENT_NOT_ALLOWED',
+            statusCode: 403,
+          });
+        }
+        // Seuls les bulletins publiés sont téléchargeables par un parent.
+        const detail = await withTenantSchema(request.claims!.schemaName, (tenantDb) =>
+          buildReportCardsService(tenantDb).getPublishedDetail(studentId, cardId)
+        );
+        void detail;
+        const job = await options.pdfQueue.add(
+          'report-card',
+          { type: 'report-card', schemaName: request.claims!.schemaName, reportCardId: cardId },
           { removeOnComplete: 20, removeOnFail: 50 }
         );
         return reply.code(202).send({ jobId: job.id });
