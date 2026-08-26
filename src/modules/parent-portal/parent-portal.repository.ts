@@ -306,4 +306,96 @@ export class ParentPortalRepository {
       total: result.rows[0]?.total_count ?? 0,
     };
   }
+
+  /**
+   * Vue d'ensemble enrichie (Tâche 17b) : statut financier caché (6a) et
+   * dernier bulletin publié (5c) d'un élève. Lecture seule du cache.
+   */
+  async getParentOverview(studentId: string): Promise<{
+    financial: {
+      status: 'up_to_date' | 'late' | 'waived';
+      daysLate: number | null;
+      totalPaid: number;
+      totalDueYear: number;
+      remainingDue: number;
+      lastComputedAt: string;
+    } | null;
+    latestPublishedReportCard: {
+      id: string;
+      periodLabel: string;
+      schoolYearLabel: string;
+      generalAverage: number;
+      rank: number;
+      classHeadcount: number;
+      publishedAt: string;
+    } | null;
+  }> {
+    const financialResult = await this.db.execute<{
+      status: string;
+      days_late: number | null;
+      total_paid: string;
+      total_due_year: string;
+      last_computed_at: string;
+    }>(sql`
+      SELECT status::text, days_late, total_paid::text, total_due_year::text,
+             last_computed_at::text
+      FROM student_financial_status
+      WHERE student_id = ${studentId}::uuid
+        AND school_year_id = (SELECT id FROM school_years WHERE status = 'active' LIMIT 1)
+      LIMIT 1
+    `);
+    const financialRow = financialResult.rows?.[0];
+
+    const reportCardResult = await this.db.execute<{
+      id: string;
+      period_label: string;
+      school_year_label: string;
+      general_average: string;
+      rank: number;
+      class_headcount: number;
+      published_at: string;
+    }>(sql`
+      SELECT rc.id::text, gp.label AS period_label, sy.label AS school_year_label,
+             rc.general_average::text, rc.rank, rc.class_headcount, rc.published_at::text
+      FROM report_cards rc
+      INNER JOIN grading_periods gp ON gp.id = rc.grading_period_id
+      INNER JOIN school_years sy ON sy.id = gp.school_year_id
+      WHERE rc.student_id = ${studentId}::uuid AND rc.status = 'published'
+      ORDER BY rc.published_at DESC
+      LIMIT 1
+    `);
+    const cardRow = reportCardResult.rows?.[0];
+
+    const paid = financialRow ? Number(financialRow.total_paid) : 0;
+    return {
+      financial: financialRow
+        ? {
+            status: financialRow.status as 'up_to_date' | 'late' | 'waived',
+            daysLate: financialRow.days_late,
+            totalPaid: paid,
+            totalDueYear: Number(financialRow.total_due_year),
+            remainingDue: Math.max(0, Number(financialRow.total_due_year) - paid),
+            lastComputedAt: financialRow.last_computed_at,
+          }
+        : null,
+      latestPublishedReportCard: cardRow
+        ? {
+            id: cardRow.id,
+            periodLabel: cardRow.period_label,
+            schoolYearLabel: cardRow.school_year_label,
+            generalAverage: Number(cardRow.general_average),
+            rank: cardRow.rank,
+            classHeadcount: cardRow.class_headcount,
+            publishedAt: cardRow.published_at,
+          }
+        : null,
+    };
+  }
+
+  async getActiveSchoolYearLabel(): Promise<string | null> {
+    const result = await this.db.execute<{ label: string }>(sql`
+      SELECT label FROM school_years WHERE status = 'active' LIMIT 1
+    `);
+    return result.rows?.[0]?.label ?? null;
+  }
 }

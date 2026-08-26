@@ -116,6 +116,25 @@ export default async function parentPortalController(app: FastifyInstance): Prom
     }
   });
 
+  app.get('/api/v1/parent/students/:studentId/overview', { preHandler: requireParent }, async (request, reply) => {
+    try {
+      const { studentId } = parentStudentIdParamsSchema.parse(request.params ?? {});
+      checkStudentAccess(request, studentId);
+
+      const claims = request.claims!;
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+        const service = buildParentPortalService(tenantDb);
+        return service.getStudentOverview(
+          { studentId },
+          { parentId: request.parentId!, allowedStudentIds: request.allowedStudentIds ?? [] }
+        );
+      });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
   app.get('/api/v1/parent/students/:studentId/stats', { preHandler: requireParent }, async (request, reply) => {
     try {
       const { studentId } = parentStudentIdParamsSchema.parse(request.params ?? {});

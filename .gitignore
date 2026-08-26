@@ -76,6 +76,7 @@ tests/integration/*
 !tests/integration/report-cards.routes.test.ts
 !tests/integration/financial-cache.routes.test.ts
 !tests/integration/financial-alerts.routes.test.ts
+!tests/integration/parent-overview.routes.test.ts
 !tests/integration/class-decisions.routes.test.ts
 !tests/integration/enrollments.routes.test.ts
 !tests/integration/finance.routes.test.ts

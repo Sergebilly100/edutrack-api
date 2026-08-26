@@ -208,8 +208,13 @@ export class ParentPortalService {
     });
   }
 
-  async getStudentStats(input: { studentId: string }, context: ServiceContext) {
+  /** Vue d'ensemble enrichie (17b) : finances + dernier bulletin publié, par enfant. */
+  async getStudentOverview(input: { studentId: string }, context: ServiceContext) {
     await this.assertStudentAccess(input.studentId, context);
+    return this.repository.getParentOverview(input.studentId);
+  }
+
+  async getStudentStats(input: { studentId: string }, context: ServiceContext) {    await this.assertStudentAccess(input.studentId, context);
 
     const now = new Date();
     const day = now.getUTCDay() || 7;
