@@ -25,6 +25,7 @@ import academicController from './modules/academic/academic.controller.js';
 import classDecisionsController from './modules/class-decisions/class-decisions.controller.js';
 import conductController from './modules/conduct/conduct.controller.js';
 import riskController from './modules/risk/risk.controller.js';
+import dashboardActionsController from './modules/dashboard-actions/dashboard-actions.controller.js';
 import reportCardsController from './modules/report-cards/report-cards.controller.js';
 import attendanceController from './modules/attendance/attendance.controller.js';
 import { emitStudentAbsent } from './modules/attendance/attendance.events.js';
@@ -137,6 +138,11 @@ const financialCacheWorker = new Worker(
   'financial-cache',
   async (job) => {
     const result = await processFinancialCacheJob(job);
+    // Tâche 7b : régénère les action items du dashboard directeur après le cache.
+    const { runDashboardActionsForSchema } = await import(
+      './modules/dashboard-actions/dashboard-actions.worker.js'
+    );
+    await runDashboardActionsForSchema({ schemaName: job.data.schemaName });
     return result;
   },
   {
@@ -296,6 +302,7 @@ app.register(academicController);
 app.register(classDecisionsController);
 app.register(conductController);
 app.register(riskController);
+app.register(dashboardActionsController);
 app.register(reportCardsController, { pdfQueue: billingPdfQueue });
 app.register(attendanceController, { pdfQueue: billingPdfQueue, notifQueue: notificationsQueue });
 app.register(dashboardController);

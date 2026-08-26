@@ -70,6 +70,7 @@ tests/unit/*
 !tests/unit/financial-cache.service.test.ts
 !tests/unit/financial-alerts.service.test.ts
 !tests/unit/risk.service.test.ts
+!tests/unit/dashboard-actions.service.test.ts
 !tests/integration/
 tests/integration/*
 !tests/integration/admin.school-year.routes.test.ts
@@ -79,6 +80,7 @@ tests/integration/*
 !tests/integration/financial-alerts.routes.test.ts
 !tests/integration/parent-overview.routes.test.ts
 !tests/integration/risk.routes.test.ts
+!tests/integration/dashboard-actions.routes.test.ts
 !tests/integration/class-decisions.routes.test.ts
 !tests/integration/enrollments.routes.test.ts
 !tests/integration/finance.routes.test.ts
