@@ -214,12 +214,77 @@ export class AcademicRepository {
     return getRows(result)[0]?.exists ?? false;
   }
 
+  async adoptLegacyClassesForSchoolYear(schoolYearId: string): Promise<void> {
+    await this.db.transaction(async (transaction) => {
+      await transaction.execute(sql`
+        WITH legacy_level_names AS (
+          SELECT DISTINCT
+            COALESCE(NULLIF(BTRIM(c.level), ''), NULLIF(BTRIM(c.name), '')) AS name
+          FROM classes c
+          WHERE c.is_active = true
+            AND c.school_year_id IS NULL
+            AND c.level_id IS NULL
+        ),
+        missing_level_names AS (
+          SELECT legacy.name
+          FROM legacy_level_names legacy
+          WHERE legacy.name IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM levels existing
+              WHERE LOWER(existing.name) = LOWER(legacy.name)
+            )
+        ),
+        ordered_level_names AS (
+          SELECT
+            name,
+            COALESCE((SELECT MAX(order_index) FROM levels), -1)
+              + ROW_NUMBER() OVER (ORDER BY name) AS order_index
+          FROM missing_level_names
+        )
+        INSERT INTO levels (name, order_index, is_exam_class)
+        SELECT name, order_index::integer, false
+        FROM ordered_level_names
+        ON CONFLICT (name) DO NOTHING
+      `);
+
+      await transaction.execute(sql`
+        UPDATE classes legacy
+        SET
+          level_id = matching_level.id,
+          updated_at = now()
+        FROM levels matching_level
+        WHERE legacy.is_active = true
+          AND legacy.school_year_id IS NULL
+          AND legacy.level_id IS NULL
+          AND LOWER(matching_level.name) = LOWER(
+            COALESCE(NULLIF(BTRIM(legacy.level), ''), NULLIF(BTRIM(legacy.name), ''))
+          )
+      `);
+
+      await transaction.execute(sql`
+        UPDATE classes legacy
+        SET
+          school_year_id = ${schoolYearId}::uuid,
+          updated_at = now()
+        WHERE legacy.is_active = true
+          AND legacy.school_year_id IS NULL
+          AND legacy.level_id IS NOT NULL
+      `);
+    });
+  }
+
   async listClassesBySchoolYear(schoolYearId: string): Promise<ClassItem[]> {
     const result = await this.db.execute<ClassRow>(sql`
       SELECT
         c.id,
         c.name,
-        c.student_count,
+        (
+          SELECT COUNT(*)::int
+          FROM students s
+          WHERE s.class_id = c.id
+            AND s.is_active = true
+        ) AS student_count,
         c.is_active,
         l.id AS level_id,
         l.name AS level_name,
@@ -260,7 +325,12 @@ export class AcademicRepository {
       SELECT
         c.id,
         c.name,
-        c.student_count,
+        (
+          SELECT COUNT(*)::int
+          FROM students s
+          WHERE s.class_id = c.id
+            AND s.is_active = true
+        ) AS student_count,
         c.is_active,
         l.id AS level_id,
         l.name AS level_name,
@@ -304,7 +374,12 @@ export class AcademicRepository {
       SELECT
         c.id,
         c.name,
-        c.student_count,
+        (
+          SELECT COUNT(*)::int
+          FROM students s
+          WHERE s.class_id = c.id
+            AND s.is_active = true
+        ) AS student_count,
         c.is_active,
         l.id AS level_id,
         l.name AS level_name,
@@ -340,7 +415,12 @@ export class AcademicRepository {
       SELECT
         c.id,
         c.name,
-        c.student_count,
+        (
+          SELECT COUNT(*)::int
+          FROM students s
+          WHERE s.class_id = c.id
+            AND s.is_active = true
+        ) AS student_count,
         c.is_active,
         l.id AS level_id,
         l.name AS level_name,

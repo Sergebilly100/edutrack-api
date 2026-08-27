@@ -322,26 +322,35 @@ const main = async (): Promise<void> => {
     await tx.execute(sql.raw(`SET LOCAL search_path TO "${TENANT.schemaName}", public`));
 
     console.info('[seed] Resetting tenant data...');
-    await tx.execute(sql`DELETE FROM sms_usage_log`);
-    await tx.execute(sql`DELETE FROM subscription_payments`);
-    await tx.execute(sql`DELETE FROM parent_student_links`);
-    await tx.execute(sql`DELETE FROM parent_subscriptions`);
-    await tx.execute(sql`DELETE FROM parents`);
-    await tx.execute(sql`DELETE FROM position_assignments`);
-    await tx.execute(sql`DELETE FROM salary_records`);
-    await tx.execute(sql`DELETE FROM admin_positions`);
-    await tx.execute(sql`DELETE FROM documents`);
-    await tx.execute(sql`DELETE FROM attendances_student`);
-    await tx.execute(sql`DELETE FROM attendances_teacher`);
-    await tx.execute(sql`DELETE FROM notifications_log`);
-    await tx.execute(sql`DELETE FROM schedules`);
-    await tx.execute(sql`DELETE FROM schedule_periods`);
-    await tx.execute(sql`DELETE FROM students`);
-    await tx.execute(sql`DELETE FROM classes`);
-    await tx.execute(sql`DELETE FROM teachers`);
-    await tx.execute(sql`DELETE FROM users`);
-    await tx.execute(sql`DELETE FROM rooms`);
-    await tx.execute(sql`DELETE FROM time_slots`);
+    // The tenant schema gains new tables over time (for example payments and
+    // import_history). A sequence of DELETE statements becomes fragile as soon
+    // as one of them adds a foreign key to an existing seeded entity. CASCADE
+    // lets PostgreSQL remove every dependent row in referentially safe order.
+    await tx.execute(sql.raw(`
+      TRUNCATE TABLE
+        sms_usage_log,
+        subscription_payments,
+        parent_student_links,
+        parent_subscriptions,
+        parents,
+        position_assignments,
+        salary_records,
+        admin_positions,
+        documents,
+        attendances_student,
+        attendances_teacher,
+        notifications_log,
+        schedules,
+        schedule_periods,
+        payments,
+        students,
+        classes,
+        teachers,
+        users,
+        rooms,
+        time_slots
+      CASCADE
+    `));
 
     console.info('[seed] Inserting rooms and time slots...');
     for (const roomName of ROOM_NAMES) {

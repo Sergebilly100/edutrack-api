@@ -179,6 +179,10 @@ export class AcademicService {
   }
 
   async listLevels() {
+    const activeSchoolYear = await this.repository.getActiveSchoolYear();
+    if (activeSchoolYear) {
+      await this.repository.adoptLegacyClassesForSchoolYear(activeSchoolYear.id);
+    }
     return { levels: await this.repository.listLevels() };
   }
 
@@ -264,6 +268,10 @@ export class AcademicService {
 
     if (schoolYearId && !requestedSchoolYear) {
       throw new AcademicModuleError('School year not found', 404, 'SCHOOL_YEAR_NOT_FOUND');
+    }
+
+    if (activeSchoolYear) {
+      await this.repository.adoptLegacyClassesForSchoolYear(activeSchoolYear.id);
     }
 
     const schoolYear = requestedSchoolYear ?? activeSchoolYear;
