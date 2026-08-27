@@ -25,6 +25,7 @@ describe('enrollment workflow rules', () => {
   it('dédoublonne les documents requis par type pour un niveau', () => {
     const base = {
       student_id: 'student', document_type_name: 'Extrait', is_mandatory: true,
+      is_active: true,
       status: 'missing' as const, file_url: null, r2_key: null, provided_at: null, notes: null,
     };
     const documents = [
@@ -50,7 +51,7 @@ describe('enrollment workflow rules', () => {
         .mockResolvedValueOnce({ ...enrollment, status: 'confirmed', confirmed_by_user_id: 'user' }),
       listStudentDocuments: vi.fn().mockResolvedValue([{
         id: 'document', student_id: 'student', document_type_id: 'photo', document_type_name: 'Photo',
-        is_mandatory: true, status: 'missing', file_url: null, r2_key: null, provided_at: null, notes: null,
+        is_mandatory: true, is_active: true, status: 'missing', file_url: null, r2_key: null, provided_at: null, notes: null,
       }]),
     };
     const paymentRecorder = {
@@ -67,12 +68,13 @@ describe('enrollment workflow rules', () => {
 
   it('prépare une notification unique avec les pièces obligatoires manquantes', async () => {
     const repository = {
+      syncActiveRequiredDocumentsForStudent: vi.fn().mockResolvedValue(undefined),
       getStudentNotificationContext: vi.fn().mockResolvedValue({
         id: 'student', first_name: 'Mariam', parent_phone: '2250700000001', parent_phone_2: '2250700000001',
       }),
       listStudentDocuments: vi.fn().mockResolvedValue([
-        { id: 'one', student_id: 'student', document_type_id: 'birth', document_type_name: 'Extrait', is_mandatory: true, status: 'missing', file_url: null, r2_key: null, provided_at: null, notes: null },
-        { id: 'two', student_id: 'student', document_type_id: 'photo', document_type_name: 'Photo', is_mandatory: false, status: 'missing', file_url: null, r2_key: null, provided_at: null, notes: null },
+        { id: 'one', student_id: 'student', document_type_id: 'birth', document_type_name: 'Extrait', is_mandatory: true, is_active: true, status: 'missing', file_url: null, r2_key: null, provided_at: null, notes: null },
+        { id: 'two', student_id: 'student', document_type_id: 'photo', document_type_name: 'Photo', is_mandatory: false, is_active: true, status: 'missing', file_url: null, r2_key: null, provided_at: null, notes: null },
       ] satisfies StudentDocumentRow[]),
     };
     const result = await new EnrollmentsService(repository as never).verifyStudentDocuments('student');

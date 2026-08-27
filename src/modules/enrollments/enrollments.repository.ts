@@ -13,12 +13,18 @@ export type EnrollmentRow = {
   id: string; student_id: string; class_id: string; school_year_id: string;
   type: EnrollmentType; status: EnrollmentStatus; enrolled_at: Date | string;
   confirmed_by_user_id: string | null; class_name: string; school_year_label: string;
+  required_document_count: number; missing_mandatory_document_count: number;
 };
 
 export type StudentDocumentRow = {
   id: string; student_id: string; document_type_id: string; document_type_name: string;
-  is_mandatory: boolean; status: StudentDocumentStatus; file_url: string | null;
+  is_mandatory: boolean; is_active: boolean; status: StudentDocumentStatus; file_url: string | null;
   r2_key: string | null; provided_at: Date | string | null; notes: string | null;
+};
+
+export type RequiredDocumentTypeRow = {
+  id: string; level_id: string; level_name?: string; name: string;
+  is_mandatory: boolean; is_active: boolean; created_at: Date | string; updated_at: Date | string;
 };
 
 export class EnrollmentsRepository {
@@ -26,13 +32,20 @@ export class EnrollmentsRepository {
 
   async listEnrollments(filters: { schoolYearId?: string; status?: EnrollmentStatus; type?: EnrollmentType }) {
     const result = await this.db.execute<EnrollmentRow>(sql`
-      SELECT e.*, c.name AS class_name, sy.label AS school_year_label
+      SELECT e.*, c.name AS class_name, sy.label AS school_year_label,
+             COUNT(rdt.id)::int AS required_document_count,
+             COUNT(rdt.id) FILTER (
+               WHERE rdt.is_mandatory AND COALESCE(sd.status::text, 'missing') <> 'provided'
+             )::int AS missing_mandatory_document_count
       FROM enrollments e
       INNER JOIN classes c ON c.id = e.class_id
       INNER JOIN school_years sy ON sy.id = e.school_year_id
+      LEFT JOIN required_document_types rdt ON rdt.level_id = c.level_id AND rdt.is_active
+      LEFT JOIN student_documents sd ON sd.student_id = e.student_id AND sd.document_type_id = rdt.id
       WHERE (${filters.schoolYearId ?? null}::uuid IS NULL OR e.school_year_id = ${filters.schoolYearId ?? null}::uuid)
         AND (${filters.status ?? null}::text IS NULL OR e.status::text = ${filters.status ?? null})
         AND (${filters.type ?? null}::text IS NULL OR e.type::text = ${filters.type ?? null})
+      GROUP BY e.id, c.name, sy.label
       ORDER BY e.enrolled_at DESC
     `);
     return rows<EnrollmentRow>(result);
@@ -40,11 +53,19 @@ export class EnrollmentsRepository {
 
   async findEnrollment(id: string) {
     const result = await this.db.execute<EnrollmentRow>(sql`
-      SELECT e.*, c.name AS class_name, sy.label AS school_year_label
+      SELECT e.*, c.name AS class_name, sy.label AS school_year_label,
+             COUNT(rdt.id)::int AS required_document_count,
+             COUNT(rdt.id) FILTER (
+               WHERE rdt.is_mandatory AND COALESCE(sd.status::text, 'missing') <> 'provided'
+             )::int AS missing_mandatory_document_count
       FROM enrollments e
       INNER JOIN classes c ON c.id = e.class_id
       INNER JOIN school_years sy ON sy.id = e.school_year_id
-      WHERE e.id = ${id}::uuid LIMIT 1
+      LEFT JOIN required_document_types rdt ON rdt.level_id = c.level_id AND rdt.is_active
+      LEFT JOIN student_documents sd ON sd.student_id = e.student_id AND sd.document_type_id = rdt.id
+      WHERE e.id = ${id}::uuid
+      GROUP BY e.id, c.name, sy.label
+      LIMIT 1
     `);
     return rows<EnrollmentRow>(result)[0] ?? null;
   }
@@ -122,20 +143,22 @@ export class EnrollmentsRepository {
     const result = await this.db.execute<{ id: string }>(sql`
       INSERT INTO student_documents (student_id, document_type_id, status)
       SELECT ${studentId}::uuid, rdt.id, 'missing'::student_document_status
-      FROM required_document_types rdt WHERE rdt.level_id = ${levelId}::uuid
+      FROM required_document_types rdt
+      WHERE rdt.level_id = ${levelId}::uuid AND rdt.is_active
       ON CONFLICT (student_id, document_type_id) DO NOTHING RETURNING id
     `);
     return rows<{ id: string }>(result).length;
   }
 
   async listRequiredDocumentTypes(levelId?: string) {
-    const result = await this.db.execute(sql`
+    const result = await this.db.execute<RequiredDocumentTypeRow>(sql`
       SELECT rdt.*, l.name AS level_name FROM required_document_types rdt
       INNER JOIN levels l ON l.id = rdt.level_id
-      WHERE (${levelId ?? null}::uuid IS NULL OR rdt.level_id = ${levelId ?? null}::uuid)
+      WHERE rdt.is_active
+        AND (${levelId ?? null}::uuid IS NULL OR rdt.level_id = ${levelId ?? null}::uuid)
       ORDER BY l.order_index, rdt.name
     `);
-    return rows(result);
+    return rows<RequiredDocumentTypeRow>(result);
   }
 
   async levelExists(levelId: string) {
@@ -143,42 +166,128 @@ export class EnrollmentsRepository {
     return rows<{ exists: boolean }>(result)[0]?.exists ?? false;
   }
 
-  async createRequiredDocumentType(input: { levelId: string; name: string; isMandatory: boolean }) {
-    const result = await this.db.execute(sql`
-      INSERT INTO required_document_types (level_id, name, is_mandatory)
-      VALUES (${input.levelId}, ${input.name}, ${input.isMandatory}) RETURNING *
+  async listRequiredDocumentLevels() {
+    const result = await this.db.execute<{ id: string; name: string; order_index: number }>(sql`
+      SELECT id, name, order_index
+      FROM levels
+      ORDER BY order_index, name
     `);
-    return rows(result)[0];
+    return rows<{ id: string; name: string; order_index: number }>(result);
   }
 
-  async updateRequiredDocumentType(id: string, input: { name?: string; isMandatory?: boolean }) {
-    const result = await this.db.execute(sql`
+  async createRequiredDocumentType(input: { levelId: string; name: string; isMandatory: boolean }) {
+    const result = await this.db.execute<RequiredDocumentTypeRow>(sql`
+      INSERT INTO required_document_types (level_id, name, is_mandatory, is_active)
+      VALUES (${input.levelId}, ${input.name}, ${input.isMandatory}, true)
+      ON CONFLICT (level_id, name) DO UPDATE SET
+        is_mandatory = EXCLUDED.is_mandatory,
+        is_active = true,
+        updated_at = NOW()
+      RETURNING *
+    `);
+    return rows<RequiredDocumentTypeRow>(result)[0];
+  }
+
+  async updateRequiredDocumentType(id: string, input: { name?: string; isMandatory?: boolean; isActive?: boolean }) {
+    const result = await this.db.execute<RequiredDocumentTypeRow>(sql`
       UPDATE required_document_types SET
         name = CASE WHEN ${input.name !== undefined} THEN ${input.name ?? null} ELSE name END,
         is_mandatory = CASE WHEN ${input.isMandatory !== undefined} THEN ${input.isMandatory ?? false} ELSE is_mandatory END,
+        is_active = CASE WHEN ${input.isActive !== undefined} THEN ${input.isActive ?? false} ELSE is_active END,
         updated_at = NOW()
       WHERE id = ${id}::uuid RETURNING *
     `);
-    return rows(result)[0] ?? null;
+    return rows<RequiredDocumentTypeRow>(result)[0] ?? null;
   }
 
   async deleteRequiredDocumentType(id: string) {
-    const result = await this.db.execute<{ id: string }>(sql`DELETE FROM required_document_types WHERE id = ${id}::uuid RETURNING id`);
+    const result = await this.db.execute<{ id: string }>(sql`
+      UPDATE required_document_types
+      SET is_active = false, updated_at = NOW()
+      WHERE id = ${id}::uuid AND is_active
+      RETURNING id
+    `);
     return rows<{ id: string }>(result).length > 0;
+  }
+
+  async syncRequiredDocumentToOpenEnrollments(documentTypeId: string, levelId: string) {
+    await this.db.execute(sql`
+      INSERT INTO student_documents (student_id, document_type_id, status)
+      SELECT DISTINCT e.student_id, ${documentTypeId}::uuid, 'missing'::student_document_status
+      FROM enrollments e
+      INNER JOIN classes c ON c.id = e.class_id
+      WHERE c.level_id = ${levelId}::uuid
+        AND e.status IN ('pending_cashier', 'pending_dossier', 'blocked_unpaid')
+      ON CONFLICT (student_id, document_type_id) DO NOTHING
+    `);
+  }
+
+  async syncActiveRequiredDocumentsForStudent(studentId: string) {
+    await this.db.execute(sql`
+      INSERT INTO student_documents (student_id, document_type_id, status)
+      SELECT ${studentId}::uuid, rdt.id, 'missing'::student_document_status
+      FROM required_document_types rdt
+      WHERE rdt.is_active
+        AND rdt.level_id = (
+          SELECT c.level_id
+          FROM enrollments e
+          INNER JOIN classes c ON c.id = e.class_id
+          WHERE e.student_id = ${studentId}::uuid
+            AND e.status IN ('pending_cashier', 'pending_dossier', 'blocked_unpaid')
+          ORDER BY e.enrolled_at DESC
+          LIMIT 1
+        )
+      ON CONFLICT (student_id, document_type_id) DO NOTHING
+    `);
+  }
+
+  async isDocumentTypeAllowedForStudent(studentId: string, documentTypeId: string) {
+    const result = await this.db.execute<{ allowed: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1
+        FROM required_document_types rdt
+        WHERE rdt.id = ${documentTypeId}::uuid
+          AND rdt.is_active
+          AND rdt.level_id = (
+            SELECT c.level_id
+            FROM enrollments e
+            INNER JOIN classes c ON c.id = e.class_id
+            WHERE e.student_id = ${studentId}::uuid
+            ORDER BY e.enrolled_at DESC
+            LIMIT 1
+          )
+      ) AS allowed
+    `);
+    return rows<{ allowed: boolean }>(result)[0]?.allowed ?? false;
   }
 
   async listStudentDocuments(studentId: string) {
     const result = await this.db.execute<StudentDocumentRow>(sql`
-      SELECT sd.*, rdt.name AS document_type_name, rdt.is_mandatory
+      SELECT sd.*, rdt.name AS document_type_name, rdt.is_mandatory, rdt.is_active
       FROM student_documents sd INNER JOIN required_document_types rdt ON rdt.id = sd.document_type_id
-      WHERE sd.student_id = ${studentId}::uuid ORDER BY rdt.name
+      WHERE sd.student_id = ${studentId}::uuid
+        AND (
+          (
+            rdt.is_active
+            AND rdt.level_id = (
+              SELECT c.level_id
+              FROM enrollments e
+              INNER JOIN classes c ON c.id = e.class_id
+              WHERE e.student_id = ${studentId}::uuid
+              ORDER BY e.enrolled_at DESC
+              LIMIT 1
+            )
+          )
+          OR sd.status = 'provided'
+        )
+      ORDER BY rdt.name
     `);
     return rows<StudentDocumentRow>(result);
   }
 
   async findStudentDocument(id: string) {
     const result = await this.db.execute<StudentDocumentRow>(sql`
-      SELECT sd.*, rdt.name AS document_type_name, rdt.is_mandatory
+      SELECT sd.*, rdt.name AS document_type_name, rdt.is_mandatory, rdt.is_active
       FROM student_documents sd INNER JOIN required_document_types rdt ON rdt.id = sd.document_type_id
       WHERE sd.id = ${id}::uuid LIMIT 1
     `);

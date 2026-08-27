@@ -95,6 +95,10 @@ export default async function enrollmentsController(
     try { const query = requiredDocumentListQuerySchema.parse(request.query ?? {}); return reply.send({ documentTypes: await withService(request, (service) => service.listRequiredDocumentTypes(query.level_id)) }); }
     catch (error) { return handleError(request, reply, error); }
   });
+  app.get('/api/v1/required-document-levels', { preHandler: requirePermission('enrollments.view') }, async (request, reply) => {
+    try { return reply.send({ levels: await withService(request, (service) => service.listRequiredDocumentLevels()) }); }
+    catch (error) { return handleError(request, reply, error); }
+  });
   app.post('/api/v1/required-document-types', { preHandler: requirePermission('enrollments.edit') }, async (request, reply) => {
     try { const body = createRequiredDocumentTypeBodySchema.parse(request.body); return reply.code(201).send({ documentType: await withService(request, (service) => service.createRequiredDocumentType(body)) }); }
     catch (error) { return handleError(request, reply, error); }
@@ -175,6 +179,7 @@ export default async function enrollmentsController(
       const documentTypeId = z.string().uuid().parse(
         firstField?.type === 'field' ? firstField.value : undefined
       );
+      await withService(request, (service) => service.assertDocumentTypeAllowed(studentId, documentTypeId));
       const buffer = await file.toBuffer();
       if (buffer.length > 10 * 1024 * 1024) throw new EnrollmentsModuleError('File exceeds 10 MB', 400, 'FILE_TOO_LARGE');
       const extension = file.filename.split('.').pop()?.toLowerCase() || 'bin';

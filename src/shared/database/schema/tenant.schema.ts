@@ -387,6 +387,7 @@ export const requiredDocumentTypes = tenant.table(
     levelId: uuid('level_id').notNull().references(() => levels.id, { onDelete: 'cascade' }),
     name: varchar('name', { length: 150 }).notNull(),
     isMandatory: boolean('is_mandatory').notNull().default(true),
+    isActive: boolean('is_active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   },

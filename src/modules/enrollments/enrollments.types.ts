@@ -50,9 +50,13 @@ export const createRequiredDocumentTypeBodySchema = z
   .object({ levelId: z.string().uuid(), name: z.string().trim().min(1).max(150), isMandatory: z.boolean().default(true) })
   .strict();
 export const updateRequiredDocumentTypeBodySchema = z
-  .object({ name: z.string().trim().min(1).max(150).optional(), isMandatory: z.boolean().optional() })
+  .object({
+    name: z.string().trim().min(1).max(150).optional(),
+    isMandatory: z.boolean().optional(),
+    isActive: z.boolean().optional(),
+  })
   .strict()
-  .refine((value) => value.name !== undefined || value.isMandatory !== undefined, {
+  .refine((value) => value.name !== undefined || value.isMandatory !== undefined || value.isActive !== undefined, {
     message: 'At least one field must be provided',
   });
 

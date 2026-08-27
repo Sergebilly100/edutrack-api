@@ -22,6 +22,12 @@ const mapEnrollment = (row: EnrollmentRow) => ({
   status: row.status,
   enrolledAt: iso(row.enrolled_at),
   confirmedByUserId: row.confirmed_by_user_id,
+  documentStatus: Number(row.required_document_count ?? 0) === 0
+    ? 'not_configured' as const
+    : Number(row.missing_mandatory_document_count ?? 0) === 0
+      ? 'complete' as const
+      : 'incomplete' as const,
+  missingMandatoryDocumentCount: Number(row.missing_mandatory_document_count ?? 0),
 });
 const mapDocument = (row: StudentDocumentRow) => ({
   id: row.id,
@@ -29,6 +35,7 @@ const mapDocument = (row: StudentDocumentRow) => ({
   documentTypeId: row.document_type_id,
   documentTypeName: row.document_type_name,
   isMandatory: row.is_mandatory,
+  isActive: row.is_active,
   status: row.status,
   fileUrl: row.file_url,
   r2Key: row.r2_key,
@@ -151,10 +158,12 @@ export class EnrollmentsService {
       const created = await this.repository.createEnrollment({ ...input, status });
       if (!created) throw new Error('Failed to create enrollment');
       await this.repository.ensureRequiredDocuments(input.studentId, targetClass.level_id);
+      const enrollmentWithDocumentStatus = await this.repository.findEnrollment(created.id);
+      if (!enrollmentWithDocumentStatus) throw new Error('Failed to reload enrollment');
       const documents = deduplicateRequiredDocuments(await this.repository.listStudentDocuments(input.studentId));
-      const missingMandatoryDocuments = documents.filter((document) => document.is_mandatory && document.status !== 'provided').map(mapDocument);
+      const missingMandatoryDocuments = documents.filter((document) => document.is_active && document.is_mandatory && document.status !== 'provided').map(mapDocument);
       return {
-        enrollment: mapEnrollment(created),
+        enrollment: mapEnrollment(enrollmentWithDocumentStatus),
         missingMandatoryDocuments,
         documentWarning: missingMandatoryDocuments.length > 0
           ? 'Des pièces obligatoires sont manquantes. Le paiement reste autorisé.'
@@ -174,14 +183,19 @@ export class EnrollmentsService {
     if (input.status && !canTransitionEnrollment(current.status, input.status)) {
       throw new EnrollmentsModuleError('Invalid enrollment status transition', 409, 'INVALID_ENROLLMENT_TRANSITION');
     }
+    let targetLevelId: string | null = null;
     if (input.classId) {
       const targetClass = await this.repository.getClassContext(input.classId);
-      if (!targetClass || !targetClass.is_active || targetClass.school_year_id !== current.school_year_id) {
+      if (!targetClass || !targetClass.is_active || !targetClass.level_id || targetClass.school_year_id !== current.school_year_id) {
         throw new EnrollmentsModuleError('Class does not belong to the enrollment school year', 400, 'CLASS_YEAR_MISMATCH');
       }
+      targetLevelId = targetClass.level_id;
     }
-    const updated = await this.repository.updateEnrollment(id, input);
-    return mapEnrollment(updated!);
+    await this.repository.updateEnrollment(id, input);
+    if (targetLevelId) await this.repository.ensureRequiredDocuments(current.student_id, targetLevelId);
+    const updated = await this.repository.findEnrollment(id);
+    if (!updated) throw new EnrollmentsModuleError('Enrollment not found', 404, 'ENROLLMENT_NOT_FOUND');
+    return mapEnrollment(updated);
   }
 
   async confirmPayment(id: string, userId: string, input: {
@@ -205,7 +219,7 @@ export class EnrollmentsService {
     const enrollment = await this.repository.findEnrollment(id);
     if (!enrollment) throw new EnrollmentsModuleError('Enrollment not found', 404, 'ENROLLMENT_NOT_FOUND');
     const documents = await this.repository.listStudentDocuments(current.student_id);
-    const missingMandatoryDocuments = documents.filter((document) => document.is_mandatory && document.status !== 'provided').map(mapDocument);
+    const missingMandatoryDocuments = documents.filter((document) => document.is_active && document.is_mandatory && document.status !== 'provided').map(mapDocument);
     return {
       enrollment: mapEnrollment(enrollment!),
       payment,
@@ -227,25 +241,36 @@ export class EnrollmentsService {
   }
 
   listRequiredDocumentTypes(levelId?: string) { return this.repository.listRequiredDocumentTypes(levelId); }
+  listRequiredDocumentLevels() { return this.repository.listRequiredDocumentLevels(); }
   async createRequiredDocumentType(input: { levelId: string; name: string; isMandatory: boolean }) {
     if (!(await this.repository.levelExists(input.levelId))) throw new EnrollmentsModuleError('Level not found', 404, 'LEVEL_NOT_FOUND');
-    try { return await this.repository.createRequiredDocumentType(input); }
+    try {
+      const documentType = await this.repository.createRequiredDocumentType(input);
+      if (!documentType) throw new Error('Failed to create required document type');
+      await this.repository.syncRequiredDocumentToOpenEnrollments(documentType.id, input.levelId);
+      return documentType;
+    }
     catch (error) {
       if ((error as { code?: string }).code === '23505') throw new EnrollmentsModuleError('Document type already exists for this level', 409, 'DOCUMENT_TYPE_ALREADY_EXISTS');
       throw error;
     }
   }
-  async updateRequiredDocumentType(id: string, input: { name?: string; isMandatory?: boolean }) {
+  async updateRequiredDocumentType(id: string, input: { name?: string; isMandatory?: boolean; isActive?: boolean }) {
     const result = await this.repository.updateRequiredDocumentType(id, input);
     if (!result) throw new EnrollmentsModuleError('Document type not found', 404, 'DOCUMENT_TYPE_NOT_FOUND');
+    if (result.is_active) await this.repository.syncRequiredDocumentToOpenEnrollments(result.id, result.level_id);
     return result;
   }
   async deleteRequiredDocumentType(id: string) {
     if (!(await this.repository.deleteRequiredDocumentType(id))) throw new EnrollmentsModuleError('Document type not found', 404, 'DOCUMENT_TYPE_NOT_FOUND');
-    return { deleted: true };
+    return { archived: true };
   }
-  async listStudentDocuments(studentId: string) { return (await this.repository.listStudentDocuments(studentId)).map(mapDocument); }
+  async listStudentDocuments(studentId: string) {
+    await this.repository.syncActiveRequiredDocumentsForStudent(studentId);
+    return (await this.repository.listStudentDocuments(studentId)).map(mapDocument);
+  }
   async verifyStudentDocuments(studentId: string) {
+    await this.repository.syncActiveRequiredDocumentsForStudent(studentId);
     const [student, documents] = await Promise.all([
       this.repository.getStudentNotificationContext(studentId),
       this.repository.listStudentDocuments(studentId),
@@ -254,7 +279,7 @@ export class EnrollmentsService {
 
     const mappedDocuments = deduplicateRequiredDocuments(documents).map(mapDocument);
     const missingMandatoryDocuments = mappedDocuments.filter(
-      (document) => document.isMandatory && document.status !== 'provided'
+      (document) => document.isActive && document.isMandatory && document.status !== 'provided'
     );
     const parentPhones = [...new Set([student.parent_phone, student.parent_phone_2].filter(
       (phone): phone is string => Boolean(phone)
@@ -278,7 +303,13 @@ export class EnrollmentsService {
     if (!document) throw new EnrollmentsModuleError('Student document not found', 404, 'STUDENT_DOCUMENT_NOT_FOUND');
     return mapDocument(document);
   }
+  async assertDocumentTypeAllowed(studentId: string, documentTypeId: string) {
+    if (!(await this.repository.isDocumentTypeAllowedForStudent(studentId, documentTypeId))) {
+      throw new EnrollmentsModuleError('Document type is not active for the student level', 400, 'DOCUMENT_TYPE_NOT_ALLOWED');
+    }
+  }
   async upsertStudentDocument(input: { studentId: string; documentTypeId: string; status: StudentDocumentStatus; r2Key?: string | null; fileUrl?: string | null; notes?: string | null }) {
+    await this.assertDocumentTypeAllowed(input.studentId, input.documentTypeId);
     try { return mapDocument((await this.repository.upsertStudentDocument(input))!); }
     catch (error) {
       if ((error as { code?: string }).code === '23503') throw new EnrollmentsModuleError('Student or document type not found', 404, 'DOCUMENT_OWNER_NOT_FOUND');

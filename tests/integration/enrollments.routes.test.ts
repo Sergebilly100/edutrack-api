@@ -57,7 +57,38 @@ describe('enrollments integration', () => {
     });
     expect(creation.status).toBe(201);
     expect(creation.body.enrollment.status).toBe('pending_cashier');
+    expect(creation.body.enrollment).toMatchObject({ documentStatus: 'incomplete', missingMandatoryDocumentCount: 1 });
     expect(creation.body.missingMandatoryDocuments).toHaveLength(1);
+
+    const addedAfterEnrollment = await request().post('/api/v1/required-document-types').set(headers).send({
+      levelId: academic.targetLevelId, name: 'Photo identité', isMandatory: true,
+    });
+    expect(addedAfterEnrollment.status).toBe(201);
+
+    const synchronizedDocuments = await request()
+      .get(`/api/v1/students/${studentId}/enrollment-documents`)
+      .set(headers);
+    expect(synchronizedDocuments.status).toBe(200);
+    expect(synchronizedDocuments.body.documents.map((document: { documentTypeName: string }) => document.documentTypeName)).toEqual([
+      'Extrait de naissance', 'Photo identité',
+    ]);
+
+    const archived = await request()
+      .delete(`/api/v1/required-document-types/${addedAfterEnrollment.body.documentType.id}`)
+      .set(headers);
+    expect(archived.status).toBe(200);
+    expect(archived.body).toEqual({ archived: true });
+
+    const documentsAfterArchive = await request()
+      .get(`/api/v1/students/${studentId}/enrollment-documents`)
+      .set(headers);
+    expect(documentsAfterArchive.body.documents).toHaveLength(1);
+    const retainedRows = await queryTenant<{ count: string }>(`
+      SELECT COUNT(*)::text AS count
+      FROM ${tenantTable('student_documents')}
+      WHERE student_id = $1::uuid AND document_type_id = $2::uuid
+    `, [studentId, addedAfterEnrollment.body.documentType.id]);
+    expect(retainedRows[0]?.count).toBe('1');
 
     const provided = await request()
       .post(`/api/v1/students/${studentId}/enrollment-documents`)
