@@ -16,6 +16,8 @@ const mapEnrollment = (row: EnrollmentRow) => ({
   studentId: row.student_id,
   classId: row.class_id,
   className: row.class_name,
+  studentFirstName: row.student_first_name,
+  studentLastName: row.student_last_name,
   schoolYearId: row.school_year_id,
   schoolYearLabel: row.school_year_label,
   type: row.type,
@@ -69,9 +71,10 @@ export class EnrollmentsService {
       recordEnrollmentPayment(input: {
         enrollmentId: string;
         actorUserId: string;
+        amount: number;
         method: PaymentMethod;
         providerReference?: string;
-        schoolReceiptReference?: string;
+        schoolReceiptReference: string;
       }): Promise<{ payment: { id: string } & Record<string, unknown> }>;
       getFinancialStatus(studentId: string, schoolYearId: string): Promise<{
         remainingDue: number;
@@ -180,6 +183,9 @@ export class EnrollmentsService {
   async updateEnrollment(id: string, input: { classId?: string; status?: 'pending_cashier' | 'pending_dossier' }) {
     const current = await this.repository.findEnrollment(id);
     if (!current) throw new EnrollmentsModuleError('Enrollment not found', 404, 'ENROLLMENT_NOT_FOUND');
+    if (current.status === 'confirmed') {
+      throw new EnrollmentsModuleError('A confirmed enrollment cannot be edited', 409, 'CONFIRMED_ENROLLMENT_IMMUTABLE');
+    }
     if (input.status && !canTransitionEnrollment(current.status, input.status)) {
       throw new EnrollmentsModuleError('Invalid enrollment status transition', 409, 'INVALID_ENROLLMENT_TRANSITION');
     }
@@ -199,9 +205,10 @@ export class EnrollmentsService {
   }
 
   async confirmPayment(id: string, userId: string, input: {
+    amount: number;
     method: PaymentMethod;
     providerReference?: string;
-    schoolReceiptReference?: string;
+    schoolReceiptReference: string;
   }) {
     const current = await this.repository.findEnrollment(id);
     if (!current) throw new EnrollmentsModuleError('Enrollment not found', 404, 'ENROLLMENT_NOT_FOUND');
@@ -242,6 +249,27 @@ export class EnrollmentsService {
 
   listRequiredDocumentTypes(levelId?: string) { return this.repository.listRequiredDocumentTypes(levelId); }
   listRequiredDocumentLevels() { return this.repository.listRequiredDocumentLevels(); }
+  async createRequiredDocumentTypes(input: { levelIds: string[]; name: string; isMandatory: boolean }) {
+    if (!(await this.repository.levelsExist(input.levelIds))) {
+      throw new EnrollmentsModuleError('One or more levels were not found', 404, 'LEVEL_NOT_FOUND');
+    }
+    return this.repository.createRequiredDocumentTypes(input.levelIds.map((levelId) => ({
+      levelId,
+      name: input.name,
+      isMandatory: input.isMandatory,
+    })));
+  }
+  async syncRequiredDocumentTypes(input: {
+    documentTypeIds: string[]; levelIds: string[]; name: string; isMandatory: boolean;
+  }) {
+    if (!(await this.repository.levelsExist(input.levelIds))) {
+      throw new EnrollmentsModuleError('One or more levels were not found', 404, 'LEVEL_NOT_FOUND');
+    }
+    if (!(await this.repository.requiredDocumentTypesExist(input.documentTypeIds))) {
+      throw new EnrollmentsModuleError('One or more document rules were not found', 404, 'DOCUMENT_TYPE_NOT_FOUND');
+    }
+    return this.repository.syncRequiredDocumentTypes(input);
+  }
   async createRequiredDocumentType(input: { levelId: string; name: string; isMandatory: boolean }) {
     if (!(await this.repository.levelExists(input.levelId))) throw new EnrollmentsModuleError('Level not found', 404, 'LEVEL_NOT_FOUND');
     try {

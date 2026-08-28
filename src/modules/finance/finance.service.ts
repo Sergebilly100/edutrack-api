@@ -320,9 +320,10 @@ export class FinanceService {
   async recordEnrollmentPayment(input: {
     enrollmentId: string;
     actorUserId: string;
+    amount: number;
     method: PaymentMethod;
     providerReference?: string;
-    schoolReceiptReference?: string;
+    schoolReceiptReference: string;
   }) {
     return this.repository.db.transaction(async (tx) => {
       const repository = new FinanceRepository(tx as FinanceDb);
@@ -339,12 +340,20 @@ export class FinanceService {
       }
       const due = await this.amountDueWith(repository, enrollment.student_id, enrollment.school_year_id);
       const alreadyPaid = await repository.getConfirmedPaid(enrollment.student_id, enrollment.school_year_id);
-      const amount = Math.max(0, Math.round((due.totalDue - alreadyPaid) * 100) / 100);
-      if (amount <= 0) {
+      const remainingDue = Math.max(0, Math.round((due.totalDue - alreadyPaid) * 100) / 100);
+      if (remainingDue <= 0) {
         throw new FinanceModuleError(
           'No remaining amount can be recorded for this enrollment',
           409,
           'ENROLLMENT_NOTHING_TO_PAY'
+        );
+      }
+      const amount = Math.round(input.amount * 100) / 100;
+      if (amount > remainingDue) {
+        throw new FinanceModuleError(
+          'Payment amount cannot exceed the remaining amount due',
+          400,
+          'ENROLLMENT_PAYMENT_EXCEEDS_REMAINING_DUE'
         );
       }
       const payment = await repository.insertPayment({

@@ -57,13 +57,25 @@ describe('enrollments integration', () => {
     });
     expect(creation.status).toBe(201);
     expect(creation.body.enrollment.status).toBe('pending_cashier');
+    expect(creation.body.enrollment).toMatchObject({ studentFirstName: 'Aya', studentLastName: 'Yao' });
     expect(creation.body.enrollment).toMatchObject({ documentStatus: 'incomplete', missingMandatoryDocumentCount: 1 });
     expect(creation.body.missingMandatoryDocuments).toHaveLength(1);
 
-    const addedAfterEnrollment = await request().post('/api/v1/required-document-types').set(headers).send({
-      levelId: academic.targetLevelId, name: 'Photo identité', isMandatory: true,
+    const editableEnrollment = await request()
+      .patch(`/api/v1/enrollments/${creation.body.enrollment.id}`)
+      .set(headers)
+      .send({ classId: academic.targetClassId });
+    expect(editableEnrollment.status).toBe(200);
+
+    const addedAfterEnrollment = await request().post('/api/v1/required-document-types/bulk').set(headers).send({
+      levelIds: [academic.currentLevelId, academic.targetLevelId], name: 'Photo identité', isMandatory: true,
     });
     expect(addedAfterEnrollment.status).toBe(201);
+    expect(addedAfterEnrollment.body.documentTypes).toHaveLength(2);
+    const targetPhotoType = addedAfterEnrollment.body.documentTypes.find(
+      (documentType: { level_id: string }) => documentType.level_id === academic.targetLevelId
+    );
+    expect(targetPhotoType).toBeDefined();
 
     const synchronizedDocuments = await request()
       .get(`/api/v1/students/${studentId}/enrollment-documents`)
@@ -73,8 +85,20 @@ describe('enrollments integration', () => {
       'Extrait de naissance', 'Photo identité',
     ]);
 
+    const synchronizedRules = await request().put('/api/v1/required-document-types/bulk').set(headers).send({
+      documentTypeIds: addedAfterEnrollment.body.documentTypes.map((item: { id: string }) => item.id),
+      levelIds: [academic.targetLevelId],
+      name: 'Photo officielle',
+      isMandatory: false,
+    });
+    expect(synchronizedRules.status).toBe(200);
+    expect(synchronizedRules.body.documentTypes).toHaveLength(1);
+    expect(synchronizedRules.body.documentTypes[0]).toMatchObject({
+      id: targetPhotoType.id, level_id: academic.targetLevelId, name: 'Photo officielle', is_mandatory: false,
+    });
+
     const archived = await request()
-      .delete(`/api/v1/required-document-types/${addedAfterEnrollment.body.documentType.id}`)
+      .delete(`/api/v1/required-document-types/${targetPhotoType.id}`)
       .set(headers);
     expect(archived.status).toBe(200);
     expect(archived.body).toEqual({ archived: true });
@@ -87,7 +111,7 @@ describe('enrollments integration', () => {
       SELECT COUNT(*)::text AS count
       FROM ${tenantTable('student_documents')}
       WHERE student_id = $1::uuid AND document_type_id = $2::uuid
-    `, [studentId, addedAfterEnrollment.body.documentType.id]);
+    `, [studentId, targetPhotoType.id]);
     expect(retainedRows[0]?.count).toBe('1');
 
     const provided = await request()
@@ -96,14 +120,38 @@ describe('enrollments integration', () => {
       .send({ documentTypeId: documentType.body.documentType.id, status: 'provided', fileUrl: 'https://files.example.test/extrait.pdf' });
     expect(provided.status).toBe(201);
 
+    const missingReceiptReference = await request()
+      .post(`/api/v1/enrollments/${creation.body.enrollment.id}/confirm-payment`)
+      .set(headers)
+      .send({ amount: 30000, method: 'cash' });
+    expect(missingReceiptReference.status).toBe(400);
+    expect(missingReceiptReference.body.code).toBe('VALIDATION_ERROR');
+
+    const excessivePayment = await request()
+      .post(`/api/v1/enrollments/${creation.body.enrollment.id}/confirm-payment`)
+      .set(headers)
+      .send({ amount: 120001, method: 'cash', schoolReceiptReference: 'RC-OVER-001' });
+    expect(excessivePayment.status).toBe(400);
+    expect(excessivePayment.body.code).toBe('ENROLLMENT_PAYMENT_EXCEEDS_REMAINING_DUE');
+
     const confirmation = await request()
       .post(`/api/v1/enrollments/${creation.body.enrollment.id}/confirm-payment`)
       .set(headers)
-      .send({ method: 'cash' });
+      .send({ amount: 30000, method: 'cash', schoolReceiptReference: 'RC-ENROLL-001' });
     expect(confirmation.status).toBe(200);
     expect(confirmation.body.enrollment).toMatchObject({ status: 'confirmed', confirmedByUserId: context.directorUserId });
     expect(confirmation.body.missingMandatoryDocuments).toHaveLength(0);
-    expect(confirmation.body.payment).toMatchObject({ amount: 120000, source: 'cashier_manual' });
+    expect(confirmation.body.payment).toMatchObject({ amount: 30000, source: 'cashier_manual' });
+    const immutableEnrollment = await request()
+      .patch(`/api/v1/enrollments/${creation.body.enrollment.id}`)
+      .set(headers)
+      .send({ classId: academic.targetClassId });
+    expect(immutableEnrollment.status).toBe(409);
+    expect(immutableEnrollment.body.code).toBe('CONFIRMED_ENROLLMENT_IMMUTABLE');
+    const financialStatus = await request()
+      .get(`/api/v1/students/${studentId}/financial-status?school_year_id=${academic.targetYearId}`)
+      .set(headers);
+    expect(financialStatus.body.financialStatus.remainingDue).toBe(90000);
   });
 
   it('confirme une réinscription malgré un dossier incomplet', async () => {
@@ -157,7 +205,7 @@ describe('enrollments integration', () => {
     const confirmation = await request()
       .post(`/api/v1/enrollments/${creation.body.enrollment.id}/confirm-payment`)
       .set(headers)
-      .send({ method: 'mobile_money', providerReference: 'MOMO-ENROLLMENT-001' });
+      .send({ amount: 30000, method: 'mobile_money', schoolReceiptReference: 'RC-ENROLL-002' });
     expect(confirmation.status).toBe(200);
     expect(confirmation.body.enrollment.status).toBe('confirmed');
     expect(confirmation.body.missingMandatoryDocuments).toHaveLength(1);

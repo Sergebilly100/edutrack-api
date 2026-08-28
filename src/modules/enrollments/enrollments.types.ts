@@ -49,6 +49,16 @@ export const requiredDocumentListQuerySchema = z.object({ level_id: z.string().u
 export const createRequiredDocumentTypeBodySchema = z
   .object({ levelId: z.string().uuid(), name: z.string().trim().min(1).max(150), isMandatory: z.boolean().default(true) })
   .strict();
+export const createRequiredDocumentTypesBodySchema = z
+  .object({
+    levelIds: z.array(z.string().uuid()).min(1).max(50).transform((ids) => [...new Set(ids)]),
+    name: z.string().trim().min(1).max(150),
+    isMandatory: z.boolean().default(true),
+  })
+  .strict();
+export const syncRequiredDocumentTypesBodySchema = createRequiredDocumentTypesBodySchema.extend({
+  documentTypeIds: z.array(z.string().uuid()).min(1).max(50).transform((ids) => [...new Set(ids)]),
+});
 export const updateRequiredDocumentTypeBodySchema = z
   .object({
     name: z.string().trim().min(1).max(150).optional(),

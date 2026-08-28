@@ -59,7 +59,13 @@ describe('enrollment workflow rules', () => {
       getFinancialStatus: vi.fn().mockResolvedValue({ remainingDue: 0 }),
     };
     const service = new EnrollmentsService(repository as never, paymentRecorder);
-    const result = await service.confirmPayment('enrollment', 'user', { method: 'cash' });
+    const result = await service.confirmPayment('enrollment', 'user', {
+      amount: 25_000, method: 'cash', schoolReceiptReference: 'RC-UNIT-001',
+    });
+    expect(paymentRecorder.recordEnrollmentPayment).toHaveBeenCalledWith({
+      enrollmentId: 'enrollment', actorUserId: 'user', amount: 25_000, method: 'cash',
+      schoolReceiptReference: 'RC-UNIT-001',
+    });
     expect(result.enrollment.status).toBe('confirmed');
     expect(result.payment.id).toBe('payment');
     expect(result.missingMandatoryDocuments).toHaveLength(1);

@@ -13,8 +13,10 @@ import {
   createEnrollmentBodySchema,
   confirmEnrollmentPaymentBodySchema,
   createRequiredDocumentTypeBodySchema,
+  createRequiredDocumentTypesBodySchema,
   enrollmentListQuerySchema,
   requiredDocumentListQuerySchema,
+  syncRequiredDocumentTypesBodySchema,
   studentParamsSchema,
   updateEnrollmentBodySchema,
   updateRequiredDocumentTypeBodySchema,
@@ -102,6 +104,18 @@ export default async function enrollmentsController(
   app.post('/api/v1/required-document-types', { preHandler: requirePermission('enrollments.edit') }, async (request, reply) => {
     try { const body = createRequiredDocumentTypeBodySchema.parse(request.body); return reply.code(201).send({ documentType: await withService(request, (service) => service.createRequiredDocumentType(body)) }); }
     catch (error) { return handleError(request, reply, error); }
+  });
+  app.post('/api/v1/required-document-types/bulk', { preHandler: requirePermission('enrollments.edit') }, async (request, reply) => {
+    try {
+      const body = createRequiredDocumentTypesBodySchema.parse(request.body);
+      return reply.code(201).send({ documentTypes: await withService(request, (service) => service.createRequiredDocumentTypes(body)) });
+    } catch (error) { return handleError(request, reply, error); }
+  });
+  app.put('/api/v1/required-document-types/bulk', { preHandler: requirePermission('enrollments.edit') }, async (request, reply) => {
+    try {
+      const body = syncRequiredDocumentTypesBodySchema.parse(request.body);
+      return reply.send({ documentTypes: await withService(request, (service) => service.syncRequiredDocumentTypes(body)) });
+    } catch (error) { return handleError(request, reply, error); }
   });
   app.patch('/api/v1/required-document-types/:id', { preHandler: requirePermission('enrollments.edit') }, async (request, reply) => {
     try { const { id } = uuidParamsSchema.parse(request.params); const body = updateRequiredDocumentTypeBodySchema.parse(request.body); return reply.send({ documentType: await withService(request, (service) => service.updateRequiredDocumentType(id, body)) }); }

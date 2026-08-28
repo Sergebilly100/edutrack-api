@@ -52,9 +52,10 @@ export const recordPaymentBodySchema = z.object({
 }).strict();
 
 export const confirmEnrollmentPaymentBodySchema = z.object({
+  amount: positiveMoneySchema,
   method: paymentMethodSchema,
   providerReference: z.string().trim().min(1).max(255).optional(),
-  schoolReceiptReference: z.string().trim().min(1).max(255).optional(),
+  schoolReceiptReference: z.string().trim().min(1, 'Cash receipt reference is required').max(255),
 }).strict();
 
 export const cancelPaymentBodySchema = z.object({

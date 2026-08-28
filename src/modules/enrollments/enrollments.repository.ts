@@ -13,6 +13,7 @@ export type EnrollmentRow = {
   id: string; student_id: string; class_id: string; school_year_id: string;
   type: EnrollmentType; status: EnrollmentStatus; enrolled_at: Date | string;
   confirmed_by_user_id: string | null; class_name: string; school_year_label: string;
+  student_first_name: string; student_last_name: string;
   required_document_count: number; missing_mandatory_document_count: number;
 };
 
@@ -33,6 +34,7 @@ export class EnrollmentsRepository {
   async listEnrollments(filters: { schoolYearId?: string; status?: EnrollmentStatus; type?: EnrollmentType }) {
     const result = await this.db.execute<EnrollmentRow>(sql`
       SELECT e.*, c.name AS class_name, sy.label AS school_year_label,
+             s.first_name AS student_first_name, s.last_name AS student_last_name,
              COUNT(rdt.id)::int AS required_document_count,
              COUNT(rdt.id) FILTER (
                WHERE rdt.is_mandatory AND COALESCE(sd.status::text, 'missing') <> 'provided'
@@ -40,12 +42,13 @@ export class EnrollmentsRepository {
       FROM enrollments e
       INNER JOIN classes c ON c.id = e.class_id
       INNER JOIN school_years sy ON sy.id = e.school_year_id
+      INNER JOIN students s ON s.id = e.student_id
       LEFT JOIN required_document_types rdt ON rdt.level_id = c.level_id AND rdt.is_active
       LEFT JOIN student_documents sd ON sd.student_id = e.student_id AND sd.document_type_id = rdt.id
       WHERE (${filters.schoolYearId ?? null}::uuid IS NULL OR e.school_year_id = ${filters.schoolYearId ?? null}::uuid)
         AND (${filters.status ?? null}::text IS NULL OR e.status::text = ${filters.status ?? null})
         AND (${filters.type ?? null}::text IS NULL OR e.type::text = ${filters.type ?? null})
-      GROUP BY e.id, c.name, sy.label
+      GROUP BY e.id, c.name, sy.label, s.first_name, s.last_name
       ORDER BY e.enrolled_at DESC
     `);
     return rows<EnrollmentRow>(result);
@@ -54,6 +57,7 @@ export class EnrollmentsRepository {
   async findEnrollment(id: string) {
     const result = await this.db.execute<EnrollmentRow>(sql`
       SELECT e.*, c.name AS class_name, sy.label AS school_year_label,
+             s.first_name AS student_first_name, s.last_name AS student_last_name,
              COUNT(rdt.id)::int AS required_document_count,
              COUNT(rdt.id) FILTER (
                WHERE rdt.is_mandatory AND COALESCE(sd.status::text, 'missing') <> 'provided'
@@ -61,10 +65,11 @@ export class EnrollmentsRepository {
       FROM enrollments e
       INNER JOIN classes c ON c.id = e.class_id
       INNER JOIN school_years sy ON sy.id = e.school_year_id
+      INNER JOIN students s ON s.id = e.student_id
       LEFT JOIN required_document_types rdt ON rdt.level_id = c.level_id AND rdt.is_active
       LEFT JOIN student_documents sd ON sd.student_id = e.student_id AND sd.document_type_id = rdt.id
       WHERE e.id = ${id}::uuid
-      GROUP BY e.id, c.name, sy.label
+      GROUP BY e.id, c.name, sy.label, s.first_name, s.last_name
       LIMIT 1
     `);
     return rows<EnrollmentRow>(result)[0] ?? null;
@@ -166,6 +171,15 @@ export class EnrollmentsRepository {
     return rows<{ exists: boolean }>(result)[0]?.exists ?? false;
   }
 
+  async levelsExist(levelIds: string[]) {
+    const result = await this.db.execute<{ count: number }>(sql`
+      SELECT COUNT(*)::int AS count
+      FROM levels
+      WHERE id IN (${sql.join(levelIds.map((levelId) => sql`${levelId}::uuid`), sql`, `)})
+    `);
+    return Number(rows<{ count: number }>(result)[0]?.count ?? 0) === levelIds.length;
+  }
+
   async listRequiredDocumentLevels() {
     const result = await this.db.execute<{ id: string; name: string; order_index: number }>(sql`
       SELECT id, name, order_index
@@ -186,6 +200,79 @@ export class EnrollmentsRepository {
       RETURNING *
     `);
     return rows<RequiredDocumentTypeRow>(result)[0];
+  }
+
+  async createRequiredDocumentTypes(inputs: Array<{ levelId: string; name: string; isMandatory: boolean }>) {
+    return this.db.transaction(async (tx) => {
+      const repository = new EnrollmentsRepository(tx as Db);
+      const created: RequiredDocumentTypeRow[] = [];
+      for (const input of inputs) {
+        const documentType = await repository.createRequiredDocumentType(input);
+        if (!documentType) throw new Error('Failed to create required document type');
+        await repository.syncRequiredDocumentToOpenEnrollments(documentType.id, input.levelId);
+        created.push(documentType);
+      }
+      return created;
+    });
+  }
+
+  async requiredDocumentTypesExist(ids: string[]) {
+    const result = await this.db.execute<{ count: number }>(sql`
+      SELECT COUNT(*)::int AS count
+      FROM required_document_types
+      WHERE id IN (${sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)}) AND is_active
+    `);
+    return Number(rows<{ count: number }>(result)[0]?.count ?? 0) === ids.length;
+  }
+
+  async findRequiredDocumentTypesByIds(ids: string[]) {
+    const result = await this.db.execute<RequiredDocumentTypeRow>(sql`
+      SELECT * FROM required_document_types
+      WHERE id IN (${sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)}) AND is_active
+      ORDER BY created_at, id
+    `);
+    return rows<RequiredDocumentTypeRow>(result);
+  }
+
+  async syncRequiredDocumentTypes(input: {
+    documentTypeIds: string[]; levelIds: string[]; name: string; isMandatory: boolean;
+  }) {
+    return this.db.transaction(async (tx) => {
+      const repository = new EnrollmentsRepository(tx as Db);
+      const existing = await repository.findRequiredDocumentTypesByIds(input.documentTypeIds);
+      if (existing.length !== input.documentTypeIds.length) throw new Error('Required document type group changed');
+      const selectedLevels = new Set(input.levelIds);
+      const retainedLevels = new Set<string>();
+
+      for (const documentType of existing) {
+        if (!selectedLevels.has(documentType.level_id)) {
+          await repository.deleteRequiredDocumentType(documentType.id);
+          continue;
+        }
+        const updated = await repository.updateRequiredDocumentType(documentType.id, {
+          name: input.name,
+          isMandatory: input.isMandatory,
+        });
+        if (!updated) throw new Error('Failed to update required document type');
+        await repository.syncRequiredDocumentToOpenEnrollments(updated.id, documentType.level_id);
+        retainedLevels.add(documentType.level_id);
+      }
+
+      for (const levelId of input.levelIds) {
+        if (retainedLevels.has(levelId)) continue;
+        const created = await repository.createRequiredDocumentType({
+          levelId,
+          name: input.name,
+          isMandatory: input.isMandatory,
+        });
+        if (!created) throw new Error('Failed to create required document type');
+        await repository.syncRequiredDocumentToOpenEnrollments(created.id, levelId);
+      }
+
+      return (await repository.listRequiredDocumentTypes()).filter(
+        (documentType) => documentType.name === input.name && selectedLevels.has(documentType.level_id)
+      );
+    });
   }
 
   async updateRequiredDocumentType(id: string, input: { name?: string; isMandatory?: boolean; isActive?: boolean }) {
