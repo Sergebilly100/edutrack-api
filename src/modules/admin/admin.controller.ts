@@ -327,6 +327,17 @@ export default async function adminController(
   );
 
   // ── Import « prise en main » (Tâche 8b) : moteur générique par mapping ────
+  const midyearMappingProfileBodySchema = z.object({
+    label: z.string().trim().min(1).max(255).optional(),
+    fields: z.array(z.object({
+      sourceColumnLabel: z.string().trim().min(1).max(255),
+      targetField: z.string().trim().min(1).max(255),
+      translations: z.array(z.object({
+        sourceValue: z.string().trim().min(1).max(255),
+        targetValue: z.string().trim().min(1).max(255),
+      }).strict()).default([]),
+    }).strict()).min(1),
+  }).strict();
   const midyearFile = async (
     request: FastifyRequest,
     reply: FastifyReply,
@@ -364,6 +375,54 @@ export default async function adminController(
   };
 
   for (const importType of ['levels', 'subjects', 'rooms', 'classes', 'students', 'payments'] as const) {
+    app.get(
+      `/api/v1/admin/schools/:tenantId/midyear-import/${importType}/profile`,
+      { preHandler: preHandlers },
+      async (request, reply) => {
+        try {
+          const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+          const schemaNameResult = await ensurePublicDb(request).execute<{ schema_name: string }>(
+            sql`SELECT schema_name FROM public.tenants WHERE id = ${tenantId} LIMIT 1`
+          );
+          const targetSchema = schemaNameResult.rows?.[0]?.schema_name;
+          if (!targetSchema) return reply.code(404).send({ error: 'Tenant not found', code: 'NOT_FOUND', statusCode: 404 });
+          const profile = await withTenantSchema(targetSchema, (tenantDb) =>
+            buildMidyearImportService(tenantDb).getProfile(importType)
+          );
+          return reply.send({ profile });
+        } catch (error) {
+          if (error instanceof MidyearImportError) return reply.code(error.statusCode).send({ error: error.message, code: error.code, statusCode: error.statusCode });
+          return handleError(reply, error, request);
+        }
+      },
+    );
+    app.put(
+      `/api/v1/admin/schools/:tenantId/midyear-import/${importType}/profile`,
+      { preHandler: preHandlers },
+      async (request, reply) => {
+        try {
+          const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
+          const body = midyearMappingProfileBodySchema.parse(request.body);
+          const schemaNameResult = await ensurePublicDb(request).execute<{ schema_name: string }>(
+            sql`SELECT schema_name FROM public.tenants WHERE id = ${tenantId} LIMIT 1`
+          );
+          const targetSchema = schemaNameResult.rows?.[0]?.schema_name;
+          if (!targetSchema) return reply.code(404).send({ error: 'Tenant not found', code: 'NOT_FOUND', statusCode: 404 });
+          const profile = await withTenantSchema(targetSchema, (tenantDb) =>
+            buildMidyearImportService(tenantDb).saveProfile({
+              importType,
+              label: body.label,
+              actorUserId: request.user!.userId,
+              fields: body.fields.map((field) => ({ ...field, isRequired: true })),
+            })
+          );
+          return reply.send({ profile });
+        } catch (error) {
+          if (error instanceof MidyearImportError) return reply.code(error.statusCode).send({ error: error.message, code: error.code, statusCode: error.statusCode });
+          return handleError(reply, error, request);
+        }
+      },
+    );
     app.post(
       `/api/v1/admin/schools/:tenantId/midyear-import/${importType}/analyze`,
       { preHandler: preHandlers },

@@ -10,6 +10,7 @@ import {
 import { parseMappingWorkbook } from '../../shared/import-mapping/workbook.js';
 import type { TenantDb } from '../../shared/database/db.js';
 import { FinanceRepository, type FinanceDb } from './finance.repository.js';
+import { PaymentImportRepository, type MappingProfile } from './payment-import.repository.js';
 
 const s = (value: unknown): string => String(value ?? '').trim();
 
@@ -60,6 +61,55 @@ export const MIDYEAR_IMPORTS: Record<
 export class MidyearImportService {
   constructor(readonly db: TenantDb) {}
 
+  private profileType(importType: string): string {
+    if (!MIDYEAR_IMPORTS[importType]) {
+      throw new MidyearImportError('Type d\'import inconnu', 400, 'IMPORT_TYPE_UNKNOWN');
+    }
+    return `midyear_${importType}`;
+  }
+
+  async getProfile(importType: string): Promise<MappingProfile | null> {
+    return new PaymentImportRepository(this.db as FinanceDb).getActiveProfile(this.profileType(importType));
+  }
+
+  async saveProfile(input: {
+    importType: string;
+    label?: string;
+    actorUserId: string;
+    fields: MappingFieldDefinition[];
+  }): Promise<MappingProfile> {
+    const config = MIDYEAR_IMPORTS[input.importType];
+    const importType = this.profileType(input.importType);
+    const expectedTargets = new Set(config.targets.map((target) => target.key));
+    const suppliedTargets = input.fields.map((field) => field.targetField);
+    if (new Set(suppliedTargets).size !== suppliedTargets.length) {
+      throw new MidyearImportError('Chaque champ cible ne peut être mappé qu’une fois', 400, 'MAPPING_TARGET_DUPLICATED');
+    }
+    if (suppliedTargets.some((target) => !expectedTargets.has(target))) {
+      throw new MidyearImportError('Le profil contient un champ cible inconnu', 400, 'MAPPING_TARGET_UNKNOWN');
+    }
+    const missingRequiredTargets = config.targets
+      .filter((target) => target.required && !suppliedTargets.includes(target.key))
+      .map((target) => target.key);
+    if (missingRequiredTargets.length > 0) {
+      throw new MidyearImportError(
+        `Champs obligatoires non mappés : ${missingRequiredTargets.join(', ')}`,
+        400,
+        'MAPPING_REQUIRED_FIELDS_MISSING'
+      );
+    }
+
+    return new PaymentImportRepository(this.db as FinanceDb).saveActiveProfile({
+      importType,
+      label: input.label,
+      actorUserId: input.actorUserId,
+      fields: input.fields.map((field) => ({
+        ...field,
+        isRequired: config.targets.find((target) => target.key === field.targetField)?.required ?? false,
+      })),
+    });
+  }
+
   private async assertDependencies(importType: string): Promise<void> {
     const dep = MIDYEAR_IMPORTS[importType]?.dependsOn;
     if (!dep) return;
@@ -89,25 +139,8 @@ export class MidyearImportService {
     await this.assertDependencies(importType);
 
     const workbook = await parseMappingWorkbook(fileBuffer);
-    const profileResult = await this.db.execute<{ fields: unknown }>(sql`
-      SELECT json_agg(json_build_object(
-        'sourceColumnLabel', f.source_column_label,
-        'targetField', f.target_field,
-        'translations', COALESCE((
-          SELECT json_agg(json_build_object('sourceValue', t.source_value, 'targetValue', t.target_value))
-          FROM import_mapping_value_translations t WHERE t.mapping_field_id = f.id
-        ), '[]'::json)
-      ) ORDER BY f.target_field)::json AS fields
-      FROM import_mapping_fields f
-      WHERE f.profile_id = (
-        SELECT id FROM import_mapping_profiles
-        WHERE import_type = ${'midyear_' + importType} AND is_active = true LIMIT 1
-      )
-    `);
-    const fieldsRaw = (profileResult.rows?.[0]?.fields ?? []) as Array<{
-      sourceColumnLabel: string; targetField: string; translations: Array<{ sourceValue: string; targetValue: string }>;
-    }>;
-    const fields: MappingFieldDefinition[] = fieldsRaw.map((f) => ({ ...f, isRequired: true }));
+    const profile = await this.getProfile(importType);
+    const fields = profile?.fields ?? [];
 
     const resolution = resolveMappingByHeaders(workbook.headers, fields);
     return {
@@ -115,7 +148,8 @@ export class MidyearImportService {
       rowCount: workbook.rows.length,
       matchedFields: resolution.matched,
       unmatchedHeaders: resolution.unmatchedHeaders,
-      missingTargets: config.targets.filter((t) => t.required).map((t) => t.key),
+      profile,
+      missingTargets: resolution.missingRequiredTargets,
       sampleRows: workbook.rows.slice(0, 10),
     };
   }
@@ -126,23 +160,9 @@ export class MidyearImportService {
     await this.assertDependencies(importType);
 
     const workbook = await parseMappingWorkbook(fileBuffer);
-    const profileResult = await this.db.execute<{ id: string }>(sql`
-      SELECT id::text FROM import_mapping_profiles
-      WHERE import_type = ${'midyear_' + importType} AND is_active = true LIMIT 1
-    `);
-    const profileId = profileResult.rows?.[0]?.id;
-    if (!profileId) throw new MidyearImportError('Configurez d\'abord le mapping pour ce fichier', 409, 'MAPPING_PROFILE_REQUIRED');
-
-    // Mapping résolu depuis le profil actif
-    const fieldsRows = await this.db.execute<{ source_column_label: string; target_field: string }>(sql`
-      SELECT source_column_label, target_field FROM import_mapping_fields WHERE profile_id = ${profileId}::uuid
-    `);
-    const fields: MappingFieldDefinition[] = (fieldsRows.rows ?? []).map((row) => ({
-      sourceColumnLabel: row.source_column_label,
-      targetField: row.target_field,
-      isRequired: true,
-      translations: [],
-    }));
+    const profile = await this.getProfile(importType);
+    if (!profile) throw new MidyearImportError('Configurez d\'abord le mapping pour ce fichier', 409, 'MAPPING_PROFILE_REQUIRED');
+    const fields = profile.fields;
     const resolution = resolveMappingByHeaders(workbook.headers, fields);
     if (resolution.missingRequiredTargets.length > 0) {
       throw new MidyearImportError(`Colonnes introuvables : ${resolution.missingRequiredTargets.join(', ')}`, 422, 'MAPPING_COLUMNS_MISSING');

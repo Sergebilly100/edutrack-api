@@ -55,6 +55,7 @@ export const createSchoolBodySchema = z.object({
     }),
   plan: z.enum(TENANT_PLAN_VALUES).default('essential'),
   monetizeParentAlerts: z.boolean().default(false),
+  midYearOnboarding: z.boolean().default(false),
 });
 
 export const updateTenantParamsSchema = z.object({

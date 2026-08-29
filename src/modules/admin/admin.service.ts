@@ -1184,6 +1184,7 @@ export const createSchool = async (
       max_admin_positions,
       max_users,
       active_school_year,
+      mid_year_onboarding,
       trial_ends_at
     )
     VALUES (
@@ -1197,6 +1198,7 @@ export const createSchool = async (
       ${planConfig.max_admin_positions},
       ${planConfig.max_users},
       ${payload.active_school_year},
+      ${payload.midYearOnboarding},
       ${trialEndsAt}
     )
     RETURNING id, schema_name
