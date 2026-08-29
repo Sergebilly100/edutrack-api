@@ -49,6 +49,18 @@ export const computeClassStats = (averages: number[]): ClassStats | null => {
   };
 };
 
+export const computeWeightedGeneralAverage = (
+  entries: Array<{ average: number; coefficient: number }>
+): number | null => {
+  const totalCoefficient = entries.reduce((sum, entry) => sum + entry.coefficient, 0);
+  if (totalCoefficient <= 0) return null;
+  const weightedTotal = entries.reduce(
+    (sum, entry) => sum + entry.average * entry.coefficient,
+    0
+  );
+  return Math.round((weightedTotal / totalCoefficient) * 1000) / 1000;
+};
+
 export class ReportCardsService {
   constructor(private readonly repository: ReportCardsRepository) {}
 
@@ -64,9 +76,32 @@ export class ReportCardsService {
     }
 
     const roster = await this.repository.listClassStudents(classId);
-    const stats = computeClassStats(
-      (await this.repository.listGeneralAverages(classId, gradingPeriodId)).map((row) => row.average)
+    const subjectAverages = await this.repository.listSubjectAverages(classId, gradingPeriodId);
+    const cachedGeneralAverages = await this.repository.listGeneralAverages(classId, gradingPeriodId);
+    const levelSubjects = await this.repository.listLevelSubjects(klass.levelId);
+    const isLastPeriod = await this.repository.isLastPeriodOfYear(klass.schoolYearId, gradingPeriodId);
+
+    const conducts = new Map(
+      await Promise.all(roster.map(async (student) => [
+        student.id,
+        await this.repository.findConductGrade(student.id, gradingPeriodId),
+      ] as const))
     );
+    const generalAverages = roster.flatMap((student) => {
+      const entries = subjectAverages
+        .filter((row) => row.studentId === student.id)
+        .flatMap((row) => {
+          const subject = levelSubjects.find((item) => item.id === row.subjectId);
+          return subject ? [{ average: row.average, coefficient: subject.coefficient }] : [];
+        });
+      const conduct = conducts.get(student.id);
+      if (conduct) entries.push({ average: conduct.note, coefficient: conduct.coefficient });
+      const average = computeWeightedGeneralAverage(entries)
+        ?? cachedGeneralAverages.find((row) => row.studentId === student.id)?.average
+        ?? null;
+      return average === null ? [] : [{ studentId: student.id, average }];
+    });
+    const stats = computeClassStats(generalAverages.map((row) => row.average));
     // Les statistiques de classe portent sur les élèves notés ; l'effectif
     // affiché reste celui de la classe entière si plus grand.
     if (!stats) {
@@ -76,11 +111,6 @@ export class ReportCardsService {
         'NO_AVERAGES_COMPUTED'
       );
     }
-
-    const generalAverages = await this.repository.listGeneralAverages(classId, gradingPeriodId);
-    const subjectAverages = await this.repository.listSubjectAverages(classId, gradingPeriodId);
-    const levelSubjects = await this.repository.listLevelSubjects(klass.levelId);
-    const isLastPeriod = await this.repository.isLastPeriodOfYear(klass.schoolYearId, gradingPeriodId);
 
     const generalRanks = computeRankMap(generalAverages.map((row) => ({ key: row.studentId, value: row.average })));
 
@@ -128,7 +158,7 @@ export class ReportCardsService {
         });
       }
 
-      const conduct = await this.repository.findConductGrade(student.id, gradingPeriodId);
+      const conduct = conducts.get(student.id);
       if (conduct) {
         lines.push({
           subjectId: null,

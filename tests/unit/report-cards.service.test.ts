@@ -4,6 +4,7 @@ import type { ReportCardsRepository } from '../../src/modules/report-cards/repor
 import {
   computeClassStats,
   computeRankMap,
+  computeWeightedGeneralAverage,
   ReportCardsService,
 } from '../../src/modules/report-cards/report-cards.service.js';
 
@@ -49,6 +50,16 @@ describe('computeClassStats (statistiques de classe)', () => {
 
   it('renvoie null sans données', () => {
     expect(computeClassStats([])).toBeNull();
+  });
+});
+
+describe('computeWeightedGeneralAverage (matières + conduite)', () => {
+  it('applique le coefficient de conduite comme celui d’une matière', () => {
+    expect(computeWeightedGeneralAverage([
+      { average: 16, coefficient: 4 },
+      { average: 13, coefficient: 2 },
+      { average: 17, coefficient: 1 },
+    ])).toBe(15.286);
   });
 });
 
@@ -104,12 +115,13 @@ describe('ReportCardsService.generateForClass', () => {
     const firstCall = repository.replaceGeneratedCard.mock.calls[0]![0] as Record<string, unknown>;
     expect(firstCall.studentId).toBe('student-a');
     // Stats de classe snapshotées
-    expect(firstCall.classAverage).toBe(12.5);
+    expect(firstCall.classAverage).toBe(12.643);
     expect(firstCall.classMinAverage).toBe(10);
-    expect(firstCall.classMaxAverage).toBe(15);
+    expect(firstCall.classMaxAverage).toBe(15.286);
     expect(firstCall.classHeadcount).toBe(2);
     // Rang général
     expect(firstCall.rank).toBe(1);
+    expect(firstCall.generalAverage).toBe(15.286);
     // Lignes : 2 matières + conduite, rang matière correct
     const lines = firstCall.lines as Array<{ subjectId: string | null; rank: number | null; lineType: string; average: number; coefficient: number }>;
     expect(lines).toHaveLength(3);

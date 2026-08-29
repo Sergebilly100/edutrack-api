@@ -17,6 +17,7 @@ import {
   updateSubjectBodySchema,
   upsertEvaluationGradeBodySchema,
   evaluationsScopeQuerySchema,
+  spontaneousGradeBodySchema,
 } from './academic-grading.types.js';
 import { AcademicModuleError, buildAcademicService } from './academic.service.js';
 import {
@@ -366,6 +367,21 @@ export default async function academicController(app: FastifyInstance): Promise<
   );
 
   app.get(
+    '/api/v1/academic/teacher-context',
+    { preHandler: requireTeacher },
+    async (request, reply) => {
+      try {
+        const result = await withTenantSchema(request.claims!.schemaName, (tenantDb) =>
+          buildAcademicGradingService(tenantDb).getTeacherAcademicContext(request.user!.userId)
+        );
+        return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.get(
     '/api/v1/evaluations/scope',
     { preHandler: requireTeacher },
     async (request, reply) => {
@@ -394,6 +410,20 @@ export default async function academicController(app: FastifyInstance): Promise<
         )
       );
       return reply.code(201).send({ evaluation });
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.post('/api/v1/evaluations/spontaneous', { preHandler: requireTeacher }, async (request, reply) => {
+    try {
+      const body = spontaneousGradeBodySchema.parse(request.body ?? {});
+      const result = await withTenantSchema(request.claims!.schemaName, (tenantDb) =>
+        tenantDb.transaction((tx) =>
+          buildAcademicGradingService(tx).createSpontaneousGrade(body, request.user!.userId)
+        )
+      );
+      return reply.code(201).send(result);
     } catch (error) {
       return handleError(request, reply, error);
     }

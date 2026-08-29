@@ -9,6 +9,14 @@ export type DossierEvent = {
   detail: string | null;
 };
 
+export type StudentDossierProfile = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  className: string;
+  matricule: string | null;
+};
+
 /**
  * Dossier élève (Tâche 7c) : timeline chronologique en lecture seule,
  * agrégeant inscriptions, paiements, bulletins publiés, absences et documents.
@@ -16,6 +24,63 @@ export type DossierEvent = {
  */
 export class StudentDossierRepository {
   constructor(readonly db: TenantDb) {}
+
+  async findStudentProfile(studentId: string): Promise<StudentDossierProfile | null> {
+    const result = await this.db.execute<{
+      id: string;
+      first_name: string;
+      last_name: string;
+      class_name: string;
+      matricule: string | null;
+    }>(sql`
+      SELECT s.id::text, s.first_name, s.last_name, c.name AS class_name, s.matricule
+      FROM students s
+      INNER JOIN classes c ON c.id = s.class_id
+      WHERE s.id = ${studentId}::uuid
+      LIMIT 1
+    `);
+    const row = result.rows?.[0];
+    if (!row) return null;
+    return {
+      id: row.id,
+      firstName: row.first_name,
+      lastName: row.last_name,
+      className: row.class_name,
+      matricule: row.matricule,
+    };
+  }
+
+  async findTeacherIdByUserId(userId: string): Promise<string | null> {
+    const result = await this.db.execute<{ id: string }>(sql`
+      SELECT id::text FROM teachers WHERE user_id = ${userId}::uuid LIMIT 1
+    `);
+    return result.rows?.[0]?.id ?? null;
+  }
+
+  async teacherCanAccessStudent(teacherId: string, studentId: string, date: string): Promise<boolean> {
+    const result = await this.db.execute<{ has_access: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1
+        FROM students st
+        INNER JOIN schedules s ON s.class_id = st.class_id
+        INNER JOIN schedule_periods sp ON sp.id = s.schedule_period_id
+        WHERE st.id = ${studentId}::uuid
+          AND s.teacher_id = ${teacherId}::uuid
+          AND s.is_active = true
+          AND (s.start_date IS NULL OR s.start_date <= ${date}::date)
+          AND (s.end_date IS NULL OR s.end_date >= ${date}::date)
+          AND sp.is_active = true
+          AND sp.valid_from <= ${date}::date
+          AND sp.valid_to >= ${date}::date
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = ${date}::date
+          )
+        LIMIT 1
+      ) AS has_access
+    `);
+    return result.rows?.[0]?.has_access ?? false;
+  }
 
   async listEvents(studentId: string, teacherId: string | null): Promise<DossierEvent[]> {
     const result = await this.db.execute<{
@@ -48,6 +113,7 @@ export class StudentDossierRepository {
         FROM report_cards rc
         INNER JOIN grading_periods gp ON gp.id = rc.grading_period_id
         WHERE rc.student_id = ${studentId}::uuid AND rc.status = 'published'
+          AND (${teacherId}::uuid IS NULL)
 
         UNION ALL
         SELECT ast.date::date,

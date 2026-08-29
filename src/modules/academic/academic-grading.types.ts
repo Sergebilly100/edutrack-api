@@ -122,3 +122,14 @@ export const evaluationsScopeQuerySchema = z.object({
   gradingPeriodId: z.string().uuid(),
 });
 export type EvaluationsScopeQuery = z.infer<typeof evaluationsScopeQuerySchema>;
+
+export const spontaneousGradeBodySchema = z.object({
+  lessonSlotId: z.string().uuid(),
+  subjectId: z.string().uuid(),
+  classId: z.string().uuid(),
+  gradingPeriodId: z.string().uuid(),
+  studentId: z.string().uuid(),
+  polarity: z.enum(['positive', 'negative']),
+  comment: z.string().trim().min(1).max(2000),
+});
+export type SpontaneousGradeInput = z.infer<typeof spontaneousGradeBodySchema>;

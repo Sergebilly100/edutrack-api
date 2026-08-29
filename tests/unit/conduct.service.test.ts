@@ -13,7 +13,12 @@ const repository = {
   findStudentContext: vi.fn(),
   findTeacherByUserId: vi.fn(),
   teacherTeachesClass: vi.fn(),
+  teacherHasStartedAverageCalculation: vi.fn(),
   gradingPeriodExists: vi.fn(),
+  gradingPeriodEndDate: vi.fn(),
+  gradingPeriodMatchesClass: vi.fn(),
+  studentsBelongToClass: vi.fn(),
+  listTeacherConductScope: vi.fn(),
   gradingPeriodLabel: vi.fn(),
   insertTeacherConductInput: vi.fn(),
   listConductInputsForStudent: vi.fn(),
@@ -33,6 +38,7 @@ const studentContext = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  repository.gradingPeriodEndDate.mockResolvedValue('2099-12-31');
 });
 
 describe('conduct.service createEducatorAssignment', () => {
@@ -128,6 +134,7 @@ describe('conduct.service submitTeacherConductInput', () => {
     repository.findStudentContext.mockResolvedValue(studentContext);
     repository.gradingPeriodExists.mockResolvedValue(true);
     repository.teacherTeachesClass.mockResolvedValue(true);
+    repository.teacherHasStartedAverageCalculation.mockResolvedValue(true);
     repository.insertTeacherConductInput.mockResolvedValue(undefined);
 
     await expect(service.submitTeacherConductInput(baseInput, { userId: 'user-teacher' })).resolves.toBeUndefined();
@@ -136,6 +143,72 @@ describe('conduct.service submitTeacherConductInput', () => {
       ...baseInput,
       teacherId: 'teacher-1',
     });
+  });
+
+  it('refuse la conduite avant le passage au calcul des moyennes', async () => {
+    const service = new ConductService(repository);
+    repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1', name: 'Ibrahim Diallo' });
+    repository.findStudentContext.mockResolvedValue(studentContext);
+    repository.gradingPeriodExists.mockResolvedValue(true);
+    repository.teacherTeachesClass.mockResolvedValue(true);
+    repository.teacherHasStartedAverageCalculation.mockResolvedValue(false);
+
+    await expect(service.submitTeacherConductInput(baseInput, { userId: 'user-teacher' })).rejects.toMatchObject({
+      code: 'AVERAGE_CALCULATION_NOT_STARTED',
+      statusCode: 409,
+    });
+  });
+
+  it('refuse la conduite lorsque la période est terminée', async () => {
+    const service = new ConductService(repository);
+    repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1', name: 'Ibrahim Diallo' });
+    repository.findStudentContext.mockResolvedValue(studentContext);
+    repository.gradingPeriodExists.mockResolvedValue(true);
+    repository.gradingPeriodEndDate.mockResolvedValue('2020-01-01');
+
+    await expect(service.submitTeacherConductInput(baseInput, { userId: 'user-teacher' })).rejects.toMatchObject({
+      code: 'GRADING_PERIOD_CLOSED',
+      statusCode: 409,
+    });
+  });
+});
+
+describe('conduct.service submitBulkTeacherConductInputs', () => {
+  it('valide le périmètre puis crée une saisie pour chaque élève sélectionné', async () => {
+    const service = new ConductService(repository);
+    repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1', name: 'Ibrahim Diallo' });
+    repository.teacherTeachesClass.mockResolvedValue(true);
+    repository.teacherHasStartedAverageCalculation.mockResolvedValue(true);
+    repository.gradingPeriodMatchesClass.mockResolvedValue(true);
+    repository.studentsBelongToClass.mockResolvedValue(true);
+    repository.insertTeacherConductInput.mockResolvedValue(undefined);
+
+    await expect(service.submitBulkTeacherConductInputs({
+      class_id: 'class-1',
+      student_ids: ['student-1', 'student-2'],
+      grading_period_id: 'period-1',
+      note: 16,
+      observation: 'Sérieux',
+    }, { userId: 'user-teacher' })).resolves.toEqual({ savedCount: 2 });
+
+    expect(repository.insertTeacherConductInput).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuse le lot si un élève est hors de la classe', async () => {
+    const service = new ConductService(repository);
+    repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1', name: 'Ibrahim Diallo' });
+    repository.teacherTeachesClass.mockResolvedValue(true);
+    repository.teacherHasStartedAverageCalculation.mockResolvedValue(true);
+    repository.gradingPeriodMatchesClass.mockResolvedValue(true);
+    repository.studentsBelongToClass.mockResolvedValue(false);
+
+    await expect(service.submitBulkTeacherConductInputs({
+      class_id: 'class-1',
+      student_ids: ['student-outside'],
+      grading_period_id: 'period-1',
+      note: 16,
+    }, { userId: 'user-teacher' })).rejects.toMatchObject({ code: 'STUDENT_CLASS_MISMATCH' });
+    expect(repository.insertTeacherConductInput).not.toHaveBeenCalled();
   });
 });
 

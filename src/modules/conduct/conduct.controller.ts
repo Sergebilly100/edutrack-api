@@ -10,6 +10,8 @@ import {
 import {
   conductGradeBodySchema,
   conductInputBodySchema,
+  conductInputScopeQuerySchema,
+  bulkConductInputBodySchema,
   conductOverviewQuerySchema,
   conductStudentParamsSchema,
   educatorAssignmentBodySchema,
@@ -107,6 +109,27 @@ export default async function conductController(app: FastifyInstance): Promise<v
   );
 
   // ── Saisie conduite par le prof ───────────────────────────────────────────
+  app.get(
+    '/api/v1/conduct/inputs/scope',
+    { preHandler: requireTeacher },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const query = conductInputScopeQuerySchema.parse(request.query ?? {});
+        const result = await withTenantSchema(claims.schemaName, (tenantDb) =>
+          buildConductService(tenantDb).getTeacherConductScope(
+            query.class_id,
+            query.grading_period_id,
+            { userId: request.user!.userId }
+          )
+        );
+        return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
   app.post(
     '/api/v1/conduct/inputs',
     { preHandler: requireTeacher },
@@ -120,6 +143,27 @@ export default async function conductController(app: FastifyInstance): Promise<v
           })
         );
         return reply.code(201).send({ success: true });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/conduct/inputs/bulk',
+    { preHandler: requireTeacher },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const body = bulkConductInputBodySchema.parse(request.body ?? {});
+        const result = await withTenantSchema(claims.schemaName, (tenantDb) =>
+          tenantDb.transaction((tx) =>
+            buildConductService(tx).submitBulkTeacherConductInputs(body, {
+              userId: request.user!.userId,
+            })
+          )
+        );
+        return reply.code(201).send(result);
       } catch (error) {
         return handleError(request, reply, error);
       }

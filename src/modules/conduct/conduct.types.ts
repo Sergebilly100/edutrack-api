@@ -25,6 +25,24 @@ export const conductInputBodySchema = z.object({
 
 export type ConductInputBody = z.infer<typeof conductInputBodySchema>;
 
+export const conductInputScopeQuerySchema = z.object({
+  class_id: z.string().uuid(),
+  grading_period_id: z.string().uuid(),
+});
+
+export const bulkConductInputBodySchema = z.object({
+  class_id: z.string().uuid(),
+  student_ids: z.array(z.string().uuid()).min(1).max(200).refine(
+    (ids) => new Set(ids).size === ids.length,
+    { message: 'Les élèves sélectionnés doivent être uniques' }
+  ),
+  grading_period_id: z.string().uuid(),
+  note: z.coerce.number().min(0).max(20),
+  observation: z.string().trim().max(1000).optional(),
+});
+
+export type BulkConductInputBody = z.infer<typeof bulkConductInputBodySchema>;
+
 export const conductGradeBodySchema = z.object({
   student_id: z.string().uuid(),
   grading_period_id: z.string().uuid(),
@@ -60,6 +78,13 @@ export type ConductInputItem = {
   note: number;
   observation: string | null;
   createdAt: string;
+};
+
+export type TeacherConductScopeItem = {
+  studentId: string;
+  fullName: string;
+  matricule: string | null;
+  input: { note: number; observation: string | null; createdAt: string } | null;
 };
 
 export type SpontaneousEvaluationItem = {

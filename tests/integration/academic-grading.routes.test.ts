@@ -81,6 +81,30 @@ describe('academic grading integration', () => {
       seededSchedule[0]!.day_of_week,
     ]);
 
+    const teacherContext = await request()
+      .get('/api/v1/academic/teacher-context')
+      .set(teacherHeaders);
+    expect(teacherContext.status, JSON.stringify(teacherContext.body)).toBe(200);
+    expect(teacherContext.body.classes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: classId, name: context.className }),
+    ]));
+    expect(teacherContext.body.gradingPeriods).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: gradingPeriodId, label: 'Premier trimestre' }),
+    ]));
+
+    const teacherScope = await request()
+      .get('/api/v1/evaluations/scope')
+      .set(teacherHeaders)
+      .query({ classId, gradingPeriodId });
+    expect(teacherScope.status, JSON.stringify(teacherScope.body)).toBe(200);
+    expect(teacherScope.body.subjects).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: mathResponse.body.subject.id }),
+      expect.objectContaining({ id: frenchResponse.body.subject.id }),
+    ]));
+    expect(teacherScope.body.completion).toEqual(expect.arrayContaining([
+      expect.objectContaining({ subjectId: mathResponse.body.subject.id, calculationStarted: false }),
+    ]));
+
     const completion = await request().put('/api/v1/class-subject-completion').set(teacherHeaders).send({
       classId,
       subjectId: mathResponse.body.subject.id,
@@ -163,5 +187,42 @@ describe('academic grading integration', () => {
       expect.objectContaining({ subjectId: mathResponse.body.subject.id, status: 'completed' }),
       expect.objectContaining({ subjectId: frenchResponse.body.subject.id, status: 'in_progress' }),
     ]));
+
+    const spontaneous = await request()
+      .post('/api/v1/evaluations/spontaneous')
+      .set(teacherHeaders)
+      .send({
+        lessonSlotId: context.scheduleId,
+        subjectId: mathResponse.body.subject.id,
+        classId,
+        gradingPeriodId,
+        studentId,
+        polarity: 'negative',
+        comment: 'Interrompt régulièrement le cours',
+      });
+    expect(spontaneous.status, JSON.stringify(spontaneous.body)).toBe(201);
+    expect(spontaneous.body.grade).toMatchObject({ score: 0, maxScore: 20 });
+
+    const missingJustification = await request()
+      .post('/api/v1/evaluations/spontaneous')
+      .set(teacherHeaders)
+      .send({
+        lessonSlotId: context.scheduleId,
+        subjectId: mathResponse.body.subject.id,
+        classId,
+        gradingPeriodId,
+        studentId,
+        polarity: 'positive',
+        comment: '',
+      });
+    expect(missingJustification.status).toBe(400);
+
+    await queryTenant(
+      `UPDATE grading_periods SET start_date = '2020-01-01', end_date = '2020-03-31' WHERE id = $1`,
+      [gradingPeriodId]
+    );
+    const closedPeriodEdit = await saveGrade(math1, 14);
+    expect(closedPeriodEdit.status).toBe(409);
+    expect(closedPeriodEdit.body.code).toBe('GRADING_PERIOD_CLOSED');
   });
 });

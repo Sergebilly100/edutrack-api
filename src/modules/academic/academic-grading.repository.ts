@@ -12,6 +12,7 @@ import type {
   UpdateGradingPeriodInput,
   UpdateSubjectInput,
   UpsertEvaluationGradeInput,
+  SpontaneousGradeInput,
 } from './academic-grading.types.js';
 
 export type AcademicGradingQueryExecutor = NodePgDatabase<Record<string, unknown>>;
@@ -231,6 +232,55 @@ export class AcademicGradingRepository {
     return rows(result)[0]?.id ?? null;
   }
 
+  async listTeacherAcademicClasses(teacherId: string): Promise<Array<{
+    id: string;
+    name: string;
+    levelId: string;
+    levelName: string;
+    schoolYearId: string;
+    schoolYearLabel: string;
+  }>> {
+    const result = await this.db.execute<{
+      id: string; name: string; level_id: string; level_name: string;
+      school_year_id: string; school_year_label: string;
+    }>(sql`
+      SELECT DISTINCT c.id::text, c.name, l.id::text AS level_id, l.name AS level_name,
+             sy.id::text AS school_year_id, sy.label AS school_year_label
+      FROM schedules sch
+      INNER JOIN classes c ON c.id = sch.class_id AND c.is_active = true
+      INNER JOIN levels l ON l.id = c.level_id
+      INNER JOIN school_years sy ON sy.id = c.school_year_id
+      WHERE sch.teacher_id = ${teacherId}::uuid AND sch.is_active = true
+      ORDER BY sy.label DESC, l.name, c.name
+    `);
+    return rows(result).map((row) => ({
+      id: row.id,
+      name: row.name,
+      levelId: row.level_id,
+      levelName: row.level_name,
+      schoolYearId: row.school_year_id,
+      schoolYearLabel: row.school_year_label,
+    }));
+  }
+
+  async listTeacherGradingPeriods(teacherId: string): Promise<GradingPeriodItem[]> {
+    const result = await this.db.execute<PeriodRow>(sql`
+      SELECT DISTINCT gp.id, gp.school_year_id, gp.type, gp.order_index, gp.label,
+             gp.start_date::text, gp.end_date::text
+      FROM grading_periods gp
+      WHERE EXISTS (
+        SELECT 1
+        FROM schedules sch
+        INNER JOIN classes c ON c.id = sch.class_id
+        WHERE sch.teacher_id = ${teacherId}::uuid
+          AND sch.is_active = true
+          AND c.school_year_id = gp.school_year_id
+      )
+      ORDER BY gp.start_date::text DESC, gp.order_index
+    `);
+    return rows(result).map(mapPeriod);
+  }
+
   async getLessonSlotScope(id: string): Promise<{
     id: string;
     teacherId: string;
@@ -324,6 +374,18 @@ export class AcademicGradingRepository {
     const row = rows(result)[0];
     if (!row) throw new Error('Failed to create evaluation');
     return mapEvaluation(row);
+  }
+
+  async createSpontaneousEvaluation(input: SpontaneousGradeInput, teacherId: string): Promise<EvaluationItem> {
+    return this.createEvaluation({
+      lessonSlotId: input.lessonSlotId,
+      subjectId: input.subjectId,
+      classId: input.classId,
+      gradingPeriodId: input.gradingPeriodId,
+      type: 'spontaneous',
+      coefficient: 1,
+      label: input.polarity === 'positive' ? 'Participation positive' : 'Participation négative',
+    }, teacherId);
   }
 
   async findEvaluation(id: string): Promise<EvaluationItem | null> {
@@ -426,11 +488,13 @@ export class AcademicGradingRepository {
       subject_id: string; subject_name: string; subject_coefficient: string | number;
       teacher_id: string | null; teacher_name: string | null;
       status: 'in_progress' | 'completed'; completed_at: Date | string | null;
+      calculation_started: boolean;
     }>(sql`
       SELECT s.id AS subject_id, s.name AS subject_name, s.coefficient AS subject_coefficient,
              tsa.teacher_id, u.name AS teacher_name,
              COALESCE(csc.status, 'in_progress'::class_subject_completion_status) AS status,
-             csc.completed_at
+             csc.completed_at,
+             csc.id IS NOT NULL AS calculation_started
       FROM classes c
       INNER JOIN subjects s ON s.level_id = c.level_id
       LEFT JOIN teacher_subject_assignments tsa ON tsa.class_id = c.id AND tsa.subject_id = s.id
@@ -448,6 +512,7 @@ export class AcademicGradingRepository {
       teacher: row.teacher_id ? { id: row.teacher_id, name: row.teacher_name } : null,
       status: row.status,
       completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
+      calculationStarted: row.calculation_started,
     }));
   }
 
@@ -458,7 +523,7 @@ export class AcademicGradingRepository {
     const result = await this.db.execute<{
       id: string; day_of_week: number; start_time: string; end_time: string; subject: string;
     }>(sql`
-      SELECT DISTINCT sch.id::text, sch.day_of_week, ts.start_time::text, ts.end_time::text, sch.subject
+      SELECT sch.id::text, sch.day_of_week, ts.start_time::text, ts.end_time::text, sch.subject
       FROM schedules sch
       INNER JOIN time_slots ts ON ts.id = sch.time_slot_id
       WHERE sch.teacher_id = ${teacherId}::uuid AND sch.class_id = ${classId}::uuid

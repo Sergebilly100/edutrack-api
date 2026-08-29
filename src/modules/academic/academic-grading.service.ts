@@ -12,6 +12,7 @@ import type {
   UpdateGradingPeriodInput,
   UpdateSubjectInput,
   UpsertEvaluationGradeInput,
+  SpontaneousGradeInput,
 } from './academic-grading.types.js';
 
 export class AcademicGradingError extends Error {
@@ -188,6 +189,26 @@ export class AcademicGradingService {
     return teacherId;
   }
 
+  private assertPeriodOpen(period: { endDate: string }): void {
+    const today = new Date().toISOString().slice(0, 10);
+    if (today > period.endDate) {
+      throw new AcademicGradingError(
+        'This grading period is closed: grades can no longer be added or edited',
+        409,
+        'GRADING_PERIOD_CLOSED'
+      );
+    }
+  }
+
+  async getTeacherAcademicContext(userId: string) {
+    const teacherId = await this.teacherIdForUser(userId);
+    const [classes, gradingPeriods] = await Promise.all([
+      this.repository.listTeacherAcademicClasses(teacherId),
+      this.repository.listTeacherGradingPeriods(teacherId),
+    ]);
+    return { classes, gradingPeriods };
+  }
+
   /** Espace de saisie prof : créneaux, matières et évaluations d'une classe/période. */
   async listEvaluationsForTeacher(classId: string, gradingPeriodId: string, userId: string) {
     const teacherId = await this.teacherIdForUser(userId);
@@ -195,15 +216,24 @@ export class AcademicGradingService {
     if (!scope) {
       throw new AcademicGradingError('Class is outside the teacher scope', 403, 'EVALUATION_SCOPE_FORBIDDEN');
     }
-    const [lessonSlots, subjects, evaluations] = await Promise.all([
+    const [lessonSlots, levelSubjects, evaluations, completion] = await Promise.all([
       this.repository.listTeacherLessonSlotsForClass(teacherId, classId),
       scope.levelId ? this.repository.listSubjects(scope.levelId) : Promise.resolve([]),
       this.repository.listEvaluationsWithGrades(teacherId, classId, gradingPeriodId),
+      this.repository.getCompletion(classId, gradingPeriodId),
     ]);
-    return { lessonSlots, subjects, evaluations };
+    const scheduledSubjectKeys = new Set(lessonSlots.map((slot) => normalizeSubjectKey(slot.subjectName)));
+    const subjects = levelSubjects.filter((subject) => scheduledSubjectKeys.has(normalizeSubjectKey(subject.name)));
+    const subjectIds = new Set(subjects.map((subject) => subject.id));
+    return {
+      lessonSlots,
+      subjects,
+      evaluations,
+      completion: completion.filter((item) => subjectIds.has(item.subjectId)),
+    };
   }
 
-  async createEvaluation(input: CreateEvaluationInput, userId: string) {    const teacherId = await this.teacherIdForUser(userId);
+  private async assertEvaluationScope(input: CreateEvaluationInput, teacherId: string): Promise<void> {
     const [slot, subject, period] = await Promise.all([
       this.repository.getLessonSlotScope(input.lessonSlotId),
       this.repository.findSubject(input.subjectId),
@@ -212,6 +242,7 @@ export class AcademicGradingService {
     if (!slot) throw new AcademicGradingError('Lesson slot not found', 400, 'LESSON_SLOT_NOT_FOUND');
     if (!subject) throw new AcademicGradingError('Subject not found', 400, 'SUBJECT_NOT_FOUND');
     if (!period) throw new AcademicGradingError('Grading period not found', 400, 'GRADING_PERIOD_NOT_FOUND');
+    this.assertPeriodOpen(period);
     if (slot.teacherId !== teacherId || slot.classId !== input.classId) {
       throw new AcademicGradingError('Lesson slot is outside the teacher scope', 403, 'EVALUATION_SCOPE_FORBIDDEN');
     }
@@ -223,6 +254,11 @@ export class AcademicGradingService {
     }
 
     await this.repository.ensureTeacherSubjectAssignment(teacherId, subject.id, input.classId);
+  }
+
+  async createEvaluation(input: CreateEvaluationInput, userId: string) {
+    const teacherId = await this.teacherIdForUser(userId);
+    await this.assertEvaluationScope(input, teacherId);
     return this.repository.createEvaluation(input, teacherId);
   }
 
@@ -233,6 +269,9 @@ export class AcademicGradingService {
     if (evaluation.teacherId !== teacherId) {
       throw new AcademicGradingError('Evaluation is outside the teacher scope', 403, 'EVALUATION_SCOPE_FORBIDDEN');
     }
+    const period = await this.repository.findGradingPeriod(evaluation.gradingPeriodId);
+    if (!period) throw new AcademicGradingError('Grading period not found', 400, 'GRADING_PERIOD_NOT_FOUND');
+    this.assertPeriodOpen(period);
     if (!(await this.repository.studentBelongsToClass(input.studentId, evaluation.classId))) {
       throw new AcademicGradingError('Student is not enrolled in the evaluation class', 400, 'STUDENT_CLASS_MISMATCH');
     }
@@ -240,6 +279,31 @@ export class AcademicGradingService {
     const grade = await this.repository.upsertGrade(evaluationId, input);
     const averages = await this.recalculateStudentPeriod(input.studentId, evaluation.gradingPeriodId);
     return { grade, averages };
+  }
+
+  async createSpontaneousGrade(input: SpontaneousGradeInput, userId: string) {
+    const teacherId = await this.teacherIdForUser(userId);
+    await this.assertEvaluationScope({
+      lessonSlotId: input.lessonSlotId,
+      subjectId: input.subjectId,
+      classId: input.classId,
+      gradingPeriodId: input.gradingPeriodId,
+      type: 'spontaneous',
+      coefficient: 1,
+      label: 'Participation spontanée',
+    }, teacherId);
+    if (!(await this.repository.studentBelongsToClass(input.studentId, input.classId))) {
+      throw new AcademicGradingError('Student is not enrolled in the lesson class', 400, 'STUDENT_CLASS_MISMATCH');
+    }
+    const evaluation = await this.repository.createSpontaneousEvaluation(input, teacherId);
+    const grade = await this.repository.upsertGrade(evaluation.id, {
+      studentId: input.studentId,
+      score: input.polarity === 'positive' ? 20 : 0,
+      maxScore: 20,
+      comment: input.comment,
+    });
+    const averages = await this.recalculateStudentPeriod(input.studentId, input.gradingPeriodId);
+    return { evaluation, grade, averages };
   }
 
   /**

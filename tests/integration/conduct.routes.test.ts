@@ -18,6 +18,7 @@ describe('conduct routes (5b)', () => {
 
   let classId = '';
   let studentId = '';
+  let secondStudentId = '';
   let gradingPeriodId = '';
 
   const seedTeacher = async (label: string): Promise<string> => {
@@ -86,6 +87,12 @@ describe('conduct routes (5b)', () => {
       [classId, `CON-${suffix}`]
     );
     studentId = students[0]!.id;
+    const secondStudents = await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
+       VALUES ($1::uuid, 'Yao', 'Conduct', $2) RETURNING id::text`,
+      [classId, `CON-BULK-${suffix}`]
+    );
+    secondStudentId = secondStudents[0]!.id;
 
     // Salle dédiée aux EDT de test + créneau par défaut existant
     await queryTenant(
@@ -145,6 +152,22 @@ describe('conduct routes (5b)', () => {
 
     await seedScheduleLink(teacherAUser, teachersA[0]!.id);
     await seedScheduleLink(teacherBUser, teachersB[0]!.id);
+
+    const conductSubjects = await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('subjects')} (level_id, name, coefficient)
+       VALUES ($1::uuid, 'SVT', 2) RETURNING id::text`,
+      [levels[0]!.id]
+    );
+    await queryTenant(
+      `INSERT INTO ${tenantTable('teacher_subject_assignments')} (teacher_id, subject_id, class_id)
+       VALUES ($1::uuid, $3::uuid, $4::uuid), ($2::uuid, $3::uuid, $4::uuid)`,
+      [teachersA[0]!.id, teachersB[0]!.id, conductSubjects[0]!.id, classId]
+    );
+    await queryTenant(
+      `INSERT INTO ${tenantTable('class_subject_completion')} (class_id, subject_id, grading_period_id, status)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 'in_progress')`,
+      [classId, conductSubjects[0]!.id, gradingPeriodId]
+    );
 
     teacherAHeaders = {
       authorization: `Bearer ${await signAccessToken({ sub: teacherAUser, role: 'teacher', schemaName: TEST_SCHEMA_NAME })}`,
@@ -222,6 +245,42 @@ describe('conduct routes (5b)', () => {
       .send({ student_id: studentId, grading_period_id: gradingPeriodId, note: 10 });
     expect(response.status).toBe(403);
     expect(response.body.code).toBe('STUDENT_NOT_IN_TEACHER_CLASSES');
+  });
+
+  it('charge le périmètre du prof puis attribue une note de conduite en lot', async () => {
+    const before = await request()
+      .get('/api/v1/conduct/inputs/scope')
+      .set(teacherAHeaders)
+      .query({ class_id: classId, grading_period_id: gradingPeriodId });
+    expect(before.status, JSON.stringify(before.body)).toBe(200);
+    expect(before.body.students).toEqual(expect.arrayContaining([
+      expect.objectContaining({ studentId, input: expect.objectContaining({ note: 16 }) }),
+      expect.objectContaining({ studentId: secondStudentId, input: null }),
+    ]));
+
+    const bulk = await request()
+      .post('/api/v1/conduct/inputs/bulk')
+      .set(teacherAHeaders)
+      .send({
+        class_id: classId,
+        student_ids: [secondStudentId],
+        grading_period_id: gradingPeriodId,
+        note: 16,
+        observation: 'Note commune de départ',
+      });
+    expect(bulk.status, JSON.stringify(bulk.body)).toBe(201);
+    expect(bulk.body.savedCount).toBe(1);
+
+    const after = await request()
+      .get('/api/v1/conduct/inputs/scope')
+      .set(teacherAHeaders)
+      .query({ class_id: classId, grading_period_id: gradingPeriodId });
+    expect(after.body.students).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        studentId: secondStudentId,
+        input: expect.objectContaining({ note: 16, observation: 'Note commune de départ' }),
+      }),
+    ]));
   });
 
   it("consultation overview : deux saisies profs visibles pour l'éducateur", async () => {

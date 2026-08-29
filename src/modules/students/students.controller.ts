@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
-import { sql } from 'drizzle-orm';
 import { StudentDossierRepository } from './student-dossier.repository.js';
+import { StudentDossierError, StudentDossierService, type DossierViewerRole } from './student-dossier.service.js';
 
 import { z } from 'zod';
 import type { Queue } from 'bullmq';
@@ -78,6 +78,14 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
   }
 
   if (error instanceof StudentsModuleError) {
+    return reply.code(error.statusCode).send({
+      error: error.message,
+      code: error.code,
+      statusCode: error.statusCode,
+    });
+  }
+
+  if (error instanceof StudentDossierError) {
     return reply.code(error.statusCode).send({
       error: error.message,
       code: error.code,
@@ -413,27 +421,17 @@ export default async function studentsController(
           return forbidden(reply, 'Forbidden');
         }
 
-        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-          const repository = new StudentDossierRepository(tenantDb);
-          let teacherId: string | null = null;
-          if (role === 'teacher') {
-            // Un prof ne voit que l'academique/assiduite de ses matieres.
-            teacherId =
-              (
-                await tenantDb.execute<{ id: string }>(
-                  sql`SELECT t.id::text FROM teachers t WHERE t.user_id = ${request.user!.userId}::uuid LIMIT 1`
-                )
-              ).rows?.[0]?.id ?? 'no-match';
-          }
-          return repository.listEvents(studentId, role === 'teacher' ? teacherId : null);
-        });
-        return reply.send({ events: result });
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) =>
+          new StudentDossierService(new StudentDossierRepository(tenantDb)).getDossier({
+            studentId,
+            role: role as DossierViewerRole,
+            userId: request.user!.userId,
+            date: new Date().toISOString().slice(0, 10),
+          })
+        );
+        return reply.send(result);
       } catch (error) {
-        if (error instanceof ZodError) {
-          return reply.code(400).send({ error: 'Invalid request', code: 'VALIDATION_ERROR', statusCode: 400 });
-        }
-        request.log.error({ err: error }, '[students] dossier error');
-        return reply.code(500).send({ error: 'Internal server error', code: 'INTERNAL_ERROR', statusCode: 500 });
+        return handleError(reply, error);
       }
     }
   );

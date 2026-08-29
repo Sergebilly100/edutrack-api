@@ -4,6 +4,7 @@ import type { TenantDb } from '../../shared/database/db.js';
 import type {
   ConductGradeBody,
   ConductInputBody,
+  TeacherConductScopeItem,
   EducatorAssignmentItem,
 } from './conduct.types.js';
 
@@ -203,11 +204,99 @@ export class ConductRepository {
     return getRows(result).length > 0;
   }
 
+  async teacherHasStartedAverageCalculation(
+    teacherId: string,
+    classId: string,
+    gradingPeriodId: string
+  ): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      SELECT 1
+      FROM class_subject_completion csc
+      INNER JOIN teacher_subject_assignments tsa
+        ON tsa.class_id = csc.class_id AND tsa.subject_id = csc.subject_id
+      WHERE csc.class_id = ${classId}::uuid
+        AND csc.grading_period_id = ${gradingPeriodId}::uuid
+        AND tsa.teacher_id = ${teacherId}::uuid
+      LIMIT 1
+    `);
+    return getRows(result).length > 0;
+  }
+
   async gradingPeriodExists(gradingPeriodId: string): Promise<boolean> {
     const result = await this.db.execute(sql`
       SELECT 1 FROM grading_periods WHERE id = ${gradingPeriodId}::uuid LIMIT 1
     `);
     return getRows(result).length > 0;
+  }
+
+  async gradingPeriodEndDate(gradingPeriodId: string): Promise<string | null> {
+    const result = await this.db.execute<{ end_date: string }> (sql`
+      SELECT end_date::text
+      FROM grading_periods
+      WHERE id = ${gradingPeriodId}::uuid
+      LIMIT 1
+    `);
+    return getRows<{ end_date: string }>(result)[0]?.end_date ?? null;
+  }
+
+  async gradingPeriodMatchesClass(gradingPeriodId: string, classId: string): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      SELECT 1
+      FROM grading_periods gp
+      INNER JOIN classes c ON c.school_year_id = gp.school_year_id
+      WHERE gp.id = ${gradingPeriodId}::uuid AND c.id = ${classId}::uuid
+      LIMIT 1
+    `);
+    return getRows(result).length > 0;
+  }
+
+  async studentsBelongToClass(studentIds: string[], classId: string): Promise<boolean> {
+    if (studentIds.length === 0) return false;
+    const ids = sql.join(studentIds.map((studentId) => sql`${studentId}::uuid`), sql`, `);
+    const result = await this.db.execute<{ count: string }>(sql`
+      SELECT COUNT(*)::text AS count
+      FROM students
+      WHERE id IN (${ids}) AND class_id = ${classId}::uuid AND is_active = true
+    `);
+    return Number(getRows<{ count: string }>(result)[0]?.count ?? 0) === studentIds.length;
+  }
+
+  async listTeacherConductScope(
+    teacherId: string,
+    classId: string,
+    gradingPeriodId: string
+  ): Promise<TeacherConductScopeItem[]> {
+    const result = await this.db.execute<{
+      student_id: string; full_name: string; matricule: string | null;
+      note: string | null; observation: string | null; created_at: string | null;
+    }>(sql`
+      SELECT s.id::text AS student_id,
+             concat_ws(' ', s.first_name, s.last_name) AS full_name,
+             s.matricule,
+             tci.note::text,
+             tci.observation,
+             tci.created_at::text
+      FROM students s
+      LEFT JOIN teacher_conduct_inputs tci
+        ON tci.student_id = s.id
+       AND tci.teacher_id = ${teacherId}::uuid
+       AND tci.grading_period_id = ${gradingPeriodId}::uuid
+      WHERE s.class_id = ${classId}::uuid AND s.is_active = true
+      ORDER BY s.last_name, s.first_name
+    `);
+    return getRows<{
+      student_id: string; full_name: string; matricule: string | null;
+      note: string | null; observation: string | null; created_at: string | null;
+    }>(result).map((row) => ({
+      studentId: row.student_id,
+      fullName: row.full_name,
+      matricule: row.matricule,
+      input: row.note === null ? null : {
+        note: Number(row.note),
+        observation: row.observation,
+        createdAt: row.created_at ?? '',
+      },
+    }));
   }
 
   async gradingPeriodLabel(gradingPeriodId: string): Promise<{ id: string; label: string } | null> {

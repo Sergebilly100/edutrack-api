@@ -158,7 +158,7 @@ describe('report-cards routes (5c)', () => {
     expect(list.status).toBe(200);
     expect(list.body.reportCards).toHaveLength(1);
     expect(list.body.reportCards[0]).toMatchObject({
-      generalAverage: 15,
+      generalAverage: 16.2,
       rank: 1,
       classHeadcount: 2,
     });
@@ -184,7 +184,7 @@ describe('report-cards routes (5c)', () => {
     const parentList = await request()
       .get(`/api/v1/parent/students/${studentAId}/report-cards`)
       .set(parentHeaders);
-    expect(parentList.body.reportCards[0].generalAverage).toBe(15);
+    expect(parentList.body.reportCards[0].generalAverage).toBe(16.2);
   });
 
   it('décision de fin d\u2019année uniquement sur la dernière période', async () => {

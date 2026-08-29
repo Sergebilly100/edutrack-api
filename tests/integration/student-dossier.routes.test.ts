@@ -52,6 +52,24 @@ describe('student dossier integration (7c)', () => {
       [teacherUser[0]!.id, `dossier.${suffix}`]
     );
 
+    await queryTenant(
+      `INSERT INTO ${tenantTable('schedule_periods')} (name, valid_from, valid_to, is_active)
+       VALUES ($1, '2000-01-01', '2100-12-31', true)`,
+      [`Dossier EDT ${suffix}`]
+    );
+    await queryTenant(
+      `INSERT INTO ${tenantTable('schedules')}
+         (schedule_period_id, teacher_id, class_id, room_id, time_slot_id, day_of_week, subject, is_active)
+       SELECT sp.id, $2::uuid, $3::uuid,
+              (SELECT id FROM ${tenantTable('rooms')} ORDER BY name LIMIT 1),
+              (SELECT id FROM ${tenantTable('time_slots')} ORDER BY sort_order LIMIT 1),
+              1, 'SVT', true
+       FROM ${tenantTable('schedule_periods')} sp
+       WHERE sp.name = $1
+       LIMIT 1`,
+      [`Dossier EDT ${suffix}`, teachers[0]!.id, classes[0]!.id]
+    );
+
     const teacherToken = await signAccessToken({
       sub: teacherUser[0]!.id,
       role: 'teacher',
@@ -63,6 +81,7 @@ describe('student dossier integration (7c)', () => {
       .get(`/api/v1/students/${studentId}/dossier`)
       .set(directorHeaders);
     expect(directorView.status).toBe(200);
+    expect(directorView.body.student).toMatchObject({ id: studentId, className: `DS class ${suffix}` });
     expect(Array.isArray(directorView.body.events)).toBe(true);
     const paymentEvent = directorView.body.events.find((event: { type: string }) => event.type === 'payment');
     expect(paymentEvent).toBeDefined();
@@ -72,8 +91,24 @@ describe('student dossier integration (7c)', () => {
       .get(`/api/v1/students/${studentId}/dossier`)
       .set({ authorization: `Bearer ${teacherToken}` });
     expect(teacherView.status).toBe(200);
+    expect(teacherView.body.student).toMatchObject({ id: studentId, className: `DS class ${suffix}` });
     const teacherPayments = teacherView.body.events.filter((event: { type: string }) => event.type === 'payment');
     expect(teacherPayments).toHaveLength(0);
+
+    const otherClasses = await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('classes')} (name, level_id, school_year_id, is_active)
+       VALUES ($1, $2::uuid, $3::uuid, true) RETURNING id::text`,
+      [`DS other class ${suffix}`, levels[0]!.id, years[0]!.id]
+    );
+    const otherStudents = await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
+       VALUES ($1::uuid, 'Hors', 'Portée', $2) RETURNING id::text`,
+      [otherClasses[0]!.id, `DS-OUT-${suffix}`]
+    );
+    const outsideScope = await request()
+      .get(`/api/v1/students/${otherStudents[0]!.id}/dossier`)
+      .set({ authorization: `Bearer ${teacherToken}` });
+    expect(outsideScope.status).toBe(403);
 
     // Timeline triée chronologiquement décroissante
     const directorDates = directorView.body.events.map((event: { date: string }) => event.date);
