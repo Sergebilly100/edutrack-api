@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import { withTenantSchema } from '../../src/shared/database/db.js';
 import { buildRiskService } from '../../src/modules/risk/risk.service.js';
-import { getAuthHeaders, queryTenant, request, tenantTable, TEST_SCHEMA_NAME } from './setup.js';
+import {
+  getAuthHeaders,
+  getSeedContext,
+  queryTenant,
+  request,
+  tenantTable,
+  TEST_SCHEMA_NAME,
+} from './setup.js';
 
 const suffix = String(Date.now());
 
@@ -70,14 +77,103 @@ describe('risk alerts integration (7a)', () => {
     // Règles : lecture et mise à jour du seuil absences élève
     const rules = await request().get('/api/v1/risk/rules').set(headers);
     expect(rules.status).toBe(200);
-    expect(rules.body.rules.some((rule: { subject_type?: string; signal_type?: string }) =>
-      rule.subject_type === undefined || rule.signal_type === undefined || true)).toBe(true);
+    expect(rules.body.rules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ subjectType: 'student', signalType: 'absences', thresholdValue: 3, periodDays: 30, isActive: true }),
+      expect.objectContaining({ subjectType: 'student', signalType: 'grades', thresholdValue: 2, periodDays: 0, isActive: true }),
+      expect.objectContaining({ subjectType: 'student', signalType: 'payments', thresholdValue: 1, periodDays: 0, isActive: true }),
+      expect.objectContaining({ subjectType: 'teacher', signalType: 'absences', thresholdValue: 3, periodDays: 30, isActive: true }),
+    ]));
 
     const update = await request()
       .put('/api/v1/risk/rules/student/absences')
       .set(headers)
       .send({ thresholdValue: 4, periodDays: 21, isActive: true });
     expect(update.status).toBe(200);
+
+    // Trois absences récentes ne franchissent pas un seuil configuré à 4.
+    await queryTenant(
+      `INSERT INTO ${tenantTable('attendances_student')} (student_id, schedule_id, date, status)
+       SELECT $1::uuid, id, CURRENT_DATE - offsets.day, 'absent'
+       FROM ${tenantTable('schedules')}
+       CROSS JOIN (VALUES (0), (1), (2)) AS offsets(day)
+       LIMIT 3`,
+      [riskyStudentId]
+    );
+    await withTenantSchema(TEST_SCHEMA_NAME, async (tenantDb) =>
+      buildRiskService(tenantDb).recalculateStudents()
+    );
+    const belowStudentThreshold = await request().get('/api/v1/risk/students').set(headers);
+    const riskyBelowThreshold = (belowStudentThreshold.body.students as Array<{
+      student_id: string; absences_signal: boolean;
+    }>).find((row) => row.student_id === riskyStudentId);
+    expect(riskyBelowThreshold?.absences_signal).toBe(false);
+
+    const lowerStudentThreshold = await request()
+      .put('/api/v1/risk/rules/student/absences')
+      .set(headers)
+      .send({ thresholdValue: 3, periodDays: 21, isActive: true });
+    expect(lowerStudentThreshold.status).toBe(200);
+    await withTenantSchema(TEST_SCHEMA_NAME, async (tenantDb) =>
+      buildRiskService(tenantDb).recalculateStudents()
+    );
+    const atStudentThreshold = await request().get('/api/v1/risk/students').set(headers);
+    const riskyAtThreshold = (atStudentThreshold.body.students as Array<{
+      student_id: string; absences_signal: boolean;
+    }>).find((row) => row.student_id === riskyStudentId);
+    expect(riskyAtThreshold?.absences_signal).toBe(true);
+
+    const { teacherId } = getSeedContext();
+    await queryTenant(
+      `INSERT INTO ${tenantTable('attendances_teacher')} (teacher_id, schedule_id, date, status)
+       SELECT $1::uuid, id, CURRENT_DATE - offsets.day, 'absent'
+       FROM ${tenantTable('schedules')}
+       CROSS JOIN (VALUES (0), (1), (2)) AS offsets(day)
+       LIMIT 3`,
+      [teacherId]
+    );
+    const updateTeacherThreshold = await request()
+      .put('/api/v1/risk/rules/teacher/absences')
+      .set(headers)
+      .send({ thresholdValue: 4, periodDays: 21, isActive: true });
+    expect(updateTeacherThreshold.status).toBe(200);
+    await withTenantSchema(TEST_SCHEMA_NAME, async (tenantDb) =>
+      buildRiskService(tenantDb).recalculateTeachers()
+    );
+    const belowTeacherThreshold = await request().get('/api/v1/risk/teachers').set(headers);
+    const teacherBelowThreshold = (belowTeacherThreshold.body.teachers as Array<{
+      teacher_id: string; absences_signal: boolean;
+    }>).find((row) => row.teacher_id === teacherId);
+    expect(teacherBelowThreshold?.absences_signal).toBe(false);
+
+    const lowerTeacherThreshold = await request()
+      .put('/api/v1/risk/rules/teacher/absences')
+      .set(headers)
+      .send({ thresholdValue: 3, periodDays: 21, isActive: true });
+    expect(lowerTeacherThreshold.status).toBe(200);
+    await withTenantSchema(TEST_SCHEMA_NAME, async (tenantDb) =>
+      buildRiskService(tenantDb).recalculateTeachers()
+    );
+    const atTeacherThreshold = await request().get('/api/v1/risk/teachers').set(headers);
+    const teacherAtThreshold = (atTeacherThreshold.body.teachers as Array<{
+      teacher_id: string; absences_signal: boolean;
+    }>).find((row) => row.teacher_id === teacherId);
+    expect(teacherAtThreshold?.absences_signal).toBe(true);
+
+    // Désactiver le risque financier retire effectivement ce signal au prochain recalcul.
+    const disablePaymentRisk = await request()
+      .put('/api/v1/risk/rules/student/payments')
+      .set(headers)
+      .send({ thresholdValue: 1, periodDays: 0, isActive: false });
+    expect(disablePaymentRisk.status).toBe(200);
+
+    await withTenantSchema(TEST_SCHEMA_NAME, async (tenantDb) =>
+      buildRiskService(tenantDb).recalculateStudents()
+    );
+    const afterDisable = await request().get('/api/v1/risk/students').set(headers);
+    const riskyAfterDisable = (afterDisable.body.students as Array<{
+      student_id: string; payment_signal: boolean;
+    }>).find((row) => row.student_id === riskyStudentId);
+    expect(riskyAfterDisable?.payment_signal).toBe(false);
   });
 
   it('profs à risque : endpoint aligné sur teachers.view / attendance.view', async () => {

@@ -1,6 +1,14 @@
 import { sql } from 'drizzle-orm';
 
 import type { TenantDb } from '../../shared/database/db.js';
+import {
+  DEFAULT_RISK_RULES,
+  isAbsenceRisk,
+  isGradeDropRisk,
+  isPaymentRisk,
+  resolveRiskRule,
+  resolveRollingRiskRule,
+} from './risk.calculations.js';
 
 
 type Rows<T> = { rows?: T[] };
@@ -79,9 +87,11 @@ export class RiskRepository {
     const absenceRule = rules.find((r) => r.subjectType === 'student' && r.signalType === 'absences');
     const gradeRule = rules.find((r) => r.subjectType === 'student' && r.signalType === 'grades');
     const paymentRule = rules.find((r) => r.subjectType === 'student' && r.signalType === 'payments');
-    void paymentRule;
+    const absenceConfig = resolveRollingRiskRule(absenceRule, DEFAULT_RISK_RULES.studentAbsences);
+    const gradeConfig = resolveRiskRule(gradeRule, DEFAULT_RISK_RULES.studentGrades);
+    const paymentConfig = resolveRiskRule(paymentRule, DEFAULT_RISK_RULES.studentPayments);
 
-    const absenceWindow = absenceRule?.periodDays && absenceRule.periodDays > 0 ? absenceRule.periodDays : 30;
+    const absenceWindow = absenceConfig.periodDays;
 
     const result = await this.db.execute<{
       student_id: string;
@@ -146,28 +156,27 @@ export class RiskRepository {
       payment_late: boolean;
     }>(result)) {
       const absenceCount = row.absence_count ?? 0;
-      const absenceThreshold = absenceRule?.thresholdValue ?? 3;
       const latest = row.avg_latest !== null ? Number(row.avg_latest) : null;
       const previous = row.avg_previous !== null ? Number(row.avg_previous) : null;
       const drop =
         latest !== null && previous !== null
           ? Math.round((previous - latest) * 100) / 100
           : null;
-      const gradesThreshold = gradeRule?.thresholdValue ?? 2;
 
       map.set(row.student_id, {
         absences: {
           count: absenceCount,
-          active: absenceRule?.isActive !== false && absenceCount >= absenceThreshold,
+          active: isAbsenceRisk(
+            absenceCount,
+            absenceConfig.thresholdValue,
+            absenceConfig.isActive
+          ),
         },
         grades: {
           drop,
-          active:
-            gradeRule?.isActive !== false &&
-            drop !== null &&
-            Math.abs(drop) >= gradesThreshold,
+          active: isGradeDropRisk(drop, gradeConfig.thresholdValue, gradeConfig.isActive),
         },
-        payments: row.payment_late,
+        payments: isPaymentRisk(row.payment_late, paymentConfig.isActive),
       });
     }
     return map;
@@ -266,10 +275,17 @@ export class RiskRepository {
   }
 
   async listTeacherRisks() {
+    const teacherAbsenceRule = (await this.listRules()).find(
+      (rule) => rule.subjectType === 'teacher' && rule.signalType === 'absences'
+    );
+    const { periodDays } = resolveRollingRiskRule(
+      teacherAbsenceRule,
+      DEFAULT_RISK_RULES.teacherAbsences
+    );
     const result = await this.db.execute<Record<string, string | number | boolean>>(sql`
       SELECT trs.teacher_id::text,
              u.name AS teacher_name,
-             COUNT(at.id) FILTER (WHERE at.status = 'absent' AND at.date >= CURRENT_DATE - 30)::int AS absence_count,
+             COUNT(at.id) FILTER (WHERE at.status = 'absent' AND at.date >= CURRENT_DATE - (${periodDays})::int)::int AS absence_count,
              CASE WHEN COALESCE(COUNT(at.id), 0) > 0
                   THEN ROUND(100.0 * (COUNT(at.id) - COUNT(at.id) FILTER (WHERE at.status = 'absent')) / COUNT(at.id))::int
                   ELSE 100 END AS attendance_rate,
@@ -277,7 +293,7 @@ export class RiskRepository {
       FROM teacher_risk_status trs
       INNER JOIN teachers t ON t.id = trs.teacher_id
       INNER JOIN users u ON u.id = t.user_id AND u.is_active = true
-      LEFT JOIN attendances_teacher at ON at.teacher_id = trs.teacher_id AND at.date >= CURRENT_DATE - 30
+      LEFT JOIN attendances_teacher at ON at.teacher_id = trs.teacher_id AND at.date >= CURRENT_DATE - (${periodDays})::int
       GROUP BY trs.teacher_id, u.name, trs.absences_signal, trs.risk_score, trs.level
       ORDER BY trs.risk_score DESC, absence_count DESC, teacher_name ASC
     `);

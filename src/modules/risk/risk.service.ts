@@ -1,4 +1,9 @@
-import { RiskRepository } from './risk.repository.js';
+import { RiskRepository, type RiskRule } from './risk.repository.js';
+import {
+  DEFAULT_RISK_RULES,
+  isAbsenceRisk,
+  resolveRollingRiskRule,
+} from './risk.calculations.js';
 
 export type RiskLevel = 'none' | 'attention' | 'warning' | 'critical';
 
@@ -11,6 +16,14 @@ export const deriveLevel = (score: number): RiskLevel =>
 
 export class RiskService {
   constructor(private readonly repository: RiskRepository) {}
+
+  listRules(): Promise<RiskRule[]> {
+    return this.repository.listRules();
+  }
+
+  upsertRule(input: Omit<RiskRule, 'id'>): Promise<void> {
+    return this.repository.upsertRule(input);
+  }
 
   /** Recalcul complet : élèves puis profs. Appelé par le job 15 min partagé. */
   async recalculateAll(): Promise<{ students: number; teachers: number }> {
@@ -50,16 +63,19 @@ export class RiskService {
   async recalculateTeachers(): Promise<number> {
     const rules = await this.repository.listRules();
     const rule = rules.find((r) => r.subjectType === 'teacher' && r.signalType === 'absences');
-    const threshold = rule?.thresholdValue ?? 3;
-    const periodDays = rule?.periodDays && rule.periodDays > 0 ? rule.periodDays : 30;
+    const ruleConfig = resolveRollingRiskRule(rule, DEFAULT_RISK_RULES.teacherAbsences);
 
-    const counts = await this.repository.computeTeacherAbsenceCounts(periodDays);
+    const counts = await this.repository.computeTeacherAbsenceCounts(ruleConfig.periodDays);
     const teacherIds = await this.repository.listTeacherIds();
 
     let count = 0;
     for (const teacherId of teacherIds) {
       const absences = counts.get(teacherId) ?? 0;
-      const active = rule?.isActive !== false && absences >= threshold;
+      const active = isAbsenceRisk(
+        absences,
+        ruleConfig.thresholdValue,
+        ruleConfig.isActive
+      );
       const score = active ? 1 : 0;
       await this.repository.upsertTeacherRisk({
         teacherId,

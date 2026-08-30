@@ -20,6 +20,7 @@ const requireAnyPermission =
     }
   };
 import { RiskRepository } from './risk.repository.js';
+import { buildRiskService } from './risk.service.js';
 import { riskRuleUpsertSchema } from './risk.types.js';
 
 const handleError = (
@@ -89,12 +90,12 @@ export default async function riskController(app: FastifyInstance): Promise<void
 
   app.get(
     '/api/v1/risk/rules',
-    { preHandler: requirePermission('students.view') },
+    { preHandler: requirePermission('risk_alerts.edit') },
     async (request, reply) => {
       try {
         const claims = request.claims!;
         const rules = await withTenantSchema(claims.schemaName, async (tenantDb) =>
-          new RiskRepository(tenantDb).listRules()
+          buildRiskService(tenantDb).listRules()
         );
         return reply.send({ rules });
       } catch (error) {
@@ -114,7 +115,7 @@ export default async function riskController(app: FastifyInstance): Promise<void
           .parse(request.params);
         const body = riskRuleUpsertSchema.parse(request.body ?? {});
         await withTenantSchema(claims.schemaName, async (tenantDb) =>
-          new RiskRepository(tenantDb).upsertRule({
+          buildRiskService(tenantDb).upsertRule({
             subjectType: params.subjectType,
             signalType: params.signalType,
             thresholdValue: body.thresholdValue,
