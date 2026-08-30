@@ -75,6 +75,15 @@ export class ReportCardsService {
       throw new ReportCardsModuleError('Période introuvable pour cette classe', 404, 'GRADING_PERIOD_NOT_FOUND');
     }
 
+    const incompleteSubjects = await this.repository.listIncompleteSubjects(classId, gradingPeriodId);
+    if (incompleteSubjects.length > 0) {
+      throw new ReportCardsModuleError(
+        `Les moyennes ne sont pas encore validées pour : ${incompleteSubjects.join(', ')}`,
+        409,
+        'SUBJECT_AVERAGES_PENDING'
+      );
+    }
+
     const roster = await this.repository.listClassStudents(classId);
     const subjectAverages = await this.repository.listSubjectAverages(classId, gradingPeriodId);
     const cachedGeneralAverages = await this.repository.listGeneralAverages(classId, gradingPeriodId);

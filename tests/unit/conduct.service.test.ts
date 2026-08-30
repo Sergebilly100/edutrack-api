@@ -13,9 +13,9 @@ const repository = {
   findStudentContext: vi.fn(),
   findTeacherByUserId: vi.fn(),
   teacherTeachesClass: vi.fn(),
-  teacherHasStartedAverageCalculation: vi.fn(),
+  teacherHasOpenAverageCalculation: vi.fn(),
+  teacherHasAverageCalculation: vi.fn(),
   gradingPeriodExists: vi.fn(),
-  gradingPeriodEndDate: vi.fn(),
   gradingPeriodMatchesClass: vi.fn(),
   studentsBelongToClass: vi.fn(),
   listTeacherConductScope: vi.fn(),
@@ -38,7 +38,6 @@ const studentContext = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  repository.gradingPeriodEndDate.mockResolvedValue('2099-12-31');
 });
 
 describe('conduct.service createEducatorAssignment', () => {
@@ -134,7 +133,7 @@ describe('conduct.service submitTeacherConductInput', () => {
     repository.findStudentContext.mockResolvedValue(studentContext);
     repository.gradingPeriodExists.mockResolvedValue(true);
     repository.teacherTeachesClass.mockResolvedValue(true);
-    repository.teacherHasStartedAverageCalculation.mockResolvedValue(true);
+    repository.teacherHasOpenAverageCalculation.mockResolvedValue(true);
     repository.insertTeacherConductInput.mockResolvedValue(undefined);
 
     await expect(service.submitTeacherConductInput(baseInput, { userId: 'user-teacher' })).resolves.toBeUndefined();
@@ -151,7 +150,7 @@ describe('conduct.service submitTeacherConductInput', () => {
     repository.findStudentContext.mockResolvedValue(studentContext);
     repository.gradingPeriodExists.mockResolvedValue(true);
     repository.teacherTeachesClass.mockResolvedValue(true);
-    repository.teacherHasStartedAverageCalculation.mockResolvedValue(false);
+    repository.teacherHasOpenAverageCalculation.mockResolvedValue(false);
 
     await expect(service.submitTeacherConductInput(baseInput, { userId: 'user-teacher' })).rejects.toMatchObject({
       code: 'AVERAGE_CALCULATION_NOT_STARTED',
@@ -159,18 +158,6 @@ describe('conduct.service submitTeacherConductInput', () => {
     });
   });
 
-  it('refuse la conduite lorsque la période est terminée', async () => {
-    const service = new ConductService(repository);
-    repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1', name: 'Ibrahim Diallo' });
-    repository.findStudentContext.mockResolvedValue(studentContext);
-    repository.gradingPeriodExists.mockResolvedValue(true);
-    repository.gradingPeriodEndDate.mockResolvedValue('2020-01-01');
-
-    await expect(service.submitTeacherConductInput(baseInput, { userId: 'user-teacher' })).rejects.toMatchObject({
-      code: 'GRADING_PERIOD_CLOSED',
-      statusCode: 409,
-    });
-  });
 });
 
 describe('conduct.service submitBulkTeacherConductInputs', () => {
@@ -178,7 +165,7 @@ describe('conduct.service submitBulkTeacherConductInputs', () => {
     const service = new ConductService(repository);
     repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1', name: 'Ibrahim Diallo' });
     repository.teacherTeachesClass.mockResolvedValue(true);
-    repository.teacherHasStartedAverageCalculation.mockResolvedValue(true);
+    repository.teacherHasOpenAverageCalculation.mockResolvedValue(true);
     repository.gradingPeriodMatchesClass.mockResolvedValue(true);
     repository.studentsBelongToClass.mockResolvedValue(true);
     repository.insertTeacherConductInput.mockResolvedValue(undefined);
@@ -198,7 +185,7 @@ describe('conduct.service submitBulkTeacherConductInputs', () => {
     const service = new ConductService(repository);
     repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1', name: 'Ibrahim Diallo' });
     repository.teacherTeachesClass.mockResolvedValue(true);
-    repository.teacherHasStartedAverageCalculation.mockResolvedValue(true);
+    repository.teacherHasOpenAverageCalculation.mockResolvedValue(true);
     repository.gradingPeriodMatchesClass.mockResolvedValue(true);
     repository.studentsBelongToClass.mockResolvedValue(false);
 
@@ -209,6 +196,23 @@ describe('conduct.service submitBulkTeacherConductInputs', () => {
       note: 16,
     }, { userId: 'user-teacher' })).rejects.toMatchObject({ code: 'STUDENT_CLASS_MISMATCH' });
     expect(repository.insertTeacherConductInput).not.toHaveBeenCalled();
+  });
+});
+
+describe('conduct.service getTeacherConductScope', () => {
+  it('conserve les notes de conduite consultables après validation des moyennes', async () => {
+    const service = new ConductService(repository);
+    repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1', name: 'Ibrahim Diallo' });
+    repository.teacherTeachesClass.mockResolvedValue(true);
+    repository.gradingPeriodMatchesClass.mockResolvedValue(true);
+    repository.teacherHasAverageCalculation.mockResolvedValue(true);
+    repository.listTeacherConductScope.mockResolvedValue([{ studentId: 'student-1', input: { note: 16 } }]);
+
+    await expect(service.getTeacherConductScope('class-1', 'period-1', { userId: 'user-teacher' })).resolves.toEqual({
+      isAvailable: true,
+      students: [{ studentId: 'student-1', input: { note: 16 } }],
+    });
+    expect(repository.teacherHasOpenAverageCalculation).not.toHaveBeenCalled();
   });
 });
 

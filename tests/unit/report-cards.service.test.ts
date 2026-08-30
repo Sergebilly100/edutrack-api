@@ -12,6 +12,7 @@ const repository = {
   findClassContext: vi.fn(),
   findGradingPeriod: vi.fn(),
   isLastPeriodOfYear: vi.fn(),
+  listIncompleteSubjects: vi.fn(),
   listClassStudents: vi.fn(),
   listSubjectAverages: vi.fn(),
   listGeneralAverages: vi.fn(),
@@ -71,6 +72,7 @@ describe('ReportCardsService.generateForClass', () => {
     repository.findClassContext.mockResolvedValue(classContext);
     repository.findGradingPeriod.mockResolvedValue(period);
     repository.isLastPeriodOfYear.mockResolvedValue(false);
+    repository.listIncompleteSubjects.mockResolvedValue([]);
     repository.listLevelSubjects.mockResolvedValue([
       { id: 'subject-1', name: 'Maths', coefficient: 4 },
       { id: 'subject-2', name: 'Français', coefficient: 2 },
@@ -199,6 +201,18 @@ describe('ReportCardsService.generateForClass', () => {
       code: 'NO_AVERAGES_COMPUTED',
       statusCode: 409,
     });
+  });
+
+  it('refuse la génération tant qu’une matière de la classe n’est pas validée', async () => {
+    baseRepo();
+    repository.listIncompleteSubjects.mockResolvedValue(['Français']);
+
+    const service = new ReportCardsService(repository);
+    await expect(service.generateForClass('class-1', 'period-1')).rejects.toMatchObject({
+      code: 'SUBJECT_AVERAGES_PENDING',
+      statusCode: 409,
+    });
+    expect(repository.listClassStudents).not.toHaveBeenCalled();
   });
 });
 

@@ -15,6 +15,7 @@ describe('report-cards routes (5c)', () => {
   let periodT1 = '';
   let periodT2 = '';
   let subjectMathsId = '';
+  let subjectFrenchId = '';
   let studentAId = '';
   let studentBId = '';
 
@@ -67,6 +68,7 @@ describe('report-cards routes (5c)', () => {
       [levelId]
     );
     subjectMathsId = subjects[0]!.id;
+    subjectFrenchId = subjects[1]!.id;
 
     const classes = await queryTenant<IdRow>(
       `INSERT INTO ${tenantTable('classes')} (name, level_id, school_year_id, is_active)
@@ -90,8 +92,22 @@ describe('report-cards routes (5c)', () => {
     await seedAverage(studentBId, periodT1, null, 10);
     await seedAverage(studentAId, periodT1, subjectMathsId, 16);
     await seedAverage(studentBId, periodT1, subjectMathsId, 8);
+    await seedAverage(studentAId, periodT1, subjectFrenchId, 14);
+    await seedAverage(studentBId, periodT1, subjectFrenchId, 12);
     await seedAverage(studentAId, periodT2, null, 14);
     await seedAverage(studentBId, periodT2, null, 11);
+    await seedAverage(studentAId, periodT2, subjectMathsId, 14);
+    await seedAverage(studentBId, periodT2, subjectMathsId, 11);
+    await seedAverage(studentAId, periodT2, subjectFrenchId, 13);
+    await seedAverage(studentBId, periodT2, subjectFrenchId, 11);
+    await queryTenant(
+      `INSERT INTO ${tenantTable('class_subject_completion')} (class_id, subject_id, grading_period_id, status, completed_at)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 'completed', now()),
+              ($1::uuid, $4::uuid, $3::uuid, 'completed', now()),
+              ($1::uuid, $2::uuid, $5::uuid, 'completed', now()),
+              ($1::uuid, $4::uuid, $5::uuid, 'completed', now())`,
+      [classId, subjectMathsId, periodT1, subjectFrenchId, periodT2]
+    );
 
     // Conduite finalisée pour student-a sur T1 (module 5b)
     await queryTenant(
@@ -158,7 +174,7 @@ describe('report-cards routes (5c)', () => {
     expect(list.status).toBe(200);
     expect(list.body.reportCards).toHaveLength(1);
     expect(list.body.reportCards[0]).toMatchObject({
-      generalAverage: 16.2,
+      generalAverage: 15.571,
       rank: 1,
       classHeadcount: 2,
     });
@@ -184,7 +200,7 @@ describe('report-cards routes (5c)', () => {
     const parentList = await request()
       .get(`/api/v1/parent/students/${studentAId}/report-cards`)
       .set(parentHeaders);
-    expect(parentList.body.reportCards[0].generalAverage).toBe(16.2);
+    expect(parentList.body.reportCards[0].generalAverage).toBe(15.571);
   });
 
   it('décision de fin d\u2019année uniquement sur la dernière période', async () => {

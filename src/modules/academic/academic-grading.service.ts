@@ -189,13 +189,13 @@ export class AcademicGradingService {
     return teacherId;
   }
 
-  private assertPeriodOpen(period: { endDate: string }): void {
-    const today = new Date().toISOString().slice(0, 10);
-    if (today > period.endDate) {
+  private async assertSubjectOpen(classId: string, subjectId: string, gradingPeriodId: string): Promise<void> {
+    const completion = await this.repository.getSubjectCompletion(classId, subjectId, gradingPeriodId);
+    if (completion) {
       throw new AcademicGradingError(
-        'This grading period is closed: grades can no longer be added or edited',
+        'La saisie est clôturée pour cette classe, cette matière et cette période',
         409,
-        'GRADING_PERIOD_CLOSED'
+        completion.status === 'completed' ? 'SUBJECT_AVERAGES_VALIDATED' : 'SUBJECT_GRADING_CLOSED'
       );
     }
   }
@@ -242,7 +242,6 @@ export class AcademicGradingService {
     if (!slot) throw new AcademicGradingError('Lesson slot not found', 400, 'LESSON_SLOT_NOT_FOUND');
     if (!subject) throw new AcademicGradingError('Subject not found', 400, 'SUBJECT_NOT_FOUND');
     if (!period) throw new AcademicGradingError('Grading period not found', 400, 'GRADING_PERIOD_NOT_FOUND');
-    this.assertPeriodOpen(period);
     if (slot.teacherId !== teacherId || slot.classId !== input.classId) {
       throw new AcademicGradingError('Lesson slot is outside the teacher scope', 403, 'EVALUATION_SCOPE_FORBIDDEN');
     }
@@ -252,6 +251,8 @@ export class AcademicGradingService {
     if (normalizeSubjectKey(slot.subjectName) !== normalizeSubjectKey(subject.name)) {
       throw new AcademicGradingError('Subject does not match the lesson slot', 400, 'EVALUATION_SUBJECT_MISMATCH');
     }
+
+    await this.assertSubjectOpen(input.classId, input.subjectId, input.gradingPeriodId);
 
     await this.repository.ensureTeacherSubjectAssignment(teacherId, subject.id, input.classId);
   }
@@ -271,7 +272,7 @@ export class AcademicGradingService {
     }
     const period = await this.repository.findGradingPeriod(evaluation.gradingPeriodId);
     if (!period) throw new AcademicGradingError('Grading period not found', 400, 'GRADING_PERIOD_NOT_FOUND');
-    this.assertPeriodOpen(period);
+    await this.assertSubjectOpen(evaluation.classId, evaluation.subjectId, evaluation.gradingPeriodId);
     if (!(await this.repository.studentBelongsToClass(input.studentId, evaluation.classId))) {
       throw new AcademicGradingError('Student is not enrolled in the evaluation class', 400, 'STUDENT_CLASS_MISMATCH');
     }
@@ -298,12 +299,12 @@ export class AcademicGradingService {
     const evaluation = await this.repository.createSpontaneousEvaluation(input, teacherId);
     const grade = await this.repository.upsertGrade(evaluation.id, {
       studentId: input.studentId,
-      score: input.polarity === 'positive' ? 20 : 0,
+      score: Math.abs(input.adjustment),
       maxScore: 20,
       comment: input.comment,
     });
     const averages = await this.recalculateStudentPeriod(input.studentId, input.gradingPeriodId);
-    return { evaluation, grade, averages };
+    return { evaluation, grade: { ...grade, score: input.adjustment }, averages };
   }
 
   /**
@@ -316,17 +317,26 @@ export class AcademicGradingService {
    */
   private async recalculateStudentPeriod(studentId: string, gradingPeriodId: string) {
     const gradeRows = await this.repository.listStudentPeriodGrades(studentId, gradingPeriodId);
-    const groups = new Map<string, { subjectCoefficient: number; grades: Array<{ score: number; maxScore: number; coefficient: number }> }>();
+    const groups = new Map<string, {
+      subjectCoefficient: number;
+      grades: Array<{ score: number; maxScore: number; coefficient: number }>;
+      adjustments: number[];
+    }>();
     for (const row of gradeRows) {
-      const group = groups.get(row.subjectId) ?? { subjectCoefficient: row.subjectCoefficient, grades: [] };
-      group.grades.push({ score: row.score, maxScore: row.maxScore, coefficient: row.evaluationCoefficient });
+      const group = groups.get(row.subjectId) ?? { subjectCoefficient: row.subjectCoefficient, grades: [], adjustments: [] };
+      if (row.evaluationType === 'spontaneous') {
+        group.adjustments.push(row.adjustment);
+      } else {
+        group.grades.push({ score: row.score, maxScore: row.maxScore, coefficient: row.evaluationCoefficient });
+      }
       groups.set(row.subjectId, group);
     }
 
     const subjects: Array<{ subjectId: string; average: number; coefficient: number }> = [];
     for (const [subjectId, group] of groups) {
-      const average = calculateSubjectAverage(group.grades);
-      if (average === null) continue;
+      const baseAverage = calculateSubjectAverage(group.grades);
+      if (baseAverage === null) continue;
+      const average = Math.max(0, Math.min(20, baseAverage + group.adjustments.reduce((sum, adjustment) => sum + adjustment, 0)));
       await this.repository.upsertAverage(studentId, gradingPeriodId, subjectId, average);
       subjects.push({ subjectId, average, coefficient: group.subjectCoefficient });
     }
@@ -359,6 +369,40 @@ export class AcademicGradingService {
     }
     if (!assigned) {
       throw new AcademicGradingError('Subject is outside the teacher scope', 403, 'COMPLETION_SCOPE_FORBIDDEN');
+    }
+    const current = await this.repository.getSubjectCompletion(
+      input.classId,
+      input.subjectId,
+      input.gradingPeriodId
+    );
+    if (!current && input.status !== 'in_progress') {
+      throw new AcademicGradingError(
+        'Clôturez d’abord la saisie avant de valider les moyennes',
+        409,
+        'AVERAGE_CALCULATION_NOT_STARTED'
+      );
+    }
+    if (current?.status === 'completed') {
+      throw new AcademicGradingError(
+        'Les moyennes de cette matière sont déjà validées',
+        409,
+        'SUBJECT_AVERAGES_VALIDATED'
+      );
+    }
+    if (!current) {
+      const missingGrades = await this.repository.countMissingScheduledGrades(
+        teacherId,
+        input.classId,
+        input.subjectId,
+        input.gradingPeriodId
+      );
+      if (missingGrades > 0) {
+        throw new AcademicGradingError(
+          `${missingGrades} note(s) d’évaluation restent à saisir avant le calcul`,
+          409,
+          'GRADES_INCOMPLETE'
+        );
+      }
     }
     return this.repository.upsertCompletion(input);
   }

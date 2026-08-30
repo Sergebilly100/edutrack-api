@@ -105,34 +105,6 @@ describe('academic grading integration', () => {
       expect.objectContaining({ subjectId: mathResponse.body.subject.id, calculationStarted: false }),
     ]));
 
-    const completion = await request().put('/api/v1/class-subject-completion').set(teacherHeaders).send({
-      classId,
-      subjectId: mathResponse.body.subject.id,
-      gradingPeriodId,
-      status: 'completed',
-    });
-    expect(completion.status).toBe(200);
-    expect(completion.body.completion.status).toBe('completed');
-
-    const reopenedCompletion = await request().put('/api/v1/class-subject-completion').set(teacherHeaders).send({
-      classId,
-      subjectId: mathResponse.body.subject.id,
-      gradingPeriodId,
-      status: 'in_progress',
-    });
-    expect(reopenedCompletion.status).toBe(200);
-    expect(reopenedCompletion.body.completion).toMatchObject({
-      status: 'in_progress',
-      completed_at: null,
-    });
-
-    expect((await request().put('/api/v1/class-subject-completion').set(teacherHeaders).send({
-      classId,
-      subjectId: mathResponse.body.subject.id,
-      gradingPeriodId,
-      status: 'completed',
-    })).status).toBe(200);
-
     const createEvaluation = async (lessonSlotId: string, subjectId: string, label: string, coefficient: number) => {
       const response = await request().post('/api/v1/evaluations').set(teacherHeaders).send({
         lessonSlotId,
@@ -184,7 +156,7 @@ describe('academic grading integration', () => {
     });
     expect(tracking.status).toBe(200);
     expect(tracking.body.subjects).toEqual(expect.arrayContaining([
-      expect.objectContaining({ subjectId: mathResponse.body.subject.id, status: 'completed' }),
+      expect.objectContaining({ subjectId: mathResponse.body.subject.id, status: 'in_progress' }),
       expect.objectContaining({ subjectId: frenchResponse.body.subject.id, status: 'in_progress' }),
     ]));
 
@@ -197,11 +169,14 @@ describe('academic grading integration', () => {
         classId,
         gradingPeriodId,
         studentId,
-        polarity: 'negative',
+        adjustment: -2,
         comment: 'Interrompt régulièrement le cours',
       });
     expect(spontaneous.status, JSON.stringify(spontaneous.body)).toBe(201);
-    expect(spontaneous.body.grade).toMatchObject({ score: 0, maxScore: 20 });
+    expect(spontaneous.body.grade).toMatchObject({ score: -2, maxScore: 20 });
+    expect(spontaneous.body.averages.subjects).toEqual(expect.arrayContaining([
+      expect.objectContaining({ subjectId: mathResponse.body.subject.id, average: 14 }),
+    ]));
 
     const missingJustification = await request()
       .post('/api/v1/evaluations/spontaneous')
@@ -212,17 +187,35 @@ describe('academic grading integration', () => {
         classId,
         gradingPeriodId,
         studentId,
-        polarity: 'positive',
+        adjustment: 2,
         comment: '',
       });
     expect(missingJustification.status).toBe(400);
 
-    await queryTenant(
-      `UPDATE grading_periods SET start_date = '2020-01-01', end_date = '2020-03-31' WHERE id = $1`,
-      [gradingPeriodId]
-    );
-    const closedPeriodEdit = await saveGrade(math1, 14);
-    expect(closedPeriodEdit.status).toBe(409);
-    expect(closedPeriodEdit.body.code).toBe('GRADING_PERIOD_CLOSED');
+    const calculationStarted = await request().put('/api/v1/class-subject-completion').set(teacherHeaders).send({
+      classId,
+      subjectId: mathResponse.body.subject.id,
+      gradingPeriodId,
+      status: 'in_progress',
+    });
+    expect(calculationStarted.status, JSON.stringify(calculationStarted.body)).toBe(200);
+    expect(calculationStarted.body.completion.status).toBe('in_progress');
+
+    const closedSubjectEdit = await saveGrade(math1, 14);
+    expect(closedSubjectEdit.status).toBe(409);
+    expect(closedSubjectEdit.body.code).toBe('SUBJECT_GRADING_CLOSED');
+
+    const completion = await request().put('/api/v1/class-subject-completion').set(teacherHeaders).send({
+      classId,
+      subjectId: mathResponse.body.subject.id,
+      gradingPeriodId,
+      status: 'completed',
+    });
+    expect(completion.status).toBe(200);
+    expect(completion.body.completion.status).toBe('completed');
+
+    const validatedSubjectEdit = await saveGrade(math1, 14);
+    expect(validatedSubjectEdit.status).toBe(409);
+    expect(validatedSubjectEdit.body.code).toBe('SUBJECT_AVERAGES_VALIDATED');
   });
 });

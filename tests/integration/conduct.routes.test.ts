@@ -14,6 +14,7 @@ describe('conduct routes (5b)', () => {
   let plainStaffHeaders: Record<string, string>;
   let teacherAHeaders: Record<string, string>;
   let teacherBHeaders: Record<string, string>;
+  let teacherAUserId = '';
   let teacherCUserId = '';
 
   let classId = '';
@@ -131,6 +132,7 @@ describe('conduct routes (5b)', () => {
 
     // Profs A et B enseignent dans la classe ; C n'y enseigne pas
     const teacherAUser = await seedTeacher('A conduct');
+    teacherAUserId = teacherAUser;
     const teacherBUser = await seedTeacher('B conduct');
     teacherCUserId = await seedTeacher('C conduct');
 
@@ -215,7 +217,7 @@ describe('conduct routes (5b)', () => {
     expect(response.body.code).toBe('EDUCATOR_ASSIGNMENT_CONFLICT');
   });
 
-  it('accepte les saisies de plusieurs profs puis refuse le doublon du même prof', async () => {
+  it('accepte les saisies de plusieurs profs puis permet au même prof de modifier la sienne', async () => {
     const first = await request()
       .post('/api/v1/conduct/inputs')
       .set(teacherAHeaders)
@@ -228,12 +230,19 @@ describe('conduct routes (5b)', () => {
       .send({ student_id: studentId, grading_period_id: gradingPeriodId, note: 12, observation: 'Bavard' });
     expect(second.status, JSON.stringify(second.body)).toBe(201);
 
-    const duplicate = await request()
+    const update = await request()
       .post('/api/v1/conduct/inputs')
       .set(teacherAHeaders)
       .send({ student_id: studentId, grading_period_id: gradingPeriodId, note: 14 });
-    expect(duplicate.status).toBe(409);
-    expect(duplicate.body.code).toBe('CONDUCT_INPUT_ALREADY_EXISTS');
+    expect(update.status, JSON.stringify(update.body)).toBe(201);
+
+    const inputs = await queryTenant<{ note: string }>(
+      `SELECT note FROM ${tenantTable('teacher_conduct_inputs')}
+       WHERE student_id = $1::uuid AND grading_period_id = $2::uuid
+       AND teacher_id = (SELECT id FROM ${tenantTable('teachers')} WHERE user_id = $3::uuid)`,
+      [studentId, gradingPeriodId, teacherAUserId]
+    );
+    expect(inputs).toEqual([{ note: '14.00' }]);
   });
 
   it("refuse la saisie par un prof qui n'enseigne pas dans la classe", async () => {
@@ -254,7 +263,7 @@ describe('conduct routes (5b)', () => {
       .query({ class_id: classId, grading_period_id: gradingPeriodId });
     expect(before.status, JSON.stringify(before.body)).toBe(200);
     expect(before.body.students).toEqual(expect.arrayContaining([
-      expect.objectContaining({ studentId, input: expect.objectContaining({ note: 16 }) }),
+      expect.objectContaining({ studentId, input: expect.objectContaining({ note: 14 }) }),
       expect.objectContaining({ studentId: secondStudentId, input: null }),
     ]));
 

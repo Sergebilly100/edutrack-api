@@ -384,7 +384,7 @@ export class AcademicGradingRepository {
       gradingPeriodId: input.gradingPeriodId,
       type: 'spontaneous',
       coefficient: 1,
-      label: input.polarity === 'positive' ? 'Participation positive' : 'Participation négative',
+      label: `Note spontanée ${input.adjustment > 0 ? '+' : ''}${input.adjustment}`,
     }, teacherId);
   }
 
@@ -422,13 +422,14 @@ export class AcademicGradingRepository {
 
   async listStudentPeriodGrades(studentId: string, gradingPeriodId: string): Promise<Array<{
     subjectId: string; subjectCoefficient: number; score: number; maxScore: number; evaluationCoefficient: number;
+    evaluationType: 'scheduled' | 'spontaneous'; adjustment: number;
   }>> {
     const result = await this.db.execute<{
       subject_id: string; subject_coefficient: string | number; score: string | number;
-      max_score: string | number; evaluation_coefficient: string | number;
+      max_score: string | number; evaluation_coefficient: string | number; type: 'scheduled' | 'spontaneous'; label: string;
     }>(sql`
       SELECT e.subject_id, s.coefficient AS subject_coefficient, eg.score, eg.max_score,
-             e.coefficient AS evaluation_coefficient
+             e.coefficient AS evaluation_coefficient, e.type, e.label
       FROM evaluation_grades eg
       INNER JOIN evaluations e ON e.id = eg.evaluation_id
       INNER JOIN subjects s ON s.id = e.subject_id
@@ -441,6 +442,10 @@ export class AcademicGradingRepository {
       score: decimal(row.score),
       maxScore: decimal(row.max_score),
       evaluationCoefficient: decimal(row.evaluation_coefficient),
+      evaluationType: row.type,
+      adjustment: row.type === 'spontaneous' && row.label.startsWith('Note spontanée -')
+        ? -decimal(row.score)
+        : decimal(row.score),
     }));
   }
 
@@ -481,6 +486,44 @@ export class AcademicGradingRepository {
     const row = rows(result)[0];
     if (!row) throw new Error('Failed to save completion status');
     return { ...row, completed_at: row.completed_at ? new Date(row.completed_at).toISOString() : null };
+  }
+
+  async getSubjectCompletion(classId: string, subjectId: string, gradingPeriodId: string): Promise<{
+    status: 'in_progress' | 'completed';
+  } | null> {
+    const result = await this.db.execute<{ status: 'in_progress' | 'completed' }>(sql`
+      SELECT status
+      FROM class_subject_completion
+      WHERE class_id = ${classId}::uuid
+        AND subject_id = ${subjectId}::uuid
+        AND grading_period_id = ${gradingPeriodId}::uuid
+      LIMIT 1
+    `);
+    return rows(result)[0] ?? null;
+  }
+
+  async countMissingScheduledGrades(
+    teacherId: string,
+    classId: string,
+    subjectId: string,
+    gradingPeriodId: string
+  ): Promise<number> {
+    const result = await this.db.execute<{ missing_count: string }>(sql`
+      SELECT COUNT(*)::text AS missing_count
+      FROM evaluations e
+      CROSS JOIN students s
+      LEFT JOIN evaluation_grades eg
+        ON eg.evaluation_id = e.id AND eg.student_id = s.id
+      WHERE e.teacher_id = ${teacherId}::uuid
+        AND e.class_id = ${classId}::uuid
+        AND e.subject_id = ${subjectId}::uuid
+        AND e.grading_period_id = ${gradingPeriodId}::uuid
+        AND e.type = 'scheduled'
+        AND s.class_id = ${classId}::uuid
+        AND s.is_active = true
+        AND eg.id IS NULL
+    `);
+    return Number(rows(result)[0]?.missing_count ?? 0);
   }
 
   async getCompletion(classId: string, gradingPeriodId: string) {

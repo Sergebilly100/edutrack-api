@@ -22,17 +22,6 @@ export class ConductModuleError extends Error {
 export class ConductService {
   constructor(private readonly repository: ConductRepository) {}
 
-  private async assertPeriodOpen(gradingPeriodId: string): Promise<void> {
-    const endDate = await this.repository.gradingPeriodEndDate(gradingPeriodId);
-    if (endDate && new Date().toISOString().slice(0, 10) > endDate) {
-      throw new ConductModuleError(
-        'Cette période est terminée : les notes de conduite ne peuvent plus être modifiées',
-        409,
-        'GRADING_PERIOD_CLOSED'
-      );
-    }
-  }
-
   async listEducatorAssignments(): Promise<{ assignments: EducatorAssignmentItem[] }> {
     return { assignments: await this.repository.listEducatorAssignments() };
   }
@@ -97,7 +86,6 @@ export class ConductService {
     if (!(await this.repository.gradingPeriodExists(input.grading_period_id))) {
       throw new ConductModuleError('Période d\u2019évaluation introuvable', 404, 'GRADING_PERIOD_NOT_FOUND');
     }
-    await this.assertPeriodOpen(input.grading_period_id);
 
     // Un prof ne saisit la conduite que pour les élèves de ses classes.
     const teachesClass = await this.repository.teacherTeachesClass(teacher.id, student.classId);
@@ -109,7 +97,7 @@ export class ConductService {
       );
     }
 
-    if (!(await this.repository.teacherHasStartedAverageCalculation(
+    if (!(await this.repository.teacherHasOpenAverageCalculation(
       teacher.id,
       student.classId,
       input.grading_period_id
@@ -139,7 +127,7 @@ export class ConductService {
     if (!(await this.repository.gradingPeriodMatchesClass(gradingPeriodId, classId))) {
       throw new ConductModuleError('La période ne correspond pas à la classe', 400, 'CONDUCT_SCOPE_MISMATCH');
     }
-    const isAvailable = await this.repository.teacherHasStartedAverageCalculation(
+    const isAvailable = await this.repository.teacherHasAverageCalculation(
       teacher.id,
       classId,
       gradingPeriodId
@@ -165,8 +153,7 @@ export class ConductService {
     if (!(await this.repository.gradingPeriodMatchesClass(input.grading_period_id, input.class_id))) {
       throw new ConductModuleError('La période ne correspond pas à la classe', 400, 'CONDUCT_SCOPE_MISMATCH');
     }
-    await this.assertPeriodOpen(input.grading_period_id);
-    if (!(await this.repository.teacherHasStartedAverageCalculation(
+    if (!(await this.repository.teacherHasOpenAverageCalculation(
       teacher.id,
       input.class_id,
       input.grading_period_id
@@ -234,7 +221,6 @@ export class ConductService {
     if (!(await this.repository.gradingPeriodExists(input.grading_period_id))) {
       throw new ConductModuleError('Période d\u2019évaluation introuvable', 404, 'GRADING_PERIOD_NOT_FOUND');
     }
-    await this.assertPeriodOpen(input.grading_period_id);
 
     const isEducatorOfStudent = await this.repository.isAssignedEducatorForStudent(
       context.userId,

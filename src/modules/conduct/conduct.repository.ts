@@ -204,7 +204,26 @@ export class ConductRepository {
     return getRows(result).length > 0;
   }
 
-  async teacherHasStartedAverageCalculation(
+  async teacherHasOpenAverageCalculation(
+    teacherId: string,
+    classId: string,
+    gradingPeriodId: string
+  ): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      SELECT 1
+      FROM class_subject_completion csc
+      INNER JOIN teacher_subject_assignments tsa
+        ON tsa.class_id = csc.class_id AND tsa.subject_id = csc.subject_id
+      WHERE csc.class_id = ${classId}::uuid
+        AND csc.grading_period_id = ${gradingPeriodId}::uuid
+        AND csc.status = 'in_progress'::class_subject_completion_status
+        AND tsa.teacher_id = ${teacherId}::uuid
+      LIMIT 1
+    `);
+    return getRows(result).length > 0;
+  }
+
+  async teacherHasAverageCalculation(
     teacherId: string,
     classId: string,
     gradingPeriodId: string
@@ -309,29 +328,19 @@ export class ConductRepository {
   async insertTeacherConductInput(
     input: ConductInputBody & { teacherId: string }
   ): Promise<void> {
-    try {
-      await this.db.execute(sql`
-        INSERT INTO teacher_conduct_inputs (student_id, teacher_id, class_id, grading_period_id, note, observation)
-        VALUES (
-          ${input.student_id}::uuid,
-          ${input.teacherId}::uuid,
-          (SELECT class_id FROM students WHERE id = ${input.student_id}::uuid),
-          ${input.grading_period_id}::uuid,
-          ${input.note},
-          ${input.observation ?? null}
-        )
-      `);
-    } catch (error) {
-      if (isUniqueViolation(error, 'teacher_conduct_inputs_once_per_period')) {
-        const conflict = new Error(
-          'Une note de conduite a déjà été saisie par ce prof pour cet élève et cette période'
-        ) as Error & { statusCode?: number; code?: string };
-        conflict.statusCode = 409;
-        conflict.code = 'CONDUCT_INPUT_ALREADY_EXISTS';
-        throw conflict;
-      }
-      throw error;
-    }
+    await this.db.execute(sql`
+      INSERT INTO teacher_conduct_inputs (student_id, teacher_id, class_id, grading_period_id, note, observation)
+      VALUES (
+        ${input.student_id}::uuid,
+        ${input.teacherId}::uuid,
+        (SELECT class_id FROM students WHERE id = ${input.student_id}::uuid),
+        ${input.grading_period_id}::uuid,
+        ${input.note},
+        ${input.observation ?? null}
+      )
+      ON CONFLICT ON CONSTRAINT teacher_conduct_inputs_once_per_period
+      DO UPDATE SET note = EXCLUDED.note, observation = EXCLUDED.observation, updated_at = now()
+    `);
   }
 
   async listConductInputsForStudent(studentId: string, gradingPeriodId: string) {

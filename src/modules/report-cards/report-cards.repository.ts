@@ -92,6 +92,23 @@ export class ReportCardsRepository {
     }));
   }
 
+  async listIncompleteSubjects(classId: string, gradingPeriodId: string): Promise<string[]> {
+    const result = await this.db.execute<{ name: string }>(sql`
+      SELECT s.name
+      FROM classes c
+      INNER JOIN subjects s ON s.level_id = c.level_id
+      LEFT JOIN class_subject_completion csc
+        ON csc.class_id = c.id
+        AND csc.subject_id = s.id
+        AND csc.grading_period_id = ${gradingPeriodId}::uuid
+      WHERE c.id = ${classId}::uuid
+        AND COALESCE(csc.status, 'in_progress'::class_subject_completion_status)
+          <> 'completed'::class_subject_completion_status
+      ORDER BY s.name
+    `);
+    return getRows<{ name: string }>(result).map((row) => row.name);
+  }
+
   /** Moyennes par matière déjà calculées (module academic) pour toute la classe. */
   async listSubjectAverages(
     classId: string,

@@ -129,7 +129,9 @@ export const spontaneousGradeBodySchema = z.object({
   classId: z.string().uuid(),
   gradingPeriodId: z.string().uuid(),
   studentId: z.string().uuid(),
-  polarity: z.enum(['positive', 'negative']),
+  adjustment: z.number().finite().min(-20).max(20).refine((value) => value !== 0, {
+    message: 'L’ajustement doit être différent de zéro',
+  }),
   comment: z.string().trim().min(1).max(2000),
 });
 export type SpontaneousGradeInput = z.infer<typeof spontaneousGradeBodySchema>;
