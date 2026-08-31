@@ -79,6 +79,41 @@ export class ReportCardsRepository {
     return row !== undefined && row.current_order !== null && row.current_order === row.max_order;
   }
 
+  /**
+   * La période courante est la première période dont les bulletins ne sont pas
+   * encore générés pour tous les élèves de toutes les classes actives.
+   * Les dates de période sont des repères de calendrier, jamais un verrou métier.
+   */
+  async isCurrentGradingPeriod(schoolYearId: string, gradingPeriodId: string): Promise<boolean> {
+    const result = await this.db.execute<{ id: string }>(sql`
+      WITH class_progress AS (
+        SELECT gp.id AS grading_period_id,
+               c.id AS class_id,
+               COUNT(s.id)::int AS student_count,
+               COUNT(rc.id) FILTER (WHERE rc.status IN ('generated', 'published'))::int AS card_count
+        FROM grading_periods gp
+        INNER JOIN classes c ON c.school_year_id = gp.school_year_id AND c.is_active = true
+        LEFT JOIN students s ON s.class_id = c.id AND s.is_active = true
+        LEFT JOIN report_cards rc ON rc.student_id = s.id AND rc.grading_period_id = gp.id
+        WHERE gp.school_year_id = ${schoolYearId}::uuid
+        GROUP BY gp.id, c.id
+      ), period_progress AS (
+        SELECT grading_period_id,
+               COALESCE(BOOL_AND(student_count > 0 AND card_count >= student_count), false) AS is_completed
+        FROM class_progress
+        GROUP BY grading_period_id
+      )
+      SELECT gp.id::text
+      FROM grading_periods gp
+      LEFT JOIN period_progress pp ON pp.grading_period_id = gp.id
+      WHERE gp.school_year_id = ${schoolYearId}::uuid
+        AND COALESCE(pp.is_completed, false) = false
+      ORDER BY gp.order_index
+      LIMIT 1
+    `);
+    return getRows<{ id: string }>(result)[0]?.id === gradingPeriodId;
+  }
+
   async listClassStudents(classId: string): Promise<Array<{ id: string; fullName: string }>> {
     const result = await this.db.execute<{ id: string; full_name: string }>(sql`
       SELECT s.id::text, concat_ws(' ', s.first_name, s.last_name) AS full_name

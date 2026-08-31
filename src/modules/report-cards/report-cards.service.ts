@@ -64,7 +64,7 @@ export const computeWeightedGeneralAverage = (
 export class ReportCardsService {
   constructor(private readonly repository: ReportCardsRepository) {}
 
-  async generateForClass(classId: string, gradingPeriodId: string): Promise<{ generatedCount: number }> {
+  async generateForClass(classId: string, gradingPeriodId: string): Promise<{ generatedCount: number; periodCompleted: boolean }> {
     const klass = await this.repository.findClassContext(classId);
     if (!klass) {
       throw new ReportCardsModuleError('Classe introuvable', 404, 'CLASS_NOT_FOUND');
@@ -73,6 +73,21 @@ export class ReportCardsService {
     const period = await this.repository.findGradingPeriod(gradingPeriodId);
     if (!period || period.schoolYearId !== klass.schoolYearId) {
       throw new ReportCardsModuleError('Période introuvable pour cette classe', 404, 'GRADING_PERIOD_NOT_FOUND');
+    }
+    const roster = await this.repository.listClassStudents(classId);
+    const periodIsCurrent = await this.repository.isCurrentGradingPeriod(klass.schoolYearId, gradingPeriodId);
+    if (!periodIsCurrent) {
+      const existingCards = await Promise.all(roster.map((student) => this.repository.findExistingCard(student.id, gradingPeriodId)));
+      if (roster.length > 0 && existingCards.every((card) => card !== null)) {
+        // Rejouer une génération déjà complète reste idempotent et ne modifie
+        // jamais la période courante.
+        return { generatedCount: 0, periodCompleted: true };
+      }
+      throw new ReportCardsModuleError(
+        'Les bulletins ne peuvent être générés que pour la période scolaire en cours',
+        409,
+        'GRADING_PERIOD_NOT_CURRENT'
+      );
     }
 
     const incompleteSubjects = await this.repository.listIncompleteSubjects(classId, gradingPeriodId);
@@ -84,7 +99,6 @@ export class ReportCardsService {
       );
     }
 
-    const roster = await this.repository.listClassStudents(classId);
     const subjectAverages = await this.repository.listSubjectAverages(classId, gradingPeriodId);
     const cachedGeneralAverages = await this.repository.listGeneralAverages(classId, gradingPeriodId);
     const levelSubjects = await this.repository.listLevelSubjects(klass.levelId);
@@ -208,7 +222,10 @@ export class ReportCardsService {
       );
     }
 
-    return { generatedCount };
+    return {
+      generatedCount,
+      periodCompleted: !(await this.repository.isCurrentGradingPeriod(klass.schoolYearId, gradingPeriodId)),
+    };
   }
 
   async publish(cardId: string, userId: string): Promise<void> {

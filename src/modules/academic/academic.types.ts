@@ -153,6 +153,7 @@ export type SchoolYearRow = {
   start_date: string;
   end_date: string;
   end_of_year_review_start_date: string;
+  grading_period_type: 'trimester' | 'semester';
   status: SchoolYearStatus;
   created_at: Date | string;
   updated_at: Date | string;
@@ -164,6 +165,7 @@ export type SchoolYearItem = {
   startDate: string;
   endDate: string;
   endOfYearReviewStartDate: string;
+  gradingPeriodType: 'trimester' | 'semester';
   status: SchoolYearStatus;
   createdAt: string;
   updatedAt: string;

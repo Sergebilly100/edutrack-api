@@ -36,6 +36,7 @@ type PeriodRow = {
   label: string;
   start_date: string;
   end_date: string;
+  is_completed?: boolean;
 };
 
 const mapSubject = (row: SubjectRow): SubjectItem => ({
@@ -54,6 +55,8 @@ const mapPeriod = (row: PeriodRow): GradingPeriodItem => ({
   label: row.label,
   startDate: row.start_date,
   endDate: row.end_date,
+  isCompleted: row.is_completed ?? false,
+  isCurrent: false,
 });
 
 export type EvaluationItem = {
@@ -155,14 +158,50 @@ export class AcademicGradingRepository {
     return rows(result).length > 0;
   }
 
+  private async withPeriodStates(periods: PeriodRow[]): Promise<GradingPeriodItem[]> {
+    if (periods.length === 0) return [];
+    const periodIds = periods.map((period) => period.id);
+    const result = await this.db.execute<{ grading_period_id: string; is_completed: boolean }>(sql`
+      WITH class_progress AS (
+        SELECT gp.id AS grading_period_id,
+               c.id AS class_id,
+               COUNT(s.id)::int AS student_count,
+               COUNT(rc.id) FILTER (WHERE rc.status IN ('generated', 'published'))::int AS card_count
+        FROM grading_periods gp
+        INNER JOIN classes c ON c.school_year_id = gp.school_year_id AND c.is_active = true
+        LEFT JOIN students s ON s.class_id = c.id AND s.is_active = true
+        LEFT JOIN report_cards rc ON rc.student_id = s.id AND rc.grading_period_id = gp.id
+        WHERE gp.id = ANY(ARRAY[${sql.join(periodIds.map((id) => sql`${id}::uuid`), sql`, `)}]::uuid[])
+        GROUP BY gp.id, c.id
+      )
+      SELECT grading_period_id::text,
+             COALESCE(BOOL_AND(student_count > 0 AND card_count >= student_count), false) AS is_completed
+      FROM class_progress
+      GROUP BY grading_period_id
+    `);
+    const completionById = new Map(rows(result).map((row) => [row.grading_period_id, row.is_completed]));
+    const mapped = periods.map((period) => mapPeriod({ ...period, is_completed: completionById.get(period.id) ?? false }));
+    const byYear = new Map<string, GradingPeriodItem[]>();
+    for (const period of mapped) {
+      const items = byYear.get(period.schoolYearId) ?? [];
+      items.push(period);
+      byYear.set(period.schoolYearId, items);
+    }
+    for (const yearPeriods of byYear.values()) {
+      const current = [...yearPeriods].sort((left, right) => left.orderIndex - right.orderIndex).find((period) => !period.isCompleted);
+      if (current) current.isCurrent = true;
+    }
+    return mapped;
+  }
+
   async listGradingPeriods(schoolYearId?: string): Promise<GradingPeriodItem[]> {
     const result = await this.db.execute<PeriodRow>(sql`
       SELECT id, school_year_id, type, order_index, label, start_date::text, end_date::text
       FROM grading_periods
       WHERE (${schoolYearId ?? null}::uuid IS NULL OR school_year_id = ${schoolYearId ?? null}::uuid)
-      ORDER BY start_date DESC, order_index
+      ORDER BY school_year_id, order_index
     `);
-    return rows(result).map(mapPeriod);
+    return this.withPeriodStates(rows(result));
   }
 
   async findGradingPeriod(id: string): Promise<GradingPeriodItem | null> {
@@ -171,15 +210,22 @@ export class AcademicGradingRepository {
       FROM grading_periods WHERE id = ${id}::uuid LIMIT 1
     `);
     const row = rows(result)[0];
-    return row ? mapPeriod(row) : null;
+    if (!row) return null;
+    const periodsInYear = await this.db.execute<PeriodRow>(sql`
+      SELECT id, school_year_id, type, order_index, label, start_date::text, end_date::text
+      FROM grading_periods
+      WHERE school_year_id = ${row.school_year_id}::uuid
+      ORDER BY order_index
+    `);
+    return (await this.withPeriodStates(rows(periodsInYear))).find((period) => period.id === id) ?? null;
   }
 
-  async getSchoolYear(id: string): Promise<{ id: string; startDate: string; endDate: string } | null> {
-    const result = await this.db.execute<{ id: string; start_date: string; end_date: string }>(sql`
-      SELECT id, start_date::text, end_date::text FROM school_years WHERE id = ${id}::uuid LIMIT 1
+  async getSchoolYear(id: string): Promise<{ id: string; startDate: string; endDate: string; gradingPeriodType: 'trimester' | 'semester' } | null> {
+    const result = await this.db.execute<{ id: string; start_date: string; end_date: string; grading_period_type: 'trimester' | 'semester' }>(sql`
+      SELECT id, start_date::text, end_date::text, grading_period_type FROM school_years WHERE id = ${id}::uuid LIMIT 1
     `);
     const row = rows(result)[0];
-    return row ? { id: row.id, startDate: row.start_date, endDate: row.end_date } : null;
+    return row ? { id: row.id, startDate: row.start_date, endDate: row.end_date, gradingPeriodType: row.grading_period_type } : null;
   }
 
   async getPeriodTypeForYear(schoolYearId: string, excludedId?: string): Promise<'trimester' | 'semester' | null> {
@@ -278,7 +324,7 @@ export class AcademicGradingRepository {
       )
       ORDER BY gp.start_date::text DESC, gp.order_index
     `);
-    return rows(result).map(mapPeriod);
+    return this.withPeriodStates(rows(result));
   }
 
   async getLessonSlotScope(id: string): Promise<{

@@ -258,6 +258,58 @@ export class ConductRepository {
     return getRows<{ end_date: string }>(result)[0]?.end_date ?? null;
   }
 
+  async isGradingPeriodCompleted(gradingPeriodId: string): Promise<boolean> {
+    const result = await this.db.execute<{ is_completed: boolean }>(sql`
+      WITH target_period AS (
+        SELECT id, school_year_id FROM grading_periods WHERE id = ${gradingPeriodId}::uuid
+      ), class_progress AS (
+        SELECT c.id AS class_id,
+               COUNT(s.id)::int AS student_count,
+               COUNT(rc.id) FILTER (WHERE rc.status IN ('generated', 'published'))::int AS card_count
+        FROM target_period gp
+        INNER JOIN classes c ON c.school_year_id = gp.school_year_id AND c.is_active = true
+        LEFT JOIN students s ON s.class_id = c.id AND s.is_active = true
+        LEFT JOIN report_cards rc ON rc.student_id = s.id AND rc.grading_period_id = gp.id
+        GROUP BY c.id
+      )
+      SELECT COALESCE(BOOL_AND(student_count > 0 AND card_count >= student_count), false) AS is_completed
+      FROM class_progress
+    `);
+    return getRows<{ is_completed: boolean }>(result)[0]?.is_completed ?? false;
+  }
+
+  async isCurrentGradingPeriod(gradingPeriodId: string): Promise<boolean> {
+    const result = await this.db.execute<{ id: string }>(sql`
+      WITH target_period AS (
+        SELECT school_year_id FROM grading_periods WHERE id = ${gradingPeriodId}::uuid
+      ), class_progress AS (
+        SELECT gp.id AS grading_period_id,
+               c.id AS class_id,
+               COUNT(s.id)::int AS student_count,
+               COUNT(rc.id) FILTER (WHERE rc.status IN ('generated', 'published'))::int AS card_count
+        FROM grading_periods gp
+        INNER JOIN target_period tp ON tp.school_year_id = gp.school_year_id
+        INNER JOIN classes c ON c.school_year_id = gp.school_year_id AND c.is_active = true
+        LEFT JOIN students s ON s.class_id = c.id AND s.is_active = true
+        LEFT JOIN report_cards rc ON rc.student_id = s.id AND rc.grading_period_id = gp.id
+        GROUP BY gp.id, c.id
+      ), period_progress AS (
+        SELECT grading_period_id,
+               COALESCE(BOOL_AND(student_count > 0 AND card_count >= student_count), false) AS is_completed
+        FROM class_progress
+        GROUP BY grading_period_id
+      )
+      SELECT gp.id::text AS id
+      FROM grading_periods gp
+      INNER JOIN target_period tp ON tp.school_year_id = gp.school_year_id
+      LEFT JOIN period_progress pp ON pp.grading_period_id = gp.id
+      WHERE COALESCE(pp.is_completed, false) = false
+      ORDER BY gp.order_index
+      LIMIT 1
+    `);
+    return getRows<{ id: string }>(result)[0]?.id === gradingPeriodId;
+  }
+
   async gradingPeriodMatchesClass(gradingPeriodId: string, classId: string): Promise<boolean> {
     const result = await this.db.execute(sql`
       SELECT 1

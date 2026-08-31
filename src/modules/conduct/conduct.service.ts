@@ -86,6 +86,12 @@ export class ConductService {
     if (!(await this.repository.gradingPeriodExists(input.grading_period_id))) {
       throw new ConductModuleError('Période d\u2019évaluation introuvable', 404, 'GRADING_PERIOD_NOT_FOUND');
     }
+    if (await this.repository.isGradingPeriodCompleted(input.grading_period_id)) {
+      throw new ConductModuleError('Cette période est finalisée : ses bulletins ont déjà été générés', 409, 'GRADING_PERIOD_COMPLETED');
+    }
+    if (!(await this.repository.isCurrentGradingPeriod(input.grading_period_id))) {
+      throw new ConductModuleError('Cette période n’est pas encore ouverte à la saisie', 409, 'GRADING_PERIOD_NOT_CURRENT');
+    }
 
     // Un prof ne saisit la conduite que pour les élèves de ses classes.
     const teachesClass = await this.repository.teacherTeachesClass(teacher.id, student.classId);
@@ -152,6 +158,12 @@ export class ConductService {
     }
     if (!(await this.repository.gradingPeriodMatchesClass(input.grading_period_id, input.class_id))) {
       throw new ConductModuleError('La période ne correspond pas à la classe', 400, 'CONDUCT_SCOPE_MISMATCH');
+    }
+    if (await this.repository.isGradingPeriodCompleted(input.grading_period_id)) {
+      throw new ConductModuleError('Cette période est finalisée : ses bulletins ont déjà été générés', 409, 'GRADING_PERIOD_COMPLETED');
+    }
+    if (!(await this.repository.isCurrentGradingPeriod(input.grading_period_id))) {
+      throw new ConductModuleError('Cette période n’est pas encore ouverte à la saisie', 409, 'GRADING_PERIOD_NOT_CURRENT');
     }
     if (!(await this.repository.teacherHasOpenAverageCalculation(
       teacher.id,
@@ -220,6 +232,12 @@ export class ConductService {
 
     if (!(await this.repository.gradingPeriodExists(input.grading_period_id))) {
       throw new ConductModuleError('Période d\u2019évaluation introuvable', 404, 'GRADING_PERIOD_NOT_FOUND');
+    }
+    if (await this.repository.isGradingPeriodCompleted(input.grading_period_id)) {
+      throw new ConductModuleError('Cette période est finalisée : ses bulletins ont déjà été générés', 409, 'GRADING_PERIOD_COMPLETED');
+    }
+    if (!(await this.repository.isCurrentGradingPeriod(input.grading_period_id))) {
+      throw new ConductModuleError('Cette période n’est pas encore ouverte à la saisie', 409, 'GRADING_PERIOD_NOT_CURRENT');
     }
 
     const isEducatorOfStudent = await this.repository.isAssignedEducatorForStudent(

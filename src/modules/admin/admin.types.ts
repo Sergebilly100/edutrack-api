@@ -578,6 +578,7 @@ export const openSchoolYearBodySchema = z.object({
   start_date: z.string().regex(ISO_DATE_REGEX, 'Format attendu : AAAA-MM-JJ'),
   end_date: z.string().regex(ISO_DATE_REGEX, 'Format attendu : AAAA-MM-JJ'),
   end_of_year_review_start_date: z.string().regex(ISO_DATE_REGEX, 'Format attendu : AAAA-MM-JJ').optional(),
+  period_type: z.enum(['trimester', 'semester']).default('trimester'),
 });
 
 export type OpenSchoolYearBody = z.infer<typeof openSchoolYearBodySchema>;
@@ -590,6 +591,7 @@ export type SchoolYearStatusResult = {
     startDate: string;
     endDate: string;
     endOfYearReviewStartDate: string | null;
+    gradingPeriodType: 'trimester' | 'semester';
   } | null;
   isEndOfYearWindowOpen: boolean;
 };
@@ -600,6 +602,7 @@ export type OpenedSchoolYear = {
   startDate: string;
   endDate: string;
   endOfYearReviewStartDate: string | null;
+  gradingPeriodType: 'trimester' | 'semester';
   status: 'active';
   closedPreviousLabel: string | null;
 };

@@ -126,9 +126,8 @@ export class AcademicGradingService {
     if (input.startDate < schoolYear.startDate || input.endDate > schoolYear.endDate) {
       throw new AcademicGradingError('Grading period must be within its school year', 400, 'GRADING_PERIOD_OUTSIDE_SCHOOL_YEAR');
     }
-    const existingType = await this.repository.getPeriodTypeForYear(input.schoolYearId);
-    if (existingType && existingType !== input.type) {
-      throw new AcademicGradingError('A school year cannot mix trimesters and semesters', 409, 'GRADING_PERIOD_TYPE_CONFLICT');
+    if (schoolYear.gradingPeriodType !== input.type) {
+      throw new AcademicGradingError('The grading period must match the school year cycle', 409, 'GRADING_PERIOD_TYPE_CONFLICT');
     }
   }
 
@@ -190,6 +189,24 @@ export class AcademicGradingService {
   }
 
   private async assertSubjectOpen(classId: string, subjectId: string, gradingPeriodId: string): Promise<void> {
+    const period = await this.repository.findGradingPeriod(gradingPeriodId);
+    if (!period) {
+      throw new AcademicGradingError('Grading period not found', 400, 'GRADING_PERIOD_NOT_FOUND');
+    }
+    if (period.isCompleted) {
+      throw new AcademicGradingError(
+        'Cette période est finalisée : ses bulletins ont déjà été générés',
+        409,
+        'GRADING_PERIOD_COMPLETED'
+      );
+    }
+    if (!period.isCurrent) {
+      throw new AcademicGradingError(
+        'Cette période n’est pas encore la période scolaire en cours',
+        409,
+        'GRADING_PERIOD_NOT_CURRENT'
+      );
+    }
     const completion = await this.repository.getSubjectCompletion(classId, subjectId, gradingPeriodId);
     if (completion) {
       throw new AcademicGradingError(
@@ -356,6 +373,15 @@ export class AcademicGradingService {
     ]);
     if (!subject || !period || !schoolClass || subject.levelId !== schoolClass.levelId || period.schoolYearId !== schoolClass.schoolYearId) {
       throw new AcademicGradingError('Completion scope is invalid', 400, 'COMPLETION_SCOPE_MISMATCH');
+    }
+    if (period.isCompleted || !period.isCurrent) {
+      throw new AcademicGradingError(
+        period.isCompleted
+          ? 'Cette période est finalisée : ses bulletins ont déjà été générés'
+          : 'Cette période n’est pas encore la période scolaire en cours',
+        409,
+        period.isCompleted ? 'GRADING_PERIOD_COMPLETED' : 'GRADING_PERIOD_NOT_CURRENT'
+      );
     }
     let assigned = await this.repository.hasTeacherSubjectAssignment(teacherId, input.subjectId, input.classId);
     if (!assigned) {

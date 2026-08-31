@@ -250,6 +250,9 @@ export const schoolYears = tenant.table(
     startDate: date('start_date').notNull(),
     endDate: date('end_date').notNull(),
     endOfYearReviewStartDate: date('end_of_year_review_start_date').notNull(),
+    // Le cycle est choisi à l'ouverture de l'année par le super administrateur.
+    // Il est la source de vérité pour les périodes (et non leurs dates repères).
+    gradingPeriodType: gradingPeriodTypeEnum('grading_period_type').notNull().default('trimester'),
     status: schoolYearStatusEnum('status').notNull().default('draft'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
       .notNull()

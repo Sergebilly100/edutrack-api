@@ -33,11 +33,31 @@ export function buildDashboardRepository(db: TenantDb) {
           WHERE (${schoolYearId ?? null}::uuid IS NULL AND status = 'active') OR id = ${schoolYearId ?? null}::uuid
           ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, start_date DESC
           LIMIT 1
+        ), period_progress AS (
+          SELECT gp.id AS grading_period_id,
+                 COALESCE(BOOL_AND(class_state.student_count > 0 AND class_state.card_count >= class_state.student_count), false) AS is_completed
+          FROM grading_periods gp
+          LEFT JOIN LATERAL (
+            SELECT c.id,
+                   COUNT(s.id)::int AS student_count,
+                   COUNT(rc.id) FILTER (WHERE rc.status IN ('generated', 'published'))::int AS card_count
+            FROM classes c
+            LEFT JOIN students s ON s.class_id = c.id AND s.is_active = true
+            LEFT JOIN report_cards rc ON rc.student_id = s.id AND rc.grading_period_id = gp.id
+            WHERE c.school_year_id = gp.school_year_id AND c.is_active = true
+            GROUP BY c.id
+          ) class_state ON true
+          WHERE gp.school_year_id = (SELECT id FROM selected_year)
+          GROUP BY gp.id
         ), selected_period AS (
-          SELECT id FROM grading_periods
-          WHERE school_year_id = (SELECT id FROM selected_year)
-            AND (${gradingPeriodId ?? null}::uuid IS NULL OR id = ${gradingPeriodId ?? null}::uuid)
-          ORDER BY order_index DESC
+          SELECT gp.id FROM grading_periods gp
+          LEFT JOIN period_progress pp ON pp.grading_period_id = gp.id
+          WHERE gp.school_year_id = (SELECT id FROM selected_year)
+            AND (
+              (${gradingPeriodId ?? null}::uuid IS NOT NULL AND gp.id = ${gradingPeriodId ?? null}::uuid)
+              OR (${gradingPeriodId ?? null}::uuid IS NULL AND COALESCE(pp.is_completed, false) = false)
+            )
+          ORDER BY gp.order_index
           LIMIT 1
         ), level_completions AS (
           SELECT l.id AS level_id, l.name AS level_name, l.order_index,

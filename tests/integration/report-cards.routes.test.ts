@@ -141,6 +141,14 @@ describe('report-cards routes (5c)', () => {
 
     expect(response.status, JSON.stringify(response.body)).toBe(200);
     expect(response.body.generatedCount).toBe(2);
+    expect(response.body.periodCompleted).toBe(true);
+
+    const periods = await request().get('/api/v1/grading-periods').set(directorHeaders);
+    expect(periods.status, JSON.stringify(periods.body)).toBe(200);
+    const t1 = periods.body.gradingPeriods.find((period: { id: string }) => period.id === periodT1);
+    const t2 = periods.body.gradingPeriods.find((period: { id: string }) => period.id === periodT2);
+    expect(t1).toMatchObject({ isCompleted: true, isCurrent: false });
+    expect(t2).toMatchObject({ isCompleted: false, isCurrent: true });
   });
 
   it('expose le détail figé : rangs par matière, conduite, stats de classe', async () => {

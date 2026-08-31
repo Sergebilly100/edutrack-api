@@ -64,6 +64,7 @@ describe('admin school-year routes (super admin)', () => {
         start_date: '2091-09-01',
         end_date: '2092-06-30',
         end_of_year_review_start_date: '2092-05-01',
+        period_type: 'semester',
       });
 
     expect(response.status, JSON.stringify(response.body)).toBe(201);
@@ -72,6 +73,7 @@ describe('admin school-year routes (super admin)', () => {
       status: 'active',
       startDate: '2091-09-01',
       endDate: '2092-06-30',
+      gradingPeriodType: 'semester',
       closedPreviousLabel: previousLabel,
     });
 
@@ -81,6 +83,15 @@ describe('admin school-year routes (super admin)', () => {
     );
     expect(statuses).toContainEqual({ label: previousLabel, status: 'closed' });
     expect(statuses).toContainEqual({ label: `open-${suffix}`, status: 'active' });
+
+    const periods = await queryTenant<{ label: string; type: string; order_index: number }>(
+      `SELECT label, type::text, order_index FROM ${tenantTable('grading_periods')} WHERE school_year_id = (SELECT id FROM ${tenantTable('school_years')} WHERE label = $1) ORDER BY order_index`,
+      [`open-${suffix}`]
+    );
+    expect(periods).toEqual([
+      { label: '1er semestre', type: 'semester', order_index: 1 },
+      { label: '2e semestre', type: 'semester', order_index: 2 },
+    ]);
 
     // L'affichage "année scolaire active" du tenant est synchronisé.
     const tenantRow = await queryPublic<{ active_school_year: string }>(

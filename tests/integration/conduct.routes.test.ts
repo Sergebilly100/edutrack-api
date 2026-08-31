@@ -21,6 +21,7 @@ describe('conduct routes (5b)', () => {
   let studentId = '';
   let secondStudentId = '';
   let gradingPeriodId = '';
+  let futureGradingPeriodId = '';
 
   const seedTeacher = async (label: string): Promise<string> => {
     const users = await queryTenant<IdRow>(
@@ -70,6 +71,12 @@ describe('conduct routes (5b)', () => {
       [years[0]!.id]
     );
     gradingPeriodId = periods[0]!.id;
+    const futurePeriods = await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('grading_periods')} (school_year_id, type, order_index, label, start_date, end_date)
+       VALUES ($1::uuid, 'trimester', 2, 'Trimestre 2 conduct', '2095-01-01', '2095-03-31') RETURNING id::text`,
+      [years[0]!.id]
+    );
+    futureGradingPeriodId = futurePeriods[0]!.id;
 
     // Niveau / classe / élève
     const levels = await queryTenant<IdRow>(
@@ -254,6 +261,16 @@ describe('conduct routes (5b)', () => {
       .send({ student_id: studentId, grading_period_id: gradingPeriodId, note: 10 });
     expect(response.status).toBe(403);
     expect(response.body.code).toBe('STUDENT_NOT_IN_TEACHER_CLASSES');
+  });
+
+  it('refuse toute saisie de conduite dans une période future', async () => {
+    const response = await request()
+      .post('/api/v1/conduct/inputs')
+      .set(teacherAHeaders)
+      .send({ student_id: studentId, grading_period_id: futureGradingPeriodId, note: 10 });
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('GRADING_PERIOD_NOT_CURRENT');
   });
 
   it('charge le périmètre du prof puis attribue une note de conduite en lot', async () => {

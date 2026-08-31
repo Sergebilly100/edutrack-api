@@ -1468,7 +1468,41 @@ type SchoolYearRow = {
   start_date: string;
   end_date: string;
   end_of_year_review_start_date: string | null;
+  grading_period_type: 'trimester' | 'semester';
   window_open: boolean;
+};
+
+type GradingPeriodTemplate = {
+  label: string;
+  orderIndex: number;
+  startDate: string;
+  endDate: string;
+};
+
+const buildGradingPeriodTemplates = (
+  startDate: string,
+  endDate: string,
+  type: 'trimester' | 'semester'
+): GradingPeriodTemplate[] => {
+  const count = type === 'trimester' ? 3 : 2;
+  const start = new Date(`${startDate}T00:00:00.000Z`);
+  const end = new Date(`${endDate}T00:00:00.000Z`);
+  const totalDays = Math.floor((end.getTime() - start.getTime()) / 86_400_000) + 1;
+
+  return Array.from({ length: count }, (_, index) => {
+    const periodEnd = new Date(start);
+    const periodEndOffset = index === count - 1
+      ? totalDays - 1
+      : Math.floor(((index + 1) * totalDays) / count) - 1;
+    periodEnd.setUTCDate(periodEnd.getUTCDate() + periodEndOffset);
+    const ordinal = index + 1;
+    return {
+      label: type === 'trimester' ? `${ordinal}${ordinal === 1 ? 'er' : 'e'} trimestre` : `${ordinal}${ordinal === 1 ? 'er' : 'e'} semestre`,
+      orderIndex: ordinal,
+      startDate: new Date(start.getTime() + Math.floor((index * totalDays) / count) * 86_400_000).toISOString().slice(0, 10),
+      endDate: periodEnd.toISOString().slice(0, 10),
+    };
+  });
 };
 
 // Même règle que le module academic (fin - 30 jours) ; dupliquée ici car les
@@ -1498,7 +1532,7 @@ export const getSchoolYearStatus = async (
 
   return withTenantSchema(schemaName, async (tenantDb) => {
     const result = await tenantDb.execute<SchoolYearRow>(sql`
-      SELECT id::text, label, start_date::text, end_date::text,
+      SELECT id::text, label, start_date::text, end_date::text, grading_period_type,
              end_of_year_review_start_date::text,
              COALESCE(end_of_year_review_start_date, end_date) <= CURRENT_DATE AS window_open
       FROM school_years
@@ -1516,6 +1550,7 @@ export const getSchoolYearStatus = async (
             startDate: row.start_date,
             endDate: row.end_date,
             endOfYearReviewStartDate: row.end_of_year_review_start_date,
+            gradingPeriodType: row.grading_period_type,
           }
         : null,
       isEndOfYearWindowOpen: row?.window_open ?? false,
@@ -1562,14 +1597,21 @@ export const openSchoolYear = async (
       const previousLabel = getRows<{ label: string }>(closedPrevious)[0]?.label ?? null;
 
       const inserted = await txDb.execute<SchoolYearRow & { status: string }>(sql`
-        INSERT INTO school_years (label, start_date, end_date, end_of_year_review_start_date, status)
-        VALUES (${payload.label}, ${payload.start_date}::date, ${payload.end_date}::date, ${reviewStartDate}::date, 'active')
+        INSERT INTO school_years (label, start_date, end_date, end_of_year_review_start_date, grading_period_type, status)
+        VALUES (${payload.label}, ${payload.start_date}::date, ${payload.end_date}::date, ${reviewStartDate}::date, ${payload.period_type}::grading_period_type, 'active')
         RETURNING id::text, label, start_date::text, end_date::text,
-                  end_of_year_review_start_date::text, status
+                  end_of_year_review_start_date::text, grading_period_type, status
       `);
       const year = getRows<SchoolYearRow & { status: string }>(inserted)[0];
       if (!year) {
         throw new Error('Échec de la création de l\u2019année scolaire');
+      }
+
+      for (const period of buildGradingPeriodTemplates(payload.start_date, payload.end_date, payload.period_type)) {
+        await txDb.execute(sql`
+          INSERT INTO grading_periods (school_year_id, type, order_index, label, start_date, end_date)
+          VALUES (${year.id}::uuid, ${payload.period_type}::grading_period_type, ${period.orderIndex}, ${period.label}, ${period.startDate}::date, ${period.endDate}::date)
+        `);
       }
 
       return {
@@ -1578,6 +1620,7 @@ export const openSchoolYear = async (
         startDate: year.start_date,
         endDate: year.end_date,
         endOfYearReviewStartDate: year.end_of_year_review_start_date,
+        gradingPeriodType: year.grading_period_type,
         status: 'active',
         closedPreviousLabel: previousLabel,
       };

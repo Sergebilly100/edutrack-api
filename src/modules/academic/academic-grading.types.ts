@@ -115,6 +115,10 @@ export type GradingPeriodItem = {
   label: string;
   startDate: string;
   endDate: string;
+  /** Une période est terminée seulement lorsque tous les bulletins des classes actives sont générés. */
+  isCompleted: boolean;
+  /** Première période non terminée de l'année ; aucune si l'année est entièrement finalisée. */
+  isCurrent: boolean;
 };
 
 export const evaluationsScopeQuerySchema = z.object({
