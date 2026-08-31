@@ -19,6 +19,89 @@ const minIsoDate = (a: string, b: string): string => (a <= b ? a : b);
 const maxIsoDate = (a: string, b: string): string => (a >= b ? a : b);
 
 export function buildDashboardRepository(db: TenantDb) {
+  async function getPilotageOverview(schoolYearId?: string, gradingPeriodId?: string) {
+    const [populationResult, academicResult, risksResult] = await Promise.all([
+      db.execute<{ active_students: number; active_teachers: number; active_classes: number }>(sql`
+        SELECT
+          (SELECT COUNT(*)::int FROM students WHERE is_active = true) AS active_students,
+          (SELECT COUNT(*)::int FROM teachers t INNER JOIN users u ON u.id = t.user_id WHERE u.is_active = true) AS active_teachers,
+          (SELECT COUNT(*)::int FROM classes c WHERE c.is_active = true AND (${schoolYearId ?? null}::uuid IS NULL OR c.school_year_id = ${schoolYearId ?? null}::uuid)) AS active_classes
+      `),
+      db.execute<{ level_id: string; level_name: string; order_index: number; class_count: number; expected_subjects: number; completed_subjects: number; students_with_average: number; average_score: number | null; performing_students: number; attention_students: number; critical_students: number }>(sql`
+        WITH selected_year AS (
+          SELECT id FROM school_years
+          WHERE (${schoolYearId ?? null}::uuid IS NULL AND status = 'active') OR id = ${schoolYearId ?? null}::uuid
+          ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, start_date DESC
+          LIMIT 1
+        ), selected_period AS (
+          SELECT id FROM grading_periods
+          WHERE school_year_id = (SELECT id FROM selected_year)
+            AND (${gradingPeriodId ?? null}::uuid IS NULL OR id = ${gradingPeriodId ?? null}::uuid)
+          ORDER BY order_index DESC
+          LIMIT 1
+        ), level_completions AS (
+          SELECT l.id AS level_id, l.name AS level_name, l.order_index,
+            COUNT(DISTINCT c.id)::int AS class_count,
+            COUNT(DISTINCT (c.id, s.id))::int AS expected_subjects,
+            COUNT(DISTINCT (csc.class_id, csc.subject_id)) FILTER (WHERE csc.status = 'completed')::int AS completed_subjects
+          FROM classes c
+          INNER JOIN levels l ON l.id = c.level_id
+          LEFT JOIN subjects s ON s.level_id = l.id
+          LEFT JOIN selected_period sp ON true
+          LEFT JOIN class_subject_completion csc ON csc.class_id = c.id AND csc.subject_id = s.id AND csc.grading_period_id = sp.id
+          WHERE c.is_active = true AND c.school_year_id = (SELECT id FROM selected_year)
+          GROUP BY l.id, l.name, l.order_index
+        ), level_averages AS (
+          SELECT l.id AS level_id,
+            COUNT(spa.student_id)::int AS students_with_average,
+            ROUND(AVG(spa.average)::numeric, 1)::float AS average_score,
+            COUNT(*) FILTER (WHERE spa.average >= 10)::int AS performing_students,
+            COUNT(*) FILTER (WHERE spa.average >= 8 AND spa.average < 10)::int AS attention_students,
+            COUNT(*) FILTER (WHERE spa.average < 8)::int AS critical_students
+          FROM classes c
+          INNER JOIN levels l ON l.id = c.level_id
+          INNER JOIN students st ON st.class_id = c.id AND st.is_active = true
+          INNER JOIN selected_period sp ON true
+          INNER JOIN student_period_averages spa ON spa.student_id = st.id AND spa.grading_period_id = sp.id AND spa.subject_id IS NULL
+          WHERE c.is_active = true AND c.school_year_id = (SELECT id FROM selected_year)
+          GROUP BY l.id
+        )
+        SELECT lc.level_id::text, lc.level_name, lc.order_index, lc.class_count, lc.expected_subjects, lc.completed_subjects,
+          COALESCE(la.students_with_average, 0)::int AS students_with_average,
+          la.average_score,
+          COALESCE(la.performing_students, 0)::int AS performing_students,
+          COALESCE(la.attention_students, 0)::int AS attention_students,
+          COALESCE(la.critical_students, 0)::int AS critical_students
+        FROM level_completions lc
+        LEFT JOIN level_averages la ON la.level_id = lc.level_id
+        ORDER BY lc.order_index, lc.level_name
+      `),
+      db.execute<{ student_absences: number; student_grades: number; student_payments: number; teacher_absences: number }>(sql`
+        SELECT
+          (SELECT COUNT(*)::int FROM student_risk_status WHERE absences_signal = true) AS student_absences,
+          (SELECT COUNT(*)::int FROM student_risk_status WHERE grades_signal = true) AS student_grades,
+          (SELECT COUNT(*)::int FROM student_risk_status WHERE payment_signal = true) AS student_payments,
+          (SELECT COUNT(*)::int FROM teacher_risk_status WHERE absences_signal = true) AS teacher_absences
+      `),
+    ]);
+    const population = populationResult.rows[0] ?? { active_students: 0, active_teachers: 0, active_classes: 0 };
+    const risks = risksResult.rows[0] ?? { student_absences: 0, student_grades: 0, student_payments: 0, teacher_absences: 0 };
+    return {
+      population: { activeStudents: population.active_students, activeTeachers: population.active_teachers, activeClasses: population.active_classes },
+      academic: academicResult.rows.map((row) => ({
+        levelId: row.level_id, levelName: row.level_name, classCount: row.class_count,
+        expectedSubjects: row.expected_subjects, completedSubjects: row.completed_subjects,
+        completionRate: row.expected_subjects > 0 ? Math.round((row.completed_subjects / row.expected_subjects) * 100) : 0,
+        studentsWithAverage: row.students_with_average,
+        averageScore: row.average_score,
+        performingStudents: row.performing_students,
+        attentionStudents: row.attention_students,
+        criticalStudents: row.critical_students,
+      })),
+      risks: { studentAbsences: risks.student_absences, studentGrades: risks.student_grades, studentPayments: risks.student_payments, teacherAbsences: risks.teacher_absences },
+    };
+  }
+
   /**
    * Calcule le taux de présence professeurs pour le jour donné
    * Les attendus viennent de l'EDT actif du jour, pas des seuls pointages existants.
@@ -501,6 +584,7 @@ export function buildDashboardRepository(db: TenantDb) {
   }
 
   return {
+    getPilotageOverview,
     getTeacherAttendanceForDay,
     getTeacherAttendanceForMonth,
     getStudentAttendanceForDay,

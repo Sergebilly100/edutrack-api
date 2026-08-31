@@ -317,6 +317,22 @@ describe('finance routes integration', () => {
       (summary: { class_id: string }) => summary.class_id === context.classId
     );
     expect(Number(classSummary.total_paid)).toBe(55_000);
+    const levelSummary = financialSummary.body.levels.find(
+      (summary: { level_id: string }) => summary.level_id === context.levelId
+    );
+    expect(Number(levelSummary.total_paid)).toBe(55_000);
+    expect(financialSummary.body.collections).toHaveLength(6);
+    expect(financialSummary.body.collections.some((point: { total_paid: string }) => Number(point.total_paid) === 55_000)).toBe(true);
+    const cashMethod = financialSummary.body.paymentMethods.find((item: { method: string }) => item.method === 'cash');
+    const mobileMoneyMethod = financialSummary.body.paymentMethods.find((item: { method: string }) => item.method === 'mobile_money');
+    expect(cashMethod).toMatchObject({ method: 'cash', payment_count: 2 });
+    expect(Number(cashMethod.total_paid)).toBe(40_000);
+    expect(mobileMoneyMethod).toMatchObject({ method: 'mobile_money', payment_count: 1 });
+    expect(Number(mobileMoneyMethod.total_paid)).toBe(15_000);
+    expect(financialSummary.body.upcomingInstallments).toEqual(expect.any(Array));
+    expect(financialSummary.body.recentPayments).toEqual(expect.arrayContaining([
+      expect.objectContaining({ student_name: 'Awa Finance', method: 'cash' }),
+    ]));
   });
 
   it('refuse une annulation sans justification puis conserve la trace complète', async () => {

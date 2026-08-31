@@ -434,6 +434,7 @@ const initApp = async (): Promise<FastifyInstance> => {
     { default: classDecisionsController },
     { default: conductController },
     { default: riskController },
+    { default: dashboardController },
     { default: dashboardActionsController },
     { default: reportCardsController },
     { default: enrollmentsController },
@@ -456,6 +457,7 @@ const initApp = async (): Promise<FastifyInstance> => {
     import('../../src/modules/class-decisions/class-decisions.controller.js'),
     import('../../src/modules/conduct/conduct.controller.js'),
     import('../../src/modules/risk/risk.controller.js'),
+    import('../../src/modules/dashboard/dashboard.controller.js'),
     import('../../src/modules/dashboard-actions/dashboard-actions.controller.js'),
     import('../../src/modules/report-cards/report-cards.controller.js'),
     import('../../src/modules/enrollments/enrollments.controller.js'),
@@ -493,6 +495,7 @@ const initApp = async (): Promise<FastifyInstance> => {
   testApp.register(reportCardsController, { pdfQueue: reportCardPdfQueue });
   testApp.register(conductController);
   testApp.register(riskController);
+  testApp.register(dashboardController);
   testApp.register(dashboardActionsController);
   testApp.register(enrollmentsController);
   testApp.register(financeController);

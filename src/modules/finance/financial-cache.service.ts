@@ -71,6 +71,36 @@ export class FinancialCacheService {
     return this.repository.listClassSummaries(yearId);
   }
 
+  async listLevelSummaries(schoolYearId?: string) {
+    const yearId = schoolYearId ?? (await this.repository.getActiveSchoolYearId());
+    if (!yearId) return [];
+    return this.repository.listLevelSummaries(yearId);
+  }
+
+  async listCollectionTrend(schoolYearId?: string) {
+    const yearId = schoolYearId ?? (await this.repository.getActiveSchoolYearId());
+    if (!yearId) return [];
+    return this.repository.listCollectionTrend(yearId);
+  }
+
+  async listPaymentMethodSummaries(schoolYearId?: string) {
+    const yearId = schoolYearId ?? (await this.repository.getActiveSchoolYearId());
+    if (!yearId) return [];
+    return this.repository.listPaymentMethodSummaries(yearId);
+  }
+
+  async listUpcomingInstallments(schoolYearId?: string) {
+    const yearId = schoolYearId ?? (await this.repository.getActiveSchoolYearId());
+    if (!yearId) return [];
+    return this.repository.listUpcomingInstallments(yearId);
+  }
+
+  async listRecentPayments(schoolYearId?: string) {
+    const yearId = schoolYearId ?? (await this.repository.getActiveSchoolYearId());
+    if (!yearId) return [];
+    return this.repository.listRecentPayments(yearId);
+  }
+
   async getStudentCachedStatus(studentId: string, schoolYearId?: string) {
     const yearId = schoolYearId ?? (await this.repository.getActiveSchoolYearId());
     if (!yearId) return null;

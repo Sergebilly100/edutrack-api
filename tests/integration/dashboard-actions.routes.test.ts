@@ -9,6 +9,28 @@ const suffix = String(Date.now());
 type IdRow = { id: string };
 
 describe('dashboard action items integration (7b)', () => {
+  it('expose les indicateurs consolidés par niveau pour la direction', async () => {
+    const headers = await getAuthHeaders('director');
+
+    const response = await request()
+      .get('/api/v1/dashboard/pilotage')
+      .set(headers);
+
+    expect(response.status).toBe(200);
+    expect(response.body.population).toEqual(expect.objectContaining({
+      activeStudents: expect.any(Number),
+      activeTeachers: expect.any(Number),
+      activeClasses: expect.any(Number),
+    }));
+    expect(response.body.risks).toEqual(expect.objectContaining({
+      studentAbsences: expect.any(Number),
+      studentGrades: expect.any(Number),
+      studentPayments: expect.any(Number),
+      teacherAbsences: expect.any(Number),
+    }));
+    expect(Array.isArray(response.body.academic)).toBe(true);
+  });
+
   it('génère, expose et résout des items croisés pour la direction', async () => {
     const headers = await getAuthHeaders('director');
 

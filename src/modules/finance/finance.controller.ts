@@ -293,7 +293,12 @@ export default async function financeController(
           Promise.all([
             service.getSchoolFinancialSummary(query.school_year_id),
             service.listClassFinancialSummaries(query.school_year_id),
-          ]).then(([school, classes]) => ({ school, classes }))
+            service.listLevelFinancialSummaries(query.school_year_id),
+            service.listFinancialCollectionTrend(query.school_year_id),
+            service.listFinancialPaymentMethods(query.school_year_id),
+            service.listFinancialUpcomingInstallments(query.school_year_id),
+            service.listFinancialRecentPayments(query.school_year_id),
+          ]).then(([school, classes, levels, collections, paymentMethods, upcomingInstallments, recentPayments]) => ({ school, classes, levels, collections, paymentMethods, upcomingInstallments, recentPayments }))
         );
         return reply.send(result);
       } catch (error) { return handleError(request, reply, error); }

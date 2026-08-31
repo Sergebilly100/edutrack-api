@@ -15,6 +15,11 @@ export const dashboardStatsQuerySchema = z.object({
 
 export type DashboardStatsQuery = z.infer<typeof dashboardStatsQuerySchema>;
 
+export const dashboardPilotageQuerySchema = z.object({
+  schoolYearId: z.string().uuid().optional(),
+  gradingPeriodId: z.string().uuid().optional(),
+});
+
 export type TeacherAttendanceStats = {
   globalRate: number;
   partTime: {

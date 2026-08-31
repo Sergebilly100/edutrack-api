@@ -244,12 +244,125 @@ export class FinancialCacheRepository {
   async listClassSummaries(schoolYearId: string) {
     const result = await this.db.execute<Record<string, string | number>>(sql`
       SELECT cfs.class_id::text, c.name AS class_name,
+             c.level_id::text AS level_id, l.name AS level_name,
              cfs.total_expected_to_date::text, cfs.total_paid::text,
              cfs.students_up_to_date_count, cfs.students_late_count, cfs.last_computed_at::text
       FROM class_financial_summary cfs
       INNER JOIN classes c ON c.id = cfs.class_id
+      INNER JOIN levels l ON l.id = c.level_id
       WHERE cfs.school_year_id = ${schoolYearId}::uuid
       ORDER BY c.name ASC
+    `);
+    return getRows(result);
+  }
+
+  /** Agrégat de pilotage : plusieurs classes peuvent appartenir au même niveau. */
+  async listLevelSummaries(schoolYearId: string) {
+    const result = await this.db.execute<Record<string, string | number>>(sql`
+      SELECT l.id::text AS level_id,
+             l.name AS level_name,
+             SUM(cfs.total_expected_to_date)::text AS total_expected_to_date,
+             SUM(cfs.total_paid)::text AS total_paid,
+             SUM(cfs.students_up_to_date_count)::int AS students_up_to_date_count,
+             SUM(cfs.students_late_count)::int AS students_late_count,
+             MAX(cfs.last_computed_at)::text AS last_computed_at
+      FROM class_financial_summary cfs
+      INNER JOIN classes c ON c.id = cfs.class_id
+      INNER JOIN levels l ON l.id = c.level_id
+      WHERE cfs.school_year_id = ${schoolYearId}::uuid
+      GROUP BY l.id, l.name, l.order_index
+      ORDER BY l.order_index ASC, l.name ASC
+    `);
+    return getRows(result);
+  }
+
+  async listCollectionTrend(schoolYearId: string) {
+    const result = await this.db.execute<Record<string, string | number>>(sql`
+      WITH months AS (
+        SELECT generate_series(
+          date_trunc('month', CURRENT_DATE) - INTERVAL '5 months',
+          date_trunc('month', CURRENT_DATE),
+          INTERVAL '1 month'
+        )::date AS month_start
+      )
+      SELECT to_char(months.month_start, 'YYYY-MM') AS month_key,
+             COALESCE(SUM(p.amount) FILTER (WHERE p.status = 'confirmed'), 0)::text AS total_paid
+      FROM months
+      LEFT JOIN payments p
+        ON date_trunc('month', p.payment_date) = months.month_start
+       AND p.school_year_id = ${schoolYearId}::uuid
+      GROUP BY months.month_start
+      ORDER BY months.month_start ASC
+    `);
+    return getRows(result);
+  }
+
+  async listPaymentMethodSummaries(schoolYearId: string) {
+    const result = await this.db.execute<Record<string, string | number>>(sql`
+      SELECT method::text AS method,
+             COALESCE(SUM(amount) FILTER (WHERE status = 'confirmed'), 0)::text AS total_paid,
+             COUNT(*) FILTER (WHERE status = 'confirmed')::int AS payment_count
+      FROM payments
+      WHERE school_year_id = ${schoolYearId}::uuid
+      GROUP BY method
+      ORDER BY total_paid DESC, method ASC
+    `);
+    return getRows(result);
+  }
+
+  async listUpcomingInstallments(schoolYearId: string) {
+    const result = await this.db.execute<Record<string, string | number>>(sql`
+      WITH step_amounts AS (
+        SELECT tss.tuition_plan_id,
+               tss.due_date,
+               GREATEST(
+                 tss.cumulative_amount_expected - COALESCE(
+                   LAG(tss.cumulative_amount_expected) OVER (
+                     PARTITION BY tss.tuition_plan_id ORDER BY tss.due_date
+                   ), 0
+                 ), 0
+               ) AS installment_amount
+        FROM tuition_schedule_steps tss
+        INNER JOIN tuition_plans tp ON tp.id = tss.tuition_plan_id
+        WHERE tp.school_year_id = ${schoolYearId}::uuid
+      )
+      SELECT sa.due_date::text AS due_date,
+             COALESCE(SUM(sa.installment_amount * enrolled.student_count), 0)::text AS expected_amount,
+             COALESCE(SUM(enrolled.student_count), 0)::int AS student_count
+      FROM step_amounts sa
+      INNER JOIN tuition_plans tp ON tp.id = sa.tuition_plan_id
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS student_count
+        FROM students s
+        INNER JOIN classes c ON c.id = s.class_id
+        WHERE s.is_active = true
+          AND c.is_active = true
+          AND c.school_year_id = ${schoolYearId}::uuid
+          AND c.level_id = tp.level_id
+      ) enrolled ON true
+      WHERE sa.due_date >= CURRENT_DATE
+      GROUP BY sa.due_date
+      ORDER BY sa.due_date ASC
+      LIMIT 3
+    `);
+    return getRows(result);
+  }
+
+  async listRecentPayments(schoolYearId: string) {
+    const result = await this.db.execute<Record<string, string | number | null>>(sql`
+      SELECT p.payment_date::text AS payment_date,
+             concat_ws(' ', s.first_name, s.last_name) AS student_name,
+             c.name AS class_name,
+             p.method::text AS method,
+             p.amount::text AS amount,
+             p.receipt_number
+      FROM payments p
+      INNER JOIN students s ON s.id = p.student_id
+      LEFT JOIN classes c ON c.id = s.class_id
+      WHERE p.school_year_id = ${schoolYearId}::uuid
+        AND p.status = 'confirmed'
+      ORDER BY p.payment_date DESC, p.created_at DESC
+      LIMIT 5
     `);
     return getRows(result);
   }

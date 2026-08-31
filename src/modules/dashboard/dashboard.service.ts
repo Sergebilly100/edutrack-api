@@ -24,8 +24,13 @@ export function buildDashboardService(db: TenantDb) {
     };
   }
 
+  async function getPilotageOverview(schoolYearId?: string, gradingPeriodId?: string) {
+    return repository.getPilotageOverview(schoolYearId, gradingPeriodId);
+  }
+
   return {
     getStats,
+    getPilotageOverview,
   };
 }
 

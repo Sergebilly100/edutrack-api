@@ -5,7 +5,7 @@ import { withTenantSchema } from '../../shared/database/db.js';
 import { requireDirectorOrSecretary } from '../../shared/middleware/auth.middleware.js';
 
 import { buildDashboardService } from './dashboard.service.js';
-import { dashboardStatsQuerySchema } from './dashboard.types.js';
+import { dashboardPilotageQuerySchema, dashboardStatsQuerySchema } from './dashboard.types.js';
 
 const handleError = (
   request: FastifyRequest,
@@ -57,4 +57,21 @@ export default async function dashboardController(app: FastifyInstance): Promise
       return handleError(request, reply, error);
     }
   });
+
+  app.get(
+    '/api/v1/dashboard/pilotage',
+    { preHandler: requireDirectorOrSecretary },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const query = dashboardPilotageQuerySchema.parse(request.query ?? {});
+        const result = await withTenantSchema(claims.schemaName, (tenantDb) =>
+          buildDashboardService(tenantDb).getPilotageOverview(query.schoolYearId, query.gradingPeriodId)
+        );
+        return reply.code(200).send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
 }

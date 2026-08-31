@@ -117,6 +117,31 @@ export class FinanceService {
     return cache.listClassSummaries(schoolYearId);
   }
 
+  async listLevelFinancialSummaries(schoolYearId?: string) {
+    const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
+    return cache.listLevelSummaries(schoolYearId);
+  }
+
+  async listFinancialCollectionTrend(schoolYearId?: string) {
+    const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
+    return cache.listCollectionTrend(schoolYearId);
+  }
+
+  async listFinancialPaymentMethods(schoolYearId?: string) {
+    const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
+    return cache.listPaymentMethodSummaries(schoolYearId);
+  }
+
+  async listFinancialUpcomingInstallments(schoolYearId?: string) {
+    const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
+    return cache.listUpcomingInstallments(schoolYearId);
+  }
+
+  async listFinancialRecentPayments(schoolYearId?: string) {
+    const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
+    return cache.listRecentPayments(schoolYearId);
+  }
+
   async getStudentFinancialCache(studentId: string, schoolYearId?: string) {
     const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
     return cache.getStudentCachedStatus(studentId, schoolYearId);
