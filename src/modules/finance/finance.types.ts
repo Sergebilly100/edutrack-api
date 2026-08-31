@@ -14,7 +14,7 @@ export const tuitionPlanLevelParamsSchema = z.object({ levelId: uuidSchema }).st
 export const subscriptionPlanParamsSchema = z.object({ id: uuidSchema }).strict();
 
 export const schoolYearQuerySchema = z.object({ school_year_id: uuidSchema });
-export const cashJournalQuerySchema = z.object({
+const cashJournalFiltersSchema = z.object({
   school_year_id: uuidSchema.optional(),
   from: z.iso.date().optional(),
   to: z.iso.date().optional(),
@@ -23,9 +23,20 @@ export const cashJournalQuerySchema = z.object({
 }).refine((value) => !value.from || !value.to || value.from <= value.to, {
   message: 'from must be before or equal to to', path: ['from'],
 });
-export const cashJournalExportQuerySchema = cashJournalQuerySchema.and(z.object({
+
+export const cashJournalQuerySchema = cashJournalFiltersSchema.extend({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export const cashJournalExportQuerySchema = cashJournalFiltersSchema.extend({
   format: z.enum(['xlsx', 'pdf']),
-}));
+});
+
+export const financialAlertLogsQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
 export const paymentMappingProfileBodySchema = z.object({
   label: z.string().trim().min(1).max(255).optional(),
   fields: z.array(z.object({

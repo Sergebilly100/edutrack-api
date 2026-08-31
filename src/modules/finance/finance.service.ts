@@ -150,9 +150,19 @@ export class FinanceService {
     return repository.deleteRule(id);
   }
 
-  listFinancialAlertLogs(limit = 100) {
+  async listFinancialAlertLogs(input: { page: number; limit: number }) {
     const repository = new FinancialAlertsRepository(this.repository.db);
-    return repository.listLogs(limit);
+    const total = await repository.countLogs();
+    const totalPages = Math.max(1, Math.ceil(total / input.limit));
+    const page = Math.min(input.page, totalPages);
+    const logs = await repository.listLogsPage({
+      limit: input.limit,
+      offset: (page - 1) * input.limit,
+    });
+    return {
+      logs,
+      pagination: { page, limit: input.limit, total, totalPages },
+    };
   }
 
   async getFinancialStatus(studentId: string, schoolYearId: string, asOfDate = todayIso()) {
@@ -265,6 +275,45 @@ export class FinanceService {
       totals.grandTotal += entry.amount;
     }
     return { entries, totals, count: entries.length };
+  }
+
+  async getPaginatedCashJournal(filter: {
+    schoolYearId?: string;
+    from?: string;
+    to?: string;
+    classId?: string;
+    method?: PaymentMethod;
+    page: number;
+    limit: number;
+  }) {
+    const summary = await this.repository.getCashJournalSummary(filter);
+    const total = FinanceRepository.toNumber(summary.total);
+    const totalPages = Math.max(1, Math.ceil(total / filter.limit));
+    const page = Math.min(filter.page, totalPages);
+    const rows = await this.repository.listCashJournalPage({
+      ...filter,
+      limit: filter.limit,
+      offset: (page - 1) * filter.limit,
+    });
+    const entries = rows.map((row) => ({
+      ...mapPayment(row),
+      studentMatricule: row.student_matricule,
+      studentName: row.student_name,
+      classId: row.class_id,
+      className: row.class_name,
+    }));
+
+    return {
+      entries,
+      totals: {
+        cash: FinanceRepository.toNumber(summary.cash_total),
+        mobile_money: FinanceRepository.toNumber(summary.mobile_money_total),
+        bank_transfer: FinanceRepository.toNumber(summary.bank_transfer_total),
+        grandTotal: FinanceRepository.toNumber(summary.grand_total),
+      },
+      count: total,
+      pagination: { page, limit: filter.limit, total, totalPages },
+    };
   }
 
   async exportCashJournalExcel(filter: {

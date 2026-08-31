@@ -153,4 +153,24 @@ describe('financial alerts integration (6b)', () => {
     expect(list.status).toBe(200);
     expect(Array.isArray(list.body.rules)).toBe(true);
   });
+
+  it('pagine l’historique des relances sans plafonner les entrées anciennes', async () => {
+    const headers = await getAuthHeaders('director');
+    const firstPage = await request()
+      .get('/api/v1/financial-alert-logs?page=1&limit=1')
+      .set(headers);
+
+    expect(firstPage.status, JSON.stringify(firstPage.body)).toBe(200);
+    expect(firstPage.body.logs).toHaveLength(Math.min(1, firstPage.body.pagination.total));
+    expect(firstPage.body.pagination).toMatchObject({ page: 1, limit: 1 });
+
+    if (firstPage.body.pagination.total > 1) {
+      const secondPage = await request()
+        .get('/api/v1/financial-alert-logs?page=2&limit=1')
+        .set(headers);
+      expect(secondPage.status, JSON.stringify(secondPage.body)).toBe(200);
+      expect(secondPage.body.pagination).toMatchObject({ page: 2, limit: 1 });
+      expect(secondPage.body.logs).toHaveLength(1);
+    }
+  });
 });

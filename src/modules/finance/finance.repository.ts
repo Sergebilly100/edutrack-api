@@ -42,6 +42,14 @@ export type CashJournalRow = PaymentRow & {
   class_name: string;
 };
 
+export type CashJournalSummary = {
+  total: string | number;
+  cash_total: string | number;
+  mobile_money_total: string | number;
+  bank_transfer_total: string | number;
+  grand_total: string | number;
+};
+
 export type AmountDueContext = {
   student_id: string;
   student_name: string;
@@ -311,6 +319,75 @@ export class FinanceRepository {
       ORDER BY p.payment_date DESC, p.created_at DESC, p.id DESC
     `);
     return rows<CashJournalRow>(result);
+  }
+
+  async listCashJournalPage(input: {
+    schoolYearId?: string;
+    from?: string;
+    to?: string;
+    classId?: string;
+    method?: PaymentMethod;
+    limit: number;
+    offset: number;
+  }): Promise<CashJournalRow[]> {
+    const result = await this.db.execute<CashJournalRow>(sql`
+      SELECT p.*, p.id::text, p.student_id::text, p.school_year_id::text,
+             p.confirmed_by_user_id::text, p.cancelled_by_user_id::text,
+             p.payment_date::text,
+             s.matricule AS student_matricule,
+             concat_ws(' ', s.first_name, s.last_name) AS student_name,
+             c.id::text AS class_id,
+             c.name AS class_name
+      FROM payments p
+      INNER JOIN students s ON s.id = p.student_id
+      LEFT JOIN enrollments e
+        ON e.student_id = s.id AND e.school_year_id = p.school_year_id
+      INNER JOIN classes c ON c.id = COALESCE(e.class_id, s.class_id)
+      WHERE (${input.schoolYearId ?? null}::uuid IS NULL OR p.school_year_id = ${input.schoolYearId ?? null}::uuid)
+        AND (${input.from ?? null}::date IS NULL OR p.payment_date >= ${input.from ?? null}::date)
+        AND (${input.to ?? null}::date IS NULL OR p.payment_date <= ${input.to ?? null}::date)
+        AND (${input.classId ?? null}::uuid IS NULL OR c.id = ${input.classId ?? null}::uuid)
+        AND (${input.method ?? null}::text IS NULL OR p.method::text = ${input.method ?? null})
+        AND p.source <> 'migration_import'
+      ORDER BY p.payment_date DESC, p.created_at DESC, p.id DESC
+      LIMIT ${input.limit} OFFSET ${input.offset}
+    `);
+    return rows<CashJournalRow>(result);
+  }
+
+  async getCashJournalSummary(input: {
+    schoolYearId?: string;
+    from?: string;
+    to?: string;
+    classId?: string;
+    method?: PaymentMethod;
+  }): Promise<CashJournalSummary> {
+    const result = await this.db.execute<CashJournalSummary>(sql`
+      SELECT
+        COUNT(*)::int AS total,
+        COALESCE(SUM(CASE WHEN p.status = 'confirmed' AND p.method = 'cash' THEN p.amount ELSE 0 END), 0) AS cash_total,
+        COALESCE(SUM(CASE WHEN p.status = 'confirmed' AND p.method = 'mobile_money' THEN p.amount ELSE 0 END), 0) AS mobile_money_total,
+        COALESCE(SUM(CASE WHEN p.status = 'confirmed' AND p.method = 'bank_transfer' THEN p.amount ELSE 0 END), 0) AS bank_transfer_total,
+        COALESCE(SUM(CASE WHEN p.status = 'confirmed' THEN p.amount ELSE 0 END), 0) AS grand_total
+      FROM payments p
+      INNER JOIN students s ON s.id = p.student_id
+      LEFT JOIN enrollments e
+        ON e.student_id = s.id AND e.school_year_id = p.school_year_id
+      INNER JOIN classes c ON c.id = COALESCE(e.class_id, s.class_id)
+      WHERE (${input.schoolYearId ?? null}::uuid IS NULL OR p.school_year_id = ${input.schoolYearId ?? null}::uuid)
+        AND (${input.from ?? null}::date IS NULL OR p.payment_date >= ${input.from ?? null}::date)
+        AND (${input.to ?? null}::date IS NULL OR p.payment_date <= ${input.to ?? null}::date)
+        AND (${input.classId ?? null}::uuid IS NULL OR c.id = ${input.classId ?? null}::uuid)
+        AND (${input.method ?? null}::text IS NULL OR p.method::text = ${input.method ?? null})
+        AND p.source <> 'migration_import'
+    `);
+    return rows<CashJournalSummary>(result)[0] ?? {
+      total: 0,
+      cash_total: 0,
+      mobile_money_total: 0,
+      bank_transfer_total: 0,
+      grand_total: 0,
+    };
   }
 
   async cancelPayment(id: string, actorUserId: string, reason: string): Promise<PaymentRow | null> {

@@ -34,6 +34,7 @@ import {
   upsertTuitionPlanBodySchema,
   cashJournalQuerySchema,
   cashJournalExportQuerySchema,
+  financialAlertLogsQuerySchema,
   paymentMappingProfileBodySchema,
 } from './finance.types.js';
 
@@ -154,9 +155,9 @@ export default async function financeController(
   app.get('/api/v1/payments/cash-journal', { preHandler: requirePermission('payments.view') }, async (request, reply) => {
     try {
       const query = cashJournalQuerySchema.parse(request.query ?? {});
-      return reply.send({ journal: await withService(request, (service) => service.getCashJournal({
+      return reply.send({ journal: await withService(request, (service) => service.getPaginatedCashJournal({
         schoolYearId: query.school_year_id, from: query.from, to: query.to,
-        classId: query.class_id, method: query.method,
+        classId: query.class_id, method: query.method, page: query.page, limit: query.limit,
       })) });
     } catch (error) { return handleError(request, reply, error); }
   });
@@ -274,8 +275,9 @@ export default async function financeController(
     { preHandler: requirePermission('payments.view') },
     async (request, reply) => {
       try {
-        const logs = await withService(request, (service) => service.listFinancialAlertLogs());
-        return reply.send({ logs });
+        const query = financialAlertLogsQuerySchema.parse(request.query ?? {});
+        const result = await withService(request, (service) => service.listFinancialAlertLogs(query));
+        return reply.send(result);
       } catch (error) { return handleError(request, reply, error); }
     }
   );

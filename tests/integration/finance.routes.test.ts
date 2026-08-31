@@ -267,12 +267,20 @@ describe('finance routes integration', () => {
     `, [context.studentId, context.schoolYearId, `MIG-${Date.now()}`]);
 
     const journal = await request()
-      .get(`/api/v1/payments/cash-journal?school_year_id=${context.schoolYearId}&class_id=${context.classId}&from=${today}&to=${today}`)
+      .get(`/api/v1/payments/cash-journal?school_year_id=${context.schoolYearId}&class_id=${context.classId}&from=${today}&to=${today}&page=1&limit=1`)
       .set(context.headers);
     expect(journal.status, JSON.stringify(journal.body)).toBe(200);
     expect(journal.body.journal.totals).toMatchObject({ cash: 20_000, mobile_money: 15_000, grandTotal: 35_000 });
-    expect(journal.body.journal.entries).toHaveLength(2);
+    expect(journal.body.journal.entries).toHaveLength(1);
+    expect(journal.body.journal.pagination).toEqual({ page: 1, limit: 1, total: 2, totalPages: 2 });
     expect(journal.body.journal.entries.some((entry: { source: string }) => entry.source === 'migration_import')).toBe(false);
+
+    const secondJournalPage = await request()
+      .get(`/api/v1/payments/cash-journal?school_year_id=${context.schoolYearId}&class_id=${context.classId}&from=${today}&to=${today}&page=2&limit=1`)
+      .set(context.headers);
+    expect(secondJournalPage.status, JSON.stringify(secondJournalPage.body)).toBe(200);
+    expect(secondJournalPage.body.journal.entries).toHaveLength(1);
+    expect(secondJournalPage.body.journal.pagination).toEqual({ page: 2, limit: 1, total: 2, totalPages: 2 });
 
     const excel = await request()
       .get(`/api/v1/payments/cash-journal/export?format=xlsx&school_year_id=${context.schoolYearId}&from=${today}&to=${today}`)

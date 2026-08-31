@@ -20,6 +20,15 @@ export type FinancialAlertRule = {
   isActive: boolean;
 };
 
+export type FinancialAlertLog = {
+  id: string;
+  student_name: string;
+  rule_type: string;
+  channel: string;
+  status: string;
+  sent_at: string;
+};
+
 export class FinancialAlertsRepository {
   constructor(readonly db: TenantDb) {}
 
@@ -198,15 +207,23 @@ export class FinancialAlertsRepository {
     `);
   }
 
-  async listLogs(limit = 100) {
-    const result = await this.db.execute<Record<string, string | number>>(sql`
+  async countLogs(): Promise<number> {
+    const result = await this.db.execute<{ total: string | number }>(sql`
+      SELECT COUNT(*)::int AS total FROM financial_alert_logs
+    `);
+    return Number(getRows<{ total: string | number }>(result)[0]?.total ?? 0);
+  }
+
+  async listLogsPage(input: { limit: number; offset: number }): Promise<FinancialAlertLog[]> {
+    const result = await this.db.execute<FinancialAlertLog>(sql`
       SELECT l.id::text, l.student_id::text,
              concat_ws(' ', s.first_name, s.last_name) AS student_name,
              r.type::text AS rule_type, l.channel::text, l.status, l.sent_at::text
       FROM financial_alert_logs l
       INNER JOIN students s ON s.id = l.student_id
       INNER JOIN financial_alert_rules r ON r.id = l.rule_id
-      ORDER BY l.sent_at DESC LIMIT ${limit}
+      ORDER BY l.sent_at DESC, l.id DESC
+      LIMIT ${input.limit} OFFSET ${input.offset}
     `);
     return getRows(result);
   }
