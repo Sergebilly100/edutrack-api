@@ -9,6 +9,7 @@ import type {
   CreateEvaluationInput,
   CreateGradingPeriodInput,
   CreateSubjectInput,
+  CreateSubjectsBulkInput,
   UpdateGradingPeriodInput,
   UpdateSubjectInput,
   UpsertEvaluationGradeInput,
@@ -76,6 +77,41 @@ export class AcademicGradingService {
       }
       if (dbCode(error) === '23505') {
         throw new AcademicGradingError('Subject already exists for this level', 409, 'SUBJECT_CONFLICT');
+      }
+      throw error;
+    }
+  }
+
+  async createSubjectsBulk(input: CreateSubjectsBulkInput) {
+    const name = canonicalizeSubject(input.name);
+    const levelIds = input.assignments.map((assignment) => assignment.levelId);
+    const conflicts = await this.repository.listSubjectConflicts(levelIds, name);
+    if (conflicts.length > 0) {
+      throw new AcademicGradingError(
+        `Cette matière existe déjà pour : ${conflicts.map((item) => item.levelName).join(', ')}`,
+        409,
+        'SUBJECT_BATCH_CONFLICT'
+      );
+    }
+
+    try {
+      const subjects = [];
+      for (const assignment of input.assignments) {
+        const subject = await this.repository.createSubject({
+          levelId: assignment.levelId,
+          name,
+          coefficient: assignment.coefficient,
+        });
+        await this.syncAssignmentsFromSchedule(subject);
+        subjects.push(subject);
+      }
+      return subjects;
+    } catch (error) {
+      if (dbCode(error) === '23503') {
+        throw new AcademicGradingError('Level not found', 400, 'SUBJECT_LEVEL_NOT_FOUND');
+      }
+      if (dbCode(error) === '23505') {
+        throw new AcademicGradingError('Subject already exists for one of the selected levels', 409, 'SUBJECT_BATCH_CONFLICT');
       }
       throw error;
     }

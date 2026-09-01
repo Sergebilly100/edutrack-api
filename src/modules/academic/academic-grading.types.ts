@@ -15,6 +15,30 @@ export const createSubjectBodySchema = z.object({
   coefficient: positiveDecimalSchema,
 });
 
+const batchSubjectAssignmentSchema = z.object({
+  levelId: z.string().uuid(),
+  coefficient: positiveDecimalSchema,
+});
+
+export const createSubjectsBulkBodySchema = z
+  .object({
+    name: z.string().trim().min(1).max(100),
+    assignments: z.array(batchSubjectAssignmentSchema).min(1).max(100),
+  })
+  .superRefine((input, context) => {
+    const seenLevelIds = new Set<string>();
+    input.assignments.forEach((assignment, index) => {
+      if (seenLevelIds.has(assignment.levelId)) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Each level can only be selected once',
+          path: ['assignments', index, 'levelId'],
+        });
+      }
+      seenLevelIds.add(assignment.levelId);
+    });
+  });
+
 export const updateSubjectBodySchema = z
   .object({
     name: z.string().trim().min(1).max(100).optional(),
@@ -92,6 +116,7 @@ export const completionQuerySchema = z.object({
 });
 
 export type CreateSubjectInput = z.infer<typeof createSubjectBodySchema>;
+export type CreateSubjectsBulkInput = z.infer<typeof createSubjectsBulkBodySchema>;
 export type UpdateSubjectInput = z.infer<typeof updateSubjectBodySchema>;
 export type CreateGradingPeriodInput = z.infer<typeof createGradingPeriodBodySchema>;
 export type UpdateGradingPeriodInput = z.infer<typeof updateGradingPeriodBodySchema>;
