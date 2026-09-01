@@ -20,24 +20,51 @@ const batchSubjectAssignmentSchema = z.object({
   coefficient: positiveDecimalSchema,
 });
 
+const uniqueBatchAssignments = <T extends { assignments: Array<{ levelId: string; subjectId?: string }> }>(
+  input: T,
+  context: z.RefinementCtx
+) => {
+  const seenLevelIds = new Set<string>();
+  const seenSubjectIds = new Set<string>();
+  input.assignments.forEach((assignment, index) => {
+    if (seenLevelIds.has(assignment.levelId)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Each level can only be selected once',
+        path: ['assignments', index, 'levelId'],
+      });
+    }
+    seenLevelIds.add(assignment.levelId);
+
+    if (assignment.subjectId && seenSubjectIds.has(assignment.subjectId)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Each subject can only be selected once',
+        path: ['assignments', index, 'subjectId'],
+      });
+    }
+    if (assignment.subjectId) seenSubjectIds.add(assignment.subjectId);
+  });
+};
+
 export const createSubjectsBulkBodySchema = z
   .object({
     name: z.string().trim().min(1).max(100),
     assignments: z.array(batchSubjectAssignmentSchema).min(1).max(100),
   })
-  .superRefine((input, context) => {
-    const seenLevelIds = new Set<string>();
-    input.assignments.forEach((assignment, index) => {
-      if (seenLevelIds.has(assignment.levelId)) {
-        context.addIssue({
-          code: 'custom',
-          message: 'Each level can only be selected once',
-          path: ['assignments', index, 'levelId'],
-        });
-      }
-      seenLevelIds.add(assignment.levelId);
-    });
-  });
+  .superRefine(uniqueBatchAssignments);
+
+export const updateSubjectsBulkBodySchema = z
+  .object({
+    name: z.string().trim().min(1).max(100),
+    assignments: z.array(batchSubjectAssignmentSchema.extend({
+      subjectId: z.string().uuid().optional(),
+    })).min(1).max(100).refine(
+      (assignments) => assignments.some((assignment) => assignment.subjectId !== undefined),
+      { message: 'At least one existing subject is required', path: ['assignments'] }
+    ),
+  })
+  .superRefine(uniqueBatchAssignments);
 
 export const updateSubjectBodySchema = z
   .object({
@@ -117,6 +144,7 @@ export const completionQuerySchema = z.object({
 
 export type CreateSubjectInput = z.infer<typeof createSubjectBodySchema>;
 export type CreateSubjectsBulkInput = z.infer<typeof createSubjectsBulkBodySchema>;
+export type UpdateSubjectsBulkInput = z.infer<typeof updateSubjectsBulkBodySchema>;
 export type UpdateSubjectInput = z.infer<typeof updateSubjectBodySchema>;
 export type CreateGradingPeriodInput = z.infer<typeof createGradingPeriodBodySchema>;
 export type UpdateGradingPeriodInput = z.infer<typeof updateGradingPeriodBodySchema>;

@@ -137,17 +137,17 @@ export class AcademicGradingRepository {
   async listSubjectConflicts(
     levelIds: string[],
     name: string
-  ): Promise<Array<{ levelId: string; levelName: string }>> {
+  ): Promise<Array<{ id: string; levelId: string; levelName: string }>> {
     if (levelIds.length === 0) return [];
-    const result = await this.db.execute<{ level_id: string; level_name: string }>(sql`
-      SELECT s.level_id::text, l.name AS level_name
+    const result = await this.db.execute<{ id: string; level_id: string; level_name: string }>(sql`
+      SELECT s.id::text, s.level_id::text, l.name AS level_name
       FROM subjects s
       INNER JOIN levels l ON l.id = s.level_id
       WHERE s.name = ${name}
         AND s.level_id = ANY(ARRAY[${sql.join(levelIds.map((id) => sql`${id}::uuid`), sql`, `)}]::uuid[])
       ORDER BY l.order_index, l.name
     `);
-    return rows(result).map((row) => ({ levelId: row.level_id, levelName: row.level_name }));
+    return rows(result).map((row) => ({ id: row.id, levelId: row.level_id, levelName: row.level_name }));
   }
 
   async updateSubject(id: string, input: UpdateSubjectInput & { name?: string }): Promise<SubjectItem | null> {

@@ -12,6 +12,7 @@ import {
   createGradingPeriodBodySchema,
   createSubjectBodySchema,
   createSubjectsBulkBodySchema,
+  updateSubjectsBulkBodySchema,
   listGradingPeriodsQuerySchema,
   listSubjectsQuerySchema,
   updateGradingPeriodBodySchema,
@@ -279,6 +280,22 @@ export default async function academicController(app: FastifyInstance): Promise<
           tenantDb.transaction((tx) => buildAcademicGradingService(tx).createSubjectsBulk(body))
         );
         return reply.code(201).send({ subjects });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.patch(
+    '/api/v1/subjects/bulk',
+    { preHandler: requirePermission('classes.edit') },
+    async (request, reply) => {
+      try {
+        const body = updateSubjectsBulkBodySchema.parse(request.body ?? {});
+        const subjects = await withTenantSchema(request.claims!.schemaName, (tenantDb) =>
+          tenantDb.transaction((tx) => buildAcademicGradingService(tx).updateSubjectsBulk(body))
+        );
+        return reply.send({ subjects });
       } catch (error) {
         return handleError(request, reply, error);
       }

@@ -10,6 +10,7 @@ import type {
   CreateGradingPeriodInput,
   CreateSubjectInput,
   CreateSubjectsBulkInput,
+  UpdateSubjectsBulkInput,
   UpdateGradingPeriodInput,
   UpdateSubjectInput,
   UpsertEvaluationGradeInput,
@@ -107,6 +108,89 @@ export class AcademicGradingService {
       }
       return subjects;
     } catch (error) {
+      if (dbCode(error) === '23503') {
+        throw new AcademicGradingError('Level not found', 400, 'SUBJECT_LEVEL_NOT_FOUND');
+      }
+      if (dbCode(error) === '23505') {
+        throw new AcademicGradingError('Subject already exists for one of the selected levels', 409, 'SUBJECT_BATCH_CONFLICT');
+      }
+      throw error;
+    }
+  }
+
+  async updateSubjectsBulk(input: UpdateSubjectsBulkInput) {
+    const name = canonicalizeSubject(input.name);
+    const existingAssignments = input.assignments.filter((assignment) => assignment.subjectId !== undefined);
+    const newAssignments = input.assignments.filter((assignment) => assignment.subjectId === undefined);
+    const currentSubjects = await Promise.all(
+      existingAssignments.map(async (assignment) => ({
+        assignment,
+        subject: await this.repository.findSubject(assignment.subjectId!),
+      }))
+    );
+    const missingSubject = currentSubjects.find((item) => !item.subject);
+    if (missingSubject) {
+      throw new AcademicGradingError('Subject not found', 404, 'SUBJECT_NOT_FOUND');
+    }
+
+    const originalNameKeys = new Set(
+      currentSubjects.map((item) => normalizeSubjectKey(item.subject!.name))
+    );
+    if (originalNameKeys.size !== 1) {
+      throw new AcademicGradingError(
+        'Les matières sélectionnées ne forment pas un même groupe',
+        400,
+        'SUBJECT_BATCH_GROUP_MISMATCH'
+      );
+    }
+
+    const levelMismatch = currentSubjects.find(
+      (item) => item.subject!.levelId !== item.assignment.levelId
+    );
+    if (levelMismatch) {
+      throw new AcademicGradingError(
+        'Le niveau d’une matière existante ne peut pas être modifié',
+        400,
+        'SUBJECT_LEVEL_IMMUTABLE'
+      );
+    }
+
+    const selectedSubjectIds = new Set(existingAssignments.map((assignment) => assignment.subjectId));
+    const conflicts = (await this.repository.listSubjectConflicts(
+      input.assignments.map((assignment) => assignment.levelId),
+      name
+    )).filter((conflict) => !selectedSubjectIds.has(conflict.id));
+    if (conflicts.length > 0) {
+      throw new AcademicGradingError(
+        `Cette matière existe déjà pour : ${conflicts.map((item) => item.levelName).join(', ')}`,
+        409,
+        'SUBJECT_BATCH_CONFLICT'
+      );
+    }
+
+    try {
+      const subjects = [];
+      for (const { assignment } of currentSubjects) {
+        const subject = await this.repository.updateSubject(assignment.subjectId!, {
+          name,
+          coefficient: assignment.coefficient,
+        });
+        if (!subject) throw new AcademicGradingError('Subject not found', 404, 'SUBJECT_NOT_FOUND');
+        await this.syncAssignmentsFromSchedule(subject);
+        subjects.push(subject);
+      }
+      for (const assignment of newAssignments) {
+        const subject = await this.repository.createSubject({
+          levelId: assignment.levelId,
+          name,
+          coefficient: assignment.coefficient,
+        });
+        await this.syncAssignmentsFromSchedule(subject);
+        subjects.push(subject);
+      }
+      return subjects;
+    } catch (error) {
+      if (error instanceof AcademicGradingError) throw error;
       if (dbCode(error) === '23503') {
         throw new AcademicGradingError('Level not found', 400, 'SUBJECT_LEVEL_NOT_FOUND');
       }
