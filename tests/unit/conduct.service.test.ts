@@ -16,6 +16,8 @@ const repository = {
   teacherHasOpenAverageCalculation: vi.fn(),
   teacherHasAverageCalculation: vi.fn(),
   gradingPeriodExists: vi.fn(),
+  isGradingPeriodCompleted: vi.fn(),
+  isCurrentGradingPeriod: vi.fn(),
   gradingPeriodMatchesClass: vi.fn(),
   studentsBelongToClass: vi.fn(),
   listTeacherConductScope: vi.fn(),
@@ -26,6 +28,7 @@ const repository = {
   findFinalGrade: vi.fn(),
   upsertConductGrade: vi.fn(),
   isAssignedEducatorForStudent: vi.fn(),
+  isHomeroomTeacherForStudent: vi.fn(),
 } as unknown as ConductRepository;
 
 const studentContext = {
@@ -38,6 +41,8 @@ const studentContext = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  repository.isGradingPeriodCompleted.mockResolvedValue(false);
+  repository.isCurrentGradingPeriod.mockResolvedValue(true);
 });
 
 describe('conduct.service createEducatorAssignment', () => {
@@ -227,10 +232,11 @@ describe('conduct.service decideConductGrade', () => {
     const service = new ConductService(repository);
     repository.findStudentContext.mockResolvedValue(studentContext);
     repository.gradingPeriodExists.mockResolvedValue(true);
+    repository.isHomeroomTeacherForStudent.mockResolvedValue(false);
     repository.isAssignedEducatorForStudent.mockResolvedValue(true);
     repository.upsertConductGrade.mockResolvedValue(undefined);
 
-    await service.decideConductGrade(gradeBody, { userId: 'educator-user' });
+    await service.decideConductGrade(gradeBody, { userId: 'educator-user', canFinalize: true });
 
     expect(repository.upsertConductGrade).toHaveBeenCalledWith(
       expect.objectContaining({ coefficient: 1, decidedByUserId: 'educator-user' })
@@ -241,10 +247,11 @@ describe('conduct.service decideConductGrade', () => {
     const service = new ConductService(repository);
     repository.findStudentContext.mockResolvedValue(studentContext);
     repository.gradingPeriodExists.mockResolvedValue(true);
+    repository.isHomeroomTeacherForStudent.mockResolvedValue(false);
     repository.isAssignedEducatorForStudent.mockResolvedValue(true);
     repository.upsertConductGrade.mockResolvedValue(undefined);
 
-    await service.decideConductGrade({ ...gradeBody, coefficient: 2 }, { userId: 'educator-user' });
+    await service.decideConductGrade({ ...gradeBody, coefficient: 2 }, { userId: 'educator-user', canFinalize: true });
 
     expect(repository.upsertConductGrade).toHaveBeenCalledWith(
       expect.objectContaining({ coefficient: 2 })
@@ -255,13 +262,29 @@ describe('conduct.service decideConductGrade', () => {
     const service = new ConductService(repository);
     repository.findStudentContext.mockResolvedValue(studentContext);
     repository.gradingPeriodExists.mockResolvedValue(true);
+    repository.isHomeroomTeacherForStudent.mockResolvedValue(false);
     repository.isAssignedEducatorForStudent.mockResolvedValue(false);
 
-    await expect(service.decideConductGrade(gradeBody, { userId: 'other-educator' })).rejects.toMatchObject({
-      code: 'NOT_ASSIGNED_EDUCATOR',
+    await expect(service.decideConductGrade(gradeBody, { userId: 'other-educator', canFinalize: true })).rejects.toMatchObject({
+      code: 'NOT_CONDUCT_DECIDER',
       statusCode: 403,
     });
 
     expect(repository.upsertConductGrade).not.toHaveBeenCalled();
+  });
+
+  it('autorise le professeur principal sans la permission conduct.finalize', async () => {
+    const service = new ConductService(repository);
+    repository.findStudentContext.mockResolvedValue(studentContext);
+    repository.gradingPeriodExists.mockResolvedValue(true);
+    repository.isHomeroomTeacherForStudent.mockResolvedValue(true);
+    repository.upsertConductGrade.mockResolvedValue(undefined);
+
+    await service.decideConductGrade(gradeBody, { userId: 'homeroom-teacher', canFinalize: false });
+
+    expect(repository.upsertConductGrade).toHaveBeenCalledWith(
+      expect.objectContaining({ decidedByUserId: 'homeroom-teacher', coefficient: 1 })
+    );
+    expect(repository.isAssignedEducatorForStudent).not.toHaveBeenCalled();
   });
 });

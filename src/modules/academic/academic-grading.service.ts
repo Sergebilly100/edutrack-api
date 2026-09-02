@@ -379,6 +379,9 @@ export class AcademicGradingService {
     if (!slot) throw new AcademicGradingError('Lesson slot not found', 400, 'LESSON_SLOT_NOT_FOUND');
     if (!subject) throw new AcademicGradingError('Subject not found', 400, 'SUBJECT_NOT_FOUND');
     if (!period) throw new AcademicGradingError('Grading period not found', 400, 'GRADING_PERIOD_NOT_FOUND');
+    if (input.evaluationDate && (input.evaluationDate < period.startDate || input.evaluationDate > period.endDate)) {
+      throw new AcademicGradingError('Evaluation date must fall within the grading period', 400, 'EVALUATION_DATE_OUTSIDE_PERIOD');
+    }
     if (slot.teacherId !== teacherId || slot.classId !== input.classId) {
       throw new AcademicGradingError('Lesson slot is outside the teacher scope', 403, 'EVALUATION_SCOPE_FORBIDDEN');
     }

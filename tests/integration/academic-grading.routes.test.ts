@@ -105,7 +105,7 @@ describe('academic grading integration', () => {
       expect.objectContaining({ subjectId: mathResponse.body.subject.id, calculationStarted: false }),
     ]));
 
-    const createEvaluation = async (lessonSlotId: string, subjectId: string, label: string, coefficient: number) => {
+    const createEvaluation = async (lessonSlotId: string, subjectId: string, label: string, coefficient: number, evaluationDate: string) => {
       const response = await request().post('/api/v1/evaluations').set(teacherHeaders).send({
         lessonSlotId,
         subjectId,
@@ -114,14 +114,24 @@ describe('academic grading integration', () => {
         type: 'scheduled',
         coefficient,
         label,
+        evaluationDate,
       });
       expect(response.status).toBe(201);
+      expect(response.body.evaluation).toMatchObject({ evaluationDate });
       return response.body.evaluation.id as string;
     };
 
-    const math1 = await createEvaluation(context.scheduleId, mathResponse.body.subject.id, 'Devoir 1', 1);
-    const math2 = await createEvaluation(context.scheduleId, mathResponse.body.subject.id, 'Devoir 2', 3);
-    const french = await createEvaluation(frenchSchedules[0]!.id, frenchResponse.body.subject.id, 'Dictée', 1);
+    const math1 = await createEvaluation(context.scheduleId, mathResponse.body.subject.id, 'Devoir 1', 1, '2088-10-15');
+    const math2 = await createEvaluation(context.scheduleId, mathResponse.body.subject.id, 'Devoir 2', 3, '2088-11-12');
+    const french = await createEvaluation(frenchSchedules[0]!.id, frenchResponse.body.subject.id, 'Dictée', 1, '2088-11-19');
+
+    const scopeWithDates = await request().get('/api/v1/evaluations/scope').set(teacherHeaders).query({ classId, gradingPeriodId });
+    expect(scopeWithDates.status).toBe(200);
+    expect(scopeWithDates.body.evaluations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: math1, evaluationDate: '2088-10-15' }),
+      expect.objectContaining({ id: math2, evaluationDate: '2088-11-12' }),
+      expect.objectContaining({ id: french, evaluationDate: '2088-11-19' }),
+    ]));
 
     const saveGrade = (evaluationId: string, score: number) =>
       request().put(`/api/v1/evaluations/${evaluationId}/grades`).set(teacherHeaders).send({

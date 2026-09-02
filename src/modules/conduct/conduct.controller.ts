@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
-import { requirePermission, requireTeacher } from '../../shared/middleware/auth.middleware.js';
+import { authenticateRequest, requirePermission, requireTeacher } from '../../shared/middleware/auth.middleware.js';
 import {
   buildConductService,
   ConductModuleError,
@@ -173,14 +173,17 @@ export default async function conductController(app: FastifyInstance): Promise<v
   // ── Consultation + décision finale par l'éducateur ───────────────────────
   app.get(
     '/api/v1/conduct/students/:studentId/overview',
-    { preHandler: requirePermission('conduct.finalize') },
+    { preHandler: authenticateRequest },
     async (request, reply) => {
       try {
         const claims = request.claims!;
         const params = conductStudentParamsSchema.parse(request.params ?? {});
         const query = conductOverviewQuerySchema.parse(request.query ?? {});
         const result = await withTenantSchema(claims.schemaName, (tenantDb) =>
-          buildConductService(tenantDb).getConductOverview(params.studentId, query.grading_period_id)
+          buildConductService(tenantDb).getConductOverview(params.studentId, query.grading_period_id, {
+            userId: request.user!.userId,
+            canFinalize: request.permissions?.has('conduct.finalize') === true,
+          })
         );
         return reply.send(result);
       } catch (error) {
@@ -191,7 +194,7 @@ export default async function conductController(app: FastifyInstance): Promise<v
 
   app.put(
     '/api/v1/conduct/grades',
-    { preHandler: requirePermission('conduct.finalize') },
+    { preHandler: authenticateRequest },
     async (request, reply) => {
       try {
         const claims = request.claims!;
@@ -199,6 +202,7 @@ export default async function conductController(app: FastifyInstance): Promise<v
         await withTenantSchema(claims.schemaName, (tenantDb) =>
           buildConductService(tenantDb).decideConductGrade(body, {
             userId: request.user!.userId,
+            canFinalize: request.permissions?.has('conduct.finalize') === true,
           })
         );
         return reply.send({ success: true });

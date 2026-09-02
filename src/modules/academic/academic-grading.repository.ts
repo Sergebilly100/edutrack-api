@@ -69,6 +69,7 @@ export type EvaluationItem = {
   type: 'scheduled' | 'spontaneous';
   coefficient: number;
   label: string;
+  evaluationDate: string | null;
 };
 
 type EvaluationRow = {
@@ -81,6 +82,7 @@ type EvaluationRow = {
   type: 'scheduled' | 'spontaneous';
   coefficient: string | number;
   label: string;
+  evaluation_date: string | null;
 };
 
 const mapEvaluation = (row: EvaluationRow): EvaluationItem => ({
@@ -93,6 +95,7 @@ const mapEvaluation = (row: EvaluationRow): EvaluationItem => ({
   type: row.type,
   coefficient: decimal(row.coefficient),
   label: row.label,
+  evaluationDate: row.evaluation_date,
 });
 
 export class AcademicGradingRepository {
@@ -301,13 +304,15 @@ export class AcademicGradingRepository {
     levelName: string;
     schoolYearId: string;
     schoolYearLabel: string;
+    isHomeroomTeacher: boolean;
   }>> {
     const result = await this.db.execute<{
       id: string; name: string; level_id: string; level_name: string;
-      school_year_id: string; school_year_label: string;
+      school_year_id: string; school_year_label: string; homeroom_teacher_id: string | null;
     }>(sql`
       SELECT DISTINCT c.id::text, c.name, l.id::text AS level_id, l.name AS level_name,
-             sy.id::text AS school_year_id, sy.label AS school_year_label
+             sy.id::text AS school_year_id, sy.label AS school_year_label,
+             c.homeroom_teacher_id::text
       FROM schedules sch
       INNER JOIN classes c ON c.id = sch.class_id AND c.is_active = true
       INNER JOIN levels l ON l.id = c.level_id
@@ -322,6 +327,7 @@ export class AcademicGradingRepository {
       levelName: row.level_name,
       schoolYearId: row.school_year_id,
       schoolYearLabel: row.school_year_label,
+      isHomeroomTeacher: row.homeroom_teacher_id === teacherId,
     }));
   }
 
@@ -429,9 +435,9 @@ export class AcademicGradingRepository {
 
   async createEvaluation(input: CreateEvaluationInput, teacherId: string): Promise<EvaluationItem> {
     const result = await this.db.execute<EvaluationRow>(sql`
-      INSERT INTO evaluations (lesson_slot_id, subject_id, class_id, grading_period_id, teacher_id, type, coefficient, label)
-      VALUES (${input.lessonSlotId}::uuid, ${input.subjectId}::uuid, ${input.classId}::uuid, ${input.gradingPeriodId}::uuid, ${teacherId}::uuid, ${input.type}::evaluation_type, ${input.coefficient}, ${input.label})
-      RETURNING id, lesson_slot_id, subject_id, class_id, grading_period_id, teacher_id, type, coefficient, label
+      INSERT INTO evaluations (lesson_slot_id, subject_id, class_id, grading_period_id, teacher_id, type, coefficient, label, evaluation_date)
+      VALUES (${input.lessonSlotId}::uuid, ${input.subjectId}::uuid, ${input.classId}::uuid, ${input.gradingPeriodId}::uuid, ${teacherId}::uuid, ${input.type}::evaluation_type, ${input.coefficient}, ${input.label}, ${input.evaluationDate ?? null}::date)
+      RETURNING id, lesson_slot_id, subject_id, class_id, grading_period_id, teacher_id, type, coefficient, label, evaluation_date::text
     `);
     const row = rows(result)[0];
     if (!row) throw new Error('Failed to create evaluation');
@@ -447,12 +453,13 @@ export class AcademicGradingRepository {
       type: 'spontaneous',
       coefficient: 1,
       label: `Note spontanée ${input.adjustment > 0 ? '+' : ''}${input.adjustment}`,
+      evaluationDate: new Date().toISOString().slice(0, 10),
     }, teacherId);
   }
 
   async findEvaluation(id: string): Promise<EvaluationItem | null> {
     const result = await this.db.execute<EvaluationRow>(sql`
-      SELECT id, lesson_slot_id, subject_id, class_id, grading_period_id, teacher_id, type, coefficient, label
+      SELECT id, lesson_slot_id, subject_id, class_id, grading_period_id, teacher_id, type, coefficient, label, evaluation_date::text
       FROM evaluations WHERE id = ${id}::uuid LIMIT 1
     `);
     const row = rows(result)[0];
@@ -623,14 +630,16 @@ export class AcademicGradingRepository {
 
   /** Créneaux de cours du prof pour une classe (base des évaluations rattachées). */
   async listTeacherLessonSlotsForClass(teacherId: string, classId: string): Promise<
-    Array<{ id: string; dayOfWeek: number; startTime: string; endTime: string; subjectName: string }>
+    Array<{ id: string; dayOfWeek: number; startTime: string; endTime: string; subjectName: string; roomName: string }>
   > {
     const result = await this.db.execute<{
-      id: string; day_of_week: number; start_time: string; end_time: string; subject: string;
+      id: string; day_of_week: number; start_time: string; end_time: string; subject: string; room_name: string;
     }>(sql`
-      SELECT sch.id::text, sch.day_of_week, ts.start_time::text, ts.end_time::text, sch.subject
+      SELECT sch.id::text, sch.day_of_week, ts.start_time::text, ts.end_time::text, sch.subject,
+             r.name AS room_name
       FROM schedules sch
       INNER JOIN time_slots ts ON ts.id = sch.time_slot_id
+      INNER JOIN rooms r ON r.id = sch.room_id
       WHERE sch.teacher_id = ${teacherId}::uuid AND sch.class_id = ${classId}::uuid
       ORDER BY sch.day_of_week, ts.start_time
     `);
@@ -640,6 +649,7 @@ export class AcademicGradingRepository {
       startTime: row.start_time.slice(0, 5),
       endTime: row.end_time.slice(0, 5),
       subjectName: row.subject,
+      roomName: row.room_name,
     }));
   }
 
@@ -666,16 +676,22 @@ export class AcademicGradingRepository {
   ): Promise<Array<{
     id: string; label: string; type: 'scheduled' | 'spontaneous'; coefficient: number;
     subjectId: string | null; subjectName: string | null;
+    dayOfWeek: number; startTime: string; endTime: string; roomName: string;
     grades: Array<{ studentId: string; score: number; maxScore: number; comment: string | null }>;
   }>> {
     const evaluationRows = rows(await this.db.execute<{
-      id: string; label: string; type: string; coefficient: string;
+      id: string; label: string; type: string; coefficient: string; evaluation_date: string | null;
       subject_id: string | null; subject_name: string | null;
+      day_of_week: number; start_time: string; end_time: string; room_name: string;
     }>(sql`
-      SELECT e.id::text, e.label, e.type::text, e.coefficient::text,
-             sub.id::text AS subject_id, sub.name AS subject_name
+      SELECT e.id::text, e.label, e.type::text, e.coefficient::text, e.evaluation_date::text,
+             sub.id::text AS subject_id, sub.name AS subject_name,
+             sch.day_of_week, ts.start_time::text, ts.end_time::text, r.name AS room_name
       FROM evaluations e
       LEFT JOIN subjects sub ON sub.id = e.subject_id
+      INNER JOIN schedules sch ON sch.id = e.lesson_slot_id
+      INNER JOIN time_slots ts ON ts.id = sch.time_slot_id
+      INNER JOIN rooms r ON r.id = sch.room_id
       WHERE e.teacher_id = ${teacherId}::uuid
         AND e.class_id = ${classId}::uuid
         AND e.grading_period_id = ${gradingPeriodId}::uuid
@@ -708,6 +724,11 @@ export class AcademicGradingRepository {
       coefficient: decimal(row.coefficient),
       subjectId: row.subject_id,
       subjectName: row.subject_name,
+      dayOfWeek: row.day_of_week,
+      startTime: row.start_time.slice(0, 5),
+      endTime: row.end_time.slice(0, 5),
+      roomName: row.room_name,
+      evaluationDate: row.evaluation_date,
       grades: gradesByEvaluation.get(row.id) ?? [],
     }));
   }

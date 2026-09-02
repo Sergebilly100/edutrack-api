@@ -789,6 +789,7 @@ export const evaluations = tenant.table(
     type: evaluationTypeEnum('type').notNull(),
     coefficient: numeric('coefficient', { precision: 8, scale: 3 }).notNull(),
     label: varchar('label', { length: 150 }).notNull(),
+    evaluationDate: date('evaluation_date', { mode: 'string' }),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   },

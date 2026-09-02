@@ -544,4 +544,17 @@ export class ConductRepository {
     `);
     return getRows(result).length > 0;
   }
+
+  async isHomeroomTeacherForStudent(userId: string, studentId: string): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      SELECT 1
+      FROM students s
+      INNER JOIN classes c ON c.id = s.class_id
+      INNER JOIN teachers t ON t.id = c.homeroom_teacher_id
+      WHERE s.id = ${studentId}::uuid
+        AND t.user_id = ${userId}::uuid
+      LIMIT 1
+    `);
+    return getRows(result).length > 0;
+  }
 }

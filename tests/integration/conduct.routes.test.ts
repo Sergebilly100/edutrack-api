@@ -348,13 +348,39 @@ describe('conduct routes (5b)', () => {
     expect(afterUpdate.body.finalGrade).toMatchObject({ note: 16, coefficient: 2 });
   });
 
+  it('permet au professeur principal de consulter les avis et d’arrêter la conduite finale', async () => {
+    await queryTenant(
+      `UPDATE ${tenantTable('classes')}
+       SET homeroom_teacher_id = (SELECT id FROM ${tenantTable('teachers')} WHERE user_id = $2::uuid)
+       WHERE id = $1::uuid`,
+      [classId, teacherAUserId]
+    );
+
+    const overview = await request()
+      .get(`/api/v1/conduct/students/${studentId}/overview?grading_period_id=${gradingPeriodId}`)
+      .set(teacherAHeaders);
+    expect(overview.status, JSON.stringify(overview.body)).toBe(200);
+    expect(overview.body.teacherInputs).toHaveLength(2);
+
+    const decided = await request()
+      .put('/api/v1/conduct/grades')
+      .set(teacherAHeaders)
+      .send({ student_id: studentId, grading_period_id: gradingPeriodId, note: 19 });
+    expect(decided.status, JSON.stringify(decided.body)).toBe(200);
+
+    const afterDecision = await request()
+      .get(`/api/v1/conduct/students/${studentId}/overview?grading_period_id=${gradingPeriodId}`)
+      .set(teacherAHeaders);
+    expect(afterDecision.body.finalGrade).toMatchObject({ note: 19, coefficient: 1, decidedByUserId: teacherAUserId });
+  });
+
   it("refuse la décision d'un détenteur non assigné (directeur sans assignation)", async () => {
     const response = await request()
       .put('/api/v1/conduct/grades')
       .set(directorHeaders)
       .send({ student_id: studentId, grading_period_id: gradingPeriodId, note: 18 });
     expect(response.status).toBe(403);
-    expect(response.body.code).toBe('NOT_ASSIGNED_EDUCATOR');
+    expect(response.body.code).toBe('NOT_CONDUCT_DECIDER');
   });
 
   it('refuse la consultation à un staff sans conduct.finalize', async () => {

@@ -116,6 +116,11 @@ export const createEvaluationBodySchema = z.object({
   type: z.enum(['scheduled', 'spontaneous']),
   coefficient: positiveDecimalSchema,
   label: z.string().trim().min(1).max(150),
+  evaluationDate: isoDateSchema.optional(),
+}).superRefine((input, context) => {
+  if (input.type === 'scheduled' && !input.evaluationDate) {
+    context.addIssue({ code: 'custom', message: 'Evaluation date is required', path: ['evaluationDate'] });
+  }
 });
 
 export const upsertEvaluationGradeBodySchema = z

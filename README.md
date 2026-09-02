@@ -120,7 +120,7 @@ docker compose up -d postgres redis
 # 2) Backend
 cp .env.example .env            # puis renseigner JWT_*, secrets, etc.
 npm install
-npm run db:migrate              # applique les migrations Drizzle
+npm run db:migrate              # applique les migrations à tous les schémas tenants
 npm run db:seed                 # (optionnel) données de démonstration
 npm run dev                     # API sur http://localhost:3000
 
