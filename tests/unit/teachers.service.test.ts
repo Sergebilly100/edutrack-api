@@ -22,6 +22,7 @@ const repository = {
   getTeacherById: vi.fn(),
   countActiveUsers: vi.fn(),
   listSubjectCatalog: vi.fn(),
+  countValidTeachingAssignments: vi.fn(),
   createTeacher: vi.fn(),
   updateTeacher: vi.fn(),
   softDeleteTeacher: vi.fn(),
@@ -65,6 +66,7 @@ describe('teachers.service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     repository.listSubjectCatalog.mockResolvedValue([]);
+    repository.countValidTeachingAssignments.mockResolvedValue(0);
     service = new TeachersService(repository as never);
   });
 
@@ -144,6 +146,31 @@ describe('teachers.service', () => {
       const result = await service.createTeacher(input as never, { schemaName: 'school_test' });
 
       expect(result.id).toBe('teacher-1');
+    });
+
+    it('enregistre les associations matière-classe valides', async () => {
+      repository.countActiveUsers.mockResolvedValue(0);
+      repository.countValidTeachingAssignments.mockResolvedValue(1);
+      repository.createTeacher.mockResolvedValue(baseTeacher);
+      const teaching_assignments = [{ subject_id: 'subject-6e-maths', class_id: 'class-6e-a' }];
+
+      await service.createTeacher(
+        { ...input, teaching_assignments } as never,
+        { schemaName: 'school_test' }
+      );
+
+      expect(repository.countValidTeachingAssignments).toHaveBeenCalledWith(teaching_assignments);
+      expect(repository.createTeacher).toHaveBeenCalledWith(expect.objectContaining({ teaching_assignments }));
+    });
+
+    it('refuse une association matière-classe de niveaux différents', async () => {
+      repository.countActiveUsers.mockResolvedValue(0);
+      repository.countValidTeachingAssignments.mockResolvedValue(0);
+
+      await expect(service.createTeacher(
+        { ...input, teaching_assignments: [{ subject_id: 'subject-6e-maths', class_id: 'class-5e-a' }] } as never,
+        { schemaName: 'school_test' }
+      )).rejects.toMatchObject({ code: 'INVALID_TEACHING_ASSIGNMENT', statusCode: 400 });
     });
 
     it('réutilise les matières existantes similaires lors de la création', async () => {

@@ -285,6 +285,13 @@ export class AcademicRepository {
           FROM students s
           WHERE s.class_id = c.id
             AND s.is_active = true
+            AND NOT EXISTS (
+              SELECT 1 FROM enrollments e
+              WHERE e.student_id = s.id
+                AND e.class_id = c.id
+                AND e.school_year_id = c.school_year_id
+                AND e.status <> 'confirmed'
+            )
         ) AS student_count,
         c.is_active,
         l.id AS level_id,

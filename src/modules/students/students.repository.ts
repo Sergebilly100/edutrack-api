@@ -311,7 +311,17 @@ const toRecentSmsStatus = (
 };
 
 const buildStudentsWhere = (query: StudentsListQuery): SQL[] => {
-  const where: SQL[] = [];
+  // Un dossier non finalisé conserve temporairement sa classe cible pour les
+  // documents et le passage en caisse, mais ne doit pas apparaître dans la
+  // liste ni dans l'effectif de cette classe avant confirmation du paiement.
+  const where: SQL[] = [sql`NOT EXISTS (
+    SELECT 1
+    FROM enrollments e
+    WHERE e.student_id = s.id
+      AND e.class_id = s.class_id
+      AND e.school_year_id = c.school_year_id
+      AND e.status <> 'confirmed'
+  )`];
   if (query.class_id) where.push(sql`s.class_id = ${query.class_id}`);
   if (typeof query.is_active === 'boolean') where.push(sql`s.is_active = ${query.is_active}`);
   if (query.search) {

@@ -23,11 +23,22 @@ export function buildDashboardRepository(db: TenantDb) {
     const [populationResult, academicResult, risksResult] = await Promise.all([
       db.execute<{ active_students: number; active_teachers: number; active_classes: number }>(sql`
         SELECT
-          (SELECT COUNT(*)::int FROM students WHERE is_active = true) AS active_students,
+          (SELECT COUNT(*)::int
+           FROM students s
+           WHERE s.is_active = true
+             AND NOT EXISTS (
+               SELECT 1
+               FROM enrollments e
+               JOIN classes c ON c.id = s.class_id
+               WHERE e.student_id = s.id
+                 AND e.class_id = s.class_id
+                 AND e.school_year_id = c.school_year_id
+                 AND e.status <> 'confirmed'
+             )) AS active_students,
           (SELECT COUNT(*)::int FROM teachers t INNER JOIN users u ON u.id = t.user_id WHERE u.is_active = true) AS active_teachers,
           (SELECT COUNT(*)::int FROM classes c WHERE c.is_active = true AND (${schoolYearId ?? null}::uuid IS NULL OR c.school_year_id = ${schoolYearId ?? null}::uuid)) AS active_classes
       `),
-      db.execute<{ level_id: string; level_name: string; order_index: number; class_count: number; expected_subjects: number; completed_subjects: number; students_with_average: number; average_score: number | null; performing_students: number; attention_students: number; critical_students: number }>(sql`
+      db.execute<{ level_id: string; level_name: string; order_index: number; class_count: number; expected_subjects: number; completed_subjects: number; students_with_average: number; average_score: number | null; performing_students: number; attention_students: number; critical_students: number; grade_count: number; grades_at_least_ten: number }>(sql`
         WITH selected_year AS (
           SELECT id FROM school_years
           WHERE (${schoolYearId ?? null}::uuid IS NULL AND status = 'active') OR id = ${schoolYearId ?? null}::uuid
@@ -42,7 +53,16 @@ export function buildDashboardRepository(db: TenantDb) {
                    COUNT(s.id)::int AS student_count,
                    COUNT(rc.id) FILTER (WHERE rc.status IN ('generated', 'published'))::int AS card_count
             FROM classes c
-            LEFT JOIN students s ON s.class_id = c.id AND s.is_active = true
+            LEFT JOIN students s ON s.class_id = c.id
+              AND s.is_active = true
+              AND NOT EXISTS (
+                SELECT 1
+                FROM enrollments e
+                WHERE e.student_id = s.id
+                  AND e.class_id = s.class_id
+                  AND e.school_year_id = c.school_year_id
+                  AND e.status <> 'confirmed'
+              )
             LEFT JOIN report_cards rc ON rc.student_id = s.id AND rc.grading_period_id = gp.id
             WHERE c.school_year_id = gp.school_year_id AND c.is_active = true
             GROUP BY c.id
@@ -54,10 +74,26 @@ export function buildDashboardRepository(db: TenantDb) {
           LEFT JOIN period_progress pp ON pp.grading_period_id = gp.id
           WHERE gp.school_year_id = (SELECT id FROM selected_year)
             AND (
-              (${gradingPeriodId ?? null}::uuid IS NOT NULL AND gp.id = ${gradingPeriodId ?? null}::uuid)
-              OR (${gradingPeriodId ?? null}::uuid IS NULL AND COALESCE(pp.is_completed, false) = false)
+              ${gradingPeriodId ?? null}::uuid IS NULL
+              OR gp.id = ${gradingPeriodId ?? null}::uuid
             )
-          ORDER BY gp.order_index
+          -- Sans filtre explicite, la période en cours est prioritaire. Si
+          -- l'année est terminée, on affiche la dernière période ayant des
+          -- notes, puis la plus récente. La première période incomplète
+          -- pouvait être une période à venir et affichait donc des zéros.
+          ORDER BY
+            CASE
+              WHEN CURRENT_DATE BETWEEN gp.start_date AND gp.end_date THEN 0
+              WHEN EXISTS (
+                SELECT 1
+                FROM evaluations e
+                INNER JOIN evaluation_grades eg ON eg.evaluation_id = e.id
+                WHERE e.grading_period_id = gp.id
+              ) THEN 1
+              WHEN COALESCE(pp.is_completed, false) THEN 2
+              ELSE 3
+            END,
+            gp.order_index DESC
           LIMIT 1
         ), level_completions AS (
           SELECT l.id AS level_id, l.name AS level_name, l.order_index,
@@ -71,29 +107,88 @@ export function buildDashboardRepository(db: TenantDb) {
           LEFT JOIN class_subject_completion csc ON csc.class_id = c.id AND csc.subject_id = s.id AND csc.grading_period_id = sp.id
           WHERE c.is_active = true AND c.school_year_id = (SELECT id FROM selected_year)
           GROUP BY l.id, l.name, l.order_index
-        ), level_averages AS (
-          SELECT l.id AS level_id,
-            COUNT(spa.student_id)::int AS students_with_average,
-            ROUND(AVG(spa.average)::numeric, 1)::float AS average_score,
-            COUNT(*) FILTER (WHERE spa.average >= 10)::int AS performing_students,
-            COUNT(*) FILTER (WHERE spa.average >= 8 AND spa.average < 10)::int AS attention_students,
-            COUNT(*) FILTER (WHERE spa.average < 8)::int AS critical_students
-          FROM classes c
+        ), grade_rows AS (
+          SELECT
+            l.id AS level_id,
+            eg.student_id,
+            e.subject_id,
+            s.coefficient::numeric AS subject_coefficient,
+            e.type::text AS evaluation_type,
+            e.label,
+            e.coefficient::numeric AS evaluation_coefficient,
+            (eg.score::numeric / NULLIF(eg.max_score::numeric, 0)) * 20 AS normalized_score,
+            eg.score::numeric AS raw_score
+          FROM evaluation_grades eg
+          INNER JOIN evaluations e ON e.id = eg.evaluation_id
+          INNER JOIN selected_period sp ON sp.id = e.grading_period_id
+          INNER JOIN subjects s ON s.id = e.subject_id
+          INNER JOIN classes c ON c.id = e.class_id
           INNER JOIN levels l ON l.id = c.level_id
-          INNER JOIN students st ON st.class_id = c.id AND st.is_active = true
-          INNER JOIN selected_period sp ON true
-          INNER JOIN student_period_averages spa ON spa.student_id = st.id AND spa.grading_period_id = sp.id AND spa.subject_id IS NULL
+          INNER JOIN students st ON st.id = eg.student_id AND st.class_id = c.id AND st.is_active = true
           WHERE c.is_active = true AND c.school_year_id = (SELECT id FROM selected_year)
-          GROUP BY l.id
+            AND e.class_id = c.id
+            AND NOT EXISTS (
+              SELECT 1
+              FROM enrollments en
+              WHERE en.student_id = st.id
+                AND en.class_id = st.class_id
+                AND en.school_year_id = c.school_year_id
+                AND en.status <> 'confirmed'
+            )
+        ), subject_averages AS (
+          SELECT
+            level_id,
+            student_id,
+            subject_id,
+            subject_coefficient,
+            LEAST(20::numeric, GREATEST(0::numeric,
+              SUM(normalized_score * evaluation_coefficient) FILTER (WHERE evaluation_type = 'scheduled')
+                / NULLIF(SUM(evaluation_coefficient) FILTER (WHERE evaluation_type = 'scheduled'), 0)
+              + COALESCE(SUM(
+                  CASE
+                    WHEN evaluation_type = 'spontaneous' AND label LIKE 'Note spontanée -%' THEN -raw_score
+                    WHEN evaluation_type = 'spontaneous' THEN raw_score
+                    ELSE 0
+                  END
+                ), 0)
+            )) AS subject_average
+          FROM grade_rows
+          GROUP BY level_id, student_id, subject_id, subject_coefficient
+          HAVING COUNT(*) FILTER (WHERE evaluation_type = 'scheduled') > 0
+        ), student_averages AS (
+          SELECT
+            level_id,
+            student_id,
+            SUM(subject_average * subject_coefficient) / NULLIF(SUM(subject_coefficient), 0) AS general_average
+          FROM subject_averages
+          GROUP BY level_id, student_id
+        ), level_averages AS (
+          SELECT level_id,
+            COUNT(student_id)::int AS students_with_average,
+            ROUND(AVG(general_average)::numeric, 1)::float AS average_score,
+            COUNT(*) FILTER (WHERE general_average >= 10)::int AS performing_students,
+            COUNT(*) FILTER (WHERE general_average >= 8 AND general_average < 10)::int AS attention_students,
+            COUNT(*) FILTER (WHERE general_average < 8)::int AS critical_students
+          FROM student_averages
+          GROUP BY level_id
+        ), level_grade_counts AS (
+          SELECT level_id,
+            COUNT(*) FILTER (WHERE evaluation_type = 'scheduled')::int AS grade_count,
+            COUNT(*) FILTER (WHERE evaluation_type = 'scheduled' AND normalized_score >= 10)::int AS grades_at_least_ten
+          FROM grade_rows
+          GROUP BY level_id
         )
         SELECT lc.level_id::text, lc.level_name, lc.order_index, lc.class_count, lc.expected_subjects, lc.completed_subjects,
           COALESCE(la.students_with_average, 0)::int AS students_with_average,
           la.average_score,
           COALESCE(la.performing_students, 0)::int AS performing_students,
           COALESCE(la.attention_students, 0)::int AS attention_students,
-          COALESCE(la.critical_students, 0)::int AS critical_students
+          COALESCE(la.critical_students, 0)::int AS critical_students,
+          COALESCE(lgc.grade_count, 0)::int AS grade_count,
+          COALESCE(lgc.grades_at_least_ten, 0)::int AS grades_at_least_ten
         FROM level_completions lc
         LEFT JOIN level_averages la ON la.level_id = lc.level_id
+        LEFT JOIN level_grade_counts lgc ON lgc.level_id = lc.level_id
         ORDER BY lc.order_index, lc.level_name
       `),
       db.execute<{ student_absences: number; student_grades: number; student_payments: number; teacher_absences: number }>(sql`
@@ -117,6 +212,8 @@ export function buildDashboardRepository(db: TenantDb) {
         performingStudents: row.performing_students,
         attentionStudents: row.attention_students,
         criticalStudents: row.critical_students,
+        gradeCount: row.grade_count,
+        gradesAtLeastTen: row.grades_at_least_ten,
       })),
       risks: { studentAbsences: risks.student_absences, studentGrades: risks.student_grades, studentPayments: risks.student_payments, teacherAbsences: risks.teacher_absences },
     };

@@ -61,6 +61,21 @@ describe('enrollments integration', () => {
     expect(creation.body.enrollment).toMatchObject({ documentStatus: 'incomplete', missingMandatoryDocumentCount: 1 });
     expect(creation.body.missingMandatoryDocuments).toHaveLength(1);
 
+    const enrollmentList = await request()
+      .get(`/api/v1/enrollments?school_year_id=${academic.targetYearId}&page=1&limit=10`)
+      .set(headers);
+    expect(enrollmentList.status).toBe(200);
+    expect(enrollmentList.body.enrollments).toBeInstanceOf(Array);
+    expect(enrollmentList.body.enrollments).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: creation.body.enrollment.id }),
+    ]));
+    expect(enrollmentList.body.pagination).toEqual(expect.objectContaining({
+      page: 1,
+      limit: 10,
+      total: expect.any(Number),
+      totalPages: expect.any(Number),
+    }));
+
     const editableEnrollment = await request()
       .patch(`/api/v1/enrollments/${creation.body.enrollment.id}`)
       .set(headers)

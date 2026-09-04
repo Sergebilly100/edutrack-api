@@ -31,8 +31,10 @@ export type RequiredDocumentTypeRow = {
 export class EnrollmentsRepository {
   constructor(private readonly db: Db) {}
 
-  async listEnrollments(filters: { schoolYearId?: string; status?: EnrollmentStatus; type?: EnrollmentType }) {
-    const result = await this.db.execute<EnrollmentRow>(sql`
+  async listEnrollments(filters: { schoolYearId?: string; status?: EnrollmentStatus; type?: EnrollmentType; page: number; limit: number }) {
+    const offset = (filters.page - 1) * filters.limit;
+    const [result, totalResult] = await Promise.all([
+      this.db.execute<EnrollmentRow>(sql`
       SELECT e.*, c.name AS class_name, sy.label AS school_year_label,
              s.first_name AS student_first_name, s.last_name AS student_last_name,
              COUNT(rdt.id)::int AS required_document_count,
@@ -50,8 +52,18 @@ export class EnrollmentsRepository {
         AND (${filters.type ?? null}::text IS NULL OR e.type::text = ${filters.type ?? null})
       GROUP BY e.id, c.name, sy.label, s.first_name, s.last_name
       ORDER BY e.enrolled_at DESC
-    `);
-    return rows<EnrollmentRow>(result);
+      LIMIT ${filters.limit}
+      OFFSET ${offset}
+    `),
+      this.db.execute<{ total: string | number }>(sql`
+        SELECT COUNT(*) AS total
+        FROM enrollments e
+        WHERE (${filters.schoolYearId ?? null}::uuid IS NULL OR e.school_year_id = ${filters.schoolYearId ?? null}::uuid)
+          AND (${filters.status ?? null}::text IS NULL OR e.status::text = ${filters.status ?? null})
+          AND (${filters.type ?? null}::text IS NULL OR e.type::text = ${filters.type ?? null})
+      `),
+    ]);
+    return { rows: rows<EnrollmentRow>(result), total: Number(rows<{ total: string | number }>(totalResult)[0]?.total ?? 0) };
   }
 
   async findEnrollment(id: string) {

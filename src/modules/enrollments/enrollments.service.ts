@@ -85,8 +85,17 @@ export class EnrollmentsService {
     }
   ) {}
 
-  async listEnrollments(filters: { schoolYearId?: string; status?: EnrollmentStatus; type?: EnrollmentType }) {
-    return (await this.repository.listEnrollments(filters)).map(mapEnrollment);
+  async listEnrollments(filters: { schoolYearId?: string; status?: EnrollmentStatus; type?: EnrollmentType; page: number; limit: number }) {
+    const result = await this.repository.listEnrollments(filters);
+    return {
+      enrollments: result.rows.map(mapEnrollment),
+      pagination: {
+        page: filters.page,
+        limit: filters.limit,
+        total: result.total,
+        totalPages: Math.max(1, Math.ceil(result.total / filters.limit)),
+      },
+    };
   }
 
   async getEnrollment(id: string) {

@@ -50,6 +50,12 @@ type TeacherRow = {
   updated_at: Date | null;
   updated_by: string | null;
   updated_by_name: string | null;
+  teaching_assignments: Array<{
+    subjectId: string;
+    subjectName: string;
+    classId: string;
+    className: string;
+  }>;
 };
 
 type TotalRow = { total: string | number };
@@ -175,6 +181,18 @@ const TEACHER_SELECT = sql`
     t.updated_at,
     t.updated_by::text AS updated_by,
     upd.name           AS updated_by_name
+    , COALESCE((
+      SELECT json_agg(json_build_object(
+        'subjectId', tsa.subject_id::text,
+        'subjectName', sub.name,
+        'classId', tsa.class_id::text,
+        'className', c.name
+      ) ORDER BY sub.name, c.name)
+      FROM teacher_subject_assignments tsa
+      INNER JOIN subjects sub ON sub.id = tsa.subject_id
+      INNER JOIN classes c ON c.id = tsa.class_id
+      WHERE tsa.teacher_id = t.id
+    ), '[]'::json) AS teaching_assignments
   FROM teachers t
   INNER JOIN users u ON u.id = t.user_id
   LEFT JOIN users upd ON upd.id = t.updated_by
@@ -192,6 +210,17 @@ export class TeachersRepository {
     `);
     const [row] = getRows<CountRow>(result);
     return toTotal({ total: row?.count ?? 0 });
+  }
+
+  async countValidTeachingAssignments(assignments: Array<{ subject_id: string; class_id: string }>): Promise<number> {
+    if (assignments.length === 0) return 0;
+    const result = await this.db.execute(sql`
+      SELECT COUNT(*)::int AS count
+      FROM (VALUES ${sql.join(assignments.map((assignment) => sql`(${assignment.subject_id}::uuid, ${assignment.class_id}::uuid)`), sql`, `)}) AS input(subject_id, class_id)
+      INNER JOIN subjects sub ON sub.id = input.subject_id
+      INNER JOIN classes c ON c.id = input.class_id AND c.is_active = true AND c.level_id = sub.level_id
+    `);
+    return Number(getRows<CountRow>(result)[0]?.count ?? 0);
   }
 
   async listSubjectCatalog(): Promise<string[]> {
@@ -370,6 +399,17 @@ export class TeachersRepository {
 
       const created = getRows<IdRow>(teacherResult)[0];
       if (!created) throw new Error('Failed to create teacher');
+      if (input.teaching_assignments?.length) {
+        await tx.execute(sql`
+          INSERT INTO teacher_subject_assignments (teacher_id, subject_id, class_id)
+          VALUES ${sql.join(input.teaching_assignments.map((assignment) => sql`(
+            ${created.id}::uuid,
+            ${assignment.subject_id}::uuid,
+            ${assignment.class_id}::uuid
+          )`), sql`, `)}
+          ON CONFLICT (teacher_id, subject_id, class_id) DO NOTHING
+        `);
+      }
       return created;
     });
 
@@ -464,6 +504,24 @@ export class TeachersRepository {
         updated_by     = ${updatedBySql}
       WHERE id = ${teacherId}
     `);
+
+    if (input.teaching_assignments !== undefined) {
+      const teachingAssignments = input.teaching_assignments;
+      await this.db.transaction(async (tx) => {
+        await tx.execute(sql`DELETE FROM teacher_subject_assignments WHERE teacher_id = ${teacherId}::uuid`);
+        if (teachingAssignments.length) {
+          await tx.execute(sql`
+            INSERT INTO teacher_subject_assignments (teacher_id, subject_id, class_id)
+            VALUES ${sql.join(teachingAssignments.map((assignment) => sql`(
+              ${teacherId}::uuid,
+              ${assignment.subject_id}::uuid,
+              ${assignment.class_id}::uuid
+            )`), sql`, `)}
+            ON CONFLICT (teacher_id, subject_id, class_id) DO NOTHING
+          `);
+        }
+      });
+    }
 
     return this.getTeacherById(teacherId);
   }

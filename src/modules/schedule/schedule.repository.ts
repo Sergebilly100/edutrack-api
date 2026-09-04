@@ -105,6 +105,7 @@ type TeacherCatalogRow = {
   username: string;
   is_blocked?: boolean;
   subjects: string[];
+  teaching_assignments: Array<{ subjectId: string; subjectName: string; classId: string; className: string }>;
 };
 
 export type TeacherCatalogItem = {
@@ -113,6 +114,7 @@ export type TeacherCatalogItem = {
   username: string;
   isBlocked?: boolean;
   subjects: string[];
+  teachingAssignments: Array<{ subjectId: string; subjectName: string; classId: string; className: string }>;
 };
 
 type ClassCatalogRow = {
@@ -226,6 +228,7 @@ const mapTeacherCatalogItem = (row: TeacherCatalogRow): TeacherCatalogItem => ({
   username: row.username,
   isBlocked: row.is_blocked,
   subjects: row.subjects ?? [],
+  teachingAssignments: row.teaching_assignments ?? [],
 });
 
 const mapClassCatalogItem = (row: ClassCatalogRow): ClassCatalogItem => ({
@@ -694,7 +697,20 @@ export const listTeachersCatalog = async (
   db: QueryExecutor
 ): Promise<TeacherCatalogItem[]> => {
   const result = await db.execute<TeacherCatalogRow>(sql`
-    SELECT t.id, u.name, t.username, t.is_blocked, t.subjects
+    SELECT
+      t.id, u.name, t.username, t.is_blocked, t.subjects,
+      COALESCE((
+        SELECT json_agg(json_build_object(
+          'subjectId', tsa.subject_id::text,
+          'subjectName', sub.name,
+          'classId', tsa.class_id::text,
+          'className', c.name
+        ) ORDER BY sub.name, c.name)
+        FROM teacher_subject_assignments tsa
+        INNER JOIN subjects sub ON sub.id = tsa.subject_id
+        INNER JOIN classes c ON c.id = tsa.class_id
+        WHERE tsa.teacher_id = t.id
+      ), '[]'::json) AS teaching_assignments
     FROM teachers t
     INNER JOIN users u ON u.id = t.user_id
     WHERE u.is_active = true

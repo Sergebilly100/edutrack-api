@@ -19,6 +19,10 @@ export const teachersListQuerySchema = z.object({
 });
 
 const teacherTypeSchema = z.enum(['vacataire', 'permanent']);
+const teachingAssignmentSchema = z.object({
+  subject_id: z.string().uuid(),
+  class_id: z.string().uuid(),
+});
 
 const optionalPhoneSchema = z.preprocess(
   (value) => (typeof value === 'string' && value.trim() === '' ? null : value),
@@ -52,6 +56,7 @@ const fullPayloadSchema = z
     email: optionalEmailSchema,
     type: teacherTypeSchema,
     subjects: z.array(z.string().trim().min(1).max(100)).default([]),
+    teaching_assignments: z.array(teachingAssignmentSchema).optional(),
     hourly_rate: z.number().int().min(0).nullable().optional().default(null),
     monthly_salary: z.number().int().min(0).nullable().optional().default(null),
   })
@@ -103,6 +108,7 @@ export const updateTeacherBodySchema = z
     email: updateEmailSchema,
     type: teacherTypeSchema.optional(),
     subjects: z.array(z.string().trim().min(1).max(100)).optional(),
+    teaching_assignments: z.array(teachingAssignmentSchema).optional(),
     hourly_rate: z.number().int().min(0).nullable().optional(),
     monthly_salary: z.number().int().min(0).nullable().optional(),
     // Champ is_active : désactive l'accès au compte (users.is_active) - distinct du blocage

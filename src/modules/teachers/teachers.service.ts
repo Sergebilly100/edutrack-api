@@ -95,6 +95,12 @@ type TeacherDTO = {
   updated_at: Date | null;
   updated_by: string | null;
   updated_by_name: string | null;
+  teaching_assignments: Array<{
+    subjectId: string;
+    subjectName: string;
+    classId: string;
+    className: string;
+  }>;
 };
 
 const toDTO = (row: {
@@ -117,6 +123,12 @@ const toDTO = (row: {
   updated_at?: Date | null;
   updated_by?: string | null;
   updated_by_name?: string | null;
+  teaching_assignments?: Array<{
+    subjectId: string;
+    subjectName: string;
+    classId: string;
+    className: string;
+  }>;
 }): TeacherDTO => ({
   id: row.id,
   name: row.name,
@@ -137,10 +149,26 @@ const toDTO = (row: {
   updated_at: row.updated_at ?? null,
   updated_by: row.updated_by ?? null,
   updated_by_name: row.updated_by_name ?? null,
+  teaching_assignments: row.teaching_assignments ?? [],
 });
 
 export class TeachersService {
   constructor(private readonly repository: TeachersRepository) {}
+
+  private async assertTeachingAssignments(assignments: Array<{ subject_id: string; class_id: string }> | undefined): Promise<void> {
+    if (assignments === undefined) return;
+    const uniqueAssignments = [...new Map(
+      assignments.map((assignment) => [`${assignment.subject_id}:${assignment.class_id}`, assignment])
+    ).values()];
+    const validCount = await this.repository.countValidTeachingAssignments(uniqueAssignments);
+    if (validCount !== uniqueAssignments.length) {
+      throw new TeachersModuleError(
+        'Chaque matière doit correspondre au niveau de la classe sélectionnée',
+        400,
+        'INVALID_TEACHING_ASSIGNMENT'
+      );
+    }
+  }
 
   async listTeachers(query: TeachersListQuery): Promise<{
     data: TeacherDTO[];
@@ -174,6 +202,8 @@ export class TeachersService {
         'TEACHER_CONTACT_REQUIRED'
       );
     }
+
+    await this.assertTeachingAssignments(input.teaching_assignments);
 
     const [currentCount, maxUsers] = await Promise.all([
       this.repository.countActiveUsers(),
@@ -214,6 +244,8 @@ export class TeachersService {
     if (!current) {
       throw new TeachersModuleError('Teacher not found', 404, 'TEACHER_NOT_FOUND');
     }
+
+    await this.assertTeachingAssignments(input.teaching_assignments);
 
     const nextType = input.type ?? current.type;
     const nextHourlyRate =

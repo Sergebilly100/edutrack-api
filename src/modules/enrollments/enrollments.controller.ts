@@ -43,11 +43,13 @@ export default async function enrollmentsController(
   app.get('/api/v1/enrollments', { preHandler: requirePermission('enrollments.view') }, async (request, reply) => {
     try {
       const query = enrollmentListQuerySchema.parse(request.query ?? {});
-      return reply.send({ enrollments: await withService(request, (service) => service.listEnrollments({
+      return reply.send(await withService(request, (service) => service.listEnrollments({
         ...(query.school_year_id ? { schoolYearId: query.school_year_id } : {}),
         ...(query.status ? { status: query.status } : {}),
         ...(query.type ? { type: query.type } : {}),
-      })) });
+        page: query.page,
+        limit: query.limit,
+      })));
     } catch (error) { return handleError(request, reply, error); }
   });
 

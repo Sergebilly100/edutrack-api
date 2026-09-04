@@ -1487,26 +1487,35 @@ export class AttendanceRepository {
           INTERVAL '1 day'
         )::date AS date
       ),
-      active_period AS (
-        SELECT id, valid_from, valid_to
-        FROM schedule_periods
-        WHERE is_active = true
-        ORDER BY created_at DESC
-        LIMIT 1
+      active_period_by_day AS (
+        SELECT d.date, sp.id AS period_id
+        FROM dates d
+        LEFT JOIN LATERAL (
+          SELECT id
+          FROM schedule_periods
+          WHERE is_active = true
+            AND d.date BETWEEN valid_from AND valid_to
+          ORDER BY created_at DESC
+          LIMIT 1
+        ) sp ON true
       ),
       schedules_by_date AS (
         SELECT
           d.date,
           s.id AS schedule_id
-        FROM dates d
-        LEFT JOIN active_period ap
-          ON d.date BETWEEN ap.valid_from AND ap.valid_to
+        FROM active_period_by_day d
         LEFT JOIN schedules s
-         ON s.schedule_period_id = ap.id
+         ON s.schedule_period_id = d.period_id
          AND s.day_of_week = EXTRACT(ISODOW FROM d.date)::int
          AND s.is_active = true
          AND (s.start_date IS NULL OR s.start_date <= d.date)
          AND (s.end_date IS NULL OR s.end_date > d.date)
+         AND NOT EXISTS (
+           SELECT 1
+           FROM schedule_exceptions se
+           WHERE se.schedule_id = s.id
+             AND se.exception_date = d.date
+         )
       )
       SELECT
         sbd.date::text AS date,
@@ -1519,7 +1528,7 @@ export class AttendanceRepository {
           0
         )::int AS absent_count,
         COALESCE(
-          SUM(CASE WHEN at.id IS NULL THEN 1 ELSE 0 END),
+          SUM(CASE WHEN sbd.schedule_id IS NOT NULL AND at.id IS NULL THEN 1 ELSE 0 END),
           0
         )::int AS not_checked_count,
         COUNT(sbd.schedule_id)::int AS total_count,
