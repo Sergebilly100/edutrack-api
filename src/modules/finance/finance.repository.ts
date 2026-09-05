@@ -42,6 +42,12 @@ export type CashJournalRow = PaymentRow & {
   class_name: string;
 };
 
+export type PaymentHistoryRow = CashJournalRow & {
+  level_id: string;
+  level_name: string;
+  financial_status: 'up_to_date' | 'late' | 'waived' | null;
+};
+
 export type CashJournalSummary = {
   total: string | number;
   cash_total: string | number;
@@ -388,6 +394,73 @@ export class FinanceRepository {
       bank_transfer_total: 0,
       grand_total: 0,
     };
+  }
+
+  async listPaymentHistoryPage(input: {
+    schoolYearId: string;
+    from?: string;
+    to?: string;
+    levelId?: string;
+    classId?: string;
+    status?: 'up_to_date' | 'late' | 'waived';
+    limit: number;
+    offset: number;
+  }): Promise<PaymentHistoryRow[]> {
+    const result = await this.db.execute<PaymentHistoryRow>(sql`
+      SELECT p.*, p.id::text, p.student_id::text, p.school_year_id::text,
+             p.confirmed_by_user_id::text, p.cancelled_by_user_id::text,
+             p.payment_date::text,
+             s.matricule AS student_matricule,
+             concat_ws(' ', s.first_name, s.last_name) AS student_name,
+             c.id::text AS class_id, c.name AS class_name,
+             l.id::text AS level_id, l.name AS level_name,
+             sfs.status::text AS financial_status
+      FROM payments p
+      INNER JOIN students s ON s.id = p.student_id
+      LEFT JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = p.school_year_id
+      INNER JOIN classes c ON c.id = COALESCE(e.class_id, s.class_id)
+      INNER JOIN levels l ON l.id = c.level_id
+      LEFT JOIN student_financial_status sfs
+        ON sfs.student_id = p.student_id AND sfs.school_year_id = p.school_year_id
+      WHERE p.school_year_id = ${input.schoolYearId}::uuid
+        AND (${input.from ?? null}::date IS NULL OR p.payment_date >= ${input.from ?? null}::date)
+        AND (${input.to ?? null}::date IS NULL OR p.payment_date <= ${input.to ?? null}::date)
+        AND (${input.levelId ?? null}::uuid IS NULL OR l.id = ${input.levelId ?? null}::uuid)
+        AND (${input.classId ?? null}::uuid IS NULL OR c.id = ${input.classId ?? null}::uuid)
+        AND (${input.status ?? null}::text IS NULL OR sfs.status::text = ${input.status ?? null})
+        AND p.source <> 'migration_import'
+      ORDER BY p.payment_date DESC, p.created_at DESC, p.id DESC
+      LIMIT ${input.limit} OFFSET ${input.offset}
+    `);
+    return rows<PaymentHistoryRow>(result);
+  }
+
+  async countPaymentHistory(input: {
+    schoolYearId: string;
+    from?: string;
+    to?: string;
+    levelId?: string;
+    classId?: string;
+    status?: 'up_to_date' | 'late' | 'waived';
+  }): Promise<number> {
+    const result = await this.db.execute<{ total: string | number }>(sql`
+      SELECT COUNT(*)::int AS total
+      FROM payments p
+      INNER JOIN students s ON s.id = p.student_id
+      LEFT JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = p.school_year_id
+      INNER JOIN classes c ON c.id = COALESCE(e.class_id, s.class_id)
+      INNER JOIN levels l ON l.id = c.level_id
+      LEFT JOIN student_financial_status sfs
+        ON sfs.student_id = p.student_id AND sfs.school_year_id = p.school_year_id
+      WHERE p.school_year_id = ${input.schoolYearId}::uuid
+        AND (${input.from ?? null}::date IS NULL OR p.payment_date >= ${input.from ?? null}::date)
+        AND (${input.to ?? null}::date IS NULL OR p.payment_date <= ${input.to ?? null}::date)
+        AND (${input.levelId ?? null}::uuid IS NULL OR l.id = ${input.levelId ?? null}::uuid)
+        AND (${input.classId ?? null}::uuid IS NULL OR c.id = ${input.classId ?? null}::uuid)
+        AND (${input.status ?? null}::text IS NULL OR sfs.status::text = ${input.status ?? null})
+        AND p.source <> 'migration_import'
+    `);
+    return FinanceRepository.toNumber(rows<{ total: string | number }>(result)[0]?.total ?? 0);
   }
 
   async cancelPayment(id: string, actorUserId: string, reason: string): Promise<PaymentRow | null> {

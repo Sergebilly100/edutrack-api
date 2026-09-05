@@ -49,13 +49,14 @@ export class ClassDecisionsService {
     return status.activeSchoolYear;
   }
 
-  async listDecisions(today?: string) {
+  async listDecisions(filters: { levelId?: string; classId?: string } = {}, today?: string) {
     const schoolYear = await this.requireOpenReview(today);
-    const [decisions, levels] = await Promise.all([
-      this.repository.listForSchoolYear(schoolYear.id),
+    const [decisions, levels, classes] = await Promise.all([
+      this.repository.listForSchoolYear(schoolYear.id, filters),
       this.repository.listLevels(),
+      this.repository.listClasses(schoolYear.id),
     ]);
-    return { schoolYear, decisions, levels };
+    return { schoolYear, decisions, levels, classes };
   }
 
   async validateDecision(

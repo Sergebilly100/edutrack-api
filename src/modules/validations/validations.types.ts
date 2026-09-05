@@ -56,12 +56,12 @@ export type PendingValidationCount = {
 // ── Missing end-scan types ──────────────────────────────────────────────────
 
 export const missingEndScansQuerySchema = z.object({
-  month: z.string().regex(/^\d{4}-\d{2}$/),
+  month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
 });
 
 export const bulkWarnEndScansBodySchema = z.object({
   teacher_ids: z.array(z.string().uuid()).min(1).max(200),
-  month: z.string().regex(/^\d{4}-\d{2}$/),
+  month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
 });
 
 export const invalidateSessionBodySchema = z.object({

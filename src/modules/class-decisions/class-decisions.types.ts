@@ -7,6 +7,11 @@ export const classDecisionStudentParamsSchema = z.object({
   studentId: z.string().uuid(),
 });
 
+export const listClassDecisionsQuerySchema = z.object({
+  level_id: z.string().uuid().optional(),
+  class_id: z.string().uuid().optional(),
+});
+
 export const validateClassDecisionBodySchema = z
   .object({
     finalDecision: classDecisionSchema,
@@ -30,6 +35,7 @@ export type ClassDecisionItem = {
   studentMatricule: string | null;
   className: string;
   currentLevelName: string;
+  generalAverage: number | null;
   suggestedDecision: ClassDecisionValue | null;
   finalDecision: ClassDecisionValue | null;
   nextLevelId: string | null;
@@ -38,3 +44,4 @@ export type ClassDecisionItem = {
 };
 
 export type LevelOption = { id: string; name: string; orderIndex: number };
+export type ClassOption = { id: string; name: string; levelId: string };

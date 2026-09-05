@@ -33,6 +33,19 @@ export const cashJournalExportQuerySchema = cashJournalFiltersSchema.extend({
   format: z.enum(['xlsx', 'pdf']),
 });
 
+export const paymentHistoryQuerySchema = z.object({
+  school_year_id: uuidSchema,
+  from: z.iso.date().optional(),
+  to: z.iso.date().optional(),
+  level_id: uuidSchema.optional(),
+  class_id: uuidSchema.optional(),
+  status: z.enum(['up_to_date', 'late', 'waived']).optional(),
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+}).refine((value) => !value.from || !value.to || value.from <= value.to, {
+  message: 'from must be before or equal to to', path: ['from'],
+});
+
 export const financialAlertLogsQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),

@@ -423,6 +423,66 @@ describe('validations routes integration (real db)', () => {
   // ── GET /api/v1/validations/missing-end-scans ────────────────────────────
 
   describe('GET /api/v1/validations/missing-end-scans', () => {
+    it('retourne les scans éligibles de tous les mois sans filtre', async () => {
+      await insertCheckedInAttendance();
+      const headers = await getAuthHeaders('director');
+
+      const response = await request()
+        .get('/api/v1/validations/missing-end-scans')
+        .set(headers);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(expect.arrayContaining([
+        expect.objectContaining({ teacherId: getSeedContext().teacherId }),
+      ]));
+    });
+
+    it('n’expose pas un scan de fin avant la tolérance de 30 minutes', async () => {
+      const context = getSeedContext();
+      const [slot] = await queryTenant<{ id: string; end_time: string }>(
+        `SELECT ts.id::text, ts.end_time::text
+         FROM ${tenantTable('schedules')} s
+         INNER JOIN ${tenantTable('time_slots')} ts ON ts.id = s.time_slot_id
+         WHERE s.id = $1`,
+        [context.scheduleId]
+      );
+      if (!slot) throw new Error('[test] Missing schedule time slot');
+
+      let attendanceId: string | null = null;
+      try {
+        await queryTenant(
+          `UPDATE ${tenantTable('time_slots')}
+           SET end_time = ((NOW() AT TIME ZONE 'Africa/Abidjan') + INTERVAL '10 minutes')::time
+           WHERE id = $1`,
+          [slot.id]
+        );
+        const rows = await queryTenant<{ id: string }>(
+          `INSERT INTO ${tenantTable('attendances_teacher')} (
+             teacher_id, schedule_id, date, checked_in_at, validation_status
+           ) VALUES ($1, $2, CURRENT_DATE, NOW(), 'not_required')
+           RETURNING id`,
+          [context.teacherId, context.scheduleId]
+        );
+        attendanceId = rows[0]?.id ?? null;
+
+        const response = await request()
+          .get('/api/v1/validations/missing-end-scans')
+          .set(await getAuthHeaders('director'));
+
+        expect(response.status).toBe(200);
+        expect(response.body.flatMap((teacher: { sessions: Array<{ attendanceId: string }> }) => teacher.sessions))
+          .not.toEqual(expect.arrayContaining([expect.objectContaining({ attendanceId })]));
+      } finally {
+        await queryTenant(
+          `UPDATE ${tenantTable('time_slots')} SET end_time = $2::time WHERE id = $1`,
+          [slot.id, slot.end_time]
+        );
+        if (attendanceId) {
+          await queryTenant(`DELETE FROM ${tenantTable('attendances_teacher')} WHERE id = $1`, [attendanceId]);
+        }
+      }
+    });
+
     it('retourne un tableau pour un mois valide', async () => {
       const headers = await getAuthHeaders('director');
 

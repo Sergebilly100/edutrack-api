@@ -48,6 +48,15 @@ describe('class decisions integration', () => {
       [classes[0]!.id]
     );
     const studentId = students[0]!.id;
+    const periods = await queryTenant<{ id: string }>(`
+      INSERT INTO ${tenantTable('grading_periods')} (school_year_id, type, order_index, label, start_date, end_date)
+      VALUES ($1::uuid, 'trimester', 1, 'T3 revue', '2099-01-01', '2099-06-30')
+      RETURNING id::text
+    `, [schoolYearId]);
+    await queryTenant(`
+      INSERT INTO ${tenantTable('student_period_averages')} (student_id, subject_id, grading_period_id, average)
+      VALUES ($1::uuid, NULL, $2::uuid, 14.5)
+    `, [studentId, periods[0]!.id]);
 
     const initialStatus = await request()
       .get('/api/v1/class-decisions/review-status')
@@ -70,10 +79,20 @@ describe('class decisions integration', () => {
     expect(list.body.decisions).toEqual([
       expect.objectContaining({
         studentId,
+        generalAverage: 14.5,
         suggestedDecision: null,
         finalDecision: null,
       }),
     ]);
+    expect(list.body.classes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: classes[0]!.id, levelId }),
+    ]));
+
+    const filtered = await request()
+      .get(`/api/v1/class-decisions?level_id=${levelId}&class_id=${classes[0]!.id}`)
+      .set(headers);
+    expect(filtered.status).toBe(200);
+    expect(filtered.body.decisions).toHaveLength(1);
 
     const validation = await request()
       .patch(`/api/v1/class-decisions/${studentId}`)

@@ -758,10 +758,9 @@ export class ValidationsRepository {
 
   // ── Missing end-scan queries ────────────────────────────────────────────────
 
-  async listMissingEndScans(month: string): Promise<MissingEndScanTeacher[]> {
-
-    const monthStart = `${month}-01`;
-    const { monthEnd } = monthBoundsFromDate(monthStart);
+  async listMissingEndScans(month?: string): Promise<MissingEndScanTeacher[]> {
+    const monthStart = month ? `${month}-01` : null;
+    const monthEnd = monthStart ? monthBoundsFromDate(monthStart).monthEnd : null;
 
     type MissingRow = {
       teacher_id: string;
@@ -834,7 +833,7 @@ export class ValidationsRepository {
       INNER JOIN schedules s ON s.id = at.schedule_id
       INNER JOIN time_slots ts ON ts.id = s.time_slot_id
       LEFT JOIN rooms r ON r.id = s.room_id
-      WHERE at.date BETWEEN ${monthStart}::date AND ${monthEnd}::date
+      WHERE (${monthStart}::date IS NULL OR at.date BETWEEN ${monthStart}::date AND ${monthEnd}::date)
         AND at.checked_in_at IS NOT NULL
         AND at.checked_out_at IS NULL
         AND at.room_scan_end_at IS NULL
@@ -842,10 +841,7 @@ export class ValidationsRepository {
           SELECT 1 FROM schedule_exceptions se
           WHERE se.schedule_id = s.id AND se.exception_date = at.date
         )
-        AND (
-          at.date < CURRENT_DATE
-          OR (NOW() AT TIME ZONE 'Africa/Abidjan') > (at.date::timestamp + ts.end_time + INTERVAL '30 minutes')
-        )
+        AND (NOW() AT TIME ZONE 'Africa/Abidjan') >= (at.date::timestamp + ts.end_time + INTERVAL '30 minutes')
       ORDER BY u.name ASC, at.date DESC
     `);
 
@@ -1038,7 +1034,7 @@ export class ValidationsRepository {
    */
   async bulkApplyEndScanWarning(params: {
     teacherIds: string[];
-    month: string;
+    month?: string;
     reason: string;
     actorId: string;
   }): Promise<Array<{
@@ -1050,8 +1046,8 @@ export class ValidationsRepository {
     affected_count: number;
   }>> {
     if (params.teacherIds.length === 0) return [];
-    const monthStart = `${params.month}-01`;
-    const { monthEnd } = monthBoundsFromDate(monthStart);
+    const monthStart = params.month ? `${params.month}-01` : null;
+    const monthEnd = monthStart ? monthBoundsFromDate(monthStart).monthEnd : null;
     const idList = sql.join(params.teacherIds.map((id) => sql`${id}::uuid`), sql`, `);
 
     const result = await this.db.execute<{
@@ -1075,14 +1071,11 @@ export class ValidationsRepository {
           )
         )
         WHERE t.id IN (${idList})
-          AND at.date BETWEEN ${monthStart}::date AND ${monthEnd}::date
+          AND (${monthStart}::date IS NULL OR at.date BETWEEN ${monthStart}::date AND ${monthEnd}::date)
           AND at.checked_in_at IS NOT NULL
           AND at.checked_out_at IS NULL
           AND at.room_scan_end_at IS NULL
-          AND (
-            at.date < CURRENT_DATE
-            OR (NOW() AT TIME ZONE 'Africa/Abidjan') > (at.date::timestamp + ts.end_time + INTERVAL '30 minutes')
-          )
+          AND (NOW() AT TIME ZONE 'Africa/Abidjan') >= (at.date::timestamp + ts.end_time + INTERVAL '30 minutes')
           AND (at.end_scan_action IS NULL OR at.end_scan_action_cancelled_at IS NOT NULL)
       ),
       updated AS (

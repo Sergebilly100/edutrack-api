@@ -9,6 +9,7 @@ import {
 } from './class-decisions.service.js';
 import {
   classDecisionStudentParamsSchema,
+  listClassDecisionsQuerySchema,
   validateClassDecisionBodySchema,
 } from './class-decisions.types.js';
 
@@ -63,8 +64,12 @@ export default async function classDecisionsController(app: FastifyInstance): Pr
     async (request, reply) => {
       try {
         const claims = request.claims!;
+        const query = listClassDecisionsQuerySchema.parse(request.query ?? {});
         const result = await withTenantSchema(claims.schemaName, (tenantDb) =>
-          buildClassDecisionsService(tenantDb).listDecisions()
+          buildClassDecisionsService(tenantDb).listDecisions({
+            levelId: query.level_id,
+            classId: query.class_id,
+          })
         );
         return reply.send(result);
       } catch (error) {

@@ -34,6 +34,7 @@ import {
   upsertTuitionPlanBodySchema,
   cashJournalQuerySchema,
   cashJournalExportQuerySchema,
+  paymentHistoryQuerySchema,
   financialAlertLogsQuerySchema,
   paymentMappingProfileBodySchema,
 } from './finance.types.js';
@@ -158,6 +159,22 @@ export default async function financeController(
       return reply.send({ journal: await withService(request, (service) => service.getPaginatedCashJournal({
         schoolYearId: query.school_year_id, from: query.from, to: query.to,
         classId: query.class_id, method: query.method, page: query.page, limit: query.limit,
+      })) });
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.get('/api/v1/finance/payment-history', { preHandler: requirePermission('payments.view') }, async (request, reply) => {
+    try {
+      const query = paymentHistoryQuerySchema.parse(request.query ?? {});
+      return reply.send({ history: await withService(request, (service) => service.getPaginatedPaymentHistory({
+        schoolYearId: query.school_year_id,
+        from: query.from,
+        to: query.to,
+        levelId: query.level_id,
+        classId: query.class_id,
+        status: query.status,
+        page: query.page,
+        limit: query.limit,
       })) });
     } catch (error) { return handleError(request, reply, error); }
   });
@@ -301,6 +318,20 @@ export default async function financeController(
           ]).then(([school, classes, levels, collections, paymentMethods, upcomingInstallments, recentPayments]) => ({ school, classes, levels, collections, paymentMethods, upcomingInstallments, recentPayments }))
         );
         return reply.send(result);
+      } catch (error) { return handleError(request, reply, error); }
+    }
+  );
+
+  app.post(
+    '/api/v1/finance/recalculate',
+    { preHandler: requirePermission('payments.view') },
+    async (request, reply) => {
+      try {
+        const query = financialSummaryQuerySchema.parse(request.query ?? {});
+        const result = await withService(request, (service) =>
+          service.recalculateFinancialCache(query.school_year_id)
+        );
+        return reply.send({ result });
       } catch (error) { return handleError(request, reply, error); }
     }
   );

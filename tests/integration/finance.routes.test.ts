@@ -251,6 +251,36 @@ describe('finance routes integration', () => {
     });
   });
 
+  it('recalcule manuellement la vue financière et filtre l’historique paginé', async () => {
+    const context = await createFinanceContext(`manual-recalc-${Date.now()}`);
+    const payment = await request().post('/api/v1/payments').set(context.headers).send({
+      studentId: context.studentId,
+      schoolYearId: context.schoolYearId,
+      amount: 20_000,
+      method: 'cash',
+    });
+    expect(payment.status).toBe(201);
+
+    const recalculation = await request()
+      .post(`/api/v1/finance/recalculate?school_year_id=${context.schoolYearId}`)
+      .set(context.headers);
+    expect(recalculation.status, JSON.stringify(recalculation.body)).toBe(200);
+    expect(recalculation.body.result).toMatchObject({ schoolYearId: context.schoolYearId, studentCount: 1 });
+
+    const today = isoDate(0);
+    const history = await request()
+      .get(`/api/v1/finance/payment-history?school_year_id=${context.schoolYearId}&from=${today}&to=${today}&level_id=${context.levelId}&class_id=${context.classId}&status=late&page=1&limit=20`)
+      .set(context.headers);
+    expect(history.status, JSON.stringify(history.body)).toBe(200);
+    expect(history.body.history.entries).toEqual([expect.objectContaining({
+      studentId: context.studentId,
+      levelId: context.levelId,
+      classId: context.classId,
+      financialStatus: 'late',
+    })]);
+    expect(history.body.history.pagination).toEqual({ page: 1, limit: 20, total: 1, totalPages: 1 });
+  });
+
   it('génère le journal filtré et l’état de compte avec solde progressif', async () => {
     const context = await createFinanceContext(`journal-${Date.now()}`);
     for (const [amount, method] of [[20_000, 'cash'], [15_000, 'mobile_money']] as const) {

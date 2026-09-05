@@ -7,6 +7,7 @@ import type {
   ClassDecisionValue,
   EndOfYearSchoolYear,
   LevelOption,
+  ClassOption,
 } from './class-decisions.types.js';
 
 type ClassDecisionQueryExecutor = NodePgDatabase<Record<string, unknown>>;
@@ -25,6 +26,7 @@ type DecisionRow = {
   student_matricule: string | null;
   class_name: string;
   current_level_name: string;
+  general_average: string | number | null;
   suggested_decision: ClassDecisionValue | null;
   final_decision: ClassDecisionValue | null;
   next_level_id: string | null;
@@ -50,6 +52,7 @@ const mapDecision = (row: DecisionRow): ClassDecisionItem => ({
   studentMatricule: row.student_matricule,
   className: row.class_name,
   currentLevelName: row.current_level_name,
+  generalAverage: row.general_average === null ? null : Number(row.general_average),
   suggestedDecision: row.suggested_decision,
   finalDecision: row.final_decision,
   nextLevelId: row.next_level_id,
@@ -71,7 +74,7 @@ export class ClassDecisionsRepository {
     return row ? mapSchoolYear(row) : null;
   }
 
-  async listForSchoolYear(schoolYearId: string): Promise<ClassDecisionItem[]> {
+  async listForSchoolYear(schoolYearId: string, filters: { levelId?: string; classId?: string } = {}): Promise<ClassDecisionItem[]> {
     const result = await this.db.execute<DecisionRow>(sql`
       SELECT
         s.id AS student_id,
@@ -80,6 +83,7 @@ export class ClassDecisionsRepository {
         s.matricule AS student_matricule,
         c.name AS class_name,
         current_level.name AS current_level_name,
+        period_average.average::text AS general_average,
         cd.suggested_decision,
         cd.final_decision,
         cd.next_level_id,
@@ -92,9 +96,21 @@ export class ClassDecisionsRepository {
         ON cd.student_id = s.id
        AND cd.school_year_id = c.school_year_id
       LEFT JOIN levels next_level ON next_level.id = cd.next_level_id
+      LEFT JOIN LATERAL (
+        SELECT spa.average
+        FROM student_period_averages spa
+        INNER JOIN grading_periods gp ON gp.id = spa.grading_period_id
+        WHERE spa.student_id = s.id
+          AND spa.subject_id IS NULL
+          AND gp.school_year_id = ${schoolYearId}::uuid
+        ORDER BY gp.order_index DESC, spa.computed_at DESC
+        LIMIT 1
+      ) period_average ON true
       WHERE s.is_active = true
         AND c.is_active = true
         AND c.school_year_id = ${schoolYearId}::uuid
+        AND (${filters.levelId ?? null}::uuid IS NULL OR c.level_id = ${filters.levelId ?? null}::uuid)
+        AND (${filters.classId ?? null}::uuid IS NULL OR c.id = ${filters.classId ?? null}::uuid)
       ORDER BY c.name ASC, s.last_name ASC, s.first_name ASC
     `);
     return getRows(result).map(mapDecision);
@@ -107,6 +123,16 @@ export class ClassDecisionsRepository {
       ORDER BY order_index ASC, name ASC
     `);
     return getRows(result).map((row) => ({ id: row.id, name: row.name, orderIndex: row.order_index }));
+  }
+
+  async listClasses(schoolYearId: string): Promise<ClassOption[]> {
+    const result = await this.db.execute<{ id: string; name: string; level_id: string }>(sql`
+      SELECT id::text, name, level_id::text
+      FROM classes
+      WHERE school_year_id = ${schoolYearId}::uuid AND is_active = true
+      ORDER BY name ASC
+    `);
+    return getRows(result).map((row) => ({ id: row.id, name: row.name, levelId: row.level_id }));
   }
 
   async levelExists(levelId: string): Promise<boolean> {
@@ -166,6 +192,7 @@ export class ClassDecisionsRepository {
         s.matricule AS student_matricule,
         c.name AS class_name,
         current_level.name AS current_level_name,
+        period_average.average::text AS general_average,
         cd.suggested_decision,
         cd.final_decision,
         cd.next_level_id,
@@ -176,6 +203,16 @@ export class ClassDecisionsRepository {
       INNER JOIN classes c ON c.id = s.class_id
       INNER JOIN levels current_level ON current_level.id = c.level_id
       LEFT JOIN levels next_level ON next_level.id = cd.next_level_id
+      LEFT JOIN LATERAL (
+        SELECT spa.average
+        FROM student_period_averages spa
+        INNER JOIN grading_periods gp ON gp.id = spa.grading_period_id
+        WHERE spa.student_id = s.id
+          AND spa.subject_id IS NULL
+          AND gp.school_year_id = ${input.schoolYearId}::uuid
+        ORDER BY gp.order_index DESC, spa.computed_at DESC
+        LIMIT 1
+      ) period_average ON true
     `);
     const row = getRows(result)[0];
     return row ? mapDecision(row) : null;

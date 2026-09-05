@@ -193,7 +193,7 @@ export class ValidationsService {
 
   // ── Missing end-scan feature ──────────────────────────────────────────────
 
-  async listMissingEndScans(month: string): Promise<MissingEndScanTeacher[]> {
+  async listMissingEndScans(month?: string): Promise<MissingEndScanTeacher[]> {
     return this.repository.listMissingEndScans(month);
   }
 
@@ -206,7 +206,7 @@ export class ValidationsService {
    */
   async bulkWarnMissingEndScans(
     teacherIds: string[],
-    month: string,
+    month: string | undefined,
     context: ServiceContext
   ): Promise<{ teacherCount: number; warnedCount: number }> {
     const reason = "Tolérance globale par l'administration";
@@ -234,7 +234,7 @@ export class ValidationsService {
         teacherName: teacher.teacher_name,
         teacherPhone: teacher.phone,
         teacherEmail: teacher.email,
-        month,
+        month: month ?? 'tous les mois',
         missingCount: teacher.affected_count,
       });
     }

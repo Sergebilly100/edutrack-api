@@ -147,6 +147,11 @@ export class FinanceService {
     return cache.getStudentCachedStatus(studentId, schoolYearId);
   }
 
+  async recalculateFinancialCache(schoolYearId?: string) {
+    const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
+    return cache.recalcAll(schoolYearId);
+  }
+
   async listClassStudentStatuses(classId: string, schoolYearId?: string) {
     const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
     return cache.listClassStudentStatuses(classId, schoolYearId);
@@ -337,6 +342,39 @@ export class FinanceService {
         grandTotal: FinanceRepository.toNumber(summary.grand_total),
       },
       count: total,
+      pagination: { page, limit: filter.limit, total, totalPages },
+    };
+  }
+
+  async getPaginatedPaymentHistory(filter: {
+    schoolYearId: string;
+    from?: string;
+    to?: string;
+    levelId?: string;
+    classId?: string;
+    status?: 'up_to_date' | 'late' | 'waived';
+    page: number;
+    limit: number;
+  }) {
+    const total = await this.repository.countPaymentHistory(filter);
+    const totalPages = Math.max(1, Math.ceil(total / filter.limit));
+    const page = Math.min(filter.page, totalPages);
+    const rows = await this.repository.listPaymentHistoryPage({
+      ...filter,
+      limit: filter.limit,
+      offset: (page - 1) * filter.limit,
+    });
+    return {
+      entries: rows.map((row) => ({
+        ...mapPayment(row),
+        studentMatricule: row.student_matricule,
+        studentName: row.student_name,
+        classId: row.class_id,
+        className: row.class_name,
+        levelId: row.level_id,
+        levelName: row.level_name,
+        financialStatus: row.financial_status,
+      })),
       pagination: { page, limit: filter.limit, total, totalPages },
     };
   }
