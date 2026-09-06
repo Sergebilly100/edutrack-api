@@ -130,6 +130,105 @@ const createScheduleFixture = async (input: {
 };
 
 describe('schedule history protection integration', () => {
+  it('rattache automatiquement le professeur, la classe et la matière à la création du créneau', async () => {
+    const headers = await getAuthHeaders('director');
+    const context = getSeedContext();
+    const today = toIsoDate(new Date());
+    const effectiveFrom = findFirstWeekdayInRange(addDays(today, 1), addDays(today, 7));
+    expect(effectiveFrom).not.toBeNull();
+    const suffix = Date.now().toString();
+    const subjectName = `Testmatique ${suffix}`;
+
+    const base = await queryTenant<{ class_id: string; room_id: string }>(
+      `
+        SELECT schedule_row.class_id, schedule_row.room_id
+        FROM ${tenantTable('schedules')} schedule_row
+        WHERE schedule_row.id = $1
+        LIMIT 1
+      `,
+      [context.scheduleId]
+    );
+    const classId = base[0]?.class_id;
+    const roomId = base[0]?.room_id;
+    expect(classId).toBeTruthy();
+    expect(roomId).toBeTruthy();
+
+    const levels = await queryTenant<{ id: string }>(
+      `
+        INSERT INTO ${tenantTable('levels')} (name, order_index, is_exam_class)
+        VALUES ($1, 999, false)
+        RETURNING id
+      `,
+      [`Assignment level ${suffix}`]
+    );
+    const levelId = levels[0]?.id;
+    expect(levelId).toBeTruthy();
+    await queryTenant(
+      `UPDATE ${tenantTable('classes')} SET level_id = $1 WHERE id = $2`,
+      [levelId, classId]
+    );
+
+    const subjects = await queryTenant<{ id: string }>(
+      `
+        INSERT INTO ${tenantTable('subjects')} (level_id, name, coefficient)
+        VALUES ($1, $2, 1)
+        RETURNING id
+      `,
+      [levelId, subjectName]
+    );
+    const subjectId = subjects[0]?.id;
+    expect(subjectId).toBeTruthy();
+
+    const periods = await queryTenant<{ id: string }>(
+      `
+        INSERT INTO ${tenantTable('schedule_periods')} (name, valid_from, valid_to, is_active, created_by)
+        VALUES ($1, $2::date, $3::date, true, NULL)
+        RETURNING id
+      `,
+      [`Assignment period ${suffix}`, today, addDays(today, 14)]
+    );
+    const schedulePeriodId = periods[0]?.id;
+    expect(schedulePeriodId).toBeTruthy();
+
+    const timeSlots = await queryTenant<{ id: string }>(
+      `
+        INSERT INTO ${tenantTable('time_slots')} (label, start_time, end_time, sort_order)
+        VALUES ($1, '22:00:00'::time, '22:30:00'::time, 900)
+        RETURNING id
+      `,
+      [`assignment-slot-${suffix}`]
+    );
+    const timeSlotId = timeSlots[0]?.id;
+    expect(timeSlotId).toBeTruthy();
+
+    const response = await request()
+      .post('/api/v1/schedule')
+      .set(headers)
+      .send({
+        schedule_period_id: schedulePeriodId,
+        teacher_id: context.teacherId,
+        class_id: classId,
+        room_id: roomId,
+        time_slot_id: timeSlotId,
+        day_of_week: isoDayOfWeek(effectiveFrom!),
+        subject: subjectName,
+        effective_from: effectiveFrom,
+        recurrence: 'recurring',
+        is_active: true,
+      });
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
+
+    const assignments = await queryTenant<{ count: number }>(
+      `
+        SELECT COUNT(*)::int AS count
+        FROM ${tenantTable('teacher_subject_assignments')}
+        WHERE teacher_id = $1 AND class_id = $2 AND subject_id = $3
+      `,
+      [context.teacherId, classId, subjectId]
+    );
+    expect(assignments[0]?.count).toBe(1);
+  });
+
   it("DELETE avec historique passé ferme le créneau (end_date) sans casser l'historique", async () => {
     const headers = await getAuthHeaders('director');
     const context = getSeedContext();

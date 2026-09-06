@@ -784,31 +784,42 @@ export const createSchedule = async (
   input: ScheduleMutationInput
 ): Promise<{ id: string }> => {
   const result = await db.execute<{ id: string }>(sql`
-    INSERT INTO schedules (
-      schedule_period_id,
-      teacher_id,
-      class_id,
-      room_id,
-      time_slot_id,
-      day_of_week,
-      subject,
-      start_date,
-      end_date,
-      is_active
+    WITH created_schedule AS (
+      INSERT INTO schedules (
+        schedule_period_id,
+        teacher_id,
+        class_id,
+        room_id,
+        time_slot_id,
+        day_of_week,
+        subject,
+        start_date,
+        end_date,
+        is_active
+      )
+      VALUES (
+        ${input.schedulePeriodId},
+        ${input.teacherId},
+        ${input.classId},
+        ${input.roomId},
+        ${input.timeSlotId},
+        ${input.dayOfWeek},
+        ${input.subject},
+        ${input.startDate ?? null}::date,
+        ${input.endDate ?? null}::date,
+        ${input.isActive ?? true}
+      )
+      RETURNING id, teacher_id, class_id, subject, is_active
+    ), assigned_subject AS (
+      INSERT INTO teacher_subject_assignments (teacher_id, subject_id, class_id)
+      SELECT created.teacher_id, subject.id, created.class_id
+      FROM created_schedule created
+      INNER JOIN classes school_class ON school_class.id = created.class_id
+      INNER JOIN subjects subject ON subject.level_id = school_class.level_id AND subject.name = created.subject
+      WHERE created.is_active = true
+      ON CONFLICT (teacher_id, subject_id, class_id) DO NOTHING
     )
-    VALUES (
-      ${input.schedulePeriodId},
-      ${input.teacherId},
-      ${input.classId},
-      ${input.roomId},
-      ${input.timeSlotId},
-      ${input.dayOfWeek},
-      ${input.subject},
-      ${input.startDate ?? null}::date,
-      ${input.endDate ?? null}::date,
-      ${input.isActive ?? true}
-    )
-    RETURNING id
+    SELECT id FROM created_schedule
   `);
 
   const [row] = getRows<{ id: string }>(result);
@@ -825,23 +836,34 @@ export const updateSchedule = async (
   input: ScheduleMutationInput
 ): Promise<{ id: string } | null> => {
   const result = await db.execute<{ id: string }>(sql`
-    UPDATE schedules
-    SET
-      schedule_period_id = ${input.schedulePeriodId},
-      teacher_id = ${input.teacherId},
-      class_id = ${input.classId},
-      room_id = ${input.roomId},
-      time_slot_id = ${input.timeSlotId},
-      day_of_week = ${input.dayOfWeek},
-      subject = ${input.subject},
-      start_date = CASE
-        WHEN ${input.startDate !== undefined}
-          THEN ${input.startDate ?? null}::date
-        ELSE start_date
-      END,
-      is_active = ${input.isActive ?? true}
-    WHERE id = ${scheduleId}
-    RETURNING id
+    WITH updated_schedule AS (
+      UPDATE schedules
+      SET
+        schedule_period_id = ${input.schedulePeriodId},
+        teacher_id = ${input.teacherId},
+        class_id = ${input.classId},
+        room_id = ${input.roomId},
+        time_slot_id = ${input.timeSlotId},
+        day_of_week = ${input.dayOfWeek},
+        subject = ${input.subject},
+        start_date = CASE
+          WHEN ${input.startDate !== undefined}
+            THEN ${input.startDate ?? null}::date
+          ELSE start_date
+        END,
+        is_active = ${input.isActive ?? true}
+      WHERE id = ${scheduleId}
+      RETURNING id, teacher_id, class_id, subject, is_active
+    ), assigned_subject AS (
+      INSERT INTO teacher_subject_assignments (teacher_id, subject_id, class_id)
+      SELECT updated.teacher_id, subject.id, updated.class_id
+      FROM updated_schedule updated
+      INNER JOIN classes school_class ON school_class.id = updated.class_id
+      INNER JOIN subjects subject ON subject.level_id = school_class.level_id AND subject.name = updated.subject
+      WHERE updated.is_active = true
+      ON CONFLICT (teacher_id, subject_id, class_id) DO NOTHING
+    )
+    SELECT id FROM updated_schedule
   `);
 
   const [row] = getRows<{ id: string }>(result);

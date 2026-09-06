@@ -45,6 +45,26 @@ const assertPeriodOrder = (type: 'trimester' | 'semester', orderIndex: number): 
   }
 };
 
+const toSlotDateTime = (date: string, time: string): Date =>
+  new Date(`${date}T${time.slice(0, 5)}:00.000Z`);
+
+const dayOfWeekFromIsoDate = (date: string): number => {
+  const day = new Date(`${date}T00:00:00.000Z`).getUTCDay();
+  return day === 0 ? 7 : day;
+};
+
+export const isWithinSpontaneousGradeWindow = (
+  evaluationDate: string,
+  slotStartTime: string,
+  slotEndTime: string,
+  now = new Date()
+): boolean => {
+  const slotStart = toSlotDateTime(evaluationDate, slotStartTime);
+  const slotEnd = toSlotDateTime(evaluationDate, slotEndTime);
+  const deadline = new Date(slotEnd.getTime() + 24 * 60 * 60 * 1000);
+  return now >= slotStart && now <= deadline;
+};
+
 export class AcademicGradingService {
   constructor(private readonly repository: AcademicGradingRepository) {}
 
@@ -353,14 +373,20 @@ export class AcademicGradingService {
     if (!scope) {
       throw new AcademicGradingError('Class is outside the teacher scope', 403, 'EVALUATION_SCOPE_FORBIDDEN');
     }
-    const [lessonSlots, levelSubjects, evaluations, completion] = await Promise.all([
+    const [rawLessonSlots, levelSubjects, evaluations, completion] = await Promise.all([
       this.repository.listTeacherLessonSlotsForClass(teacherId, classId),
       scope.levelId ? this.repository.listSubjects(scope.levelId) : Promise.resolve([]),
       this.repository.listEvaluationsWithGrades(teacherId, classId, gradingPeriodId),
       this.repository.getCompletion(classId, gradingPeriodId),
     ]);
-    const scheduledSubjectKeys = new Set(lessonSlots.map((slot) => normalizeSubjectKey(slot.subjectName)));
-    const subjects = levelSubjects.filter((subject) => scheduledSubjectKeys.has(normalizeSubjectKey(subject.name)));
+    const lessonSlots = rawLessonSlots.map((slot) => ({
+      ...slot,
+      subjectId: levelSubjects.find(
+        (subject) => normalizeSubjectKey(subject.name) === normalizeSubjectKey(slot.subjectName)
+      )?.id ?? null,
+    }));
+    const subjectIdsForSlots = new Set(lessonSlots.flatMap((slot) => slot.subjectId ? [slot.subjectId] : []));
+    const subjects = levelSubjects.filter((subject) => subjectIdsForSlots.has(subject.id));
     const subjectIds = new Set(subjects.map((subject) => subject.id));
     return {
       lessonSlots,
@@ -424,6 +450,20 @@ export class AcademicGradingService {
 
   async createSpontaneousGrade(input: SpontaneousGradeInput, userId: string) {
     const teacherId = await this.teacherIdForUser(userId);
+    const slot = await this.repository.getLessonSlotScope(input.lessonSlotId);
+    if (!slot || slot.teacherId !== teacherId || slot.classId !== input.classId) {
+      throw new AcademicGradingError('Lesson slot is outside the teacher scope', 403, 'EVALUATION_SCOPE_FORBIDDEN');
+    }
+    if (
+      dayOfWeekFromIsoDate(input.evaluationDate) !== slot.dayOfWeek ||
+      !isWithinSpontaneousGradeWindow(input.evaluationDate, slot.startTime, slot.endTime)
+    ) {
+      throw new AcademicGradingError(
+        'La note spontanée est disponible pendant le cours et pendant les 24 heures qui suivent',
+        409,
+        'SPONTANEOUS_GRADE_WINDOW_CLOSED'
+      );
+    }
     await this.assertEvaluationScope({
       lessonSlotId: input.lessonSlotId,
       subjectId: input.subjectId,
@@ -432,6 +472,7 @@ export class AcademicGradingService {
       type: 'spontaneous',
       coefficient: 1,
       label: 'Participation spontanée',
+      evaluationDate: input.evaluationDate,
     }, teacherId);
     if (!(await this.repository.studentBelongsToClass(input.studentId, input.classId))) {
       throw new AcademicGradingError('Student is not enrolled in the lesson class', 400, 'STUDENT_CLASS_MISMATCH');

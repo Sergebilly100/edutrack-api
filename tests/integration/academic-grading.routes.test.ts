@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   getAuthHeaders,
@@ -61,9 +61,12 @@ describe('academic grading integration', () => {
     const gradingPeriodId = periodResponse.body.gradingPeriod.id as string;
 
     const seededSchedule = await queryTenant<{
-      schedule_period_id: string; room_id: string; time_slot_id: string; day_of_week: number;
+      schedule_period_id: string; room_id: string; time_slot_id: string; day_of_week: number; start_time: string;
     }>(`
-      SELECT schedule_period_id, room_id, time_slot_id, day_of_week FROM schedules WHERE id = $1
+      SELECT s.schedule_period_id, s.room_id, s.time_slot_id, s.day_of_week, ts.start_time::text
+      FROM schedules s
+      INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+      WHERE s.id = $1
     `, [context.scheduleId]);
     const alternateSlot = await queryTenant<{ id: string }>(`
       SELECT id FROM time_slots WHERE id <> $1 ORDER BY sort_order LIMIT 1
@@ -170,14 +173,23 @@ describe('academic grading integration', () => {
       expect.objectContaining({ subjectId: frenchResponse.body.subject.id, status: 'in_progress' }),
     ]));
 
+    vi.useFakeTimers();
+    const spontaneousDate = new Date(Date.UTC(2088, 9, 1));
+    spontaneousDate.setUTCDate(
+      spontaneousDate.getUTCDate() + ((seededSchedule[0]!.day_of_week - spontaneousDate.getUTCDay() + 7) % 7)
+    );
+    const spontaneousDateIso = spontaneousDate.toISOString().slice(0, 10);
+    vi.setSystemTime(new Date(`${spontaneousDateIso}T${seededSchedule[0]!.start_time.slice(0, 5)}:00.000Z`));
+    const spontaneousTeacherHeaders = await getAuthHeaders('teacher');
     const spontaneous = await request()
       .post('/api/v1/evaluations/spontaneous')
-      .set(teacherHeaders)
+      .set(spontaneousTeacherHeaders)
       .send({
         lessonSlotId: context.scheduleId,
         subjectId: mathResponse.body.subject.id,
         classId,
         gradingPeriodId,
+        evaluationDate: spontaneousDateIso,
         studentId,
         adjustment: -2,
         comment: 'Interrompt régulièrement le cours',
@@ -190,17 +202,19 @@ describe('academic grading integration', () => {
 
     const missingJustification = await request()
       .post('/api/v1/evaluations/spontaneous')
-      .set(teacherHeaders)
+      .set(spontaneousTeacherHeaders)
       .send({
         lessonSlotId: context.scheduleId,
         subjectId: mathResponse.body.subject.id,
         classId,
         gradingPeriodId,
+        evaluationDate: spontaneousDateIso,
         studentId,
         adjustment: 2,
         comment: '',
       });
     expect(missingJustification.status).toBe(400);
+    vi.useRealTimers();
 
     const calculationStarted = await request().put('/api/v1/class-subject-completion').set(teacherHeaders).send({
       classId,
@@ -227,5 +241,18 @@ describe('academic grading integration', () => {
     const validatedSubjectEdit = await saveGrade(math1, 14);
     expect(validatedSubjectEdit.status).toBe(409);
     expect(validatedSubjectEdit.body.code).toBe('SUBJECT_AVERAGES_VALIDATED');
+
+    await queryTenant(`
+      UPDATE schedules
+      SET end_date = '2000-01-01'
+      WHERE teacher_id = $1 AND class_id = $2
+    `, [context.teacherId, classId]);
+    const contextWithoutExpiredSchedules = await request()
+      .get('/api/v1/academic/teacher-context')
+      .set(teacherHeaders);
+    expect(contextWithoutExpiredSchedules.status).toBe(200);
+    expect(contextWithoutExpiredSchedules.body.classes).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: classId }),
+    ]));
   });
 });

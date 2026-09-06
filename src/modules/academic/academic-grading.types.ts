@@ -190,6 +190,7 @@ export const spontaneousGradeBodySchema = z.object({
   subjectId: z.string().uuid(),
   classId: z.string().uuid(),
   gradingPeriodId: z.string().uuid(),
+  evaluationDate: isoDateSchema,
   studentId: z.string().uuid(),
   adjustment: z.number().finite().min(-20).max(20).refine((value) => value !== 0, {
     message: 'L’ajustement doit être différent de zéro',

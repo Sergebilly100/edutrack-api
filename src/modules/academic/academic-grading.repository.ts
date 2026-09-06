@@ -317,7 +317,14 @@ export class AcademicGradingRepository {
       INNER JOIN classes c ON c.id = sch.class_id AND c.is_active = true
       INNER JOIN levels l ON l.id = c.level_id
       INNER JOIN school_years sy ON sy.id = c.school_year_id
-      WHERE sch.teacher_id = ${teacherId}::uuid AND sch.is_active = true
+      INNER JOIN schedule_periods sp ON sp.id = sch.schedule_period_id
+      WHERE sch.teacher_id = ${teacherId}::uuid
+        AND sch.is_active = true
+        AND sp.is_active = true
+        AND sp.valid_from <= CURRENT_DATE
+        AND sp.valid_to >= CURRENT_DATE
+        AND (sch.start_date IS NULL OR sch.start_date <= CURRENT_DATE)
+        AND (sch.end_date IS NULL OR sch.end_date > CURRENT_DATE)
       ORDER BY sy.label DESC, l.name, c.name
     `);
     return rows(result).map((row) => ({
@@ -340,8 +347,14 @@ export class AcademicGradingRepository {
         SELECT 1
         FROM schedules sch
         INNER JOIN classes c ON c.id = sch.class_id
+        INNER JOIN schedule_periods sp ON sp.id = sch.schedule_period_id
         WHERE sch.teacher_id = ${teacherId}::uuid
           AND sch.is_active = true
+          AND sp.is_active = true
+          AND sp.valid_from <= CURRENT_DATE
+          AND sp.valid_to >= CURRENT_DATE
+          AND (sch.start_date IS NULL OR sch.start_date <= CURRENT_DATE)
+          AND (sch.end_date IS NULL OR sch.end_date > CURRENT_DATE)
           AND c.school_year_id = gp.school_year_id
       )
       ORDER BY gp.start_date::text DESC, gp.order_index
@@ -355,20 +368,27 @@ export class AcademicGradingRepository {
     classId: string;
     classLevelId: string | null;
     classSchoolYearId: string | null;
+    dayOfWeek: number;
     subjectName: string;
+    startTime: string;
+    endTime: string;
   } | null> {
     const result = await this.db.execute<{
-      id: string; teacher_id: string; class_id: string; level_id: string | null;
-      school_year_id: string | null; subject: string;
+      id: string; teacher_id: string; class_id: string; day_of_week: number; level_id: string | null;
+      school_year_id: string | null; subject: string; start_time: string; end_time: string;
     }>(sql`
-      SELECT s.id, s.teacher_id, s.class_id, c.level_id, c.school_year_id, s.subject
-      FROM schedules s INNER JOIN classes c ON c.id = s.class_id
+      SELECT s.id, s.teacher_id, s.class_id, s.day_of_week, c.level_id, c.school_year_id, s.subject,
+             ts.start_time::text, ts.end_time::text
+      FROM schedules s
+      INNER JOIN classes c ON c.id = s.class_id
+      INNER JOIN time_slots ts ON ts.id = s.time_slot_id
       WHERE s.id = ${id}::uuid LIMIT 1
     `);
     const row = rows(result)[0];
     return row ? {
       id: row.id, teacherId: row.teacher_id, classId: row.class_id,
-      classLevelId: row.level_id, classSchoolYearId: row.school_year_id, subjectName: row.subject,
+      classLevelId: row.level_id, classSchoolYearId: row.school_year_id, dayOfWeek: row.day_of_week, subjectName: row.subject,
+      startTime: row.start_time, endTime: row.end_time,
     } : null;
   }
 
@@ -453,7 +473,7 @@ export class AcademicGradingRepository {
       type: 'spontaneous',
       coefficient: 1,
       label: `Note spontanée ${input.adjustment > 0 ? '+' : ''}${input.adjustment}`,
-      evaluationDate: new Date().toISOString().slice(0, 10),
+      evaluationDate: input.evaluationDate,
     }, teacherId);
   }
 
@@ -630,7 +650,14 @@ export class AcademicGradingRepository {
 
   /** Créneaux de cours du prof pour une classe (base des évaluations rattachées). */
   async listTeacherLessonSlotsForClass(teacherId: string, classId: string): Promise<
-    Array<{ id: string; dayOfWeek: number; startTime: string; endTime: string; subjectName: string; roomName: string }>
+    Array<{
+      id: string;
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+      subjectName: string;
+      roomName: string;
+    }>
   > {
     const result = await this.db.execute<{
       id: string; day_of_week: number; start_time: string; end_time: string; subject: string; room_name: string;
@@ -640,7 +667,15 @@ export class AcademicGradingRepository {
       FROM schedules sch
       INNER JOIN time_slots ts ON ts.id = sch.time_slot_id
       INNER JOIN rooms r ON r.id = sch.room_id
-      WHERE sch.teacher_id = ${teacherId}::uuid AND sch.class_id = ${classId}::uuid
+      INNER JOIN schedule_periods sp ON sp.id = sch.schedule_period_id
+      WHERE sch.teacher_id = ${teacherId}::uuid
+        AND sch.class_id = ${classId}::uuid
+        AND sch.is_active = true
+        AND sp.is_active = true
+        AND sp.valid_from <= CURRENT_DATE
+        AND sp.valid_to >= CURRENT_DATE
+        AND (sch.start_date IS NULL OR sch.start_date <= CURRENT_DATE)
+        AND (sch.end_date IS NULL OR sch.end_date > CURRENT_DATE)
       ORDER BY sch.day_of_week, ts.start_time
     `);
     return rows(result).map((row) => ({
@@ -658,9 +693,18 @@ export class AcademicGradingRepository {
       SELECT c.level_id::text AS level_id
       FROM classes c
       WHERE c.id = ${classId}::uuid
+        AND c.is_active = true
         AND EXISTS (
           SELECT 1 FROM schedules sch
-          WHERE sch.teacher_id = ${teacherId}::uuid AND sch.class_id = c.id
+          INNER JOIN schedule_periods sp ON sp.id = sch.schedule_period_id
+          WHERE sch.teacher_id = ${teacherId}::uuid
+            AND sch.class_id = c.id
+            AND sch.is_active = true
+            AND sp.is_active = true
+            AND sp.valid_from <= CURRENT_DATE
+            AND sp.valid_to >= CURRENT_DATE
+            AND (sch.start_date IS NULL OR sch.start_date <= CURRENT_DATE)
+            AND (sch.end_date IS NULL OR sch.end_date > CURRENT_DATE)
         )
       LIMIT 1
     `);
