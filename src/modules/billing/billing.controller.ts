@@ -127,6 +127,32 @@ type BillingPdfQueueHandle = {
   getJob: (jobId: string) => Promise<BillingPdfJobHandle | null>;
 };
 
+const getExportContentType = (fileName: string): 'application/pdf' | 'application/zip' => {
+  return path.extname(fileName).toLowerCase() === '.zip' ? 'application/zip' : 'application/pdf';
+};
+
+/**
+ * Construit l'URL de téléchargement pendant que le job est encore disponible.
+ *
+ * Pour R2, l'URL présignée est autonome : un clic ultérieur ne dépend plus de
+ * BullMQ et ne peut donc pas échouer si la politique de rétention a entretemps
+ * supprimé le job terminé. Le fallback disque garde l'URL API signée existante.
+ */
+const buildCompletedJobDownloadUrl = async (
+  request: FastifyRequest,
+  job: BillingPdfJobHandle,
+  result: NonNullable<ReturnType<typeof resolveJobFileResult>>
+): Promise<string> => {
+  if (result.r2Key) {
+    return presignDownload(result.r2Key, 300, {
+      filename: result.fileName,
+      contentType: getExportContentType(result.fileName),
+    });
+  }
+
+  return buildSignedDownloadUrl(request, String(job.id), request.claims!.sub);
+};
+
 const createInMemoryBillingPdfQueue = (): BillingPdfQueueHandle => {
   let sequence = 0;
   const jobs = new Map<string, BillingPdfJobHandle>();
@@ -679,9 +705,13 @@ export default async function billingController(
       };
 
       if (state === 'completed') {
-        const resultUrl = buildSignedDownloadUrl(request, String(job.id), request.claims!.sub);
         const jobResult = resolveJobFileResult(job.returnvalue);
-        response.resultUrl = resultUrl;
+        const resultUrl = jobResult
+          ? await buildCompletedJobDownloadUrl(request, job, jobResult)
+          : null;
+        if (resultUrl) {
+          response.resultUrl = resultUrl;
+        }
         response.result = {
           ...(job.returnvalue && typeof job.returnvalue === 'object' ? job.returnvalue : {}),
           ...(jobResult ? { downloadUrl: resultUrl, resultUrl } : {}),
@@ -722,8 +752,11 @@ export default async function billingController(
         status,
       };
 
-      if (status === 'done' && resolveJobFileResult(job.returnvalue)) {
-        response.resultUrl = buildSignedDownloadUrl(request, String(job.id), request.claims!.sub);
+      if (status === 'done') {
+        const jobResult = resolveJobFileResult(job.returnvalue);
+        if (jobResult) {
+          response.resultUrl = await buildCompletedJobDownloadUrl(request, job, jobResult);
+        }
       }
 
       if (status === 'failed') {
@@ -788,11 +821,9 @@ export default async function billingController(
       // valid for 5 min - long enough for the browser to follow the redirect but
       // short enough that leaked Referer/log entries decay quickly.
       if (result.r2Key) {
-        const extension = path.extname(result.fileName).toLowerCase();
-        const contentType = extension === '.zip' ? 'application/zip' : 'application/pdf';
         const presignedUrl = await presignDownload(result.r2Key, 300, {
           filename: result.fileName,
-          contentType,
+          contentType: getExportContentType(result.fileName),
         });
         return reply.redirect(presignedUrl, 302);
       }
@@ -828,10 +859,7 @@ export default async function billingController(
 
       await access(resolvedFilePath);
 
-      const extension = path.extname(result.fileName).toLowerCase();
-      const contentType = extension === '.zip' ? 'application/zip' : 'application/pdf';
-
-      reply.header('Content-Type', contentType);
+      reply.header('Content-Type', getExportContentType(result.fileName));
       reply.header('Content-Disposition', `attachment; filename="${result.fileName}"`);
       return reply.send(createReadStream(resolvedFilePath));
     } catch (error) {
