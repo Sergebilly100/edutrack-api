@@ -28,10 +28,41 @@ export type RequiredDocumentTypeRow = {
   is_mandatory: boolean; is_active: boolean; created_at: Date | string; updated_at: Date | string;
 };
 
+export type ReEnrollmentCandidateRow = {
+  student_id: string;
+  student_first_name: string;
+  student_last_name: string;
+  student_matricule: string | null;
+  current_class_name: string;
+  current_school_year_id: string;
+  current_school_year_label: string;
+  final_decision: 'promoted' | 'repeat' | 'expelled' | null;
+  next_level_id: string | null;
+  next_level_name: string | null;
+  enrollment_id: string | null;
+  enrollment_status: EnrollmentStatus | null;
+  enrollment_class_name: string | null;
+};
+
+export type StudentAcademicSummaryRow = {
+  school_year_id: string;
+  school_year_label: string;
+  school_year_start_date: string;
+  class_name: string;
+  final_decision: 'promoted' | 'repeat' | 'expelled' | null;
+};
+
+export type StudentSummaryProfile = {
+  id: string;
+  first_name: string;
+  last_name: string;
+  matricule: string | null;
+};
+
 export class EnrollmentsRepository {
   constructor(private readonly db: Db) {}
 
-  async listEnrollments(filters: { schoolYearId?: string; status?: EnrollmentStatus; type?: EnrollmentType; page: number; limit: number }) {
+  async listEnrollments(filters: { schoolYearId?: string; levelId?: string; classId?: string; status?: EnrollmentStatus; type?: EnrollmentType; page: number; limit: number }) {
     const offset = (filters.page - 1) * filters.limit;
     const [result, totalResult] = await Promise.all([
       this.db.execute<EnrollmentRow>(sql`
@@ -48,6 +79,8 @@ export class EnrollmentsRepository {
       LEFT JOIN required_document_types rdt ON rdt.level_id = c.level_id AND rdt.is_active
       LEFT JOIN student_documents sd ON sd.student_id = e.student_id AND sd.document_type_id = rdt.id
       WHERE (${filters.schoolYearId ?? null}::uuid IS NULL OR e.school_year_id = ${filters.schoolYearId ?? null}::uuid)
+        AND (${filters.levelId ?? null}::uuid IS NULL OR c.level_id = ${filters.levelId ?? null}::uuid)
+        AND (${filters.classId ?? null}::uuid IS NULL OR e.class_id = ${filters.classId ?? null}::uuid)
         AND (${filters.status ?? null}::text IS NULL OR e.status::text = ${filters.status ?? null})
         AND (${filters.type ?? null}::text IS NULL OR e.type::text = ${filters.type ?? null})
       GROUP BY e.id, c.name, sy.label, s.first_name, s.last_name
@@ -59,11 +92,134 @@ export class EnrollmentsRepository {
         SELECT COUNT(*) AS total
         FROM enrollments e
         WHERE (${filters.schoolYearId ?? null}::uuid IS NULL OR e.school_year_id = ${filters.schoolYearId ?? null}::uuid)
+          AND (${filters.levelId ?? null}::uuid IS NULL OR EXISTS (
+            SELECT 1 FROM classes c WHERE c.id = e.class_id AND c.level_id = ${filters.levelId ?? null}::uuid
+          ))
+          AND (${filters.classId ?? null}::uuid IS NULL OR e.class_id = ${filters.classId ?? null}::uuid)
           AND (${filters.status ?? null}::text IS NULL OR e.status::text = ${filters.status ?? null})
           AND (${filters.type ?? null}::text IS NULL OR e.type::text = ${filters.type ?? null})
       `),
     ]);
     return { rows: rows<EnrollmentRow>(result), total: Number(rows<{ total: string | number }>(totalResult)[0]?.total ?? 0) };
+  }
+
+  async listReEnrollmentCandidates(input: {
+    schoolYearId?: string;
+    sourceSchoolYearId?: string;
+    levelId?: string;
+    classId?: string;
+    search?: string;
+    page: number;
+    limit: number;
+  }) {
+    const offset = (input.page - 1) * input.limit;
+    const search = input.search ? `%${input.search}%` : null;
+    const candidatesQuery = sql`
+      SELECT
+        s.id::text AS student_id,
+        s.first_name AS student_first_name,
+        s.last_name AS student_last_name,
+        s.matricule AS student_matricule,
+        current_class.name AS current_class_name,
+        source_year.id::text AS current_school_year_id,
+        source_year.label AS current_school_year_label,
+        decision.final_decision::text AS final_decision,
+        decision.next_level_id::text AS next_level_id,
+        next_level.name AS next_level_name,
+        enrollment.id::text AS enrollment_id,
+        enrollment.status::text AS enrollment_status,
+        enrollment_class.name AS enrollment_class_name
+      FROM students s
+      INNER JOIN classes current_class ON current_class.id = s.class_id
+      INNER JOIN school_years source_year ON source_year.id = current_class.school_year_id
+      LEFT JOIN school_years target_year ON target_year.id = ${input.schoolYearId ?? null}::uuid
+      LEFT JOIN class_decisions decision
+        ON decision.student_id = s.id
+       AND decision.school_year_id = source_year.id
+      LEFT JOIN levels next_level ON next_level.id = decision.next_level_id
+      LEFT JOIN enrollments enrollment
+        ON enrollment.student_id = s.id
+       AND enrollment.school_year_id = target_year.id
+      LEFT JOIN classes enrollment_class ON enrollment_class.id = enrollment.class_id
+      WHERE (${input.schoolYearId ?? null}::uuid IS NULL OR (
+          target_year.status = 'active'
+          AND source_year.status = 'closed'
+          AND target_year.start_date > source_year.end_date
+        ))
+        AND (${input.sourceSchoolYearId ?? null}::uuid IS NULL OR source_year.id = ${input.sourceSchoolYearId ?? null}::uuid)
+        AND (${input.levelId ?? null}::uuid IS NULL OR current_class.level_id = ${input.levelId ?? null}::uuid)
+        AND (${input.classId ?? null}::uuid IS NULL OR current_class.id = ${input.classId ?? null}::uuid)
+        AND (${search}::text IS NULL OR (
+          s.first_name ILIKE ${search}
+          OR s.last_name ILIKE ${search}
+          OR s.matricule ILIKE ${search}
+        ))
+      ORDER BY s.last_name ASC, s.first_name ASC, s.created_at ASC
+    `;
+    const [result, totalResult] = await Promise.all([
+      this.db.execute<ReEnrollmentCandidateRow>(sql`${candidatesQuery} LIMIT ${input.limit} OFFSET ${offset}`),
+      this.db.execute<{ total: string | number }>(sql`SELECT COUNT(*) AS total FROM (${candidatesQuery}) candidates`),
+    ]);
+    return {
+      rows: rows<ReEnrollmentCandidateRow>(result),
+      total: Number(rows<{ total: string | number }>(totalResult)[0]?.total ?? 0),
+    };
+  }
+
+  async getStudentSummaryProfile(studentId: string): Promise<StudentSummaryProfile | null> {
+    const result = await this.db.execute<StudentSummaryProfile>(sql`
+      SELECT id::text, first_name, last_name, matricule
+      FROM students
+      WHERE id = ${studentId}::uuid
+      LIMIT 1
+    `);
+    return rows<StudentSummaryProfile>(result)[0] ?? null;
+  }
+
+  async listStudentAcademicSummary(studentId: string): Promise<StudentAcademicSummaryRow[]> {
+    const result = await this.db.execute<StudentAcademicSummaryRow>(sql`
+      WITH academic_history AS (
+        SELECT
+          school_year.id::text AS school_year_id,
+          school_year.label AS school_year_label,
+          school_year.start_date::text AS school_year_start_date,
+          class.name AS class_name,
+          decision.final_decision::text AS final_decision
+        FROM enrollments enrollment
+        INNER JOIN classes class ON class.id = enrollment.class_id
+        INNER JOIN school_years school_year ON school_year.id = enrollment.school_year_id
+        LEFT JOIN class_decisions decision
+          ON decision.student_id = enrollment.student_id
+         AND decision.school_year_id = school_year.id
+        WHERE enrollment.student_id = ${studentId}::uuid
+
+        UNION ALL
+
+        SELECT
+          school_year.id::text AS school_year_id,
+          school_year.label AS school_year_label,
+          school_year.start_date::text AS school_year_start_date,
+          class.name AS class_name,
+          decision.final_decision::text AS final_decision
+        FROM students student
+        INNER JOIN classes class ON class.id = student.class_id
+        INNER JOIN school_years school_year ON school_year.id = class.school_year_id
+        LEFT JOIN class_decisions decision
+          ON decision.student_id = student.id
+         AND decision.school_year_id = school_year.id
+        WHERE student.id = ${studentId}::uuid
+          AND NOT EXISTS (
+            SELECT 1
+            FROM enrollments enrollment
+            WHERE enrollment.student_id = student.id
+              AND enrollment.school_year_id = school_year.id
+          )
+      )
+      SELECT school_year_id, school_year_label, school_year_start_date, class_name, final_decision
+      FROM academic_history
+      ORDER BY school_year_start_date DESC
+    `);
+    return rows<StudentAcademicSummaryRow>(result);
   }
 
   async findEnrollment(id: string) {
@@ -101,6 +257,39 @@ export class EnrollmentsRepository {
       WHERE s.id = ${studentId}::uuid LIMIT 1
     `);
     return rows<{ id: string; is_active: boolean; lifecycle_status: string; current_school_year_id: string | null; current_level_id: string | null; final_decision: 'promoted' | 'repeat' | 'expelled' | null; next_level_id: string | null }>(result)[0] ?? null;
+  }
+
+  async getReEnrollmentYearContext(studentId: string, targetSchoolYearId: string) {
+    const result = await this.db.execute<{
+      source_school_year_id: string;
+      source_school_year_status: 'draft' | 'active' | 'closed';
+      source_school_year_end_date: string;
+      target_school_year_id: string | null;
+      target_school_year_status: 'draft' | 'active' | 'closed' | null;
+      target_school_year_start_date: string | null;
+    }>(sql`
+      SELECT
+        source_year.id::text AS source_school_year_id,
+        source_year.status::text AS source_school_year_status,
+        source_year.end_date::text AS source_school_year_end_date,
+        target_year.id::text AS target_school_year_id,
+        target_year.status::text AS target_school_year_status,
+        target_year.start_date::text AS target_school_year_start_date
+      FROM students student
+      INNER JOIN classes source_class ON source_class.id = student.class_id
+      INNER JOIN school_years source_year ON source_year.id = source_class.school_year_id
+      LEFT JOIN school_years target_year ON target_year.id = ${targetSchoolYearId}::uuid
+      WHERE student.id = ${studentId}::uuid
+      LIMIT 1
+    `);
+    return rows<{
+      source_school_year_id: string;
+      source_school_year_status: 'draft' | 'active' | 'closed';
+      source_school_year_end_date: string;
+      target_school_year_id: string | null;
+      target_school_year_status: 'draft' | 'active' | 'closed' | null;
+      target_school_year_start_date: string | null;
+    }>(result)[0] ?? null;
   }
 
   async getStudentNotificationContext(studentId: string) {

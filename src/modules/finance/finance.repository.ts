@@ -490,9 +490,35 @@ export class FinanceRepository {
 
   async confirmEnrollment(id: string, actorUserId: string): Promise<void> {
     await this.db.execute(sql`
-      UPDATE enrollments
-      SET status = 'confirmed', confirmed_by_user_id = ${actorUserId}::uuid, updated_at = NOW()
-      WHERE id = ${id}::uuid
+      WITH confirmed_enrollment AS (
+        UPDATE enrollments
+        SET status = 'confirmed', confirmed_by_user_id = ${actorUserId}::uuid, updated_at = NOW()
+        WHERE id = ${id}::uuid
+        RETURNING student_id, class_id
+      ), students_to_move AS (
+        SELECT student.id, student.class_id AS previous_class_id, confirmed_enrollment.class_id AS target_class_id
+        FROM students student
+        INNER JOIN confirmed_enrollment ON confirmed_enrollment.student_id = student.id
+        WHERE student.class_id IS DISTINCT FROM confirmed_enrollment.class_id
+      ), moved_student AS (
+        UPDATE students student
+        SET class_id = students_to_move.target_class_id
+        FROM students_to_move
+        WHERE student.id = students_to_move.id
+        RETURNING student.id
+      )
+      UPDATE classes class
+      SET student_count = GREATEST(
+        0,
+        class.student_count + CASE
+          WHEN class.id = students_to_move.previous_class_id THEN -1
+          WHEN class.id = students_to_move.target_class_id THEN 1
+          ELSE 0
+        END
+      )
+      FROM students_to_move
+      INNER JOIN moved_student ON moved_student.id = students_to_move.id
+      WHERE class.id IN (students_to_move.previous_class_id, students_to_move.target_class_id)
     `);
   }
 

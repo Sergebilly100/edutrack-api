@@ -320,7 +320,7 @@ const buildStudentsWhere = (query: StudentsListQuery): SQL[] => {
     WHERE e.student_id = s.id
       AND e.class_id = s.class_id
       AND e.school_year_id = c.school_year_id
-      AND e.status <> 'confirmed'
+      AND e.status IN ('pending_cashier', 'pending_dossier')
   )`];
   if (query.class_id) where.push(sql`s.class_id = ${query.class_id}`);
   if (typeof query.is_active === 'boolean') where.push(sql`s.is_active = ${query.is_active}`);

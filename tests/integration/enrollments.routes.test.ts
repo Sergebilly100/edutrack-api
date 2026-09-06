@@ -29,6 +29,11 @@ const createAcademicContext = async (suffix: string) => {
   return { previousYearId, targetYearId, currentLevelId, targetLevelId, currentClassId: currentClass[0]!.id, targetClassId: targetClass[0]!.id };
 };
 
+const openReEnrollmentCycle = async (academic: Awaited<ReturnType<typeof createAcademicContext>>) => {
+  await queryTenant(`UPDATE ${tenantTable('school_years')} SET status = 'closed' WHERE status = 'active' OR id = $1::uuid`, [academic.previousYearId]);
+  await queryTenant(`UPDATE ${tenantTable('school_years')} SET status = 'active' WHERE id = $1::uuid`, [academic.targetYearId]);
+};
+
 describe('enrollments integration', () => {
   it('réalise une nouvelle inscription jusqu’à la confirmation caisse', async () => {
     const headers = await getAuthHeaders('director');
@@ -62,7 +67,7 @@ describe('enrollments integration', () => {
     expect(creation.body.missingMandatoryDocuments).toHaveLength(1);
 
     const enrollmentList = await request()
-      .get(`/api/v1/enrollments?school_year_id=${academic.targetYearId}&page=1&limit=10`)
+      .get(`/api/v1/enrollments?school_year_id=${academic.targetYearId}&level_id=${academic.targetLevelId}&class_id=${academic.targetClassId}&page=1&limit=10`)
       .set(headers);
     expect(enrollmentList.status).toBe(200);
     expect(enrollmentList.body.enrollments).toBeInstanceOf(Array);
@@ -172,6 +177,7 @@ describe('enrollments integration', () => {
   it('confirme une réinscription malgré un dossier incomplet', async () => {
     const headers = await getAuthHeaders('director');
     const academic = await createAcademicContext('enrollment-renew');
+    await openReEnrollmentCycle(academic);
     const students = await queryTenant<{ id: string }>(`
       INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule, parent_phone)
       VALUES ($1::uuid, 'Mariam', 'Kouassi', 'ENR-RENEW-001', '2250700000009') RETURNING id
@@ -210,6 +216,23 @@ describe('enrollments integration', () => {
     expect(creation.body.enrollment.status).toBe('pending_cashier');
     expect(creation.body.documentWarning).toContain('paiement reste autorisé');
 
+    const candidates = await request()
+      .get(`/api/v1/enrollments/re-enrollment/candidates?school_year_id=${academic.targetYearId}&source_school_year_id=${academic.previousYearId}&level_id=${academic.currentLevelId}&class_id=${academic.currentClassId}`)
+      .set(headers);
+    expect(candidates.status).toBe(200);
+    expect(candidates.body.candidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ studentId, enrollment: expect.objectContaining({ status: 'pending_cashier' }) }),
+    ]));
+
+    const summary = await request()
+      .get(`/api/v1/enrollments/re-enrollment/students/${studentId}/summary`)
+      .set(headers);
+    expect(summary.status).toBe(200);
+    expect(summary.body.years).toEqual(expect.arrayContaining([
+      expect.objectContaining({ schoolYearId: academic.previousYearId, className: 'enrollment-renew-current-class' }),
+      expect.objectContaining({ schoolYearId: academic.targetYearId, className: 'enrollment-renew-target-class' }),
+    ]));
+
     const verification = await request()
       .post(`/api/v1/students/${studentId}/enrollment-documents/verify`)
       .set(headers);
@@ -225,11 +248,16 @@ describe('enrollments integration', () => {
     expect(confirmation.body.enrollment.status).toBe('confirmed');
     expect(confirmation.body.missingMandatoryDocuments).toHaveLength(1);
     expect(confirmation.body.documentWarning).toContain('Paiement confirmé');
+    const movedStudent = await queryTenant<{ class_id: string }>(`
+      SELECT class_id::text FROM ${tenantTable('students')} WHERE id = $1::uuid
+    `, [studentId]);
+    expect(movedStudent[0]?.class_id).toBe(academic.targetClassId);
   });
 
   it('calcule l’impayé antérieur côté serveur puis débloque après règlement', async () => {
     const headers = await getAuthHeaders('director');
     const academic = await createAcademicContext('enr-unpaid');
+    await openReEnrollmentCycle(academic);
     const students = await queryTenant<{ id: string }>(`
       INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
       VALUES ($1::uuid, 'Jean', 'Nguessan', 'ENR-UNPAID-001') RETURNING id
@@ -258,6 +286,21 @@ describe('enrollments integration', () => {
     expect(creation.status).toBe(201);
     expect(creation.body.enrollment.status).toBe('blocked_unpaid');
 
+    // Un élève bloqué doit rester trouvable par la saisie rapide afin que la
+    // caisse puisse solder l’impayé, même s’il est déjà rattaché à la classe cible.
+    await queryTenant(`UPDATE ${tenantTable('students')} SET class_id = $1::uuid WHERE id = $2::uuid`, [academic.targetClassId, studentId]);
+    const cashierSearch = await request()
+      .get('/api/v1/students?search=Jean&limit=20')
+      .set(headers);
+    expect(cashierSearch.status).toBe(200);
+    expect(cashierSearch.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: studentId }),
+    ]));
+
+    // Le scénario de règlement porte sur l'année close : on restaure donc le
+    // rattachement d'origine après avoir vérifié la recherche de caisse.
+    await queryTenant(`UPDATE ${tenantTable('students')} SET class_id = $1::uuid WHERE id = $2::uuid`, [academic.currentClassId, studentId]);
+
     const settlement = await request().post('/api/v1/payments').set(headers).send({
       studentId,
       schoolYearId: academic.previousYearId,
@@ -277,6 +320,7 @@ describe('enrollments integration', () => {
   it('ne bloque pas une réinscription quand une remise couvre la dette antérieure', async () => {
     const headers = await getAuthHeaders('director');
     const academic = await createAcademicContext('enr-waived');
+    await openReEnrollmentCycle(academic);
     const students = await queryTenant<{ id: string }>(`
       INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
       VALUES ($1::uuid, 'Aya', 'Remise', 'ENR-WAIVED-001') RETURNING id

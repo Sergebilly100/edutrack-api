@@ -15,6 +15,7 @@ import {
   createRequiredDocumentTypeBodySchema,
   createRequiredDocumentTypesBodySchema,
   enrollmentListQuerySchema,
+  reEnrollmentCandidatesQuerySchema,
   requiredDocumentListQuerySchema,
   syncRequiredDocumentTypesBodySchema,
   studentParamsSchema,
@@ -45,11 +46,35 @@ export default async function enrollmentsController(
       const query = enrollmentListQuerySchema.parse(request.query ?? {});
       return reply.send(await withService(request, (service) => service.listEnrollments({
         ...(query.school_year_id ? { schoolYearId: query.school_year_id } : {}),
+        ...(query.level_id ? { levelId: query.level_id } : {}),
+        ...(query.class_id ? { classId: query.class_id } : {}),
         ...(query.status ? { status: query.status } : {}),
         ...(query.type ? { type: query.type } : {}),
         page: query.page,
         limit: query.limit,
       })));
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.get('/api/v1/enrollments/re-enrollment/candidates', { preHandler: requirePermission('enrollments.view') }, async (request, reply) => {
+    try {
+      const query = reEnrollmentCandidatesQuerySchema.parse(request.query ?? {});
+      return reply.send(await withService(request, (service) => service.listReEnrollmentCandidates({
+        ...(query.school_year_id ? { schoolYearId: query.school_year_id } : {}),
+        ...(query.source_school_year_id ? { sourceSchoolYearId: query.source_school_year_id } : {}),
+        ...(query.level_id ? { levelId: query.level_id } : {}),
+        ...(query.class_id ? { classId: query.class_id } : {}),
+        ...(query.search ? { search: query.search } : {}),
+        page: query.page,
+        limit: query.limit,
+      })));
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.get('/api/v1/enrollments/re-enrollment/students/:studentId/summary', { preHandler: requirePermission('enrollments.view') }, async (request, reply) => {
+    try {
+      const { studentId } = studentParamsSchema.parse(request.params);
+      return reply.send(await withService(request, (service) => service.getStudentAcademicSummary(studentId)));
     } catch (error) { return handleError(request, reply, error); }
   });
 

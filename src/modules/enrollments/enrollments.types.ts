@@ -21,8 +21,20 @@ export const studentParamsSchema = z.object({ studentId: z.string().uuid() }).st
 
 export const enrollmentListQuerySchema = z.object({
   school_year_id: z.string().uuid().optional(),
+  level_id: z.string().uuid().optional(),
+  class_id: z.string().uuid().optional(),
   status: enrollmentStatusSchema.optional(),
   type: enrollmentTypeSchema.optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export const reEnrollmentCandidatesQuerySchema = z.object({
+  school_year_id: z.string().uuid().optional(),
+  source_school_year_id: z.string().uuid().optional(),
+  level_id: z.string().uuid().optional(),
+  class_id: z.string().uuid().optional(),
+  search: z.string().trim().min(1).max(100).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });

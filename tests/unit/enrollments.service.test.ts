@@ -5,6 +5,7 @@ import {
   canTransitionEnrollment,
   deduplicateRequiredDocuments,
   EnrollmentsService,
+  EnrollmentsModuleError,
   resolveInitialEnrollmentStatus,
 } from '../../src/modules/enrollments/enrollments.service.js';
 
@@ -20,6 +21,27 @@ describe('enrollment workflow rules', () => {
     expect(resolveInitialEnrollmentStatus('re_registration', true)).toBe('blocked_unpaid');
     expect(resolveInitialEnrollmentStatus('re_registration', false)).toBe('pending_cashier');
     expect(resolveInitialEnrollmentStatus('new_registration', true)).toBe('pending_cashier');
+  });
+
+  it('refuse une réinscription tant que l’année source n’est pas clôturée et la cible active', async () => {
+    const repository = {
+      getStudentContext: vi.fn().mockResolvedValue({
+        id: 'student', is_active: true, lifecycle_status: 'active', current_school_year_id: 'year-current',
+        current_level_id: 'level-current', final_decision: 'promoted', next_level_id: 'level-target',
+      }),
+      getClassContext: vi.fn().mockResolvedValue({ id: 'class-target', level_id: 'level-target', school_year_id: 'year-target', is_active: true }),
+      getReEnrollmentYearContext: vi.fn().mockResolvedValue({
+        source_school_year_id: 'year-current', source_school_year_status: 'active', source_school_year_end_date: '2027-06-30',
+        target_school_year_id: 'year-target', target_school_year_status: 'draft', target_school_year_start_date: '2027-09-01',
+      }),
+    };
+    const service = new EnrollmentsService(repository as never, { getFinancialStatus: vi.fn() } as never);
+
+    await expect(service.createEnrollment({
+      studentId: 'student', classId: 'class-target', schoolYearId: 'year-target', type: 're_registration', hasPreviousYearUnpaid: false,
+    })).rejects.toEqual(expect.objectContaining<Partial<EnrollmentsModuleError>>({
+      code: 'RE_ENROLLMENT_YEAR_TRANSITION_REQUIRED', statusCode: 409,
+    }));
   });
 
   it('dédoublonne les documents requis par type pour un niveau', () => {

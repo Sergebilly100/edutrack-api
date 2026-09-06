@@ -1,4 +1,4 @@
-import { EnrollmentsRepository, type EnrollmentRow, type StudentDocumentRow } from './enrollments.repository.js';
+import { EnrollmentsRepository, type EnrollmentRow, type ReEnrollmentCandidateRow, type StudentAcademicSummaryRow, type StudentDocumentRow } from './enrollments.repository.js';
 import type { EnrollmentStatus, EnrollmentType, StudentDocumentStatus } from './enrollments.types.js';
 import { buildFinanceService } from '../finance/finance.service.js';
 import type { PaymentMethod } from '../finance/finance.types.js';
@@ -44,6 +44,32 @@ const mapDocument = (row: StudentDocumentRow) => ({
   providedAt: iso(row.provided_at),
   notes: row.notes,
 });
+const mapReEnrollmentCandidate = (row: ReEnrollmentCandidateRow) => ({
+  studentId: row.student_id,
+  studentFirstName: row.student_first_name,
+  studentLastName: row.student_last_name,
+  studentMatricule: row.student_matricule,
+  currentClassName: row.current_class_name,
+  currentSchoolYearId: row.current_school_year_id,
+  currentSchoolYearLabel: row.current_school_year_label,
+  finalDecision: row.final_decision,
+  nextLevelId: row.next_level_id,
+  nextLevelName: row.next_level_name,
+  enrollment: row.enrollment_id && row.enrollment_status
+    ? {
+        id: row.enrollment_id,
+        status: row.enrollment_status,
+        className: row.enrollment_class_name ?? row.current_class_name,
+      }
+    : null,
+});
+
+const mapDecisionLabel = (decision: StudentAcademicSummaryRow['final_decision']): string => {
+  if (decision === 'promoted') return 'Admis(e)';
+  if (decision === 'repeat') return 'Redouble';
+  if (decision === 'expelled') return 'Exclu(e)';
+  return 'Non renseignée';
+};
 
 export const deduplicateRequiredDocuments = (documents: StudentDocumentRow[]): StudentDocumentRow[] => {
   const byType = new Map<string, StudentDocumentRow>();
@@ -81,11 +107,12 @@ export class EnrollmentsService {
         currency?: string;
         totalDue?: number;
         confirmedPaid?: number;
+        standing?: 'up_to_date' | 'late';
       }>;
     }
   ) {}
 
-  async listEnrollments(filters: { schoolYearId?: string; status?: EnrollmentStatus; type?: EnrollmentType; page: number; limit: number }) {
+  async listEnrollments(filters: { schoolYearId?: string; levelId?: string; classId?: string; status?: EnrollmentStatus; type?: EnrollmentType; page: number; limit: number }) {
     const result = await this.repository.listEnrollments(filters);
     return {
       enrollments: result.rows.map(mapEnrollment),
@@ -95,6 +122,67 @@ export class EnrollmentsService {
         total: result.total,
         totalPages: Math.max(1, Math.ceil(result.total / filters.limit)),
       },
+    };
+  }
+
+  async listReEnrollmentCandidates(input: { schoolYearId?: string; sourceSchoolYearId?: string; levelId?: string; classId?: string; search?: string; page: number; limit: number }) {
+    const result = await this.repository.listReEnrollmentCandidates(input);
+    return {
+      candidates: result.rows.map(mapReEnrollmentCandidate),
+      pagination: {
+        page: input.page,
+        limit: input.limit,
+        total: result.total,
+        totalPages: Math.max(1, Math.ceil(result.total / input.limit)),
+      },
+    };
+  }
+
+  async getStudentAcademicSummary(studentId: string) {
+    const profile = await this.repository.getStudentSummaryProfile(studentId);
+    if (!profile) throw new EnrollmentsModuleError('Student not found', 404, 'STUDENT_NOT_FOUND');
+    const history = await this.repository.listStudentAcademicSummary(studentId);
+    const years = await Promise.all(history.map(async (row) => {
+      if (!this.finance) {
+        return {
+          schoolYearId: row.school_year_id,
+          schoolYearLabel: row.school_year_label,
+          className: row.class_name,
+          decision: mapDecisionLabel(row.final_decision),
+          financialStatus: 'unavailable' as const,
+          remainingDue: null,
+          currency: 'FCFA',
+        };
+      }
+      try {
+        const financial = await this.finance.getFinancialStatus(studentId, row.school_year_id);
+        return {
+          schoolYearId: row.school_year_id,
+          schoolYearLabel: row.school_year_label,
+          className: row.class_name,
+          decision: mapDecisionLabel(row.final_decision),
+          financialStatus: financial.remainingDue > 0 ? 'remaining_due' as const : 'settled' as const,
+          remainingDue: financial.remainingDue,
+          currency: financial.currency ?? 'FCFA',
+        };
+      } catch (error) {
+        if ((error as { code?: string }).code === 'TUITION_PLAN_REQUIRED') {
+          return {
+            schoolYearId: row.school_year_id,
+            schoolYearLabel: row.school_year_label,
+            className: row.class_name,
+            decision: mapDecisionLabel(row.final_decision),
+            financialStatus: 'not_configured' as const,
+            remainingDue: null,
+            currency: 'FCFA',
+          };
+        }
+        throw error;
+      }
+    }));
+    return {
+      student: { id: profile.id, firstName: profile.first_name, lastName: profile.last_name, matricule: profile.matricule },
+      years,
     };
   }
 
@@ -136,6 +224,20 @@ export class EnrollmentsService {
     }
 
     if (input.type === 're_registration') {
+      const yearContext = await this.repository.getReEnrollmentYearContext(input.studentId, input.schoolYearId);
+      if (!yearContext || yearContext.target_school_year_id !== input.schoolYearId) {
+        throw new EnrollmentsModuleError('Target school year not found', 404, 'TARGET_SCHOOL_YEAR_NOT_FOUND');
+      }
+      if (yearContext.source_school_year_id === input.schoolYearId) {
+        throw new EnrollmentsModuleError('Re-enrollment cannot target the current school year', 409, 'RE_ENROLLMENT_CURRENT_YEAR_FORBIDDEN');
+      }
+      if (yearContext.source_school_year_status !== 'closed' || yearContext.target_school_year_status !== 'active' || !yearContext.target_school_year_start_date || yearContext.target_school_year_start_date <= yearContext.source_school_year_end_date) {
+        throw new EnrollmentsModuleError(
+          'Re-enrollment requires a closed school year and a new active school year opened by the super administrator',
+          409,
+          'RE_ENROLLMENT_YEAR_TRANSITION_REQUIRED'
+        );
+      }
       if (!student.final_decision) {
         throw new EnrollmentsModuleError('A validated class decision is required', 409, 'CLASS_DECISION_REQUIRED');
       }
