@@ -515,6 +515,85 @@ describe('import integration - schedule', () => {
     expect(res.body.errors).toHaveLength(0);
   });
 
+  it('POST /api/v1/import/schedule/confirm - rattache le professeur, la classe et la matière importée', async () => {
+    const headers = await getAuthHeaders('director');
+    const context = getSeedContext();
+    const suffix = Date.now().toString();
+    const subjectName = `Importtest ${suffix}`;
+
+    const classes = await queryTenant<{ class_id: string }>(
+      `SELECT class_id FROM ${tenantTable('schedules')} WHERE id = $1`,
+      [context.scheduleId]
+    );
+    const classId = classes[0]?.class_id;
+    expect(classId).toBeTruthy();
+
+    const levels = await queryTenant<{ id: string }>(
+      `
+        INSERT INTO ${tenantTable('levels')} (name, order_index, is_exam_class)
+        VALUES ($1, 998, false)
+        RETURNING id
+      `,
+      [`Import assignment level ${suffix}`]
+    );
+    const levelId = levels[0]?.id;
+    expect(levelId).toBeTruthy();
+    await queryTenant(
+      `UPDATE ${tenantTable('classes')} SET level_id = $1 WHERE id = $2`,
+      [levelId, classId]
+    );
+
+    const subjects = await queryTenant<{ id: string }>(
+      `
+        INSERT INTO ${tenantTable('subjects')} (level_id, name, coefficient)
+        VALUES ($1, $2, 1)
+        RETURNING id
+      `,
+      [levelId, subjectName]
+    );
+    const subjectId = subjects[0]?.id;
+    expect(subjectId).toBeTruthy();
+
+    const [{ name: teacherName }] = await queryTenant<{ name: string }>(
+      `SELECT u.name FROM ${tenantTable('teachers')} t INNER JOIN ${tenantTable('users')} u ON u.id = t.user_id WHERE t.id = $1`,
+      [context.teacherId]
+    );
+    const [{ label: slotLabel }] = await queryTenant<{ label: string }>(
+      `SELECT label FROM ${tenantTable('time_slots')} LIMIT 1`,
+      []
+    );
+    const period = nextFullWeek(3);
+
+    const res = await attachSchedule(
+      request()
+        .post('/api/v1/import/schedule/confirm')
+        .set(headers)
+        .field('week_start', period.monday)
+        .field('week_end', period.sunday),
+      [
+        {
+          'Nom professeur*': teacherName,
+          'Classe*': context.className,
+          'Matière*': subjectName,
+          'Jour*': 'Lundi',
+          'Créneau*': slotLabel,
+          Salle: 'Salle A1',
+        },
+      ]
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    const assignments = await queryTenant<{ count: number }>(
+      `
+        SELECT COUNT(*)::int AS count
+        FROM ${tenantTable('teacher_subject_assignments')}
+        WHERE teacher_id = $1 AND class_id = $2 AND subject_id = $3
+      `,
+      [context.teacherId, classId, subjectId]
+    );
+    expect(assignments[0]?.count).toBe(1);
+  });
+
   it('POST /api/v1/import/schedule/confirm - sans conflictAcknowledged + conflit → 400 IMPORT_CONFLICT_ACK_REQUIRED', async () => {
     const headers = await getAuthHeaders('director');
     const { className } = getSeedContext();

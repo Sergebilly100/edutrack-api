@@ -752,43 +752,64 @@ export const defaultImportRepository: ImportRepository = {
 
     if (existing) {
       await db.execute(sql`
-        UPDATE schedules
-        SET
-          class_id = ${params.classId},
-          room_id = ${params.roomId},
-          subject = ${row.subject},
-          is_active = true,
-          start_date = ${params.startDate}::date,
-          end_date = NULL
-        WHERE id = ${existing.id}
+        WITH updated_schedule AS (
+          UPDATE schedules
+          SET
+            class_id = ${params.classId},
+            room_id = ${params.roomId},
+            subject = ${row.subject},
+            is_active = true,
+            start_date = ${params.startDate}::date,
+            end_date = NULL
+          WHERE id = ${existing.id}
+          RETURNING teacher_id, class_id, subject
+        ), assigned_subject AS (
+          INSERT INTO teacher_subject_assignments (teacher_id, subject_id, class_id)
+          SELECT updated.teacher_id, subject.id, updated.class_id
+          FROM updated_schedule updated
+          INNER JOIN classes school_class ON school_class.id = updated.class_id
+          INNER JOIN subjects subject ON subject.level_id = school_class.level_id AND subject.name = updated.subject
+          ON CONFLICT (teacher_id, subject_id, class_id) DO NOTHING
+        )
+        SELECT 1
       `);
       return { result: 'updated', id: existing.id };
     }
 
     const insertResult = await db.execute(sql`
-      INSERT INTO schedules (
-        schedule_period_id,
-        teacher_id,
-        class_id,
-        room_id,
-        time_slot_id,
-        day_of_week,
-        subject,
-        start_date,
-        is_active
+      WITH inserted_schedule AS (
+        INSERT INTO schedules (
+          schedule_period_id,
+          teacher_id,
+          class_id,
+          room_id,
+          time_slot_id,
+          day_of_week,
+          subject,
+          start_date,
+          is_active
+        )
+        VALUES (
+          ${params.schedulePeriodId},
+          ${params.teacherId},
+          ${params.classId},
+          ${params.roomId},
+          ${params.timeSlotId},
+          ${row.dayOfWeek},
+          ${row.subject},
+          ${params.startDate}::date,
+          true
+        )
+        RETURNING id, teacher_id, class_id, subject
+      ), assigned_subject AS (
+        INSERT INTO teacher_subject_assignments (teacher_id, subject_id, class_id)
+        SELECT inserted.teacher_id, subject.id, inserted.class_id
+        FROM inserted_schedule inserted
+        INNER JOIN classes school_class ON school_class.id = inserted.class_id
+        INNER JOIN subjects subject ON subject.level_id = school_class.level_id AND subject.name = inserted.subject
+        ON CONFLICT (teacher_id, subject_id, class_id) DO NOTHING
       )
-      VALUES (
-        ${params.schedulePeriodId},
-        ${params.teacherId},
-        ${params.classId},
-        ${params.roomId},
-        ${params.timeSlotId},
-        ${row.dayOfWeek},
-        ${row.subject},
-        ${params.startDate}::date,
-        true
-      )
-      RETURNING id
+      SELECT id FROM inserted_schedule
     `);
 
     const insertedId = getRows<ScheduleInsertRow>(insertResult)[0]?.id;
