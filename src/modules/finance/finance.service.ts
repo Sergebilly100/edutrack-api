@@ -266,6 +266,7 @@ export class FinanceService {
       student: {
         id: due.student_id,
         name: due.student_name,
+        matricule: due.student_matricule,
         classId: due.class_id,
         className: due.class_name,
       },

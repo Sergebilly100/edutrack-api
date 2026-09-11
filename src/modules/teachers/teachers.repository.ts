@@ -56,6 +56,7 @@ type TeacherRow = {
     classId: string;
     className: string;
   }>;
+  homeroom_classes: Array<{ id: string; name: string }>;
 };
 
 type TotalRow = { total: string | number };
@@ -193,6 +194,12 @@ const TEACHER_SELECT = sql`
       INNER JOIN classes c ON c.id = tsa.class_id
       WHERE tsa.teacher_id = t.id
     ), '[]'::json) AS teaching_assignments
+    , COALESCE((
+      SELECT json_agg(json_build_object('id', c.id::text, 'name', c.name) ORDER BY c.name)
+      FROM classes c
+      WHERE c.homeroom_teacher_id = t.id
+        AND c.is_active = true
+    ), '[]'::json) AS homeroom_classes
   FROM teachers t
   INNER JOIN users u ON u.id = t.user_id
   LEFT JOIN users upd ON upd.id = t.updated_by

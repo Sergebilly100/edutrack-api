@@ -109,6 +109,14 @@ describe('teachers integration (real db)', () => {
     it('retourne le prof par id', async () => {
       const headers = await getAuthHeaders('director');
       const { teacherId } = await seedTeacher({ last_name: 'ById' });
+      const classes = await queryTenant<{ id: string; name: string }>(`
+        SELECT id::text, name FROM ${tenantTable('classes')} WHERE is_active = true LIMIT 1
+      `);
+      expect(classes[0]).toBeTruthy();
+      await queryTenant(
+        `UPDATE ${tenantTable('classes')} SET homeroom_teacher_id = $1::uuid WHERE id = $2::uuid`,
+        [teacherId, classes[0]!.id]
+      );
 
       const response = await request()
         .get(`/api/v1/teachers/${teacherId}`)
@@ -117,6 +125,9 @@ describe('teachers integration (real db)', () => {
       expect(response.status).toBe(200);
       expect(response.body.id).toBe(teacherId);
       expect(response.body.type).toBe('vacataire');
+      expect(response.body.homeroom_classes).toEqual([
+        expect.objectContaining({ id: classes[0]!.id, name: classes[0]!.name }),
+      ]);
     });
 
     it('retourne 404 si prof introuvable', async () => {

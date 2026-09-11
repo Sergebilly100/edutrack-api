@@ -101,6 +101,7 @@ type TeacherDTO = {
     classId: string;
     className: string;
   }>;
+  homeroom_classes: Array<{ id: string; name: string }>;
 };
 
 const toDTO = (row: {
@@ -129,6 +130,7 @@ const toDTO = (row: {
     classId: string;
     className: string;
   }>;
+  homeroom_classes?: Array<{ id: string; name: string }>;
 }): TeacherDTO => ({
   id: row.id,
   name: row.name,
@@ -150,6 +152,7 @@ const toDTO = (row: {
   updated_by: row.updated_by ?? null,
   updated_by_name: row.updated_by_name ?? null,
   teaching_assignments: row.teaching_assignments ?? [],
+  homeroom_classes: row.homeroom_classes ?? [],
 });
 
 export class TeachersService {

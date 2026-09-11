@@ -59,6 +59,7 @@ export type CashJournalSummary = {
 export type AmountDueContext = {
   student_id: string;
   student_name: string;
+  student_matricule: string | null;
   class_id: string;
   class_name: string;
   school_year_id: string;
@@ -98,6 +99,7 @@ export class FinanceRepository {
       SELECT
         s.id::text AS student_id,
         concat_ws(' ', s.first_name, s.last_name) AS student_name,
+        s.matricule AS student_matricule,
         c.id::text AS class_id,
         c.name AS class_name,
         ${schoolYearId}::uuid::text AS school_year_id,

@@ -35,10 +35,11 @@ const createFinanceContext = async (suffix: string, totalAmount = 100_000) => {
     INSERT INTO ${tenantTable('classes')} (name, level_id, school_year_id, is_active)
     VALUES ($1, $2::uuid, $3::uuid, true) RETURNING id
   `, [`finance-class-${suffix}`, levels[0]!.id, years[0]!.id]);
+  const matricule = `FIN-${suffix}`;
   const students = await queryTenant<{ id: string }>(`
     INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
     VALUES ($1::uuid, 'Awa', 'Finance', $2) RETURNING id
-  `, [classes[0]!.id, `FIN-${suffix}`]);
+  `, [classes[0]!.id, matricule]);
 
   const headers = await getAuthHeaders('director');
   const plan = await request()
@@ -57,6 +58,7 @@ const createFinanceContext = async (suffix: string, totalAmount = 100_000) => {
     classId: classes[0]!.id,
     levelId: levels[0]!.id,
     studentId: students[0]!.id,
+    matricule,
   };
 };
 
@@ -328,6 +330,10 @@ describe('finance routes integration', () => {
       .get(`/api/v1/students/${context.studentId}/account-statement?school_year_id=${context.schoolYearId}`)
       .set(context.headers);
     expect(statement.status, JSON.stringify(statement.body)).toBe(200);
+    expect(statement.body.statement.student).toMatchObject({
+      name: 'Awa Finance',
+      matricule: context.matricule,
+    });
     expect(statement.body.statement.movements.map((item: { balanceAfter: number }) => item.balanceAfter)).toEqual([80_000, 65_000, 45_000]);
 
     const financialStatus = await request()
