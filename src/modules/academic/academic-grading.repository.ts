@@ -615,6 +615,24 @@ export class AcademicGradingRepository {
     return Number(rows(result)[0]?.missing_count ?? 0);
   }
 
+  async countScheduledEvaluations(
+    teacherId: string,
+    classId: string,
+    subjectId: string,
+    gradingPeriodId: string
+  ): Promise<number> {
+    const result = await this.db.execute<{ evaluation_count: string }>(sql`
+      SELECT COUNT(*)::text AS evaluation_count
+      FROM evaluations
+      WHERE teacher_id = ${teacherId}::uuid
+        AND class_id = ${classId}::uuid
+        AND subject_id = ${subjectId}::uuid
+        AND grading_period_id = ${gradingPeriodId}::uuid
+        AND type = 'scheduled'
+    `);
+    return Number(rows(result)[0]?.evaluation_count ?? 0);
+  }
+
   async getCompletion(classId: string, gradingPeriodId: string) {
     const result = await this.db.execute<{
       subject_id: string; subject_name: string; subject_coefficient: string | number;

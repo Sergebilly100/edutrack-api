@@ -108,6 +108,15 @@ describe('academic grading integration', () => {
       expect.objectContaining({ subjectId: mathResponse.body.subject.id, calculationStarted: false }),
     ]));
 
+    const noEvaluationCalculation = await request().put('/api/v1/class-subject-completion').set(teacherHeaders).send({
+      classId,
+      subjectId: mathResponse.body.subject.id,
+      gradingPeriodId,
+      status: 'in_progress',
+    });
+    expect(noEvaluationCalculation.status).toBe(409);
+    expect(noEvaluationCalculation.body.code).toBe('EVALUATIONS_REQUIRED');
+
     const createEvaluation = async (lessonSlotId: string, subjectId: string, label: string, coefficient: number, evaluationDate: string) => {
       const response = await request().post('/api/v1/evaluations').set(teacherHeaders).send({
         lessonSlotId,
@@ -127,6 +136,15 @@ describe('academic grading integration', () => {
     const math1 = await createEvaluation(context.scheduleId, mathResponse.body.subject.id, 'Devoir 1', 1, '2088-10-15');
     const math2 = await createEvaluation(context.scheduleId, mathResponse.body.subject.id, 'Devoir 2', 3, '2088-11-12');
     const french = await createEvaluation(frenchSchedules[0]!.id, frenchResponse.body.subject.id, 'Dictée', 1, '2088-11-19');
+
+    const incompleteCalculation = await request().put('/api/v1/class-subject-completion').set(teacherHeaders).send({
+      classId,
+      subjectId: mathResponse.body.subject.id,
+      gradingPeriodId,
+      status: 'in_progress',
+    });
+    expect(incompleteCalculation.status).toBe(409);
+    expect(incompleteCalculation.body.code).toBe('GRADES_INCOMPLETE');
 
     const scopeWithDates = await request().get('/api/v1/evaluations/scope').set(teacherHeaders).query({ classId, gradingPeriodId });
     expect(scopeWithDates.status).toBe(200);
@@ -225,9 +243,19 @@ describe('academic grading integration', () => {
     expect(calculationStarted.status, JSON.stringify(calculationStarted.body)).toBe(200);
     expect(calculationStarted.body.completion.status).toBe('in_progress');
 
-    const closedSubjectEdit = await saveGrade(math1, 14);
-    expect(closedSubjectEdit.status).toBe(409);
-    expect(closedSubjectEdit.body.code).toBe('SUBJECT_GRADING_CLOSED');
+    const inProgressSubjectEdit = await saveGrade(math1, 14);
+    expect(inProgressSubjectEdit.status).toBe(200);
+
+    const math3 = await createEvaluation(context.scheduleId, mathResponse.body.subject.id, 'Devoir 3', 1, '2088-12-01');
+    const incompleteCompletion = await request().put('/api/v1/class-subject-completion').set(teacherHeaders).send({
+      classId,
+      subjectId: mathResponse.body.subject.id,
+      gradingPeriodId,
+      status: 'completed',
+    });
+    expect(incompleteCompletion.status).toBe(409);
+    expect(incompleteCompletion.body.code).toBe('GRADES_INCOMPLETE');
+    expect((await saveGrade(math3, 16)).status).toBe(200);
 
     const completion = await request().put('/api/v1/class-subject-completion').set(teacherHeaders).send({
       classId,

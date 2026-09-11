@@ -348,11 +348,11 @@ export class AcademicGradingService {
       );
     }
     const completion = await this.repository.getSubjectCompletion(classId, subjectId, gradingPeriodId);
-    if (completion) {
+    if (completion?.status === 'completed') {
       throw new AcademicGradingError(
         'La saisie est clôturée pour cette classe, cette matière et cette période',
         409,
-        completion.status === 'completed' ? 'SUBJECT_AVERAGES_VALIDATED' : 'SUBJECT_GRADING_CLOSED'
+        'SUBJECT_AVERAGES_VALIDATED'
       );
     }
   }
@@ -579,20 +579,33 @@ export class AcademicGradingService {
         'SUBJECT_AVERAGES_VALIDATED'
       );
     }
-    if (!current) {
-      const missingGrades = await this.repository.countMissingScheduledGrades(
+    const [evaluationCount, missingGrades] = await Promise.all([
+      this.repository.countScheduledEvaluations(
         teacherId,
         input.classId,
         input.subjectId,
         input.gradingPeriodId
+      ),
+      this.repository.countMissingScheduledGrades(
+        teacherId,
+        input.classId,
+        input.subjectId,
+        input.gradingPeriodId
+      ),
+    ]);
+    if (evaluationCount === 0) {
+      throw new AcademicGradingError(
+        'Créez au moins une évaluation avant de calculer ou de clôturer les moyennes',
+        409,
+        'EVALUATIONS_REQUIRED'
       );
-      if (missingGrades > 0) {
-        throw new AcademicGradingError(
-          `${missingGrades} note(s) d’évaluation restent à saisir avant le calcul`,
-          409,
-          'GRADES_INCOMPLETE'
-        );
-      }
+    }
+    if (missingGrades > 0) {
+      throw new AcademicGradingError(
+        `${missingGrades} note(s) d’évaluation restent à saisir avant le calcul ou la clôture`,
+        409,
+        'GRADES_INCOMPLETE'
+      );
     }
     return this.repository.upsertCompletion(input);
   }
