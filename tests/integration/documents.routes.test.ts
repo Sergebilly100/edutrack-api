@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import multipart from '@fastify/multipart';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -10,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   createDownloadUrl: vi.fn(),
   getDownloadPayload: vi.fn(),
   deleteDocument: vi.fn(),
+  uploadDocument: vi.fn(),
+  replaceDocument: vi.fn(),
 }));
 
 vi.mock('../../src/shared/database/db.js', () => ({
@@ -35,6 +38,7 @@ const DOCUMENT_ID = '22222222-2222-4222-8222-222222222222';
 
 const buildApp = async () => {
   const app = Fastify();
+  await app.register(multipart);
   await app.register(documentsController);
   await app.ready();
   return app;
@@ -58,6 +62,8 @@ beforeEach(() => {
     createDownloadUrl: mocks.createDownloadUrl,
     getDownloadPayload: mocks.getDownloadPayload,
     deleteDocument: mocks.deleteDocument,
+    uploadDocument: mocks.uploadDocument,
+    replaceDocument: mocks.replaceDocument,
   });
 
   mocks.listDocuments.mockResolvedValue({
@@ -89,9 +95,109 @@ beforeEach(() => {
     buffer: Buffer.from('%PDF-1.4'),
   });
   mocks.deleteDocument.mockResolvedValue({ success: true });
+  mocks.uploadDocument.mockResolvedValue({
+    id: DOCUMENT_ID,
+    entityType: 'teacher',
+    entityId: ENTITY_ID,
+    type: 'contrat',
+    name: 'Contrat de travail',
+    uploadedBy: 'director-id',
+    createdAt: '2026-04-23T00:00:00.000Z',
+    url: 'https://example.test/file.pdf',
+  });
+  mocks.replaceDocument.mockResolvedValue({
+    id: DOCUMENT_ID,
+    entityType: 'teacher',
+    entityId: ENTITY_ID,
+    type: 'contrat',
+    name: 'Contrat mis à jour',
+    uploadedBy: 'director-id',
+    createdAt: '2026-04-23T00:00:00.000Z',
+    url: 'https://example.test/updated-file.pdf',
+  });
 });
 
 describe('documents routes', () => {
+  it('POST /api/v1/documents/:entityType/:entityId accepte un fichier multipart', async () => {
+    const boundary = 'documents-test-boundary';
+    const payload = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="type"\r\n\r\ncontrat\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="name"\r\n\r\nContrat de travail\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="contrat.pdf"\r\nContent-Type: application/pdf\r\n\r\n`),
+      Buffer.from('%PDF-1.4'),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/v1/documents/teacher/${ENTITY_ID}`,
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(mocks.uploadDocument).toHaveBeenCalledWith(expect.objectContaining({
+      entityType: 'teacher',
+      entityId: ENTITY_ID,
+      type: 'contrat',
+      name: 'Contrat de travail',
+      fileName: 'contrat.pdf',
+      fileBuffer: expect.any(Buffer),
+    }));
+    await app.close();
+  });
+
+  it('POST /api/v1/documents/:entityType/:entityId accepte un PDF identifié comme application/octet-stream', async () => {
+    const boundary = 'documents-generic-mime-boundary';
+    const payload = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="type"\r\n\r\nautre\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="name"\r\n\r\nJustificatif\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="justificatif.pdf"\r\nContent-Type: application/octet-stream\r\n\r\n`),
+      Buffer.from('%PDF-1.4'),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/v1/documents/student/${ENTITY_ID}`,
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(mocks.uploadDocument).toHaveBeenCalledWith(expect.objectContaining({
+      entityType: 'student',
+      contentType: 'application/pdf',
+      fileName: 'justificatif.pdf',
+    }));
+    await app.close();
+  });
+
+  it('POST /api/v1/documents/:entityType/:entityId accepte le MIME historique image/jpg', async () => {
+    const boundary = 'documents-jpg-mime-boundary';
+    const payload = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="type"\r\n\r\nphoto\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="name"\r\n\r\nPhoto élève\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="photo.jpg"\r\nContent-Type: image/jpg\r\n\r\n`),
+      Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/v1/documents/student/${ENTITY_ID}`,
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(mocks.uploadDocument).toHaveBeenCalledWith(expect.objectContaining({
+      contentType: 'image/jpeg',
+      fileName: 'photo.jpg',
+    }));
+    await app.close();
+  });
+
   it('GET /api/v1/documents/:entityType/:entityId retourne la liste des documents', async () => {
     const app = await buildApp();
     const response = await app.inject({
@@ -101,6 +207,32 @@ describe('documents routes', () => {
 
     expect(response.statusCode).toBe(200);
     expect(mocks.listDocuments).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('PUT /api/v1/documents/:id remplace le fichier existant', async () => {
+    const boundary = 'documents-replace-boundary';
+    const payload = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="type"\r\n\r\nautre\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="name"\r\n\r\nContrat mis à jour\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="contrat-mis-a-jour.pdf"\r\nContent-Type: application/pdf\r\n\r\n`),
+      Buffer.from('%PDF-1.4'),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/api/v1/documents/${DOCUMENT_ID}`,
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.replaceDocument).toHaveBeenCalledWith(expect.objectContaining({
+      documentId: DOCUMENT_ID,
+      name: 'Contrat mis à jour',
+      fileName: 'contrat-mis-a-jour.pdf',
+    }));
     await app.close();
   });
 

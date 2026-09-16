@@ -125,7 +125,7 @@ describe('dashboard action items integration (7b)', () => {
       await queryTenant(
         `INSERT INTO ${tenantTable('attendances_teacher')} (teacher_id, schedule_id, date, status)
          VALUES ($1::uuid, $2::uuid, $3::date, $4::attendance_teacher_status)`,
-        [context.teacherId, schedule[0]!.id, date.date, index === 0 ? 'present' : 'absent']
+        [context.teacherId, schedule[0]!.id, date.date, index === 0 ? 'late' : 'absent']
       );
     }
 
@@ -134,7 +134,7 @@ describe('dashboard action items integration (7b)', () => {
     expect(response.status).toBe(200);
     const older = response.body.find((row: { date: string }) => row.date === dates[1]!.date);
     const newer = response.body.find((row: { date: string }) => row.date === dates[0]!.date);
-    expect(older).toMatchObject({ present_count: 1, absent_count: 0, not_checked_count: 0, total_count: 1 });
+    expect(older).toMatchObject({ present_count: 0, late_count: 1, absent_count: 0, not_checked_count: 0, total_count: 1 });
     expect(newer).toMatchObject({ present_count: 0, absent_count: 1, not_checked_count: 0, total_count: 1 });
     expect(scheduleIds).toHaveLength(2);
   });

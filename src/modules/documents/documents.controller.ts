@@ -74,6 +74,16 @@ const normalizeString = (value: unknown): string => {
   return value.trim();
 };
 
+const normalizeUploadMime = (value: string): string => {
+  const mime = value.trim().toLowerCase();
+  // Les appareils Android et certains navigateurs utilisent encore ces alias
+  // pour un JPEG. Le contenu reste ensuite contrôlé par sa signature binaire.
+  if (mime === 'image/jpg' || mime === 'image/pjpeg') {
+    return 'image/jpeg';
+  }
+  return mime;
+};
+
 const resolveBaseUrl = (request: FastifyRequest): string => {
   const configured = process.env.APP_BASE_URL?.trim();
   if (configured) {
@@ -145,7 +155,7 @@ const readUpload = async (request: FastifyRequest): Promise<UploadPayload> => {
       }
 
       fileName = normalizeString(part.filename);
-      contentType = part.mimetype;
+      contentType = normalizeUploadMime(part.mimetype);
 
       const buffer = await part.toBuffer();
       if (part.file.truncated || buffer.length > MAX_UPLOAD_SIZE_BYTES) {
@@ -175,7 +185,8 @@ const readUpload = async (request: FastifyRequest): Promise<UploadPayload> => {
     throw new DocumentsModuleError('File is empty', 400, 'DOCUMENT_FILE_EMPTY');
   }
 
-  if (!ALLOWED_DOCUMENT_MIME.has(contentType)) {
+  const detectedMime = detectMimeFromMagicBytes(fileBuffer);
+  if (!detectedMime || !ALLOWED_DOCUMENT_MIME.has(detectedMime)) {
     throw new DocumentsModuleError(
       'Type de fichier non autorisé. Formats acceptés: PDF, PNG, JPEG, WEBP.',
       400,
@@ -183,8 +194,11 @@ const readUpload = async (request: FastifyRequest): Promise<UploadPayload> => {
     );
   }
 
-  const detectedMime = detectMimeFromMagicBytes(fileBuffer);
-  if (!detectedMime || detectedMime !== contentType) {
+  // Certains navigateurs déclarent des fichiers PDF/image comme
+  // application/octet-stream. Le contrôle des octets de signature est la
+  // source de vérité : accepter ce MIME générique évite de bloquer un fichier
+  // valide, sans assouplir la validation du contenu.
+  if (contentType !== detectedMime && contentType !== 'application/octet-stream') {
     throw new DocumentsModuleError(
       "Le contenu du fichier ne correspond pas à son type déclaré.",
       400,
@@ -204,7 +218,7 @@ const readUpload = async (request: FastifyRequest): Promise<UploadPayload> => {
     type,
     name,
     fileName,
-    contentType,
+    contentType: detectedMime,
     fileBuffer,
   };
 };
@@ -294,6 +308,37 @@ export default async function documentsController(app: FastifyInstance): Promise
       });
 
       return reply.code(201).send(result);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.put('/api/v1/documents/:id', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const params = documentParamsSchema.parse(request.params ?? {});
+      const metadata = await withTenantSchema(claims.schemaName, async (tenantDb) =>
+        buildDocumentsService(tenantDb).getDocumentMetadata(params.id)
+      );
+
+      if (!ensureDocumentsPermission(request, reply, metadata.entityType)) {
+        return;
+      }
+
+      const upload = await readUpload(request);
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) =>
+        buildDocumentsService(tenantDb).replaceDocument({
+          schemaName: claims.schemaName,
+          documentId: params.id,
+          name: upload.name,
+          fileName: upload.fileName,
+          fileBuffer: upload.fileBuffer,
+          contentType: upload.contentType,
+          baseUrl: resolveBaseUrl(request),
+        })
+      );
+
+      return reply.send(result);
     } catch (error) {
       return handleError(reply, error);
     }

@@ -912,6 +912,20 @@ export const findTeacherIdByUserId = async (
   return row?.id ?? null;
 };
 
+export const isTeacherBlocked = async (
+  db: QueryExecutor,
+  teacherId: string
+): Promise<boolean> => {
+  const result = await db.execute<{ is_blocked: boolean }>(sql`
+    SELECT is_blocked
+    FROM teachers
+    WHERE id = ${teacherId}
+    LIMIT 1
+  `);
+
+  return getRows<{ is_blocked: boolean }>(result)[0]?.is_blocked === true;
+};
+
 export const findScheduleConflicts = async (
   db: QueryExecutor,
   input: ScheduleMutationInput & { excludeScheduleId?: string; referenceDate: string }

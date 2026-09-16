@@ -106,6 +106,21 @@ export class DocumentsRepository {
     return created;
   }
 
+  async replaceDocumentFile(input: {
+    documentId: string;
+    name: string;
+    r2Key: string;
+  }): Promise<DocumentRow | null> {
+    const result = await this.tenantDb.execute(sql`
+      UPDATE documents
+      SET name = ${input.name}, r2_key = ${input.r2Key}
+      WHERE id = ${input.documentId}
+      RETURNING id, entity_type, entity_id, type, name, r2_key, uploaded_by, created_at
+    `);
+
+    return getRows<DocumentRow>(result)[0] ?? null;
+  }
+
   async listDocuments(entityType: DocumentEntityType, entityId: string): Promise<DocumentRow[]> {
     const result = await this.tenantDb.execute(sql`
       SELECT id, entity_type, entity_id, type, name, r2_key, uploaded_by, created_at

@@ -133,6 +133,7 @@ type DirectorTodayCourseRow = {
 type DirectorHistoryRow = {
   date: string;
   present_count: number;
+  late_count: number;
   absent_count: number;
   not_checked_count: number;
   total_count: number;
@@ -1520,9 +1521,13 @@ export class AttendanceRepository {
       SELECT
         sbd.date::text AS date,
         COALESCE(
-          SUM(CASE WHEN at.status IN ('present', 'late') THEN 1 ELSE 0 END),
+          SUM(CASE WHEN at.status = 'present' THEN 1 ELSE 0 END),
           0
         )::int AS present_count,
+        COALESCE(
+          SUM(CASE WHEN at.status = 'late' THEN 1 ELSE 0 END),
+          0
+        )::int AS late_count,
         COALESCE(
           SUM(CASE WHEN at.status = 'absent' THEN 1 ELSE 0 END),
           0

@@ -34,6 +34,12 @@ describe('student dossier integration (7c)', () => {
     );
     const studentId = students[0]!.id;
 
+    await queryTenant(
+      `INSERT INTO ${tenantTable('documents')} (entity_type, entity_id, type, name, r2_key, uploaded_by)
+       VALUES ('student', $1::uuid, 'autre', 'Certificat médical', $2, $3::uuid)`,
+      [studentId, `student/${studentId}/certificat.pdf`, context.directorUserId]
+    );
+
     // Paiement confirmé
     await queryTenant(
       `INSERT INTO ${tenantTable('payments')} (student_id, school_year_id, amount, method, source, status, payment_date, receipt_number)
@@ -85,6 +91,9 @@ describe('student dossier integration (7c)', () => {
     expect(Array.isArray(directorView.body.events)).toBe(true);
     const paymentEvent = directorView.body.events.find((event: { type: string }) => event.type === 'payment');
     expect(paymentEvent).toBeDefined();
+    const documentEvent = directorView.body.events.find((event: { label: string }) => event.label === 'Certificat médical');
+    expect(documentEvent).toMatchObject({ type: 'document', detail: 'fourni' });
+    expect(directorView.body.events.some((event: { type: string }) => event.type === 'absence')).toBe(false);
 
     // Vue prof : le paiement est masqué (scoping académique uniquement)
     const teacherView = await request()

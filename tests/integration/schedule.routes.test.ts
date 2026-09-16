@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   findTeacherIdByUserId: vi.fn(),
   findSchedulePeriodById: vi.fn(),
   createSchedule: vi.fn(),
+  assertTeacherCanBeScheduled: vi.fn(),
 }));
 
 vi.mock('../../src/shared/middleware/auth.middleware.js', () => ({
@@ -49,6 +50,7 @@ vi.mock('../../src/modules/schedule/schedule.service.js', async () => {
     }),
     hasFutureOccurrenceInPeriod: vi.fn().mockResolvedValue(false),
     computeOneShotEndDate: vi.fn().mockReturnValue('2026-05-31'),
+    assertTeacherCanBeScheduled: mocks.assertTeacherCanBeScheduled,
     resolveTimeSlotId: vi.fn().mockResolvedValue('timeslot-id'),
     createPeriodFromInput: vi.fn().mockResolvedValue({ id: 'period-id', name: 'T1' }),
   };
@@ -148,6 +150,7 @@ beforeEach(() => {
     is_active: true,
   });
   mocks.createSchedule.mockResolvedValue({ id: 'schedule-id' });
+  mocks.assertTeacherCanBeScheduled.mockResolvedValue(undefined);
 
   mocks.getActiveSchedulesForDate.mockResolvedValue({
     date: '2026-05-09',
@@ -360,6 +363,23 @@ describe('POST /api/v1/schedule - couverture de période', () => {
     expect(response.statusCode).toBe(400);
     expect(JSON.parse(response.body).code).toBe('SCHEDULE_DATE_OUTSIDE_PERIOD');
     expect(mocks.createSchedule).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('refuse l’ajout d’un créneau à un professeur bloqué → 409 TEACHER_BLOCKED', async () => {
+    mocks.assertTeacherCanBeScheduled.mockRejectedValueOnce(
+      new Error('Teacher is blocked and cannot be scheduled')
+    );
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/schedule',
+      payload: basePayload,
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'TEACHER_BLOCKED', statusCode: 409 });
     await app.close();
   });
 });

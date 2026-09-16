@@ -83,6 +83,16 @@ type UploadInput = {
   baseUrl: string;
 };
 
+type ReplaceInput = {
+  schemaName: string;
+  documentId: string;
+  fileName: string;
+  fileBuffer: Buffer;
+  contentType?: string;
+  name: string;
+  baseUrl: string;
+};
+
 type ListInput = {
   entityType: DocumentEntityType;
   entityId: string;
@@ -454,6 +464,54 @@ export class DocumentsService {
 
     const url = await this.signObjectUrl(created.r2_key);
     return this.toDocumentItem(created, url);
+  }
+
+  async replaceDocument(input: ReplaceInput): Promise<DocumentItem> {
+    const current = await this.repository.findDocumentById(input.documentId);
+    if (!current) {
+      throw new DocumentsModuleError('Document not found', 404, 'DOCUMENT_NOT_FOUND');
+    }
+
+    const extension = DocumentsService.validateExtension(input.fileName);
+    const tenantId = await this.repository.findTenantIdBySchemaName(input.schemaName);
+    if (!tenantId) {
+      throw new DocumentsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
+    }
+
+    const key = `${tenantId}/${current.entity_type}/${current.entity_id}/${randomUUID()}${extension}`;
+    await this.uploadObject({
+      key,
+      fileBuffer: input.fileBuffer,
+      contentType: DocumentsService.getContentType(input.fileName, input.contentType),
+    });
+
+    let updated: DocumentRow | null;
+    try {
+      updated = await this.repository.replaceDocumentFile({
+        documentId: current.id,
+        name: input.name,
+        r2Key: key,
+      });
+    } catch (error) {
+      await this.deleteObject(key);
+      throw error;
+    }
+
+    if (!updated) {
+      await this.deleteObject(key);
+      throw new DocumentsModuleError('Document not found', 404, 'DOCUMENT_NOT_FOUND');
+    }
+
+    // Le nouveau fichier est déjà référencé. Un ancien objet résiduel est sans
+    // incidence fonctionnelle et ne doit pas transformer un remplacement réussi
+    // en erreur côté utilisateur.
+    try {
+      await this.deleteObject(current.r2_key);
+    } catch {
+      // Nettoyage différé par le cycle de rétention du stockage.
+    }
+
+    return this.toDocumentItem(updated, await this.signObjectUrl(updated.r2_key));
   }
 
   async createDownloadUrl(input: DownloadInput): Promise<{ id: string; url: string }> {

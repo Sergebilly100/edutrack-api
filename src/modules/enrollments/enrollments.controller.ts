@@ -26,6 +26,11 @@ import {
   uuidParamsSchema,
 } from './enrollments.types.js';
 
+const normalizeUploadMime = (value: string): string => {
+  const mime = value.trim().toLowerCase();
+  return mime === 'image/jpg' || mime === 'image/pjpeg' ? 'image/jpeg' : mime;
+};
+
 const handleError = (request: FastifyRequest, reply: FastifyReply, error: unknown) => {
   if (error instanceof ZodError) return reply.code(400).send({ error: 'Invalid request', code: 'VALIDATION_ERROR', statusCode: 400, details: error.issues });
   if (error instanceof EnrollmentsModuleError) return reply.code(error.statusCode).send({ error: error.message, code: error.code, statusCode: error.statusCode });
@@ -213,8 +218,9 @@ export default async function enrollmentsController(
       if (!isR2Configured()) throw new EnrollmentsModuleError('Document storage is unavailable', 503, 'DOCUMENT_STORAGE_UNAVAILABLE');
       const file = await request.file();
       if (!file) throw new EnrollmentsModuleError('No file provided', 400, 'FILE_REQUIRED');
+      const mimeType = normalizeUploadMime(file.mimetype);
       const allowedMime = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
-      if (!allowedMime.has(file.mimetype)) throw new EnrollmentsModuleError('Unsupported document type', 400, 'INVALID_FILE_TYPE');
+      if (!allowedMime.has(mimeType)) throw new EnrollmentsModuleError('Unsupported document type', 400, 'INVALID_FILE_TYPE');
       const field = file.fields.documentTypeId;
       const firstField = Array.isArray(field) ? field[0] : field;
       const documentTypeId = z.string().uuid().parse(
@@ -225,7 +231,7 @@ export default async function enrollmentsController(
       if (buffer.length > 10 * 1024 * 1024) throw new EnrollmentsModuleError('File exceeds 10 MB', 400, 'FILE_TOO_LARGE');
       const extension = file.filename.split('.').pop()?.toLowerCase() || 'bin';
       const key = `student-documents/${request.claims!.schemaName}/${studentId}/${randomUUID()}.${extension}`;
-      await uploadBuffer(key, buffer, file.mimetype);
+      await uploadBuffer(key, buffer, mimeType);
       const document = await withService(request, (service) => service.upsertStudentDocument({ studentId, documentTypeId, status: 'provided', r2Key: key }));
       return reply.code(201).send({ document });
     } catch (error) { return handleError(request, reply, error); }

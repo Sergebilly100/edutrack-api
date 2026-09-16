@@ -961,6 +961,7 @@ export class AttendanceService {
     Array<{
       date: string;
       present: number;
+      late_count: number;
       absent: number;
       not_checked: number;
       present_count: number;

@@ -29,6 +29,7 @@ import {
 } from './schedule.repository.js';
 import {
   computeOneShotEndDate,
+  assertTeacherCanBeScheduled,
   createPeriodFromInput,
   duplicatePeriod,
   getActiveSchedulesForDate,
@@ -166,6 +167,13 @@ const handleError = (
     return reply.code(409).send({
       error: message,
       code: 'TEACHER_SCHEDULE_CONFLICT',
+      statusCode: 409,
+    });
+  }
+  if (message === 'Teacher is blocked and cannot be scheduled') {
+    return reply.code(409).send({
+      error: message,
+      code: 'TEACHER_BLOCKED',
       statusCode: 409,
     });
   }
@@ -436,6 +444,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
         const body = schedulePayloadSchema.parse(request.body);
         const db = ensureTenantDb(request);
         await ensureScheduleTemporalColumns(db);
+        await assertTeacherCanBeScheduled(db, body.teacher_id);
         const canonicalSubject = canonicalizeSubject(body.subject);
         const today = getTodayIso();
         const effectiveFrom = body.effective_from ?? today;
@@ -527,6 +536,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
         const body = schedulePayloadSchema.parse(request.body);
         const db = ensureTenantDb(request);
         await ensureScheduleTemporalColumns(db);
+        await assertTeacherCanBeScheduled(db, body.teacher_id);
         const canonicalSubject = canonicalizeSubject(body.subject);
         const today = getTodayIso();
         const effectiveFrom = body.effective_from ?? today;

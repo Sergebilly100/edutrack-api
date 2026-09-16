@@ -3,7 +3,7 @@ import { sql } from 'drizzle-orm';
 import type { TenantDb } from '../../shared/database/db.js';
 
 export type DossierEvent = {
-  type: 'enrollment' | 'payment' | 'report_card' | 'absence' | 'document';
+  type: 'enrollment' | 'payment' | 'report_card' | 'document';
   date: string;
   label: string;
   detail: string | null;
@@ -19,7 +19,7 @@ export type StudentDossierProfile = {
 
 /**
  * Dossier élève (Tâche 7c) : timeline chronologique en lecture seule,
- * agrégeant inscriptions, paiements, bulletins publiés, absences et documents.
+ * agrégeant inscriptions, paiements, bulletins publiés et documents.
  * Volume faible par élève : pas de cache nécessaire.
  */
 export class StudentDossierRepository {
@@ -116,17 +116,6 @@ export class StudentDossierRepository {
           AND (${teacherId}::uuid IS NULL)
 
         UNION ALL
-        SELECT ast.date::date,
-               'absence',
-               CASE ast.status WHEN 'excused' THEN 'Absence justifiée' ELSE 'Absence' END,
-               s.subject
-        FROM attendances_student ast
-        INNER JOIN schedules s ON s.id = ast.schedule_id
-        WHERE ast.student_id = ${studentId}::uuid
-          AND ast.status IN ('absent', 'excused')
-          AND (${teacherId}::uuid IS NULL OR s.teacher_id = ${teacherId}::uuid)
-
-        UNION ALL
         SELECT sd.created_at::date,
                'document',
                COALESCE(rdt.name, 'Document'),
@@ -134,6 +123,16 @@ export class StudentDossierRepository {
         FROM student_documents sd
         LEFT JOIN required_document_types rdt ON rdt.id = sd.document_type_id
         WHERE sd.student_id = ${studentId}::uuid
+          AND (${teacherId}::uuid IS NULL)
+
+        UNION ALL
+        SELECT d.created_at::date,
+               'document',
+               d.name,
+               'fourni'
+        FROM documents d
+        WHERE d.entity_type = 'student'::document_entity_type
+          AND d.entity_id = ${studentId}::uuid
           AND (${teacherId}::uuid IS NULL)
       )
       SELECT type, date::text, label, detail FROM events ORDER BY date DESC LIMIT 200
