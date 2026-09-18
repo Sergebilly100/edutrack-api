@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 import {
   resolveMappingByHeaders,
   translateMappedValue,
@@ -176,7 +174,7 @@ export class PaymentImportService {
           source: 'bulk_import',
           confirmedByUserId: actorUserId,
           providerReference: row.reference,
-          receiptNumber: `REC-${randomUUID()}`,
+          receiptNumber: await finance.nextReceiptNumber(),
           paymentDate: row.paymentDate,
         });
         touchedStudents.add(row.studentId);

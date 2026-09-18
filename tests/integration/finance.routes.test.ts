@@ -158,6 +158,7 @@ describe('finance routes integration', () => {
       status: 'confirmed',
       schoolReceiptReference: 'CARNET-42',
     });
+    expect(response.body.payment.receiptNumber).toMatch(/^REC-\d{10}$/);
     expect(response.body.financialStatus).toMatchObject({
       confirmedPaid: 100_000,
       remainingDue: 0,

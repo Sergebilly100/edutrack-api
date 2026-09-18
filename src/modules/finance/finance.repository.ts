@@ -86,12 +86,25 @@ export type ReceiptContextRow = PaymentRow & {
   currency: string;
 };
 
+type ReceiptNumberRow = {
+  receipt_number: string;
+};
+
 export class FinanceRepository {
   constructor(readonly db: FinanceDb) {}
 
   static toNumber(value: string | number | null | undefined): number {
     const parsed = typeof value === 'number' ? value : Number(value ?? 0);
     return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  async nextReceiptNumber(): Promise<string> {
+    const result = await this.db.execute<ReceiptNumberRow>(sql`
+      SELECT CONCAT('REC-', LPAD(nextval('payment_receipt_numbers')::text, 10, '0')) AS receipt_number
+    `);
+    const receiptNumber = rows<ReceiptNumberRow>(result)[0]?.receipt_number;
+    if (!receiptNumber) throw new Error('Failed to generate receipt number');
+    return receiptNumber;
   }
 
   async getAmountDueContext(studentId: string, schoolYearId: string): Promise<AmountDueContext | null> {

@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import ExcelJS from 'exceljs';
 
 import {
@@ -35,8 +34,6 @@ export class FinanceModuleError extends Error {
 
 const todayIso = (): string => new Date().toISOString().slice(0, 10);
 const iso = (value: string | Date | null): string | null => value ? new Date(value).toISOString() : null;
-const receiptNumber = (): string => `REC-${randomUUID()}`;
-
 const mapPayment = (row: PaymentRow) => ({
   id: row.id,
   studentId: row.student_id,
@@ -241,7 +238,7 @@ export class FinanceService {
         ...input,
         source: 'cashier_manual',
         confirmedByUserId: input.actorUserId,
-        receiptNumber: receiptNumber(),
+        receiptNumber: await repository.nextReceiptNumber(),
       });
       const financialStatus = await service.getFinancialStatus(input.studentId, input.schoolYearId);
       if (financialStatus.remainingDue === 0) {
@@ -478,7 +475,7 @@ export class FinanceService {
         confirmedByUserId: input.actorUserId,
         providerReference: input.providerReference,
         schoolReceiptReference: input.schoolReceiptReference,
-        receiptNumber: receiptNumber(),
+        receiptNumber: await repository.nextReceiptNumber(),
       });
       await repository.confirmEnrollment(input.enrollmentId, input.actorUserId);
       await new FinancialCacheService(

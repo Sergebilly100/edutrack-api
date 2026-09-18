@@ -20,6 +20,12 @@ import type { PermissionKey } from '../../types/index.js';
 
 export const tenant = pgSchema('tenant');
 
+export const paymentReceiptNumbers = tenant.sequence('payment_receipt_numbers', {
+  startWith: 1,
+  minValue: 1,
+  maxValue: 9_999_999_999,
+});
+
 export const userRoleEnum = tenant.enum('user_role', [
   'director',
   'staff',

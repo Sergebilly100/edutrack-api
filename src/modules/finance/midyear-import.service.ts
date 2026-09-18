@@ -308,7 +308,7 @@ export class MidyearImportService {
               method: 'cash',
               source: 'migration_import',
               confirmedByUserId: null,
-              receiptNumber: `MIG-${randomUUID()}`,
+              receiptNumber: await finance.nextReceiptNumber(),
               paymentDate: new Date().toISOString().slice(0, 10),
             });
             createdCount += 1;
