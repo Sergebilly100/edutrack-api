@@ -816,7 +816,9 @@ export const evaluations = tenant.table(
   'evaluations',
   {
     id: uuid('id').defaultRandom().primaryKey(),
-    lessonSlotId: uuid('lesson_slot_id').notNull().references(() => schedules.id),
+    // Une évaluation peut être créée avant la configuration de l'EDT. Le
+    // rattachement à un créneau reste disponible lorsqu'un créneau existe.
+    lessonSlotId: uuid('lesson_slot_id').references(() => schedules.id),
     subjectId: uuid('subject_id').notNull().references(() => subjects.id),
     classId: uuid('class_id').notNull().references(() => classes.id),
     gradingPeriodId: uuid('grading_period_id').notNull().references(() => gradingPeriods.id),

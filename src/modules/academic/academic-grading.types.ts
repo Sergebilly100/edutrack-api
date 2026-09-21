@@ -109,7 +109,7 @@ export const updateGradingPeriodBodySchema = z
   );
 
 export const createEvaluationBodySchema = z.object({
-  lessonSlotId: z.string().uuid(),
+  lessonSlotId: z.string().uuid().optional(),
   subjectId: z.string().uuid(),
   classId: z.string().uuid(),
   gradingPeriodId: z.string().uuid(),

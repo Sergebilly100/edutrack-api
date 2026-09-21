@@ -275,12 +275,57 @@ describe('academic grading integration', () => {
       SET end_date = '2000-01-01'
       WHERE teacher_id = $1 AND class_id = $2
     `, [context.teacherId, classId]);
-    const contextWithoutExpiredSchedules = await request()
+    const contextWithoutActiveSchedules = await request()
       .get('/api/v1/academic/teacher-context')
       .set(teacherHeaders);
-    expect(contextWithoutExpiredSchedules.status).toBe(200);
-    expect(contextWithoutExpiredSchedules.body.classes).not.toEqual(expect.arrayContaining([
+    expect(contextWithoutActiveSchedules.status).toBe(200);
+    expect(contextWithoutActiveSchedules.body.classes).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: classId }),
     ]));
+    expect(contextWithoutActiveSchedules.body.gradingPeriods).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: gradingPeriodId }),
+    ]));
+
+    const scopeWithoutActiveSchedules = await request()
+      .get('/api/v1/evaluations/scope')
+      .set(teacherHeaders)
+      .query({ classId, gradingPeriodId });
+    expect(scopeWithoutActiveSchedules.status, JSON.stringify(scopeWithoutActiveSchedules.body)).toBe(200);
+    expect(scopeWithoutActiveSchedules.body.lessonSlots).toEqual([]);
+    expect(scopeWithoutActiveSchedules.body.subjects).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: frenchResponse.body.subject.id }),
+    ]));
+
+    const evaluationWithoutSchedule = await request()
+      .post('/api/v1/evaluations')
+      .set(teacherHeaders)
+      .send({
+        subjectId: frenchResponse.body.subject.id,
+        classId,
+        gradingPeriodId,
+        type: 'scheduled',
+        coefficient: 1,
+        label: 'Devoir sans EDT',
+        evaluationDate: '2088-12-10',
+      });
+    expect(evaluationWithoutSchedule.status, JSON.stringify(evaluationWithoutSchedule.body)).toBe(201);
+    expect(evaluationWithoutSchedule.body.evaluation.lessonSlotId).toBeNull();
+
+    const gradeWithoutSchedule = await request()
+      .put(`/api/v1/evaluations/${evaluationWithoutSchedule.body.evaluation.id}/grades`)
+      .set(teacherHeaders)
+      .send({ studentId, score: 15, maxScore: 20 });
+    expect(gradeWithoutSchedule.status, JSON.stringify(gradeWithoutSchedule.body)).toBe(200);
+
+    const calculationWithoutSchedule = await request()
+      .put('/api/v1/class-subject-completion')
+      .set(teacherHeaders)
+      .send({
+        classId,
+        subjectId: frenchResponse.body.subject.id,
+        gradingPeriodId,
+        status: 'in_progress',
+      });
+    expect(calculationWithoutSchedule.status, JSON.stringify(calculationWithoutSchedule.body)).toBe(200);
   });
 });

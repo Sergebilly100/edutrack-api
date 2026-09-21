@@ -373,20 +373,25 @@ export class AcademicGradingService {
     if (!scope) {
       throw new AcademicGradingError('Class is outside the teacher scope', 403, 'EVALUATION_SCOPE_FORBIDDEN');
     }
-    const [rawLessonSlots, levelSubjects, evaluations, completion] = await Promise.all([
+    const [rawLessonSlots, assignedSubjects, scheduledSubjectNames, levelSubjects, evaluations, completion] = await Promise.all([
       this.repository.listTeacherLessonSlotsForClass(teacherId, classId),
+      this.repository.listTeacherAssignedSubjectsForClass(teacherId, classId),
+      this.repository.listTeacherScheduleSubjects(teacherId, classId),
       scope.levelId ? this.repository.listSubjects(scope.levelId) : Promise.resolve([]),
       this.repository.listEvaluationsWithGrades(teacherId, classId, gradingPeriodId),
       this.repository.getCompletion(classId, gradingPeriodId),
     ]);
+    const assignedSubjectIds = new Set(assignedSubjects.map((subject) => subject.id));
+    const scheduledSubjectKeys = new Set(scheduledSubjectNames.map(normalizeSubjectKey));
+    const subjects = levelSubjects.filter(
+      (subject) => assignedSubjectIds.has(subject.id) || scheduledSubjectKeys.has(normalizeSubjectKey(subject.name))
+    );
     const lessonSlots = rawLessonSlots.map((slot) => ({
       ...slot,
-      subjectId: levelSubjects.find(
+      subjectId: subjects.find(
         (subject) => normalizeSubjectKey(subject.name) === normalizeSubjectKey(slot.subjectName)
       )?.id ?? null,
     }));
-    const subjectIdsForSlots = new Set(lessonSlots.flatMap((slot) => slot.subjectId ? [slot.subjectId] : []));
-    const subjects = levelSubjects.filter((subject) => subjectIdsForSlots.has(subject.id));
     const subjectIds = new Set(subjects.map((subject) => subject.id));
     return {
       lessonSlots,
@@ -397,30 +402,44 @@ export class AcademicGradingService {
   }
 
   private async assertEvaluationScope(input: CreateEvaluationInput, teacherId: string): Promise<void> {
-    const [slot, subject, period] = await Promise.all([
-      this.repository.getLessonSlotScope(input.lessonSlotId),
+    const [slot, subject, period, schoolClass] = await Promise.all([
+      input.lessonSlotId ? this.repository.getLessonSlotScope(input.lessonSlotId) : Promise.resolve(null),
       this.repository.findSubject(input.subjectId),
       this.repository.findGradingPeriod(input.gradingPeriodId),
+      this.repository.getClassScope(input.classId),
     ]);
-    if (!slot) throw new AcademicGradingError('Lesson slot not found', 400, 'LESSON_SLOT_NOT_FOUND');
     if (!subject) throw new AcademicGradingError('Subject not found', 400, 'SUBJECT_NOT_FOUND');
     if (!period) throw new AcademicGradingError('Grading period not found', 400, 'GRADING_PERIOD_NOT_FOUND');
+    if (!schoolClass) throw new AcademicGradingError('Class not found', 400, 'CLASS_NOT_FOUND');
     if (input.evaluationDate && (input.evaluationDate < period.startDate || input.evaluationDate > period.endDate)) {
       throw new AcademicGradingError('Evaluation date must fall within the grading period', 400, 'EVALUATION_DATE_OUTSIDE_PERIOD');
     }
-    if (slot.teacherId !== teacherId || slot.classId !== input.classId) {
-      throw new AcademicGradingError('Lesson slot is outside the teacher scope', 403, 'EVALUATION_SCOPE_FORBIDDEN');
-    }
-    if (slot.classLevelId !== subject.levelId || slot.classSchoolYearId !== period.schoolYearId) {
+    if (schoolClass.levelId !== subject.levelId || schoolClass.schoolYearId !== period.schoolYearId) {
       throw new AcademicGradingError('Subject or period does not match the lesson class', 400, 'EVALUATION_SCOPE_MISMATCH');
     }
-    if (normalizeSubjectKey(slot.subjectName) !== normalizeSubjectKey(subject.name)) {
+    let assigned = await this.repository.hasTeacherSubjectAssignment(teacherId, subject.id, input.classId);
+    if (!assigned) {
+      const scheduledSubjectNames = await this.repository.listTeacherScheduleSubjects(teacherId, input.classId);
+      assigned = scheduledSubjectNames.some(
+        (scheduledSubject) => normalizeSubjectKey(scheduledSubject) === normalizeSubjectKey(subject.name)
+      );
+      if (assigned) {
+        await this.repository.ensureTeacherSubjectAssignment(teacherId, subject.id, input.classId);
+      }
+    }
+    if (!assigned) {
+      throw new AcademicGradingError('Subject is outside the teacher scope', 403, 'EVALUATION_SCOPE_FORBIDDEN');
+    }
+    if (input.lessonSlotId && !slot) throw new AcademicGradingError('Lesson slot not found', 400, 'LESSON_SLOT_NOT_FOUND');
+    if (slot && (slot.teacherId !== teacherId || slot.classId !== input.classId)) {
+      throw new AcademicGradingError('Lesson slot is outside the teacher scope', 403, 'EVALUATION_SCOPE_FORBIDDEN');
+    }
+    if (slot && normalizeSubjectKey(slot.subjectName) !== normalizeSubjectKey(subject.name)) {
       throw new AcademicGradingError('Subject does not match the lesson slot', 400, 'EVALUATION_SUBJECT_MISMATCH');
     }
 
     await this.assertSubjectOpen(input.classId, input.subjectId, input.gradingPeriodId);
 
-    await this.repository.ensureTeacherSubjectAssignment(teacherId, subject.id, input.classId);
   }
 
   async createEvaluation(input: CreateEvaluationInput, userId: string) {

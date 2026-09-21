@@ -61,7 +61,7 @@ const mapPeriod = (row: PeriodRow): GradingPeriodItem => ({
 
 export type EvaluationItem = {
   id: string;
-  lessonSlotId: string;
+  lessonSlotId: string | null;
   subjectId: string;
   classId: string;
   gradingPeriodId: string;
@@ -74,7 +74,7 @@ export type EvaluationItem = {
 
 type EvaluationRow = {
   id: string;
-  lesson_slot_id: string;
+  lesson_slot_id: string | null;
   subject_id: string;
   class_id: string;
   grading_period_id: string;
@@ -313,18 +313,11 @@ export class AcademicGradingRepository {
       SELECT DISTINCT c.id::text, c.name, l.id::text AS level_id, l.name AS level_name,
              sy.id::text AS school_year_id, sy.label AS school_year_label,
              c.homeroom_teacher_id::text
-      FROM schedules sch
-      INNER JOIN classes c ON c.id = sch.class_id AND c.is_active = true
+      FROM teacher_subject_assignments tsa
+      INNER JOIN classes c ON c.id = tsa.class_id AND c.is_active = true
       INNER JOIN levels l ON l.id = c.level_id
       INNER JOIN school_years sy ON sy.id = c.school_year_id
-      INNER JOIN schedule_periods sp ON sp.id = sch.schedule_period_id
-      WHERE sch.teacher_id = ${teacherId}::uuid
-        AND sch.is_active = true
-        AND sp.is_active = true
-        AND sp.valid_from <= CURRENT_DATE
-        AND sp.valid_to >= CURRENT_DATE
-        AND (sch.start_date IS NULL OR sch.start_date <= CURRENT_DATE)
-        AND (sch.end_date IS NULL OR sch.end_date > CURRENT_DATE)
+      WHERE tsa.teacher_id = ${teacherId}::uuid
       ORDER BY sy.label DESC, l.name, c.name
     `);
     return rows(result).map((row) => ({
@@ -345,16 +338,9 @@ export class AcademicGradingRepository {
       FROM grading_periods gp
       WHERE EXISTS (
         SELECT 1
-        FROM schedules sch
-        INNER JOIN classes c ON c.id = sch.class_id
-        INNER JOIN schedule_periods sp ON sp.id = sch.schedule_period_id
-        WHERE sch.teacher_id = ${teacherId}::uuid
-          AND sch.is_active = true
-          AND sp.is_active = true
-          AND sp.valid_from <= CURRENT_DATE
-          AND sp.valid_to >= CURRENT_DATE
-          AND (sch.start_date IS NULL OR sch.start_date <= CURRENT_DATE)
-          AND (sch.end_date IS NULL OR sch.end_date > CURRENT_DATE)
+        FROM teacher_subject_assignments tsa
+        INNER JOIN classes c ON c.id = tsa.class_id
+        WHERE tsa.teacher_id = ${teacherId}::uuid
           AND c.school_year_id = gp.school_year_id
       )
       ORDER BY gp.start_date::text DESC, gp.order_index
@@ -453,10 +439,23 @@ export class AcademicGradingRepository {
     return rows(result).map((row) => row.subject);
   }
 
+  async listTeacherAssignedSubjectsForClass(teacherId: string, classId: string): Promise<SubjectItem[]> {
+    const result = await this.db.execute<SubjectRow>(sql`
+      SELECT s.id, s.level_id, l.name AS level_name, s.name, s.coefficient
+      FROM teacher_subject_assignments tsa
+      INNER JOIN subjects s ON s.id = tsa.subject_id
+      INNER JOIN levels l ON l.id = s.level_id
+      WHERE tsa.teacher_id = ${teacherId}::uuid
+        AND tsa.class_id = ${classId}::uuid
+      ORDER BY s.name
+    `);
+    return rows(result).map(mapSubject);
+  }
+
   async createEvaluation(input: CreateEvaluationInput, teacherId: string): Promise<EvaluationItem> {
     const result = await this.db.execute<EvaluationRow>(sql`
       INSERT INTO evaluations (lesson_slot_id, subject_id, class_id, grading_period_id, teacher_id, type, coefficient, label, evaluation_date)
-      VALUES (${input.lessonSlotId}::uuid, ${input.subjectId}::uuid, ${input.classId}::uuid, ${input.gradingPeriodId}::uuid, ${teacherId}::uuid, ${input.type}::evaluation_type, ${input.coefficient}, ${input.label}, ${input.evaluationDate ?? null}::date)
+      VALUES (${input.lessonSlotId ?? null}::uuid, ${input.subjectId}::uuid, ${input.classId}::uuid, ${input.gradingPeriodId}::uuid, ${teacherId}::uuid, ${input.type}::evaluation_type, ${input.coefficient}, ${input.label}, ${input.evaluationDate ?? null}::date)
       RETURNING id, lesson_slot_id, subject_id, class_id, grading_period_id, teacher_id, type, coefficient, label, evaluation_date::text
     `);
     const row = rows(result)[0];
@@ -713,16 +712,10 @@ export class AcademicGradingRepository {
       WHERE c.id = ${classId}::uuid
         AND c.is_active = true
         AND EXISTS (
-          SELECT 1 FROM schedules sch
-          INNER JOIN schedule_periods sp ON sp.id = sch.schedule_period_id
-          WHERE sch.teacher_id = ${teacherId}::uuid
-            AND sch.class_id = c.id
-            AND sch.is_active = true
-            AND sp.is_active = true
-            AND sp.valid_from <= CURRENT_DATE
-            AND sp.valid_to >= CURRENT_DATE
-            AND (sch.start_date IS NULL OR sch.start_date <= CURRENT_DATE)
-            AND (sch.end_date IS NULL OR sch.end_date > CURRENT_DATE)
+          SELECT 1
+          FROM teacher_subject_assignments tsa
+          WHERE tsa.teacher_id = ${teacherId}::uuid
+            AND tsa.class_id = c.id
         )
       LIMIT 1
     `);
@@ -738,22 +731,22 @@ export class AcademicGradingRepository {
   ): Promise<Array<{
     id: string; label: string; type: 'scheduled' | 'spontaneous'; coefficient: number;
     subjectId: string | null; subjectName: string | null;
-    dayOfWeek: number; startTime: string; endTime: string; roomName: string;
+    dayOfWeek: number | null; startTime: string; endTime: string; roomName: string;
     grades: Array<{ studentId: string; score: number; maxScore: number; comment: string | null }>;
   }>> {
     const evaluationRows = rows(await this.db.execute<{
       id: string; label: string; type: string; coefficient: string; evaluation_date: string | null;
       subject_id: string | null; subject_name: string | null;
-      day_of_week: number; start_time: string; end_time: string; room_name: string;
+      day_of_week: number | null; start_time: string | null; end_time: string | null; room_name: string | null;
     }>(sql`
       SELECT e.id::text, e.label, e.type::text, e.coefficient::text, e.evaluation_date::text,
              sub.id::text AS subject_id, sub.name AS subject_name,
              sch.day_of_week, ts.start_time::text, ts.end_time::text, r.name AS room_name
       FROM evaluations e
       LEFT JOIN subjects sub ON sub.id = e.subject_id
-      INNER JOIN schedules sch ON sch.id = e.lesson_slot_id
-      INNER JOIN time_slots ts ON ts.id = sch.time_slot_id
-      INNER JOIN rooms r ON r.id = sch.room_id
+      LEFT JOIN schedules sch ON sch.id = e.lesson_slot_id
+      LEFT JOIN time_slots ts ON ts.id = sch.time_slot_id
+      LEFT JOIN rooms r ON r.id = sch.room_id
       WHERE e.teacher_id = ${teacherId}::uuid
         AND e.class_id = ${classId}::uuid
         AND e.grading_period_id = ${gradingPeriodId}::uuid
@@ -787,9 +780,9 @@ export class AcademicGradingRepository {
       subjectId: row.subject_id,
       subjectName: row.subject_name,
       dayOfWeek: row.day_of_week,
-      startTime: row.start_time.slice(0, 5),
-      endTime: row.end_time.slice(0, 5),
-      roomName: row.room_name,
+      startTime: row.start_time?.slice(0, 5) ?? '',
+      endTime: row.end_time?.slice(0, 5) ?? '',
+      roomName: row.room_name ?? '',
       evaluationDate: row.evaluation_date,
       grades: gradesByEvaluation.get(row.id) ?? [],
     }));
