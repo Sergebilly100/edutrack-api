@@ -3,6 +3,7 @@ import ExcelJS from 'exceljs';
 import {
   calculateStudentTotalDue,
   canCancelPayment,
+  isValidCumulativeSchedule,
   prorateSubscriptionAmount,
   resolveIndividualFinancialStatus,
 } from './finance.calculations.js';
@@ -96,6 +97,9 @@ export class FinanceService {
         ? null
         : FinanceRepository.toNumber(context.discount_amount),
       subscriptionLines,
+      tuitionDue: Math.max(0, context.override_total_amount === null
+        ? FinanceRepository.toNumber(context.plan_total_amount) - (context.discount_amount === null ? 0 : FinanceRepository.toNumber(context.discount_amount))
+        : FinanceRepository.toNumber(context.override_total_amount)),
       totalDue,
     };
   }
@@ -531,6 +535,18 @@ export class FinanceService {
         'DISCOUNT_EXCEEDS_TUITION'
       );
     }
+    const adjustedTuitionAmount = input.overrideTotalAmount ?? Math.max(
+      0,
+      context.planTotalAmount - (input.discountAmount ?? 0)
+    );
+    const currentSchedule = await this.repository.listStudentTuitionSchedule(input.studentId, input.schoolYearId);
+    if (currentSchedule.length > 0 && !isValidCumulativeSchedule(currentSchedule, adjustedTuitionAmount)) {
+      throw new FinanceModuleError(
+        'The individual cumulative schedule exceeds the adjusted tuition amount',
+        409,
+        'STUDENT_SCHEDULE_EXCEEDS_TUITION'
+      );
+    }
     try {
       return await this.repository.db.transaction(async (tx) => {
         const repository = new FinanceRepository(tx as FinanceDb);
@@ -545,6 +561,8 @@ export class FinanceService {
           reason: input.reason,
           amountLabel,
         });
+        await new FinancialCacheService(new FinancialCacheRepository(tx as FinanceDb))
+          .recalcStudent(input.studentId, input.schoolYearId);
         return { override };
       });
     } catch (error) {
@@ -557,6 +575,44 @@ export class FinanceService {
       }
       throw error;
     }
+  }
+
+  async getStudentTuitionSchedule(studentId: string, schoolYearId: string) {
+    await this.getAmountDue(studentId, schoolYearId);
+    return this.repository.listStudentTuitionSchedule(studentId, schoolYearId);
+  }
+
+  async replaceStudentTuitionSchedule(input: {
+    studentId: string;
+    schoolYearId: string;
+    scheduleSteps: Array<{ dueDate: string; cumulativeAmountExpected: number }>;
+  }) {
+    const due = await this.getAmountDue(input.studentId, input.schoolYearId);
+    if (!isValidCumulativeSchedule(input.scheduleSteps, due.tuitionDue)) {
+      throw new FinanceModuleError(
+        'Schedule steps must have increasing dates and cumulative amounts within the student tuition amount',
+        400,
+        'INVALID_STUDENT_CUMULATIVE_SCHEDULE'
+      );
+    }
+    return this.repository.db.transaction(async (tx) => {
+      const repository = new FinanceRepository(tx as FinanceDb);
+      await repository.replaceStudentTuitionSchedule(input);
+      await new FinancialCacheService(new FinancialCacheRepository(tx as FinanceDb))
+        .recalcStudent(input.studentId, input.schoolYearId);
+      return { scheduleSteps: await repository.listStudentTuitionSchedule(input.studentId, input.schoolYearId) };
+    });
+  }
+
+  async deleteStudentTuitionSchedule(studentId: string, schoolYearId: string) {
+    await this.getAmountDue(studentId, schoolYearId);
+    return this.repository.db.transaction(async (tx) => {
+      const repository = new FinanceRepository(tx as FinanceDb);
+      const deleted = await repository.deleteStudentTuitionSchedule(studentId, schoolYearId);
+      await new FinancialCacheService(new FinancialCacheRepository(tx as FinanceDb))
+        .recalcStudent(studentId, schoolYearId);
+      return { deleted };
+    });
   }
 
   async upsertTuitionPlan(levelId: string, input: UpsertTuitionPlanInput) {

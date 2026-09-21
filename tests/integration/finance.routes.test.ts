@@ -99,10 +99,10 @@ describe('finance routes integration', () => {
       WHERE table_schema = current_schema()
         AND table_name IN (
           'tuition_plans', 'tuition_schedule_steps', 'student_tuition_overrides',
-          'payment_provider_settings', 'payments', 'subscription_plans'
+          'student_tuition_schedule_steps', 'payment_provider_settings', 'payments', 'subscription_plans'
         )
     `);
-    expect(tables[0]!.count).toBe(6);
+    expect(tables[0]!.count).toBe(7);
     const columns = await queryTenant<{ column_name: string }>(`
       SELECT column_name
       FROM information_schema.columns
@@ -419,5 +419,57 @@ describe('finance routes integration', () => {
     `, [response.body.override.id]);
     expect(notifications).toHaveLength(1);
     expect(notifications[0]!.metadata.event).toBe('tuition_discount_granted');
+  });
+
+  it('remplace la courbe du niveau pour un élève, recalcule son statut, puis la réinitialise', async () => {
+    const context = await createFinanceContext(`student-schedule-${Date.now()}`);
+    const saved = await request()
+      .put(`/api/v1/tuition/student-schedules/${context.studentId}`)
+      .set(context.headers)
+      .send({
+        schoolYearId: context.schoolYearId,
+        scheduleSteps: [
+          { dueDate: isoDate(-1), cumulativeAmountExpected: 15_000 },
+          { dueDate: isoDate(30), cumulativeAmountExpected: 100_000 },
+        ],
+      });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    expect(saved.body.scheduleSteps).toEqual([
+      { dueDate: isoDate(-1), cumulativeAmountExpected: 15_000 },
+      { dueDate: isoDate(30), cumulativeAmountExpected: 100_000 },
+    ]);
+
+    const schedule = await request()
+      .get(`/api/v1/tuition/student-schedules/${context.studentId}?school_year_id=${context.schoolYearId}`)
+      .set(context.headers);
+    expect(schedule.status, JSON.stringify(schedule.body)).toBe(200);
+    expect(schedule.body.scheduleSteps).toEqual(saved.body.scheduleSteps);
+
+    const payment = await request().post('/api/v1/payments').set(context.headers).send({
+      studentId: context.studentId,
+      schoolYearId: context.schoolYearId,
+      amount: 20_000,
+      method: 'cash',
+    });
+    expect(payment.status).toBe(201);
+    expect(payment.body.financialStatus).toMatchObject({
+      cumulativeExpectedAtDate: 15_000,
+      standing: 'up_to_date',
+    });
+
+    const reset = await request()
+      .delete(`/api/v1/tuition/student-schedules/${context.studentId}?school_year_id=${context.schoolYearId}`)
+      .set(context.headers);
+    expect(reset.status, JSON.stringify(reset.body)).toBe(200);
+    expect(reset.body.deleted).toBe(true);
+
+    const status = await request()
+      .get(`/api/v1/students/${context.studentId}/financial-status?school_year_id=${context.schoolYearId}`)
+      .set(context.headers);
+    expect(status.status).toBe(200);
+    expect(status.body.financialStatus).toMatchObject({
+      cumulativeExpectedAtDate: 60_000,
+      standing: 'late',
+    });
   });
 });

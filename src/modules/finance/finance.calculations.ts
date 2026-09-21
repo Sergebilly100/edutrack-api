@@ -3,6 +3,33 @@ export type FinancialStanding = 'up_to_date' | 'late';
 export type FinancialCacheStatus = FinancialStanding | 'waived';
 export type PaymentStatus = 'confirmed' | 'waived_by_school' | 'cancelled';
 
+export type CumulativeScheduleStep = {
+  dueDate: string;
+  cumulativeAmountExpected: number;
+};
+
+export const isValidCumulativeSchedule = (
+  scheduleSteps: readonly CumulativeScheduleStep[],
+  totalAmount: number
+): boolean => {
+  if (scheduleSteps.length === 0) return false;
+
+  let previousDate = '';
+  let previousAmount = -1;
+  for (const step of scheduleSteps) {
+    if (
+      step.dueDate <= previousDate
+      || step.cumulativeAmountExpected < previousAmount
+      || step.cumulativeAmountExpected > totalAmount
+    ) {
+      return false;
+    }
+    previousDate = step.dueDate;
+    previousAmount = step.cumulativeAmountExpected;
+  }
+  return true;
+};
+
 const PERIOD_MONTHS: Record<SubscriptionPeriod, number> = {
   monthly: 1,
   quarterly: 3,

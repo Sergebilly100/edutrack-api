@@ -7,7 +7,7 @@ import type {
   SubscriptionPlanInput,
   UpsertTuitionPlanInput,
 } from './finance.types.js';
-import type { PaymentStatus, SubscriptionPeriod } from './finance.calculations.js';
+import type { CumulativeScheduleStep, PaymentStatus, SubscriptionPeriod } from './finance.calculations.js';
 
 export type FinanceDb = NodePgDatabase<Record<string, unknown>>;
 
@@ -219,7 +219,10 @@ export class FinanceRepository {
 
   async getExpectedAtDate(studentId: string, schoolYearId: string, asOfDate: string): Promise<number> {
     const result = await this.db.execute<{ expected: string | number }>(sql`
-      SELECT COALESCE(tss.cumulative_amount_expected, 0) AS expected
+      SELECT CASE
+        WHEN custom_steps.step_count > 0 THEN COALESCE(custom_steps.expected, 0)
+        ELSE COALESCE(plan_steps.expected, 0)
+      END AS expected
       FROM students s
       LEFT JOIN enrollments e
         ON e.student_id = s.id
@@ -231,13 +234,18 @@ export class FinanceRepository {
         ON tp.level_id = c.level_id
        AND tp.school_year_id = ${schoolYearId}::uuid
       LEFT JOIN LATERAL (
-        SELECT cumulative_amount_expected
+        SELECT COUNT(*)::int AS step_count,
+               MAX(cumulative_amount_expected) FILTER (WHERE due_date <= ${asOfDate}::date) AS expected
+        FROM student_tuition_schedule_steps
+        WHERE student_id = s.id
+          AND school_year_id = ${schoolYearId}::uuid
+      ) custom_steps ON true
+      LEFT JOIN LATERAL (
+        SELECT MAX(cumulative_amount_expected) AS expected
         FROM tuition_schedule_steps
         WHERE tuition_plan_id = tp.id
           AND due_date <= ${asOfDate}::date
-        ORDER BY due_date DESC
-        LIMIT 1
-      ) tss ON true
+      ) plan_steps ON true
       WHERE s.id = ${studentId}::uuid
       ORDER BY e.enrolled_at DESC NULLS LAST
       LIMIT 1
@@ -556,6 +564,52 @@ export class FinanceRepository {
       RETURNING *, id::text, student_id::text, school_year_id::text, granted_by_user_id::text
     `);
     return rows(result)[0];
+  }
+
+  async listStudentTuitionSchedule(studentId: string, schoolYearId: string): Promise<CumulativeScheduleStep[]> {
+    const result = await this.db.execute<{ due_date: string; cumulative_amount_expected: string | number }>(sql`
+      SELECT due_date::text, cumulative_amount_expected
+      FROM student_tuition_schedule_steps
+      WHERE student_id = ${studentId}::uuid
+        AND school_year_id = ${schoolYearId}::uuid
+      ORDER BY due_date ASC
+    `);
+    return rows<{ due_date: string; cumulative_amount_expected: string | number }>(result).map((step) => ({
+      dueDate: step.due_date,
+      cumulativeAmountExpected: FinanceRepository.toNumber(step.cumulative_amount_expected),
+    }));
+  }
+
+  async replaceStudentTuitionSchedule(input: {
+    studentId: string;
+    schoolYearId: string;
+    scheduleSteps: readonly CumulativeScheduleStep[];
+  }): Promise<void> {
+    await this.db.execute(sql`
+      DELETE FROM student_tuition_schedule_steps
+      WHERE student_id = ${input.studentId}::uuid
+        AND school_year_id = ${input.schoolYearId}::uuid
+    `);
+    for (const step of input.scheduleSteps) {
+      await this.db.execute(sql`
+        INSERT INTO student_tuition_schedule_steps (
+          student_id, school_year_id, due_date, cumulative_amount_expected
+        ) VALUES (
+          ${input.studentId}::uuid, ${input.schoolYearId}::uuid,
+          ${step.dueDate}::date, ${step.cumulativeAmountExpected}
+        )
+      `);
+    }
+  }
+
+  async deleteStudentTuitionSchedule(studentId: string, schoolYearId: string): Promise<boolean> {
+    const result = await this.db.execute<{ id: string }>(sql`
+      DELETE FROM student_tuition_schedule_steps
+      WHERE student_id = ${studentId}::uuid
+        AND school_year_id = ${schoolYearId}::uuid
+      RETURNING id::text
+    `);
+    return rows<{ id: string }>(result).length > 0;
   }
 
   async notifyDirectorOfOverride(input: {

@@ -112,6 +112,14 @@ export const upsertTuitionPlanBodySchema = z.object({
   }).strict()).default([]),
 }).strict();
 
+export const upsertStudentTuitionScheduleBodySchema = z.object({
+  schoolYearId: uuidSchema,
+  scheduleSteps: z.array(z.object({
+    dueDate: z.iso.date(),
+    cumulativeAmountExpected: moneySchema,
+  }).strict()).min(1),
+}).strict();
+
 export const upsertProviderSettingBodySchema = z.object({
   provider: mobileMoneyProviderSchema,
   merchantNumber: z.string().trim().min(1).max(100),

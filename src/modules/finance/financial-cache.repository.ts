@@ -81,17 +81,31 @@ export class FinancialCacheRepository {
       )
       SELECT scope.student_id::text,
              scope.class_id::text AS class_id,
-             COALESCE(steps.expected_to_date, 0)::text AS expected_to_date,
+             CASE WHEN custom_steps.step_count > 0
+               THEN COALESCE(custom_steps.expected_to_date, 0)
+               ELSE COALESCE(plan_steps.expected_to_date, 0)
+             END::text AS expected_to_date,
              COALESCE(cov.paid_confirmed, 0)::text AS paid_confirmed,
              COALESCE(cov.waived_amount, 0)::text AS waived_amount,
              COALESCE(GREATEST(
                COALESCE(scope.override_total_amount, scope.plan_total + COALESCE(scope.discount_amount, 0), 0),
                0
              ), 0)::text AS total_due_year,
-             steps.earliest_overdue_step_due_date::text AS earliest_overdue_step_due_date
+             CASE WHEN custom_steps.step_count > 0
+               THEN custom_steps.earliest_overdue_step_due_date
+               ELSE plan_steps.earliest_overdue_step_due_date
+             END::text AS earliest_overdue_step_due_date
       FROM scope
       LEFT JOIN coverage cov
         ON cov.student_id = scope.student_id AND cov.school_year_id = ${schoolYearId}::uuid
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS step_count,
+               MAX(stss.cumulative_amount_expected) FILTER (WHERE stss.due_date <= CURRENT_DATE) AS expected_to_date,
+               MIN(stss.due_date) FILTER (WHERE stss.due_date <= CURRENT_DATE) AS earliest_overdue_step_due_date
+        FROM student_tuition_schedule_steps stss
+        WHERE stss.student_id = scope.student_id
+          AND stss.school_year_id = ${schoolYearId}::uuid
+      ) custom_steps ON true
       LEFT JOIN LATERAL (
         SELECT MAX(tss.cumulative_amount_expected) FILTER (WHERE tss.due_date <= CURRENT_DATE) AS expected_to_date,
                MIN(tss.due_date) FILTER (WHERE tss.due_date <= CURRENT_DATE) AS earliest_overdue_step_due_date
@@ -99,7 +113,7 @@ export class FinancialCacheRepository {
         INNER JOIN tuition_plans tp2 ON tp2.id = tss.tuition_plan_id
         INNER JOIN classes c2 ON c2.level_id = tp2.level_id AND c2.id = scope.class_id
         WHERE tp2.school_year_id = ${schoolYearId}::uuid
-      ) steps ON true
+      ) plan_steps ON true
     `);
 
     return getRows<{

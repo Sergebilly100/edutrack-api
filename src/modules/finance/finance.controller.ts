@@ -32,6 +32,7 @@ import {
   updateSubscriptionPlanBodySchema,
   upsertProviderSettingBodySchema,
   upsertTuitionPlanBodySchema,
+  upsertStudentTuitionScheduleBodySchema,
   cashJournalQuerySchema,
   cashJournalExportQuerySchema,
   paymentHistoryQuerySchema,
@@ -394,6 +395,36 @@ export default async function financeController(
         grantedByUserId: request.user!.userId,
       }));
       return reply.code(201).send(result);
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.get('/api/v1/tuition/student-schedules/:studentId', { preHandler: requireAnyPermission(['tuition.view', 'tuition.grant_discount']) }, async (request, reply) => {
+    try {
+      const { studentId } = studentFinancialParamsSchema.parse(request.params);
+      const { school_year_id: schoolYearId } = schoolYearQuerySchema.parse(request.query);
+      return reply.send({ scheduleSteps: await withService(request, (service) =>
+        service.getStudentTuitionSchedule(studentId, schoolYearId)) });
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.put('/api/v1/tuition/student-schedules/:studentId', { preHandler: requirePermission('tuition.grant_discount') }, async (request, reply) => {
+    try {
+      const { studentId } = studentFinancialParamsSchema.parse(request.params);
+      const body = upsertStudentTuitionScheduleBodySchema.parse(request.body);
+      return reply.send(await withService(request, (service) => service.replaceStudentTuitionSchedule({
+        studentId,
+        schoolYearId: body.schoolYearId,
+        scheduleSteps: body.scheduleSteps,
+      })));
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.delete('/api/v1/tuition/student-schedules/:studentId', { preHandler: requirePermission('tuition.grant_discount') }, async (request, reply) => {
+    try {
+      const { studentId } = studentFinancialParamsSchema.parse(request.params);
+      const { school_year_id: schoolYearId } = schoolYearQuerySchema.parse(request.query);
+      return reply.send(await withService(request, (service) =>
+        service.deleteStudentTuitionSchedule(studentId, schoolYearId)));
     } catch (error) { return handleError(request, reply, error); }
   });
 

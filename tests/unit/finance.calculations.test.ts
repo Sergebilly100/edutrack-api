@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   calculateStudentTotalDue,
   canCancelPayment,
+  isValidCumulativeSchedule,
   prorateSubscriptionAmount,
   resolveIndividualFinancialStatus,
   resolveFinancialStanding,
@@ -60,5 +61,19 @@ describe('finance calculations', () => {
     expect(canCancelPayment('confirmed')).toBe(true);
     expect(canCancelPayment('waived_by_school')).toBe(true);
     expect(canCancelPayment('cancelled')).toBe(false);
+  });
+
+  it('valide une courbe cumulative individuelle strictement ordonnée et bornée', () => {
+    expect(isValidCumulativeSchedule([
+      { dueDate: '2026-10-01', cumulativeAmountExpected: 30_000 },
+      { dueDate: '2027-01-01', cumulativeAmountExpected: 80_000 },
+    ], 100_000)).toBe(true);
+    expect(isValidCumulativeSchedule([
+      { dueDate: '2026-10-01', cumulativeAmountExpected: 30_000 },
+      { dueDate: '2026-09-01', cumulativeAmountExpected: 40_000 },
+    ], 100_000)).toBe(false);
+    expect(isValidCumulativeSchedule([
+      { dueDate: '2026-10-01', cumulativeAmountExpected: 120_000 },
+    ], 100_000)).toBe(false);
   });
 });

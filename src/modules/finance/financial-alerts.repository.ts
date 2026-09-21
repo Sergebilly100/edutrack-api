@@ -116,14 +116,34 @@ export class FinancialAlertsRepository {
          OR (
            r.type = 'preventive'
            AND sfs.status = 'up_to_date'
-           AND EXISTS (
-             SELECT 1
-             FROM tuition_schedule_steps tss
-             INNER JOIN tuition_plans tp ON tp.id = tss.tuition_plan_id
-             INNER JOIN classes c2 ON c2.level_id = tp.level_id AND c2.id = COALESCE(s.class_id, s.class_id)
-             WHERE tp.school_year_id = sfs.school_year_id
-               AND tss.due_date > CURRENT_DATE
-               AND tss.due_date <= CURRENT_DATE + r.days_offset
+           AND (
+             EXISTS (
+               SELECT 1
+               FROM student_tuition_schedule_steps stss
+               WHERE stss.student_id = s.id
+                 AND stss.school_year_id = sfs.school_year_id
+                 AND stss.due_date > CURRENT_DATE
+                 AND stss.due_date <= CURRENT_DATE + r.days_offset
+             )
+             OR (
+               NOT EXISTS (
+                 SELECT 1
+                 FROM student_tuition_schedule_steps stss
+                 WHERE stss.student_id = s.id
+                   AND stss.school_year_id = sfs.school_year_id
+               )
+               AND EXISTS (
+                 SELECT 1
+                 FROM tuition_schedule_steps tss
+                 INNER JOIN tuition_plans tp ON tp.id = tss.tuition_plan_id
+                 LEFT JOIN enrollments e
+                   ON e.student_id = s.id AND e.school_year_id = sfs.school_year_id
+                 INNER JOIN classes c2 ON c2.level_id = tp.level_id AND c2.id = COALESCE(e.class_id, s.class_id)
+                 WHERE tp.school_year_id = sfs.school_year_id
+                   AND tss.due_date > CURRENT_DATE
+                   AND tss.due_date <= CURRENT_DATE + r.days_offset
+               )
+             )
            )
          )
        )

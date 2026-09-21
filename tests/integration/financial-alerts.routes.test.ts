@@ -154,6 +154,64 @@ describe('financial alerts integration (6b)', () => {
     expect(Array.isArray(list.body.rules)).toBe(true);
   });
 
+  it('utilise la courbe individuelle pour les relances préventives', async () => {
+    const testSuffix = `curve-${Date.now()}`;
+    const year = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('school_years')} (label, start_date, end_date, end_of_year_review_start_date, status)
+      VALUES ($1, '2088-09-01', '2089-06-30', '2089-05-01', 'draft')
+      RETURNING id::text
+    `, [testSuffix]);
+    const level = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('levels')} (name, order_index, is_exam_class)
+      VALUES ($1, 99799, false) RETURNING id::text
+    `, [`level-${testSuffix}`]);
+    const classRow = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('classes')} (name, level_id, school_year_id, is_active)
+      VALUES ($1, $2::uuid, $3::uuid, true) RETURNING id::text
+    `, [`class-${testSuffix}`, level[0]!.id, year[0]!.id]);
+    const student = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
+      VALUES ($1::uuid, 'Courbe', 'Particulière', $2) RETURNING id::text
+    `, [classRow[0]!.id, `CURVE-${Date.now()}`]);
+    const plan = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('tuition_plans')} (level_id, school_year_id, total_amount, currency)
+      VALUES ($1::uuid, $2::uuid, 100000, 'FCFA') RETURNING id::text
+    `, [level[0]!.id, year[0]!.id]);
+    await queryTenant(`
+      INSERT INTO ${tenantTable('tuition_schedule_steps')} (tuition_plan_id, due_date, cumulative_amount_expected)
+      VALUES ($1::uuid, CURRENT_DATE + 1, 30000)
+    `, [plan[0]!.id]);
+    await queryTenant(`
+      INSERT INTO ${tenantTable('student_tuition_schedule_steps')} (student_id, school_year_id, due_date, cumulative_amount_expected)
+      VALUES ($1::uuid, $2::uuid, CURRENT_DATE + 5, 30000)
+    `, [student[0]!.id, year[0]!.id]);
+    await queryTenant(`
+      INSERT INTO ${tenantTable('student_financial_status')} (
+        student_id, school_year_id, total_expected_to_date, total_paid, total_due_year, status, last_computed_at
+      ) VALUES ($1::uuid, $2::uuid, 0, 0, 100000, 'up_to_date', NOW())
+    `, [student[0]!.id, year[0]!.id]);
+    await queryTenant(`
+      INSERT INTO ${tenantTable('financial_alert_rules')} (type, days_offset, channel, is_active)
+      VALUES ('preventive', 2, 'sms', true)
+      ON CONFLICT (type) DO UPDATE SET days_offset = EXCLUDED.days_offset, is_active = true
+    `);
+
+    const noReminder = await withTenantSchema(TEST_SCHEMA_NAME, (tenantDb) =>
+      new FinancialAlertsRepository(tenantDb).listDueReminders(year[0]!.id));
+    expect(noReminder.some((reminder) => reminder.studentId === student[0]!.id)).toBe(false);
+
+    await queryTenant(`
+      UPDATE ${tenantTable('student_tuition_schedule_steps')}
+      SET due_date = CURRENT_DATE + 1
+      WHERE student_id = $1::uuid AND school_year_id = $2::uuid
+    `, [student[0]!.id, year[0]!.id]);
+    const reminder = await withTenantSchema(TEST_SCHEMA_NAME, (tenantDb) =>
+      new FinancialAlertsRepository(tenantDb).listDueReminders(year[0]!.id));
+    expect(reminder).toEqual(expect.arrayContaining([
+      expect.objectContaining({ studentId: student[0]!.id, ruleType: 'preventive' }),
+    ]));
+  });
+
   it('pagine l’historique des relances sans plafonner les entrées anciennes', async () => {
     const headers = await getAuthHeaders('director');
     const firstPage = await request()
