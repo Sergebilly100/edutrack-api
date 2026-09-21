@@ -286,6 +286,15 @@ describe('academic grading integration', () => {
       expect.objectContaining({ id: gradingPeriodId }),
     ]));
 
+    const studentsWithoutActiveSchedules = await request()
+      .get('/api/v1/students')
+      .set(teacherHeaders)
+      .query({ class_id: classId, is_active: true, page: 1, limit: 100 });
+    expect(studentsWithoutActiveSchedules.status, JSON.stringify(studentsWithoutActiveSchedules.body)).toBe(200);
+    expect(studentsWithoutActiveSchedules.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: studentId }),
+    ]));
+
     const scopeWithoutActiveSchedules = await request()
       .get('/api/v1/evaluations/scope')
       .set(teacherHeaders)

@@ -102,7 +102,6 @@ export class StudentsService {
   async teacherCanAccessClass(input: {
     teacherUserId: string;
     classId: string;
-    date: string;
   }): Promise<boolean> {
     return this.repository.teacherHasClassAccess(input);
   }

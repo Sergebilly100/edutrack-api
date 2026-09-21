@@ -126,11 +126,9 @@ export default async function studentsController(
           const service = buildStudentsService(tenantDb);
 
           if (claims.role === 'teacher') {
-            const date = new Date().toISOString().slice(0, 10);
             const canAccess = await service.teacherCanAccessClass({
               teacherUserId: claims.sub,
               classId: query.class_id as string,
-              date,
             });
             if (!canAccess) throw new StudentsModuleError('Forbidden', 403, 'FORBIDDEN');
           }

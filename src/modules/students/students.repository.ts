@@ -432,26 +432,14 @@ export class StudentsRepository {
   async teacherHasClassAccess(input: {
     teacherUserId: string;
     classId: string;
-    date: string;
   }): Promise<boolean> {
     const result = await this.db.execute(sql`
       SELECT EXISTS (
         SELECT 1
         FROM teachers t
-        INNER JOIN schedules s ON s.teacher_id = t.id
-        INNER JOIN schedule_periods sp ON sp.id = s.schedule_period_id
+        INNER JOIN teacher_subject_assignments tsa ON tsa.teacher_id = t.id
         WHERE t.user_id = ${input.teacherUserId}
-          AND s.class_id = ${input.classId}
-          AND s.is_active = true
-          AND (s.start_date IS NULL OR s.start_date <= ${input.date}::date)
-          AND (s.end_date IS NULL OR s.end_date >= ${input.date}::date)
-          AND sp.is_active = true
-          AND sp.valid_from <= ${input.date}::date
-          AND sp.valid_to >= ${input.date}::date
-          AND NOT EXISTS (
-            SELECT 1 FROM schedule_exceptions se
-            WHERE se.schedule_id = s.id AND se.exception_date = ${input.date}::date
-          )
+          AND tsa.class_id = ${input.classId}
         LIMIT 1
       ) AS has_access
     `);
