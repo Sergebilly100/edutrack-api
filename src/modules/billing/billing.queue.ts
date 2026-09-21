@@ -489,7 +489,7 @@ export const processBillingPdfJob = async (
 
     if (job.data.type === 'report-card') {
       // Cachet et signature : images de paramétrage école, réservées aux
-      // bulletins — les reçus ne les utilisent jamais.
+      // bulletins - les reçus ne les utilisent jamais.
       const seals = await loadSchoolSeals(job.data.schemaName);
       const payload = await buildReportCardsService(tenantDb).getPdfPayload(job.data.reportCardId);
       const fileName = `bulletin_${toSafeFilePart(payload.studentName)}_${toSafeFilePart(payload.periodLabel)}.pdf`;

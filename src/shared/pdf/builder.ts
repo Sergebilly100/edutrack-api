@@ -678,7 +678,7 @@ export class PdfBuilder {
 
   /**
    * Bloc cachet + signature avec images optionnelles uploadées par l'école.
-   * Réservé aux documents officiels signés (bulletins) — les reçus n'y ont
+   * Réservé aux documents officiels signés (bulletins) - les reçus n'y ont
    * PAS droit, même si les images existent.
    */
   async stampAndSignature(seals: {
