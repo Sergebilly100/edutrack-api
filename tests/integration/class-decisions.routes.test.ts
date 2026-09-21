@@ -57,6 +57,15 @@ describe('class decisions integration', () => {
       INSERT INTO ${tenantTable('student_period_averages')} (student_id, subject_id, grading_period_id, average)
       VALUES ($1::uuid, NULL, $2::uuid, 14.5)
     `, [studentId, periods[0]!.id]);
+    const subjects = await queryTenant<{ id: string }>(`
+      INSERT INTO ${tenantTable('subjects')} (level_id, name, coefficient)
+      VALUES ($1::uuid, 'Mathématiques revue', 4)
+      RETURNING id::text
+    `, [levelId]);
+    await queryTenant(`
+      INSERT INTO ${tenantTable('student_period_averages')} (student_id, subject_id, grading_period_id, average)
+      VALUES ($1::uuid, $2::uuid, $3::uuid, 14.5)
+    `, [studentId, subjects[0]!.id, periods[0]!.id]);
 
     const initialStatus = await request()
       .get('/api/v1/class-decisions/review-status')
@@ -74,19 +83,54 @@ describe('class decisions integration', () => {
       .send({ endOfYearReviewStartDate: '2000-01-01' });
     expect(updateDate.status).toBe(200);
 
-    const list = await request().get('/api/v1/class-decisions').set(headers);
-    expect(list.status).toBe(200);
-    expect(list.body.decisions).toEqual([
+    const pendingList = await request().get('/api/v1/class-decisions').set(headers);
+    expect(pendingList.status).toBe(200);
+    expect(pendingList.body.decisions).toEqual([
       expect.objectContaining({
         studentId,
-        generalAverage: 14.5,
+        generalAverage: null,
         suggestedDecision: null,
         finalDecision: null,
       }),
     ]);
+    await queryTenant(`
+      INSERT INTO ${tenantTable('class_subject_completion')} (class_id, subject_id, grading_period_id, status, completed_at)
+      VALUES ($1::uuid, $2::uuid, $3::uuid, 'completed', now())
+    `, [classes[0]!.id, subjects[0]!.id, periods[0]!.id]);
+
+    const list = await request().get('/api/v1/class-decisions').set(headers);
+    expect(list.status).toBe(200);
+    expect(list.body.decisions).toEqual([
+      expect.objectContaining({ studentId, generalAverage: 14.5 }),
+    ]);
     expect(list.body.classes).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: classes[0]!.id, levelId }),
     ]));
+
+    const preview = await request()
+      .post('/api/v1/class-decisions/bulk-preview')
+      .set(headers)
+      .send({
+        classId: classes[0]!.id,
+        threshold: 10,
+        atOrAbove: { finalDecision: 'promoted', nextLevelId: levelId },
+        below: { finalDecision: 'repeat', nextLevelId: levelId },
+      });
+    expect(preview.status).toBe(200);
+    expect(preview.body).toMatchObject({ eligibleCount: 1, pendingCount: 0, canApply: true });
+    expect(preview.body.items[0]).toMatchObject({ studentId, proposedDecision: 'promoted' });
+
+    const bulkValidation = await request()
+      .post('/api/v1/class-decisions/bulk-validate')
+      .set(headers)
+      .send({
+        classId: classes[0]!.id,
+        threshold: 10,
+        atOrAbove: { finalDecision: 'promoted', nextLevelId: levelId },
+        below: { finalDecision: 'repeat', nextLevelId: levelId },
+      });
+    expect(bulkValidation.status).toBe(200);
+    expect(bulkValidation.body).toMatchObject({ eligibleCount: 1, canApply: true });
 
     const filtered = await request()
       .get(`/api/v1/class-decisions?level_id=${levelId}&class_id=${classes[0]!.id}`)

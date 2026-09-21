@@ -25,6 +25,7 @@ type DecisionRow = {
   student_last_name: string;
   student_matricule: string | null;
   class_name: string;
+  current_level_id: string;
   current_level_name: string;
   general_average: string | number | null;
   suggested_decision: ClassDecisionValue | null;
@@ -51,6 +52,7 @@ const mapDecision = (row: DecisionRow): ClassDecisionItem => ({
   studentLastName: row.student_last_name,
   studentMatricule: row.student_matricule,
   className: row.class_name,
+  currentLevelId: row.current_level_id,
   currentLevelName: row.current_level_name,
   generalAverage: row.general_average === null ? null : Number(row.general_average),
   suggestedDecision: row.suggested_decision,
@@ -82,6 +84,7 @@ export class ClassDecisionsRepository {
         s.last_name AS student_last_name,
         s.matricule AS student_matricule,
         c.name AS class_name,
+        current_level.id AS current_level_id,
         current_level.name AS current_level_name,
         period_average.average::text AS general_average,
         cd.suggested_decision,
@@ -98,13 +101,33 @@ export class ClassDecisionsRepository {
       LEFT JOIN levels next_level ON next_level.id = cd.next_level_id
       LEFT JOIN LATERAL (
         SELECT spa.average
-        FROM student_period_averages spa
-        INNER JOIN grading_periods gp ON gp.id = spa.grading_period_id
-        WHERE spa.student_id = s.id
-          AND spa.subject_id IS NULL
-          AND gp.school_year_id = ${schoolYearId}::uuid
-        ORDER BY gp.order_index DESC, spa.computed_at DESC
-        LIMIT 1
+        FROM (
+          SELECT id
+          FROM grading_periods
+          WHERE school_year_id = ${schoolYearId}::uuid
+          ORDER BY order_index DESC
+          LIMIT 1
+        ) latest_period
+        INNER JOIN student_period_averages spa
+          ON spa.student_id = s.id
+         AND spa.grading_period_id = latest_period.id
+         AND spa.subject_id IS NULL
+        WHERE EXISTS (
+          SELECT 1
+          FROM subjects subject
+          WHERE subject.level_id = c.level_id
+        )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM subjects subject
+            LEFT JOIN class_subject_completion completion
+              ON completion.class_id = c.id
+             AND completion.subject_id = subject.id
+             AND completion.grading_period_id = latest_period.id
+            WHERE subject.level_id = c.level_id
+              AND COALESCE(completion.status, 'in_progress'::class_subject_completion_status)
+                <> 'completed'::class_subject_completion_status
+          )
       ) period_average ON true
       WHERE s.is_active = true
         AND c.is_active = true
@@ -191,6 +214,7 @@ export class ClassDecisionsRepository {
         s.last_name AS student_last_name,
         s.matricule AS student_matricule,
         c.name AS class_name,
+        current_level.id AS current_level_id,
         current_level.name AS current_level_name,
         period_average.average::text AS general_average,
         cd.suggested_decision,
@@ -205,16 +229,89 @@ export class ClassDecisionsRepository {
       LEFT JOIN levels next_level ON next_level.id = cd.next_level_id
       LEFT JOIN LATERAL (
         SELECT spa.average
-        FROM student_period_averages spa
-        INNER JOIN grading_periods gp ON gp.id = spa.grading_period_id
-        WHERE spa.student_id = s.id
-          AND spa.subject_id IS NULL
-          AND gp.school_year_id = ${input.schoolYearId}::uuid
-        ORDER BY gp.order_index DESC, spa.computed_at DESC
-        LIMIT 1
+        FROM (
+          SELECT id
+          FROM grading_periods
+          WHERE school_year_id = ${input.schoolYearId}::uuid
+          ORDER BY order_index DESC
+          LIMIT 1
+        ) latest_period
+        INNER JOIN student_period_averages spa
+          ON spa.student_id = s.id
+         AND spa.grading_period_id = latest_period.id
+         AND spa.subject_id IS NULL
+        WHERE EXISTS (
+          SELECT 1
+          FROM subjects subject
+          WHERE subject.level_id = c.level_id
+        )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM subjects subject
+            LEFT JOIN class_subject_completion completion
+              ON completion.class_id = c.id
+             AND completion.subject_id = subject.id
+             AND completion.grading_period_id = latest_period.id
+            WHERE subject.level_id = c.level_id
+              AND COALESCE(completion.status, 'in_progress'::class_subject_completion_status)
+                <> 'completed'::class_subject_completion_status
+          )
       ) period_average ON true
     `);
     const row = getRows(result)[0];
     return row ? mapDecision(row) : null;
+  }
+
+  async validateBulkDecisions(inputs: Array<{
+    studentId: string;
+    schoolYearId: string;
+    finalDecision: ClassDecisionValue;
+    nextLevelId: string | null;
+    validatedByUserId: string;
+  }>): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      const transactionDb = tx as ClassDecisionQueryExecutor;
+      for (const input of inputs) {
+        const result = await transactionDb.execute<{ student_id: string }>(sql`
+          WITH eligible_student AS (
+            SELECT s.id
+            FROM students s
+            INNER JOIN classes c ON c.id = s.class_id
+            WHERE s.id = ${input.studentId}::uuid
+              AND s.is_active = true
+              AND c.is_active = true
+              AND c.school_year_id = ${input.schoolYearId}::uuid
+          )
+          INSERT INTO class_decisions (
+            student_id,
+            school_year_id,
+            final_decision,
+            next_level_id,
+            validated_by_user_id,
+            validated_at,
+            updated_at
+          )
+          SELECT
+            id,
+            ${input.schoolYearId}::uuid,
+            ${input.finalDecision}::class_decision_type,
+            ${input.nextLevelId}::uuid,
+            ${input.validatedByUserId}::uuid,
+            now(),
+            now()
+          FROM eligible_student
+          ON CONFLICT (student_id, school_year_id) DO UPDATE SET
+            final_decision = EXCLUDED.final_decision,
+            next_level_id = EXCLUDED.next_level_id,
+            validated_by_user_id = EXCLUDED.validated_by_user_id,
+            validated_at = EXCLUDED.validated_at,
+            updated_at = now()
+          RETURNING student_id::text
+        `);
+        if (getRows(result).length !== 1) {
+          throw new Error('Student is no longer eligible for the active school year');
+        }
+      }
+    });
   }
 }

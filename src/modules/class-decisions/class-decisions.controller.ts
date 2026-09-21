@@ -9,6 +9,7 @@ import {
 } from './class-decisions.service.js';
 import {
   classDecisionStudentParamsSchema,
+  bulkClassDecisionsBodySchema,
   listClassDecisionsQuerySchema,
   validateClassDecisionBodySchema,
 } from './class-decisions.types.js';
@@ -94,6 +95,40 @@ export default async function classDecisionsController(app: FastifyInstance): Pr
           )
         );
         return reply.send({ decision });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/class-decisions/bulk-preview',
+    { preHandler: requirePermission('class_decisions.validate') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const body = bulkClassDecisionsBodySchema.parse(request.body ?? {});
+        const preview = await withTenantSchema(claims.schemaName, (tenantDb) =>
+          buildClassDecisionsService(tenantDb).previewBulkDecisions(body)
+        );
+        return reply.send(preview);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/class-decisions/bulk-validate',
+    { preHandler: requirePermission('class_decisions.validate') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const body = bulkClassDecisionsBodySchema.parse(request.body ?? {});
+        const result = await withTenantSchema(claims.schemaName, (tenantDb) =>
+          buildClassDecisionsService(tenantDb).validateBulkDecisions(body, request.user!.userId)
+        );
+        return reply.send(result);
       } catch (error) {
         return handleError(request, reply, error);
       }

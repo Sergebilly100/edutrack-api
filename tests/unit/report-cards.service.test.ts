@@ -11,6 +11,7 @@ import {
 const repository = {
   findClassContext: vi.fn(),
   findGradingPeriod: vi.fn(),
+  isCurrentGradingPeriod: vi.fn(),
   isLastPeriodOfYear: vi.fn(),
   listIncompleteSubjects: vi.fn(),
   listClassStudents: vi.fn(),
@@ -71,6 +72,7 @@ describe('ReportCardsService.generateForClass', () => {
   const baseRepo = (): void => {
     repository.findClassContext.mockResolvedValue(classContext);
     repository.findGradingPeriod.mockResolvedValue(period);
+    repository.isCurrentGradingPeriod.mockResolvedValue(true);
     repository.isLastPeriodOfYear.mockResolvedValue(false);
     repository.listIncompleteSubjects.mockResolvedValue([]);
     repository.listLevelSubjects.mockResolvedValue([

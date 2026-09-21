@@ -74,9 +74,9 @@ export class ReportCardsService {
     if (!period || period.schoolYearId !== klass.schoolYearId) {
       throw new ReportCardsModuleError('Période introuvable pour cette classe', 404, 'GRADING_PERIOD_NOT_FOUND');
     }
-    const roster = await this.repository.listClassStudents(classId);
     const periodIsCurrent = await this.repository.isCurrentGradingPeriod(klass.schoolYearId, gradingPeriodId);
     if (!periodIsCurrent) {
+      const roster = await this.repository.listClassStudents(classId);
       const existingCards = await Promise.all(roster.map((student) => this.repository.findExistingCard(student.id, gradingPeriodId)));
       if (roster.length > 0 && existingCards.every((card) => card !== null)) {
         // Rejouer une génération déjà complète reste idempotent et ne modifie
@@ -98,6 +98,8 @@ export class ReportCardsService {
         'SUBJECT_AVERAGES_PENDING'
       );
     }
+
+    const roster = await this.repository.listClassStudents(classId);
 
     const subjectAverages = await this.repository.listSubjectAverages(classId, gradingPeriodId);
     const cachedGeneralAverages = await this.repository.listGeneralAverages(classId, gradingPeriodId);
