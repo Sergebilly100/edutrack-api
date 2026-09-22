@@ -26,6 +26,14 @@ export const parentChangePasswordSchema = z.object({
     .regex(/[0-9]/, 'Le mot de passe doit contenir au moins un chiffre'),
 });
 
+export const parentNotificationParamsSchema = z.object({
+  notificationId: z.string().uuid(),
+});
+
+export const parentNotificationsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
 export type ParentStudentSummary = {
   id: string;
   first_name: string;
@@ -34,3 +42,13 @@ export type ParentStudentSummary = {
 };
 
 export type ParentSubscriptionStatus = 'active' | 'expired' | 'cancelled';
+
+export type ParentNotification = {
+  id: string;
+  type: 'payment_reminder';
+  message: string;
+  createdAt: string;
+  readAt: string | null;
+  studentId: string | null;
+  studentName: string | null;
+};

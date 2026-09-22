@@ -1,4 +1,9 @@
-import { RiskRepository, type RiskRule } from './risk.repository.js';
+import {
+  RiskRepository,
+  type RiskRule,
+  type StudentRiskListInput,
+  type TeacherRiskListInput,
+} from './risk.repository.js';
 import {
   DEFAULT_RISK_RULES,
   isAbsenceRisk,
@@ -23,6 +28,29 @@ export class RiskService {
 
   upsertRule(input: Omit<RiskRule, 'id'>): Promise<void> {
     return this.repository.upsertRule(input);
+  }
+
+  async listStudentRisks(input: StudentRiskListInput & { homeroomUserId?: string }) {
+    const studentIds = input.homeroomUserId
+      ? await this.repository.listHomeroomStudentIds(input.homeroomUserId) ?? []
+      : undefined;
+    const result = await this.repository.listStudentRisks({ ...input, studentIds });
+    return {
+      students: result.rows,
+      pagination: this.pagination(input.page, input.limit, result.total),
+    };
+  }
+
+  async listTeacherRisks(input: TeacherRiskListInput) {
+    const result = await this.repository.listTeacherRisks(input);
+    return {
+      teachers: result.rows,
+      pagination: this.pagination(input.page, input.limit, result.total),
+    };
+  }
+
+  private pagination(page: number, limit: number, total: number) {
+    return { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) };
   }
 
   /** Recalcul complet : élèves puis profs. Appelé par le job 15 min partagé. */

@@ -174,7 +174,7 @@ describe('conduct routes (5b)', () => {
     );
     await queryTenant(
       `INSERT INTO ${tenantTable('class_subject_completion')} (class_id, subject_id, grading_period_id, status)
-       VALUES ($1::uuid, $2::uuid, $3::uuid, 'in_progress')`,
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 'completed')`,
       [classId, conductSubjects[0]!.id, gradingPeriodId]
     );
 

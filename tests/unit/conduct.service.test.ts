@@ -13,7 +13,7 @@ const repository = {
   findStudentContext: vi.fn(),
   findTeacherByUserId: vi.fn(),
   teacherTeachesClass: vi.fn(),
-  teacherHasOpenAverageCalculation: vi.fn(),
+  teacherHasCompletedAverageCalculation: vi.fn(),
   teacherHasAverageCalculation: vi.fn(),
   gradingPeriodExists: vi.fn(),
   isGradingPeriodCompleted: vi.fn(),
@@ -138,7 +138,7 @@ describe('conduct.service submitTeacherConductInput', () => {
     repository.findStudentContext.mockResolvedValue(studentContext);
     repository.gradingPeriodExists.mockResolvedValue(true);
     repository.teacherTeachesClass.mockResolvedValue(true);
-    repository.teacherHasOpenAverageCalculation.mockResolvedValue(true);
+    repository.teacherHasCompletedAverageCalculation.mockResolvedValue(true);
     repository.insertTeacherConductInput.mockResolvedValue(undefined);
 
     await expect(service.submitTeacherConductInput(baseInput, { userId: 'user-teacher' })).resolves.toBeUndefined();
@@ -155,7 +155,7 @@ describe('conduct.service submitTeacherConductInput', () => {
     repository.findStudentContext.mockResolvedValue(studentContext);
     repository.gradingPeriodExists.mockResolvedValue(true);
     repository.teacherTeachesClass.mockResolvedValue(true);
-    repository.teacherHasOpenAverageCalculation.mockResolvedValue(false);
+    repository.teacherHasCompletedAverageCalculation.mockResolvedValue(false);
 
     await expect(service.submitTeacherConductInput(baseInput, { userId: 'user-teacher' })).rejects.toMatchObject({
       code: 'AVERAGE_CALCULATION_NOT_STARTED',
@@ -170,7 +170,7 @@ describe('conduct.service submitBulkTeacherConductInputs', () => {
     const service = new ConductService(repository);
     repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1', name: 'Ibrahim Diallo' });
     repository.teacherTeachesClass.mockResolvedValue(true);
-    repository.teacherHasOpenAverageCalculation.mockResolvedValue(true);
+    repository.teacherHasCompletedAverageCalculation.mockResolvedValue(true);
     repository.gradingPeriodMatchesClass.mockResolvedValue(true);
     repository.studentsBelongToClass.mockResolvedValue(true);
     repository.insertTeacherConductInput.mockResolvedValue(undefined);
@@ -190,7 +190,7 @@ describe('conduct.service submitBulkTeacherConductInputs', () => {
     const service = new ConductService(repository);
     repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1', name: 'Ibrahim Diallo' });
     repository.teacherTeachesClass.mockResolvedValue(true);
-    repository.teacherHasOpenAverageCalculation.mockResolvedValue(true);
+    repository.teacherHasCompletedAverageCalculation.mockResolvedValue(true);
     repository.gradingPeriodMatchesClass.mockResolvedValue(true);
     repository.studentsBelongToClass.mockResolvedValue(false);
 
@@ -217,7 +217,7 @@ describe('conduct.service getTeacherConductScope', () => {
       isAvailable: true,
       students: [{ studentId: 'student-1', input: { note: 16 } }],
     });
-    expect(repository.teacherHasOpenAverageCalculation).not.toHaveBeenCalled();
+    expect(repository.teacherHasCompletedAverageCalculation).not.toHaveBeenCalled();
   });
 });
 

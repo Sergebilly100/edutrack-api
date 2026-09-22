@@ -42,6 +42,18 @@ describe('financial alerts integration (6b)', () => {
     );
     const lateStudentId = students[0]!.id;
     const cleanStudentId = students[1]!.id;
+    const parents = await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('parents')} (full_name, phone, password_hash, must_change_password, is_active)
+       VALUES ($1, $2, 'not-used-by-this-test', false, true)
+       RETURNING id::text`,
+      [`Parent ${suffix}`, `225078${suffix.slice(-7).padStart(7, '0')}`]
+    );
+    const parentId = parents[0]!.id;
+    await queryTenant(
+      `INSERT INTO ${tenantTable('parent_student_links')} (parent_id, student_id)
+       VALUES ($1::uuid, $2::uuid)`,
+      [parentId, lateStudentId]
+    );
 
     // Cache financier pré-rempli (responsabilité de la Tâche 6a)
     await queryTenant(
@@ -101,7 +113,7 @@ describe('financial alerts integration (6b)', () => {
     );
     expect(smsOnlyNotifications).toHaveLength(0);
 
-    // Une règle in_app, elle, alimente le journal visible par le directeur.
+    // Une règle in_app alimente la boîte de réception du parent lié à l'élève.
     const inAppUpsert = await request()
       .put('/api/v1/financial-alert-rules/severe_late')
       .set(headers)
@@ -135,7 +147,7 @@ describe('financial alerts integration (6b)', () => {
       status: 'delivered',
       related_id: lateStudentId,
     });
-    expect(inAppNotifications[0]!.recipient_id).not.toBeNull();
+    expect(inAppNotifications[0]!.recipient_id).toBe(parentId);
 
     // Anti-doublon : rejouer immédiatement ne renvoie rien.
     const secondRun = await withTenantSchema(TEST_SCHEMA_NAME, (tenantDb) =>

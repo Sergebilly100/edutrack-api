@@ -19,9 +19,8 @@ const requireAnyPermission =
       return;
     }
   };
-import { RiskRepository } from './risk.repository.js';
 import { buildRiskService } from './risk.service.js';
-import { riskRuleUpsertSchema } from './risk.types.js';
+import { riskRuleUpsertSchema, riskStudentsQuerySchema, riskTeachersQuerySchema } from './risk.types.js';
 
 const handleError = (
   request: FastifyRequest,
@@ -52,19 +51,15 @@ export default async function riskController(app: FastifyInstance): Promise<void
     async (request, reply) => {
       try {
         const claims = request.claims!;
-        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-          const repository = new RiskRepository(tenantDb);
-          const rows = (await repository.listStudentRisks()) as Array<Record<string, unknown>>;
-          // Alignement permission ↔ affichage : les enseignants ne voient que
-          // leurs propres élèves (prof principal), jamais l'école entière.
-          if (claims.role === 'teacher') {
-            const homeroomIds = await repository.listHomeroomStudentIds(request.user!.userId);
-            const allowed = homeroomIds ?? [];
-            return rows.filter((row) => allowed.includes(String(row.student_id)));
-          }
-          return rows;
-        });
-        return reply.send({ students: result });
+        const query = riskStudentsQuerySchema.parse(request.query);
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) =>
+          buildRiskService(tenantDb).listStudentRisks({
+            ...query,
+            includePayments: request.permissions?.has('payments.view') ?? false,
+            homeroomUserId: claims.role === 'teacher' ? request.user!.userId : undefined,
+          })
+        );
+        return reply.send(result);
       } catch (error) {
         return handleError(request, reply, error);
       }
@@ -78,10 +73,11 @@ export default async function riskController(app: FastifyInstance): Promise<void
     async (request, reply) => {
       try {
         const claims = request.claims!;
+        const query = riskTeachersQuerySchema.parse(request.query);
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) =>
-          new RiskRepository(tenantDb).listTeacherRisks()
+          buildRiskService(tenantDb).listTeacherRisks(query)
         );
-        return reply.send({ teachers: result });
+        return reply.send(result);
       } catch (error) {
         return handleError(request, reply, error);
       }

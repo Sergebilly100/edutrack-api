@@ -12,6 +12,8 @@ import {
 import {
   parentAbsencesQuerySchema,
   parentChangePasswordSchema,
+  parentNotificationParamsSchema,
+  parentNotificationsQuerySchema,
   parentScheduleQuerySchema,
   parentStudentIdParamsSchema,
 } from './parent-portal.types.js';
@@ -57,6 +59,50 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
 };
 
 export default async function parentPortalController(app: FastifyInstance): Promise<void> {
+  app.get('/api/v1/parent/notifications', { preHandler: requireParent }, async (request, reply) => {
+    try {
+      const query = parentNotificationsQuerySchema.parse(request.query ?? {});
+      const claims = request.claims!;
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) =>
+        buildParentPortalService(tenantDb).listNotifications(query, {
+          parentId: request.parentId!, allowedStudentIds: request.allowedStudentIds ?? [],
+        })
+      );
+      return reply.send(result);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.patch('/api/v1/parent/notifications/:notificationId/read', { preHandler: requireParent }, async (request, reply) => {
+    try {
+      const { notificationId } = parentNotificationParamsSchema.parse(request.params ?? {});
+      const claims = request.claims!;
+      await withTenantSchema(claims.schemaName, async (tenantDb) =>
+        buildParentPortalService(tenantDb).markNotificationRead(notificationId, {
+          parentId: request.parentId!, allowedStudentIds: request.allowedStudentIds ?? [],
+        })
+      );
+      return reply.send({ success: true });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.patch('/api/v1/parent/notifications/read-all', { preHandler: requireParent }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      await withTenantSchema(claims.schemaName, async (tenantDb) =>
+        buildParentPortalService(tenantDb).markAllNotificationsRead({
+          parentId: request.parentId!, allowedStudentIds: request.allowedStudentIds ?? [],
+        })
+      );
+      return reply.send({ success: true });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
   app.get('/api/v1/parent/students', { preHandler: requireParent }, async (request, reply) => {
     try {
       const claims = request.claims!;

@@ -195,36 +195,37 @@ export class FinancialAlertsRepository {
     `);
   }
 
-  /**
-   * Les notifications in-app financières suivent le même contrat que les
-   * remises : une notification déjà livrée, adressée au directeur actif.
-   */
+  /** Crée une notification pour chaque compte parent actif lié à l'élève. */
   async insertInAppPaymentReminder(input: {
     studentId: string;
+    studentName: string;
     ruleId: string;
     ruleType: FinancialAlertRule['type'];
     message: string;
-  }): Promise<void> {
-    await this.db.execute(sql`
+  }): Promise<number> {
+    const result = await this.db.execute<{ id: string }>(sql`
       INSERT INTO notifications_log (
         type, channel, recipient_id, recipient_phone, recipient_email,
         message, metadata, status, related_id, sent_at
       )
       SELECT
-        'payment_reminder', 'in_app', u.id, COALESCE(u.phone, ''), u.email,
+        'payment_reminder', 'in_app', p.id, p.phone, p.email,
         ${input.message},
         ${JSON.stringify({
           event: 'payment_reminder',
           studentId: input.studentId,
+          studentName: input.studentName,
           ruleId: input.ruleId,
           ruleType: input.ruleType,
         })}::jsonb,
         'delivered', ${input.studentId}::uuid, NOW()
-      FROM users u
-      WHERE u.role = 'director' AND u.is_active = true
-      ORDER BY u.created_at ASC
-      LIMIT 1
+      FROM parents p
+      INNER JOIN parent_student_links psl ON psl.parent_id = p.id
+      WHERE psl.student_id = ${input.studentId}::uuid
+        AND p.is_active = true
+      RETURNING id::text
     `);
+    return getRows<{ id: string }>(result).length;
   }
 
   async countLogs(): Promise<number> {

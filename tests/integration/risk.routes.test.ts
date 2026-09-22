@@ -65,6 +65,7 @@ describe('risk alerts integration (7a)', () => {
     const list = await request().get('/api/v1/risk/students').set(headers);
     expect(list.status).toBe(200);
     const rows = list.body.students as Array<{ student_id: string; risk_score: number; level: string }>;
+    expect(list.body.pagination).toEqual(expect.objectContaining({ page: 1, limit: 10 }));
     const risky = rows.find((row) => row.student_id === riskyStudentId);
 
     // Signal paiements actif. Les absences/moyennes dépendent des données du
@@ -73,6 +74,14 @@ describe('risk alerts integration (7a)', () => {
       expect(risky.risk_score).toBeGreaterThanOrEqual(1);
       expect(['attention', 'warning', 'critical']).toContain(risky.level);
     }
+
+    const filteredStudents = await request()
+      .get('/api/v1/risk/students')
+      .set(headers)
+      .query({ page: 1, limit: 1, schoolLevelId: levels[0]!.id, classId, category: 'payments' });
+    expect(filteredStudents.status).toBe(200);
+    expect(filteredStudents.body.pagination).toEqual(expect.objectContaining({ page: 1, limit: 1 }));
+    expect((filteredStudents.body.students as Array<{ payment_signal: boolean }>).every((row) => row.payment_signal)).toBe(true);
 
     // Règles : lecture et mise à jour du seuil absences élève
     const rules = await request().get('/api/v1/risk/rules').set(headers);
@@ -139,7 +148,7 @@ describe('risk alerts integration (7a)', () => {
     await withTenantSchema(TEST_SCHEMA_NAME, async (tenantDb) =>
       buildRiskService(tenantDb).recalculateTeachers()
     );
-    const belowTeacherThreshold = await request().get('/api/v1/risk/teachers').set(headers);
+    const belowTeacherThreshold = await request().get('/api/v1/risk/teachers').set(headers).query({ atRisk: false });
     const teacherBelowThreshold = (belowTeacherThreshold.body.teachers as Array<{
       teacher_id: string; absences_signal: boolean;
     }>).find((row) => row.teacher_id === teacherId);
@@ -158,6 +167,18 @@ describe('risk alerts integration (7a)', () => {
       teacher_id: string; absences_signal: boolean;
     }>).find((row) => row.teacher_id === teacherId);
     expect(teacherAtThreshold?.absences_signal).toBe(true);
+
+    const teacherMonth = new Date().toISOString().slice(0, 7);
+    const monthlyTeachers = await request()
+      .get('/api/v1/risk/teachers')
+      .set(headers)
+      .query({ month: teacherMonth, page: 1, limit: 1 });
+    expect(monthlyTeachers.status).toBe(200);
+    expect(monthlyTeachers.body.pagination).toEqual(expect.objectContaining({ page: 1, limit: 1 }));
+    const teacherInMonth = (monthlyTeachers.body.teachers as Array<{
+      teacher_id: string; absence_count: number;
+    }>).find((row) => row.teacher_id === teacherId);
+    expect(teacherInMonth?.absence_count).toBeGreaterThanOrEqual(3);
 
     // Désactiver le risque financier retire effectivement ce signal au prochain recalcul.
     const disablePaymentRisk = await request()

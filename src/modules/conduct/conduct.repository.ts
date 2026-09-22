@@ -204,7 +204,7 @@ export class ConductRepository {
     return getRows(result).length > 0;
   }
 
-  async teacherHasOpenAverageCalculation(
+  async teacherHasCompletedAverageCalculation(
     teacherId: string,
     classId: string,
     gradingPeriodId: string
@@ -216,7 +216,7 @@ export class ConductRepository {
         ON tsa.class_id = csc.class_id AND tsa.subject_id = csc.subject_id
       WHERE csc.class_id = ${classId}::uuid
         AND csc.grading_period_id = ${gradingPeriodId}::uuid
-        AND csc.status = 'in_progress'::class_subject_completion_status
+        AND csc.status = 'completed'::class_subject_completion_status
         AND tsa.teacher_id = ${teacherId}::uuid
       LIMIT 1
     `);
@@ -235,6 +235,7 @@ export class ConductRepository {
         ON tsa.class_id = csc.class_id AND tsa.subject_id = csc.subject_id
       WHERE csc.class_id = ${classId}::uuid
         AND csc.grading_period_id = ${gradingPeriodId}::uuid
+        AND csc.status = 'completed'::class_subject_completion_status
         AND tsa.teacher_id = ${teacherId}::uuid
       LIMIT 1
     `);

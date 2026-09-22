@@ -57,6 +57,14 @@ type AbsenceRow = {
   room_name: string;
 };
 
+type ParentNotificationRow = {
+  id: string;
+  type: 'payment_reminder';
+  message: string;
+  created_at: string;
+  metadata: unknown;
+};
+
 export class ParentPortalRepository {
   constructor(private readonly db: TenantDb) {}
 
@@ -94,6 +102,62 @@ export class ParentPortalRepository {
       SET password_hash = ${passwordHash},
           must_change_password = false
       WHERE id = ${parentId}::uuid
+    `);
+  }
+
+  async listNotifications(parentId: string, limit: number): Promise<ParentNotificationRow[]> {
+    const result = await this.db.execute<ParentNotificationRow>(sql`
+      SELECT id::text, type::text AS type, message, created_at::text, metadata
+      FROM notifications_log
+      WHERE recipient_id = ${parentId}::uuid
+        AND channel = 'in_app'
+        AND type = 'payment_reminder'
+      ORDER BY created_at DESC
+      LIMIT ${limit}
+    `);
+    return result.rows;
+  }
+
+  async countUnreadNotifications(parentId: string): Promise<number> {
+    const result = await this.db.execute<{ count: number }>(sql`
+      SELECT COUNT(*)::int AS count
+      FROM notifications_log
+      WHERE recipient_id = ${parentId}::uuid
+        AND channel = 'in_app'
+        AND type = 'payment_reminder'
+        AND metadata->>'read_at' IS NULL
+    `);
+    return result.rows[0]?.count ?? 0;
+  }
+
+  async findNotification(notificationId: string, parentId: string): Promise<boolean> {
+    const result = await this.db.execute<{ id: string }>(sql`
+      SELECT id::text
+      FROM notifications_log
+      WHERE id = ${notificationId}::uuid
+        AND recipient_id = ${parentId}::uuid
+        AND channel = 'in_app'
+        AND type = 'payment_reminder'
+      LIMIT 1
+    `);
+    return result.rows.length > 0;
+  }
+
+  async markNotificationRead(notificationId: string): Promise<void> {
+    await this.db.execute(sql`
+      UPDATE notifications_log
+      SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('read_at', NOW()::text)
+      WHERE id = ${notificationId}::uuid
+    `);
+  }
+
+  async markAllNotificationsRead(parentId: string): Promise<void> {
+    await this.db.execute(sql`
+      UPDATE notifications_log
+      SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('read_at', NOW()::text)
+      WHERE recipient_id = ${parentId}::uuid
+        AND channel = 'in_app'
+        AND type = 'payment_reminder'
     `);
   }
 

@@ -62,9 +62,11 @@ export class FinancialAlertsService {
           : `Rappel - Scolarite de ${reminder.studentName} en retard. Merci de regulariser aupres de l'ecole.`;
 
       try {
+        let inAppRecipientCount = 0;
         if (reminder.channel === 'in_app' || reminder.channel === 'both') {
-          await repository.insertInAppPaymentReminder({
+          inAppRecipientCount = await repository.insertInAppPaymentReminder({
             studentId: reminder.studentId,
+            studentName: reminder.studentName,
             ruleId: reminder.ruleId,
             ruleType: reminder.ruleType,
             message,
@@ -76,13 +78,16 @@ export class FinancialAlertsService {
             studentId: reminder.studentId,
             ruleId: reminder.ruleId,
             channel: reminder.channel,
-            status: 'sent',
-            message,
+            status: inAppRecipientCount > 0 ? 'sent' : 'failed',
+            message: inAppRecipientCount > 0
+              ? message
+              : 'Aucun compte parent actif lié à cet élève pour la relance in-app',
           });
-          sentCount += 1;
+          sentCount += inAppRecipientCount > 0 ? 1 : 0;
           continue;
         }
 
+        let smsQueued = false;
         if (this.smsQueue && reminder.parentPhone) {
           const queueRef = `fin-alert-${reminder.ruleId}-${reminder.studentId}-${Date.now()}`;
           await this.smsQueue.add(
@@ -98,27 +103,31 @@ export class FinancialAlertsService {
             },
             { attempts: 3, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: true }
           );
+          smsQueued = true;
         } else if (!reminder.parentPhone) {
-          // Pas de numéro joignable : on logue l'échec sans bloquer le lot.
-          await repository.insertAlertLog({
-            studentId: reminder.studentId,
-            ruleId: reminder.ruleId,
-            channel: reminder.channel,
-            status: 'failed',
-            message: 'Aucun numéro parent disponible',
-          });
-          sentCount += 0;
-          continue;
+          // Le canal in-app peut tout de même avoir été déposé pour un parent.
+          if (inAppRecipientCount === 0) {
+            await repository.insertAlertLog({
+              studentId: reminder.studentId,
+              ruleId: reminder.ruleId,
+              channel: reminder.channel,
+              status: 'failed',
+              message: 'Aucun numéro parent ni compte parent actif disponible',
+            });
+            continue;
+          }
         }
 
         await repository.insertAlertLog({
           studentId: reminder.studentId,
           ruleId: reminder.ruleId,
           channel: reminder.channel,
-          status: 'sent',
-          message,
+          status: smsQueued || inAppRecipientCount > 0 ? 'sent' : 'failed',
+          message: smsQueued || inAppRecipientCount > 0
+            ? message
+            : 'Aucun canal de relance disponible',
         });
-        sentCount += 1;
+        sentCount += smsQueued || inAppRecipientCount > 0 ? 1 : 0;
       } catch (error) {
         // Les relances ne doivent jamais faire échouer le lot quotidien.
         appLogger.warn({ err: error }, '[financial-alerts] envoi relance impossible');

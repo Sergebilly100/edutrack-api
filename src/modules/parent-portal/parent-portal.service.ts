@@ -2,7 +2,7 @@ import argon2 from 'argon2';
 
 import { ParentPortalRepository } from './parent-portal.repository.js';
 import type { TenantDb } from './parent-portal.repository.js';
-import type { ParentStudentSummary, ParentSubscriptionStatus } from './parent-portal.types.js';
+import type { ParentNotification, ParentStudentSummary, ParentSubscriptionStatus } from './parent-portal.types.js';
 
 type ServiceContext = {
   parentId: string;
@@ -131,6 +131,45 @@ export class ParentPortalService {
 
   async listStudents(context: ServiceContext): Promise<ParentStudentSummary[]> {
     return this.repository.listStudentsByParent(context.parentId);
+  }
+
+  async listNotifications(input: { limit: number }, context: ServiceContext): Promise<{
+    notifications: ParentNotification[];
+    unreadCount: number;
+  }> {
+    const [rows, unreadCount] = await Promise.all([
+      this.repository.listNotifications(context.parentId, input.limit),
+      this.repository.countUnreadNotifications(context.parentId),
+    ]);
+    const notifications = rows.map((row) => {
+      const metadata = row.metadata && typeof row.metadata === 'object'
+        ? row.metadata as Record<string, unknown>
+        : {};
+      return {
+        id: row.id,
+        type: 'payment_reminder' as const,
+        message: row.message,
+        createdAt: row.created_at,
+        readAt: typeof metadata.read_at === 'string' ? metadata.read_at : null,
+        studentId: typeof metadata.studentId === 'string' ? metadata.studentId : null,
+        studentName: typeof metadata.studentName === 'string' ? metadata.studentName : null,
+      };
+    });
+    return {
+      notifications,
+      unreadCount,
+    };
+  }
+
+  async markNotificationRead(notificationId: string, context: ServiceContext): Promise<void> {
+    if (!(await this.repository.findNotification(notificationId, context.parentId))) {
+      throw new ParentPortalError('Notification introuvable', 404, 'NOTIFICATION_NOT_FOUND');
+    }
+    await this.repository.markNotificationRead(notificationId);
+  }
+
+  markAllNotificationsRead(context: ServiceContext): Promise<void> {
+    return this.repository.markAllNotificationsRead(context.parentId);
   }
 
   async getStudentSchedule(input: { studentId: string; week: string }, context: ServiceContext) {

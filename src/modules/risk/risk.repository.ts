@@ -30,6 +30,50 @@ export type RiskRule = {
   isActive: boolean;
 };
 
+export type StudentRiskListInput = {
+  page: number;
+  limit: number;
+  schoolLevelId?: string;
+  classId?: string;
+  category?: 'absences' | 'grades' | 'payments';
+  riskLevel?: 'attention' | 'warning' | 'critical';
+  atRisk: boolean;
+  includePayments: boolean;
+  studentIds?: string[];
+};
+
+export type TeacherRiskListInput = {
+  page: number;
+  limit: number;
+  month?: string;
+  atRisk: boolean;
+};
+
+export type StudentRiskRow = {
+  student_id: string;
+  student_name: string;
+  school_level_id: string | null;
+  school_level_name: string | null;
+  class_id: string | null;
+  class_name: string | null;
+  absences_signal: boolean;
+  grades_signal: boolean;
+  payment_signal: boolean;
+  risk_score: number;
+  level: 'none' | 'attention' | 'warning' | 'critical';
+  computed_at: string;
+};
+
+export type TeacherRiskRow = {
+  teacher_id: string;
+  teacher_name: string;
+  absence_count: number;
+  attendance_rate: number;
+  absences_signal: boolean;
+  risk_score: number;
+  level: 'none' | 'attention';
+};
+
 export class RiskRepository {
   constructor(readonly db: TenantDb) {}
 
@@ -259,45 +303,129 @@ export class RiskRepository {
     `);
   }
 
-  async listStudentRisks() {
-    const result = await this.db.execute<Record<string, string | number | boolean>>(sql`
-      SELECT srs.student_id::text,
-             concat_ws(' ', s.first_name, s.last_name) AS student_name,
-             c.name AS class_name,
-             srs.absences_signal, srs.grades_signal, srs.payment_signal,
-             srs.risk_score, srs.level::text, srs.computed_at::text
-      FROM student_risk_status srs
-      INNER JOIN students s ON s.id = srs.student_id AND s.is_active = true
-      LEFT JOIN classes c ON c.id = s.class_id
-      ORDER BY srs.risk_score DESC, student_name ASC
-    `);
-    return getRows(result);
+  async listStudentRisks(input: StudentRiskListInput): Promise<{ rows: StudentRiskRow[]; total: number }> {
+    const offset = (input.page - 1) * input.limit;
+    const score = input.includePayments
+      ? sql`srs.risk_score`
+      : sql`(CASE WHEN srs.absences_signal THEN 1 ELSE 0 END + CASE WHEN srs.grades_signal THEN 1 ELSE 0 END)`;
+    const riskLevel = sql`CASE
+      WHEN ${score} <= 0 THEN 'none'::risk_level
+      WHEN ${score} = 1 THEN 'attention'::risk_level
+      WHEN ${score} = 2 THEN 'warning'::risk_level
+      ELSE 'critical'::risk_level
+    END`;
+    const categoryCondition = input.category === 'absences'
+      ? sql`srs.absences_signal`
+      : input.category === 'grades'
+        ? sql`srs.grades_signal`
+        : input.category === 'payments'
+          ? input.includePayments ? sql`srs.payment_signal` : sql`FALSE`
+          : sql`TRUE`;
+    const studentScope = input.studentIds
+      ? input.studentIds.length > 0
+        ? sql`s.id IN (${sql.join(input.studentIds.map((studentId) => sql`${studentId}::uuid`), sql`, `)})`
+        : sql`FALSE`
+      : sql`TRUE`;
+    const conditions = sql`
+      s.is_active = true
+      AND (${input.schoolLevelId ?? null}::uuid IS NULL OR c.level_id = ${input.schoolLevelId ?? null}::uuid)
+      AND (${input.classId ?? null}::uuid IS NULL OR c.id = ${input.classId ?? null}::uuid)
+      AND ${studentScope}
+      AND (${input.atRisk} = false OR ${score} > 0)
+      AND ${categoryCondition}
+      AND (${input.riskLevel ?? null}::text IS NULL OR ${riskLevel}::text = ${input.riskLevel ?? null})
+    `;
+    const [itemsResult, totalResult] = await Promise.all([
+      this.db.execute<StudentRiskRow>(sql`
+        SELECT srs.student_id::text,
+               concat_ws(' ', s.first_name, s.last_name) AS student_name,
+               l.id::text AS school_level_id,
+               l.name AS school_level_name,
+               c.id::text AS class_id,
+               c.name AS class_name,
+               srs.absences_signal,
+               srs.grades_signal,
+               ${input.includePayments ? sql`srs.payment_signal` : sql`FALSE`} AS payment_signal,
+               ${score}::int AS risk_score,
+               ${riskLevel}::text AS level,
+               srs.computed_at::text
+        FROM student_risk_status srs
+        INNER JOIN students s ON s.id = srs.student_id
+        LEFT JOIN classes c ON c.id = s.class_id
+        LEFT JOIN levels l ON l.id = c.level_id
+        WHERE ${conditions}
+        ORDER BY ${score} DESC, student_name ASC
+        LIMIT ${input.limit}
+        OFFSET ${offset}
+      `),
+      this.db.execute<{ total: string | number }>(sql`
+        SELECT COUNT(*) AS total
+        FROM student_risk_status srs
+        INNER JOIN students s ON s.id = srs.student_id
+        LEFT JOIN classes c ON c.id = s.class_id
+        LEFT JOIN levels l ON l.id = c.level_id
+        WHERE ${conditions}
+      `),
+    ]);
+    return {
+      rows: getRows<StudentRiskRow>(itemsResult),
+      total: Number(getRows<{ total: string | number }>(totalResult)[0]?.total ?? 0),
+    };
   }
 
-  async listTeacherRisks() {
+  async listTeacherRisks(input: TeacherRiskListInput): Promise<{ rows: TeacherRiskRow[]; total: number }> {
+    const offset = (input.page - 1) * input.limit;
     const teacherAbsenceRule = (await this.listRules()).find(
       (rule) => rule.subjectType === 'teacher' && rule.signalType === 'absences'
     );
-    const { periodDays } = resolveRollingRiskRule(
+    const ruleConfig = resolveRollingRiskRule(
       teacherAbsenceRule,
       DEFAULT_RISK_RULES.teacherAbsences
     );
-    const result = await this.db.execute<Record<string, string | number | boolean>>(sql`
-      SELECT trs.teacher_id::text,
+    const startDate = input.month ? `${input.month}-01` : null;
+    const dateRange = input.month
+      ? sql`at.date >= ${startDate}::date AND at.date < (${startDate}::date + INTERVAL '1 month')`
+      : sql`at.date >= CURRENT_DATE - (${ruleConfig.periodDays})::int`;
+    const teacherCounts = sql`
+      SELECT t.id::text AS teacher_id,
              u.name AS teacher_name,
-             COUNT(at.id) FILTER (WHERE at.status = 'absent' AND at.date >= CURRENT_DATE - (${periodDays})::int)::int AS absence_count,
-             CASE WHEN COALESCE(COUNT(at.id), 0) > 0
+             COUNT(at.id) FILTER (WHERE at.status = 'absent')::int AS absence_count,
+             CASE WHEN COUNT(at.id) > 0
                   THEN ROUND(100.0 * (COUNT(at.id) - COUNT(at.id) FILTER (WHERE at.status = 'absent')) / COUNT(at.id))::int
-                  ELSE 100 END AS attendance_rate,
-             trs.absences_signal, trs.risk_score, trs.level::text
-      FROM teacher_risk_status trs
-      INNER JOIN teachers t ON t.id = trs.teacher_id
+                  ELSE 100 END AS attendance_rate
+      FROM teachers t
       INNER JOIN users u ON u.id = t.user_id AND u.is_active = true
-      LEFT JOIN attendances_teacher at ON at.teacher_id = trs.teacher_id AND at.date >= CURRENT_DATE - (${periodDays})::int
-      GROUP BY trs.teacher_id, u.name, trs.absences_signal, trs.risk_score, trs.level
-      ORDER BY trs.risk_score DESC, absence_count DESC, teacher_name ASC
-    `);
-    return getRows(result);
+      LEFT JOIN attendances_teacher at ON at.teacher_id = t.id AND ${dateRange}
+      GROUP BY t.id, u.name
+    `;
+    const isAtRisk = sql`${ruleConfig.isActive} AND absence_count >= ${ruleConfig.thresholdValue}`;
+    const [itemsResult, totalResult] = await Promise.all([
+      this.db.execute<TeacherRiskRow>(sql`
+        WITH teacher_counts AS (${teacherCounts})
+        SELECT teacher_id,
+               teacher_name,
+               absence_count,
+               attendance_rate,
+               ${isAtRisk} AS absences_signal,
+               CASE WHEN ${isAtRisk} THEN 1 ELSE 0 END::int AS risk_score,
+               CASE WHEN ${isAtRisk} THEN 'attention' ELSE 'none' END AS level
+        FROM teacher_counts
+        WHERE (${input.atRisk} = false OR ${isAtRisk})
+        ORDER BY ${isAtRisk} DESC, absence_count DESC, teacher_name ASC
+        LIMIT ${input.limit}
+        OFFSET ${offset}
+      `),
+      this.db.execute<{ total: string | number }>(sql`
+        WITH teacher_counts AS (${teacherCounts})
+        SELECT COUNT(*) AS total
+        FROM teacher_counts
+        WHERE (${input.atRisk} = false OR ${isAtRisk})
+      `),
+    ]);
+    return {
+      rows: getRows<TeacherRiskRow>(itemsResult),
+      total: Number(getRows<{ total: string | number }>(totalResult)[0]?.total ?? 0),
+    };
   }
 
   /** Classes dont le prof principal est l'utilisateur donné. */

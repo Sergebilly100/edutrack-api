@@ -103,13 +103,13 @@ export class ConductService {
       );
     }
 
-    if (!(await this.repository.teacherHasOpenAverageCalculation(
+    if (!(await this.repository.teacherHasCompletedAverageCalculation(
       teacher.id,
       student.classId,
       input.grading_period_id
     ))) {
       throw new ConductModuleError(
-        'Passez d’abord au calcul des moyennes pour cette période',
+        'Terminez d’abord le calcul des moyennes de votre matière pour cette période',
         409,
         'AVERAGE_CALCULATION_NOT_STARTED'
       );
@@ -165,13 +165,13 @@ export class ConductService {
     if (!(await this.repository.isCurrentGradingPeriod(input.grading_period_id))) {
       throw new ConductModuleError('Cette période n’est pas encore ouverte à la saisie', 409, 'GRADING_PERIOD_NOT_CURRENT');
     }
-    if (!(await this.repository.teacherHasOpenAverageCalculation(
+    if (!(await this.repository.teacherHasCompletedAverageCalculation(
       teacher.id,
       input.class_id,
       input.grading_period_id
     ))) {
       throw new ConductModuleError(
-        'Passez d’abord au calcul des moyennes pour cette période',
+        'Terminez d’abord le calcul des moyennes de votre matière pour cette période',
         409,
         'AVERAGE_CALCULATION_NOT_STARTED'
       );
