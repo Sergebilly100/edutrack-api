@@ -103,13 +103,13 @@ export class ConductService {
       );
     }
 
-    if (!(await this.repository.teacherHasCompletedAverageCalculation(
+    if (!(await this.repository.teacherHasAverageCalculation(
       teacher.id,
       student.classId,
       input.grading_period_id
     ))) {
       throw new ConductModuleError(
-        'Terminez d’abord le calcul des moyennes de votre matière pour cette période',
+        'Lancez d’abord le calcul des moyennes de votre matière pour cette période',
         409,
         'AVERAGE_CALCULATION_NOT_STARTED'
       );
@@ -165,13 +165,13 @@ export class ConductService {
     if (!(await this.repository.isCurrentGradingPeriod(input.grading_period_id))) {
       throw new ConductModuleError('Cette période n’est pas encore ouverte à la saisie', 409, 'GRADING_PERIOD_NOT_CURRENT');
     }
-    if (!(await this.repository.teacherHasCompletedAverageCalculation(
+    if (!(await this.repository.teacherHasAverageCalculation(
       teacher.id,
       input.class_id,
       input.grading_period_id
     ))) {
       throw new ConductModuleError(
-        'Terminez d’abord le calcul des moyennes de votre matière pour cette période',
+        'Lancez d’abord le calcul des moyennes de votre matière pour cette période',
         409,
         'AVERAGE_CALCULATION_NOT_STARTED'
       );
@@ -230,6 +230,12 @@ export class ConductService {
       this.repository.listSpontaneousEvaluationsForStudent(studentId, gradingPeriodId),
       this.repository.findFinalGrade(studentId, gradingPeriodId),
     ]);
+    const submittedCount = teacherInputs.filter((input) => input.isSubmitted).length;
+    const inputSummary = {
+      expectedCount: teacherInputs.length,
+      submittedCount,
+      isComplete: teacherInputs.length > 0 && submittedCount === teacherInputs.length,
+    };
 
     return {
       student: {
@@ -242,6 +248,7 @@ export class ConductService {
         label: periodRow.label,
       },
       teacherInputs,
+      inputSummary,
       spontaneousEvaluations,
       finalGrade,
     };
@@ -267,6 +274,19 @@ export class ConductService {
     }
 
     await this.assertCanManageFinalConduct(input.student_id, context);
+
+    const teacherInputs = await this.repository.listConductInputsForStudent(
+      input.student_id,
+      input.grading_period_id
+    );
+    const missingTeacherInputs = teacherInputs.filter((teacherInput) => !teacherInput.isSubmitted);
+    if (teacherInputs.length === 0 || missingTeacherInputs.length > 0) {
+      throw new ConductModuleError(
+        'Tous les enseignants de la classe doivent renseigner leur note de conduite avant la décision finale',
+        409,
+        'CONDUCT_INPUTS_INCOMPLETE'
+      );
+    }
 
     await this.repository.upsertConductGrade({
       ...input,

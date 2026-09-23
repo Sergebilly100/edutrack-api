@@ -239,6 +239,27 @@ export class AcademicGradingRepository {
     return (await this.withPeriodStates(rows(periodsInYear))).find((period) => period.id === id) ?? null;
   }
 
+  async findNextGradingPeriod(id: string): Promise<GradingPeriodItem | null> {
+    const result = await this.db.execute<PeriodRow>(sql`
+      SELECT next_period.id,
+             next_period.school_year_id,
+             next_period.type,
+             next_period.order_index,
+             next_period.label,
+             next_period.start_date::text,
+             next_period.end_date::text
+      FROM grading_periods current_period
+      INNER JOIN grading_periods next_period
+        ON next_period.school_year_id = current_period.school_year_id
+       AND next_period.order_index > current_period.order_index
+      WHERE current_period.id = ${id}::uuid
+      ORDER BY next_period.order_index
+      LIMIT 1
+    `);
+    const row = rows(result)[0];
+    return row ? mapPeriod(row) : null;
+  }
+
   async getSchoolYear(id: string): Promise<{ id: string; startDate: string; endDate: string; gradingPeriodType: 'trimester' | 'semester' } | null> {
     const result = await this.db.execute<{ id: string; start_date: string; end_date: string; grading_period_type: 'trimester' | 'semester' }>(sql`
       SELECT id, start_date::text, end_date::text, grading_period_type FROM school_years WHERE id = ${id}::uuid LIMIT 1

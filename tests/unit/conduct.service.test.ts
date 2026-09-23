@@ -13,7 +13,6 @@ const repository = {
   findStudentContext: vi.fn(),
   findTeacherByUserId: vi.fn(),
   teacherTeachesClass: vi.fn(),
-  teacherHasCompletedAverageCalculation: vi.fn(),
   teacherHasAverageCalculation: vi.fn(),
   gradingPeriodExists: vi.fn(),
   isGradingPeriodCompleted: vi.fn(),
@@ -43,6 +42,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   repository.isGradingPeriodCompleted.mockResolvedValue(false);
   repository.isCurrentGradingPeriod.mockResolvedValue(true);
+  repository.teacherHasAverageCalculation.mockResolvedValue(true);
+  repository.listConductInputsForStudent.mockResolvedValue([
+    { teacherId: 'teacher-1', isSubmitted: true, note: 16 },
+  ]);
 });
 
 describe('conduct.service createEducatorAssignment', () => {
@@ -138,7 +141,7 @@ describe('conduct.service submitTeacherConductInput', () => {
     repository.findStudentContext.mockResolvedValue(studentContext);
     repository.gradingPeriodExists.mockResolvedValue(true);
     repository.teacherTeachesClass.mockResolvedValue(true);
-    repository.teacherHasCompletedAverageCalculation.mockResolvedValue(true);
+    repository.teacherHasAverageCalculation.mockResolvedValue(true);
     repository.insertTeacherConductInput.mockResolvedValue(undefined);
 
     await expect(service.submitTeacherConductInput(baseInput, { userId: 'user-teacher' })).resolves.toBeUndefined();
@@ -155,7 +158,7 @@ describe('conduct.service submitTeacherConductInput', () => {
     repository.findStudentContext.mockResolvedValue(studentContext);
     repository.gradingPeriodExists.mockResolvedValue(true);
     repository.teacherTeachesClass.mockResolvedValue(true);
-    repository.teacherHasCompletedAverageCalculation.mockResolvedValue(false);
+    repository.teacherHasAverageCalculation.mockResolvedValue(false);
 
     await expect(service.submitTeacherConductInput(baseInput, { userId: 'user-teacher' })).rejects.toMatchObject({
       code: 'AVERAGE_CALCULATION_NOT_STARTED',
@@ -170,7 +173,7 @@ describe('conduct.service submitBulkTeacherConductInputs', () => {
     const service = new ConductService(repository);
     repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1', name: 'Ibrahim Diallo' });
     repository.teacherTeachesClass.mockResolvedValue(true);
-    repository.teacherHasCompletedAverageCalculation.mockResolvedValue(true);
+    repository.teacherHasAverageCalculation.mockResolvedValue(true);
     repository.gradingPeriodMatchesClass.mockResolvedValue(true);
     repository.studentsBelongToClass.mockResolvedValue(true);
     repository.insertTeacherConductInput.mockResolvedValue(undefined);
@@ -190,7 +193,7 @@ describe('conduct.service submitBulkTeacherConductInputs', () => {
     const service = new ConductService(repository);
     repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1', name: 'Ibrahim Diallo' });
     repository.teacherTeachesClass.mockResolvedValue(true);
-    repository.teacherHasCompletedAverageCalculation.mockResolvedValue(true);
+    repository.teacherHasAverageCalculation.mockResolvedValue(true);
     repository.gradingPeriodMatchesClass.mockResolvedValue(true);
     repository.studentsBelongToClass.mockResolvedValue(false);
 
@@ -217,7 +220,6 @@ describe('conduct.service getTeacherConductScope', () => {
       isAvailable: true,
       students: [{ studentId: 'student-1', input: { note: 16 } }],
     });
-    expect(repository.teacherHasCompletedAverageCalculation).not.toHaveBeenCalled();
   });
 });
 
@@ -286,5 +288,21 @@ describe('conduct.service decideConductGrade', () => {
       expect.objectContaining({ decidedByUserId: 'homeroom-teacher', coefficient: 1 })
     );
     expect(repository.isAssignedEducatorForStudent).not.toHaveBeenCalled();
+  });
+
+  it('refuse la décision finale tant qu’un professeur attendu n’a pas renseigné sa note', async () => {
+    const service = new ConductService(repository);
+    repository.findStudentContext.mockResolvedValue(studentContext);
+    repository.gradingPeriodExists.mockResolvedValue(true);
+    repository.isHomeroomTeacherForStudent.mockResolvedValue(true);
+    repository.listConductInputsForStudent.mockResolvedValue([
+      { teacherId: 'teacher-1', isSubmitted: true, note: 16 },
+      { teacherId: 'teacher-2', isSubmitted: false, note: null },
+    ]);
+
+    await expect(
+      service.decideConductGrade(gradeBody, { userId: 'homeroom-teacher', canFinalize: false })
+    ).rejects.toMatchObject({ code: 'CONDUCT_INPUTS_INCOMPLETE', statusCode: 409 });
+    expect(repository.upsertConductGrade).not.toHaveBeenCalled();
   });
 });

@@ -438,12 +438,12 @@ export default async function academicController(app: FastifyInstance): Promise<
   app.post('/api/v1/evaluations', { preHandler: requireTeacher }, async (request, reply) => {
     try {
       const body = createEvaluationBodySchema.parse(request.body ?? {});
-      const evaluation = await withTenantSchema(request.claims!.schemaName, (tenantDb) =>
+      const result = await withTenantSchema(request.claims!.schemaName, (tenantDb) =>
         tenantDb.transaction((tx) =>
           buildAcademicGradingService(tx).createEvaluation(body, request.user!.userId)
         )
       );
-      return reply.code(201).send({ evaluation });
+      return reply.code(201).send(result);
     } catch (error) {
       return handleError(request, reply, error);
     }

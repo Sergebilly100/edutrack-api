@@ -199,25 +199,18 @@ export class ConductRepository {
 
   async teacherTeachesClass(teacherId: string, classId: string): Promise<boolean> {
     const result = await this.db.execute(sql`
-      SELECT 1 FROM schedules WHERE teacher_id = ${teacherId}::uuid AND class_id = ${classId}::uuid LIMIT 1
-    `);
-    return getRows(result).length > 0;
-  }
-
-  async teacherHasCompletedAverageCalculation(
-    teacherId: string,
-    classId: string,
-    gradingPeriodId: string
-  ): Promise<boolean> {
-    const result = await this.db.execute(sql`
       SELECT 1
-      FROM class_subject_completion csc
-      INNER JOIN teacher_subject_assignments tsa
-        ON tsa.class_id = csc.class_id AND tsa.subject_id = csc.subject_id
-      WHERE csc.class_id = ${classId}::uuid
-        AND csc.grading_period_id = ${gradingPeriodId}::uuid
-        AND csc.status = 'completed'::class_subject_completion_status
-        AND tsa.teacher_id = ${teacherId}::uuid
+      WHERE EXISTS (
+        SELECT 1
+        FROM teacher_subject_assignments
+        WHERE teacher_id = ${teacherId}::uuid AND class_id = ${classId}::uuid
+      ) OR EXISTS (
+        SELECT 1
+        FROM schedules
+        WHERE teacher_id = ${teacherId}::uuid
+          AND class_id = ${classId}::uuid
+          AND is_active = true
+      )
       LIMIT 1
     `);
     return getRows(result).length > 0;
@@ -231,12 +224,28 @@ export class ConductRepository {
     const result = await this.db.execute(sql`
       SELECT 1
       FROM class_subject_completion csc
-      INNER JOIN teacher_subject_assignments tsa
-        ON tsa.class_id = csc.class_id AND tsa.subject_id = csc.subject_id
       WHERE csc.class_id = ${classId}::uuid
         AND csc.grading_period_id = ${gradingPeriodId}::uuid
-        AND csc.status = 'completed'::class_subject_completion_status
-        AND tsa.teacher_id = ${teacherId}::uuid
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM teacher_subject_assignments tsa
+            WHERE tsa.class_id = csc.class_id
+              AND tsa.subject_id = csc.subject_id
+              AND tsa.teacher_id = ${teacherId}::uuid
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM schedules sch
+            INNER JOIN classes class ON class.id = sch.class_id
+            INNER JOIN subjects subject
+              ON subject.level_id = class.level_id AND subject.name = sch.subject
+            WHERE sch.teacher_id = ${teacherId}::uuid
+              AND sch.class_id = ${classId}::uuid
+              AND sch.is_active = true
+              AND subject.id = csc.subject_id
+          )
+        )
       LIMIT 1
     `);
     return getRows(result).length > 0;
@@ -398,47 +407,77 @@ export class ConductRepository {
 
   async listConductInputsForStudent(studentId: string, gradingPeriodId: string) {
     const result = await this.db.execute<{
-      id: string;
+      id: string | null;
+      teacher_id: string;
       teacher_name: string;
       subject_label: string | null;
-      note: string;
+      note: string | null;
       observation: string | null;
-      created_at: string;
+      created_at: string | null;
     }>(sql`
+      WITH target_student AS (
+        SELECT class_id
+        FROM students
+        WHERE id = ${studentId}::uuid
+      ), expected_teachers AS (
+        SELECT DISTINCT tsa.teacher_id, tsa.class_id
+        FROM teacher_subject_assignments tsa
+        INNER JOIN target_student student ON student.class_id = tsa.class_id
+        UNION
+        SELECT DISTINCT sch.teacher_id, sch.class_id
+        FROM schedules sch
+        INNER JOIN target_student student ON student.class_id = sch.class_id
+        WHERE sch.is_active = true
+      )
       SELECT
         tci.id::text,
+        t.id::text AS teacher_id,
         u.name AS teacher_name,
         (
-          SELECT DISTINCT sch.subject
-          FROM schedules sch
-          WHERE sch.teacher_id = tci.teacher_id AND sch.class_id = tci.class_id
-          LIMIT 1
+          SELECT string_agg(labels.subject_name, ', ' ORDER BY labels.subject_name)
+          FROM (
+            SELECT DISTINCT subject.name AS subject_name
+            FROM teacher_subject_assignments tsa
+            INNER JOIN subjects subject ON subject.id = tsa.subject_id
+            WHERE tsa.teacher_id = t.id AND tsa.class_id = expected.class_id
+            UNION
+            SELECT DISTINCT sch.subject AS subject_name
+            FROM schedules sch
+            WHERE sch.teacher_id = t.id AND sch.class_id = expected.class_id
+              AND sch.is_active = true
+          ) labels
         ) AS subject_label,
         tci.note::text,
         tci.observation,
         tci.created_at::text
-      FROM teacher_conduct_inputs tci
-      INNER JOIN teachers t ON t.id = tci.teacher_id
-      INNER JOIN users u ON u.id = t.user_id
-      WHERE tci.student_id = ${studentId}::uuid
-        AND tci.grading_period_id = ${gradingPeriodId}::uuid
-      ORDER BY tci.created_at ASC
+      FROM expected_teachers expected
+      INNER JOIN teachers t ON t.id = expected.teacher_id
+      INNER JOIN users u ON u.id = t.user_id AND u.is_active = true
+      LEFT JOIN teacher_conduct_inputs tci
+        ON tci.teacher_id = expected.teacher_id
+       AND tci.class_id = expected.class_id
+       AND tci.student_id = ${studentId}::uuid
+       AND tci.grading_period_id = ${gradingPeriodId}::uuid
+      ORDER BY u.name, t.id
     `);
 
     return getRows<{
-      id: string;
+      id: string | null;
+      teacher_id: string;
       teacher_name: string;
       subject_label: string | null;
-      note: string;
+      note: string | null;
       observation: string | null;
-      created_at: string;
+      created_at: string | null;
     }>(result).map((row) => ({
       id: row.id,
+      teacherId: row.teacher_id,
       teacherName: row.teacher_name,
       subjectLabel: row.subject_label,
-      note: Number(row.note),
+      note: row.note === null ? null : Number(row.note),
       observation: row.observation,
       createdAt: row.created_at,
+      isSubmitted: row.note !== null,
     }));
   }
 

@@ -12,6 +12,7 @@ const ids = {
   subject: '550e8400-e29b-41d4-a716-446655440003',
   schoolClass: '550e8400-e29b-41d4-a716-446655440004',
   period: '550e8400-e29b-41d4-a716-446655440005',
+  nextPeriod: '550e8400-e29b-41d4-a716-446655440008',
   level: '550e8400-e29b-41d4-a716-446655440006',
   schoolYear: '550e8400-e29b-41d4-a716-446655440007',
 };
@@ -20,6 +21,7 @@ const repository = {
   findTeacherByUserId: vi.fn(),
   findSubject: vi.fn(),
   findGradingPeriod: vi.fn(),
+  findNextGradingPeriod: vi.fn(),
   getClassScope: vi.fn(),
   getLessonSlotScope: vi.fn(),
   hasTeacherSubjectAssignment: vi.fn(),
@@ -50,7 +52,10 @@ beforeEach(() => {
     schoolYearId: ids.schoolYear,
     isCompleted: false,
     isCurrent: true,
+    startDate: '2026-09-01',
+    endDate: '2026-12-20',
   });
+  repository.findNextGradingPeriod.mockResolvedValue(null);
   repository.getClassScope.mockResolvedValue({
     id: ids.schoolClass,
     levelId: ids.level,
@@ -74,7 +79,10 @@ describe('AcademicGradingService.updateCompletion', () => {
   });
 
   it('vérifie de nouveau les notes avant la clôture après un calcul lancé', async () => {
-    repository.getSubjectCompletion.mockResolvedValue({ status: 'in_progress' });
+    repository.getSubjectCompletion.mockImplementation(
+      async (_classId: string, _subjectId: string, periodId: string) =>
+        periodId === ids.period ? { status: 'in_progress' } : null
+    );
     repository.countMissingScheduledGrades.mockResolvedValue(1);
 
     await expect(service.updateCompletion({ ...completionInput, status: 'completed' }, ids.user)).rejects.toMatchObject<
@@ -96,12 +104,85 @@ describe('AcademicGradingService.createEvaluation', () => {
       coefficient: 1,
       label: 'Devoir sans EDT',
       evaluationDate: '2026-09-21',
-    }, ids.user)).resolves.toEqual({ id: 'evaluation-1' });
+    }, ids.user)).resolves.toEqual({
+      evaluation: { id: 'evaluation-1' },
+      routedToPeriod: null,
+    });
 
     expect(repository.getLessonSlotScope).not.toHaveBeenCalled();
     expect(repository.createEvaluation).toHaveBeenCalledWith(expect.objectContaining({
       classId: ids.schoolClass,
       subjectId: ids.subject,
     }), ids.teacher);
+  });
+
+  it('redirige une nouvelle évaluation vers la période suivante après le lancement du calcul', async () => {
+    repository.getSubjectCompletion.mockImplementation(
+      async (_classId: string, _subjectId: string, periodId: string) =>
+        periodId === ids.period ? { status: 'in_progress' } : null
+    );
+    repository.findNextGradingPeriod.mockResolvedValue({
+      id: ids.nextPeriod,
+      schoolYearId: ids.schoolYear,
+      label: 'Deuxième trimestre',
+      startDate: '2027-01-01',
+      endDate: '2027-03-31',
+      isCompleted: false,
+      isCurrent: false,
+    });
+    repository.findGradingPeriod.mockImplementation(async (id: string) => id === ids.nextPeriod
+      ? {
+          id: ids.nextPeriod,
+          schoolYearId: ids.schoolYear,
+          label: 'Deuxième trimestre',
+          startDate: '2027-01-01',
+          endDate: '2027-03-31',
+          isCompleted: false,
+          isCurrent: false,
+        }
+      : {
+          id: ids.period,
+          schoolYearId: ids.schoolYear,
+          startDate: '2026-09-01',
+          endDate: '2026-12-20',
+          isCompleted: false,
+          isCurrent: true,
+        });
+    repository.createEvaluation.mockResolvedValue({ id: 'evaluation-2' });
+
+    await expect(service.createEvaluation({
+      classId: ids.schoolClass,
+      subjectId: ids.subject,
+      gradingPeriodId: ids.period,
+      type: 'scheduled',
+      coefficient: 1,
+      label: 'Devoir suivant',
+      evaluationDate: '2027-01-15',
+    }, ids.user)).resolves.toEqual({
+      evaluation: { id: 'evaluation-2' },
+      routedToPeriod: { id: ids.nextPeriod, label: 'Deuxième trimestre' },
+    });
+    expect(repository.createEvaluation).toHaveBeenCalledWith(
+      expect.objectContaining({ gradingPeriodId: ids.nextPeriod }),
+      ids.teacher
+    );
+  });
+
+  it('refuse une nouvelle évaluation après le calcul si aucune période suivante n’existe', async () => {
+    repository.getSubjectCompletion.mockResolvedValue({ status: 'in_progress' });
+
+    await expect(service.createEvaluation({
+      classId: ids.schoolClass,
+      subjectId: ids.subject,
+      gradingPeriodId: ids.period,
+      type: 'scheduled',
+      coefficient: 1,
+      label: 'Devoir suivant',
+      evaluationDate: '2027-01-15',
+    }, ids.user)).rejects.toMatchObject<Partial<AcademicGradingError>>({
+      code: 'NEXT_GRADING_PERIOD_NOT_CONFIGURED',
+      statusCode: 409,
+    });
+    expect(repository.createEvaluation).not.toHaveBeenCalled();
   });
 });

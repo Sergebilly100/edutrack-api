@@ -72,12 +72,14 @@ export type EducatorAssignmentItem = {
 };
 
 export type ConductInputItem = {
-  id: string;
+  id: string | null;
+  teacherId: string;
   teacherName: string;
   subjectLabel: string | null;
-  note: number;
+  note: number | null;
   observation: string | null;
-  createdAt: string;
+  createdAt: string | null;
+  isSubmitted: boolean;
 };
 
 export type TeacherConductScopeItem = {
@@ -107,6 +109,11 @@ export type ConductOverview = {
     label: string;
   };
   teacherInputs: ConductInputItem[];
+  inputSummary: {
+    expectedCount: number;
+    submittedCount: number;
+    isComplete: boolean;
+  };
   spontaneousEvaluations: SpontaneousEvaluationItem[];
   finalGrade: {
     note: number;

@@ -160,7 +160,6 @@ describe('conduct routes (5b)', () => {
     );
 
     await seedScheduleLink(teacherAUser, teachersA[0]!.id);
-    await seedScheduleLink(teacherBUser, teachersB[0]!.id);
 
     const conductSubjects = await queryTenant<IdRow>(
       `INSERT INTO ${tenantTable('subjects')} (level_id, name, coefficient)
@@ -317,7 +316,50 @@ describe('conduct routes (5b)', () => {
     expect(response.status, JSON.stringify(response.body)).toBe(200);
     expect(response.body.student.fullName).toBe('Awa Conduct');
     expect(response.body.teacherInputs).toHaveLength(2);
+    expect(response.body.inputSummary).toEqual({
+      expectedCount: 2,
+      submittedCount: 2,
+      isComplete: true,
+    });
     expect(response.body.finalGrade).toBeNull();
+  });
+
+  it('montre les professeurs manquants et bloque la décision finale tant que tous les avis ne sont pas saisis', async () => {
+    const incompleteOverview = await request()
+      .get(`/api/v1/conduct/students/${secondStudentId}/overview?grading_period_id=${gradingPeriodId}`)
+      .set(educatorHeaders);
+    expect(incompleteOverview.status, JSON.stringify(incompleteOverview.body)).toBe(200);
+    expect(incompleteOverview.body.inputSummary).toEqual({
+      expectedCount: 2,
+      submittedCount: 1,
+      isComplete: false,
+    });
+    expect(incompleteOverview.body.teacherInputs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ teacherName: 'Prof A conduct', note: 16, isSubmitted: true }),
+      expect.objectContaining({ teacherName: 'Prof B conduct', note: null, isSubmitted: false }),
+    ]));
+
+    const blockedDecision = await request()
+      .put('/api/v1/conduct/grades')
+      .set(educatorHeaders)
+      .send({ student_id: secondStudentId, grading_period_id: gradingPeriodId, note: 15 });
+    expect(blockedDecision.status).toBe(409);
+    expect(blockedDecision.body.code).toBe('CONDUCT_INPUTS_INCOMPLETE');
+
+    const remainingInput = await request()
+      .post('/api/v1/conduct/inputs')
+      .set(teacherBHeaders)
+      .send({ student_id: secondStudentId, grading_period_id: gradingPeriodId, note: 13 });
+    expect(remainingInput.status, JSON.stringify(remainingInput.body)).toBe(201);
+
+    const completeOverview = await request()
+      .get(`/api/v1/conduct/students/${secondStudentId}/overview?grading_period_id=${gradingPeriodId}`)
+      .set(educatorHeaders);
+    expect(completeOverview.body.inputSummary).toEqual({
+      expectedCount: 2,
+      submittedCount: 2,
+      isComplete: true,
+    });
   });
 
   it('décision finale par l’éducateur assigné avec coefficient par défaut 1', async () => {

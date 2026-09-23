@@ -59,6 +59,16 @@ describe('academic grading integration', () => {
     });
     expect(periodResponse.status).toBe(201);
     const gradingPeriodId = periodResponse.body.gradingPeriod.id as string;
+    const nextPeriodResponse = await request().post('/api/v1/grading-periods').set(directorHeaders).send({
+      schoolYearId: years[0]!.id,
+      type: 'trimester',
+      orderIndex: 2,
+      label: 'Deuxième trimestre',
+      startDate: '2089-01-01',
+      endDate: '2089-03-31',
+    });
+    expect(nextPeriodResponse.status).toBe(201);
+    const nextGradingPeriodId = nextPeriodResponse.body.gradingPeriod.id as string;
 
     const seededSchedule = await queryTenant<{
       schedule_period_id: string; room_id: string; time_slot_id: string; day_of_week: number; start_time: string;
@@ -244,18 +254,28 @@ describe('academic grading integration', () => {
     expect(calculationStarted.body.completion.status).toBe('in_progress');
 
     const inProgressSubjectEdit = await saveGrade(math1, 14);
-    expect(inProgressSubjectEdit.status).toBe(200);
+    expect(inProgressSubjectEdit.status).toBe(409);
+    expect(inProgressSubjectEdit.body.code).toBe('SUBJECT_CALCULATION_STARTED');
 
-    const math3 = await createEvaluation(context.scheduleId, mathResponse.body.subject.id, 'Devoir 3', 1, '2088-12-01');
-    const incompleteCompletion = await request().put('/api/v1/class-subject-completion').set(teacherHeaders).send({
-      classId,
+    const routedEvaluation = await request().post('/api/v1/evaluations').set(teacherHeaders).send({
+      lessonSlotId: context.scheduleId,
       subjectId: mathResponse.body.subject.id,
+      classId,
       gradingPeriodId,
-      status: 'completed',
+      type: 'scheduled',
+      coefficient: 1,
+      label: 'Devoir 3',
+      evaluationDate: '2089-01-15',
     });
-    expect(incompleteCompletion.status).toBe(409);
-    expect(incompleteCompletion.body.code).toBe('GRADES_INCOMPLETE');
-    expect((await saveGrade(math3, 16)).status).toBe(200);
+    expect(routedEvaluation.status, JSON.stringify(routedEvaluation.body)).toBe(201);
+    expect(routedEvaluation.body.evaluation).toMatchObject({
+      gradingPeriodId: nextGradingPeriodId,
+      evaluationDate: '2089-01-15',
+    });
+    expect(routedEvaluation.body.routedToPeriod).toEqual({
+      id: nextGradingPeriodId,
+      label: 'Deuxième trimestre',
+    });
 
     const completion = await request().put('/api/v1/class-subject-completion').set(teacherHeaders).send({
       classId,

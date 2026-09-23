@@ -328,7 +328,12 @@ export class AcademicGradingService {
     return teacherId;
   }
 
-  private async assertSubjectOpen(classId: string, subjectId: string, gradingPeriodId: string): Promise<void> {
+  private async assertSubjectOpen(
+    classId: string,
+    subjectId: string,
+    gradingPeriodId: string,
+    options: { allowFuturePeriod?: boolean } = {}
+  ): Promise<void> {
     const period = await this.repository.findGradingPeriod(gradingPeriodId);
     if (!period) {
       throw new AcademicGradingError('Grading period not found', 400, 'GRADING_PERIOD_NOT_FOUND');
@@ -340,7 +345,7 @@ export class AcademicGradingService {
         'GRADING_PERIOD_COMPLETED'
       );
     }
-    if (!period.isCurrent) {
+    if (!period.isCurrent && !options.allowFuturePeriod) {
       throw new AcademicGradingError(
         'Cette période n’est pas encore la période scolaire en cours',
         409,
@@ -348,11 +353,13 @@ export class AcademicGradingService {
       );
     }
     const completion = await this.repository.getSubjectCompletion(classId, subjectId, gradingPeriodId);
-    if (completion?.status === 'completed') {
+    if (completion) {
       throw new AcademicGradingError(
-        'La saisie est clôturée pour cette classe, cette matière et cette période',
+        completion.status === 'completed'
+          ? 'La saisie est clôturée pour cette classe, cette matière et cette période'
+          : 'Le calcul des moyennes a commencé : les notes de cette matière ne sont plus modifiables pour cette période',
         409,
-        'SUBJECT_AVERAGES_VALIDATED'
+        completion.status === 'completed' ? 'SUBJECT_AVERAGES_VALIDATED' : 'SUBJECT_CALCULATION_STARTED'
       );
     }
   }
@@ -401,7 +408,11 @@ export class AcademicGradingService {
     };
   }
 
-  private async assertEvaluationScope(input: CreateEvaluationInput, teacherId: string): Promise<void> {
+  private async assertEvaluationScope(
+    input: CreateEvaluationInput,
+    teacherId: string,
+    options: { allowFuturePeriod?: boolean } = {}
+  ): Promise<void> {
     const [slot, subject, period, schoolClass] = await Promise.all([
       input.lessonSlotId ? this.repository.getLessonSlotScope(input.lessonSlotId) : Promise.resolve(null),
       this.repository.findSubject(input.subjectId),
@@ -438,14 +449,41 @@ export class AcademicGradingService {
       throw new AcademicGradingError('Subject does not match the lesson slot', 400, 'EVALUATION_SUBJECT_MISMATCH');
     }
 
-    await this.assertSubjectOpen(input.classId, input.subjectId, input.gradingPeriodId);
+    await this.assertSubjectOpen(
+      input.classId,
+      input.subjectId,
+      input.gradingPeriodId,
+      options
+    );
 
   }
 
   async createEvaluation(input: CreateEvaluationInput, userId: string) {
     const teacherId = await this.teacherIdForUser(userId);
-    await this.assertEvaluationScope(input, teacherId);
-    return this.repository.createEvaluation(input, teacherId);
+    const completion = await this.repository.getSubjectCompletion(
+      input.classId,
+      input.subjectId,
+      input.gradingPeriodId
+    );
+    let targetInput = input;
+    let routedToPeriod: { id: string; label: string } | null = null;
+    if (completion) {
+      const nextPeriod = await this.repository.findNextGradingPeriod(input.gradingPeriodId);
+      if (!nextPeriod) {
+        throw new AcademicGradingError(
+          'Le calcul des moyennes a commencé et aucune période suivante n’est configurée pour cette évaluation',
+          409,
+          'NEXT_GRADING_PERIOD_NOT_CONFIGURED'
+        );
+      }
+      targetInput = { ...input, gradingPeriodId: nextPeriod.id };
+      routedToPeriod = { id: nextPeriod.id, label: nextPeriod.label };
+    }
+    await this.assertEvaluationScope(targetInput, teacherId, {
+      allowFuturePeriod: routedToPeriod !== null,
+    });
+    const evaluation = await this.repository.createEvaluation(targetInput, teacherId);
+    return { evaluation, routedToPeriod };
   }
 
   async upsertGrade(evaluationId: string, input: UpsertEvaluationGradeInput, userId: string) {
