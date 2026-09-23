@@ -61,6 +61,11 @@ const toDateWithTime = (date: string, time: string): Date => new Date(`${date}T$
 export class ParentPortalService {
   constructor(private readonly repository: ParentPortalRepository) {}
 
+  async getSchoolConfig(): Promise<{ activeSchoolYear: string | null }> {
+    // Finance endpoints require the tenant year's UUID, not the public display label.
+    return { activeSchoolYear: await this.repository.getActiveSchoolYearId() };
+  }
+
   private async assertStudentAccess(studentId: string, context: ServiceContext): Promise<void> {
     if (
       !context.allowedStudentIds.includes(studentId) ||

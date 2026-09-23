@@ -270,7 +270,7 @@ export class MidyearImportService {
               const parent = await this.db.execute<{ id: string }>(sql`
                 INSERT INTO parents (full_name, phone, password_hash, is_active)
                 VALUES (${`${lastName} ${firstName}`}, ${parentPhone}, 'not-used', true)
-                ON CONFLICT (phone) DO UPDATE SET updated_at = NOW()
+                ON CONFLICT (phone) DO UPDATE SET phone = EXCLUDED.phone
                 RETURNING id::text
               `);
               const parentId = parent.rows?.[0]?.id;

@@ -13,6 +13,7 @@ export default defineConfig({
         test: {
           name: 'integration',
           include: ['tests/integration/**/*.test.ts'],
+          setupFiles: ['tests/support/integration-env.ts'],
           pool: 'forks',
           poolOptions: {
             forks: {

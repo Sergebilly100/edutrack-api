@@ -122,6 +122,7 @@ export class FinancialAlertsRepository {
                FROM student_tuition_schedule_steps stss
                WHERE stss.student_id = s.id
                  AND stss.school_year_id = sfs.school_year_id
+                 AND sfs.total_paid + sfs.waived_amount < LEAST(stss.cumulative_amount_expected, sfs.total_due_year)
                  AND stss.due_date > CURRENT_DATE
                  AND stss.due_date <= CURRENT_DATE + r.days_offset
              )
@@ -140,6 +141,7 @@ export class FinancialAlertsRepository {
                    ON e.student_id = s.id AND e.school_year_id = sfs.school_year_id
                  INNER JOIN classes c2 ON c2.level_id = tp.level_id AND c2.id = COALESCE(e.class_id, s.class_id)
                  WHERE tp.school_year_id = sfs.school_year_id
+                   AND sfs.total_paid + sfs.waived_amount < LEAST(tss.cumulative_amount_expected, sfs.total_due_year)
                    AND tss.due_date > CURRENT_DATE
                    AND tss.due_date <= CURRENT_DATE + r.days_offset
                )
@@ -170,11 +172,13 @@ export class FinancialAlertsRepository {
     }));
   }
 
-  async wasReminderSentRecently(studentId: string, ruleId: string, withinDays = 7): Promise<boolean> {
+  async wasReminderSentRecently(studentId: string, ruleId: string, channel: 'sms' | 'in_app', withinDays = 7): Promise<boolean> {
     const result = await this.db.execute<{ exists: boolean }>(sql`
       SELECT EXISTS (
         SELECT 1 FROM financial_alert_logs
         WHERE student_id = ${studentId}::uuid AND rule_id = ${ruleId}::uuid
+          AND status = 'sent'
+          AND (channel = ${channel}::financial_alert_channel OR channel = 'both')
           AND sent_at >= NOW() - (${withinDays} || ' days')::interval
       ) AS exists
     `);

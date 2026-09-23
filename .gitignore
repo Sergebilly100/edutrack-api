@@ -55,42 +55,9 @@ tmp/*.xlsx
 # Scripts
 scripts/
 
-# Tests
-tests/
-!tests/
-tests/*
-!tests/unit/
-tests/unit/*
-!tests/unit/class-decisions.service.test.ts
-!tests/unit/academic.service.test.ts
-!tests/unit/enrollments.service.test.ts
-!tests/unit/finance.calculations.test.ts
-!tests/unit/academic-grading.calculations.test.ts
-!tests/unit/academic-grading.types.test.ts
-!tests/unit/conduct.service.test.ts
-!tests/unit/report-cards.service.test.ts
-!tests/unit/financial-cache.service.test.ts
-!tests/unit/financial-alerts.service.test.ts
-!tests/unit/risk.service.test.ts
-!tests/unit/dashboard-actions.service.test.ts
-!tests/integration/
-tests/integration/*
-!tests/integration/admin.school-year.routes.test.ts
-!tests/integration/academic.routes.integration.test.ts
-!tests/integration/academic-subjects-bulk.routes.test.ts
-!tests/integration/conduct.routes.test.ts
-!tests/integration/report-cards.routes.test.ts
-!tests/integration/financial-cache.routes.test.ts
-!tests/integration/financial-alerts.routes.test.ts
-!tests/integration/parent-overview.routes.test.ts
-!tests/integration/risk.routes.test.ts
-!tests/integration/dashboard-actions.routes.test.ts
-!tests/integration/student-dossier.routes.test.ts
-!tests/integration/midyear-flag.routes.test.ts
-!tests/integration/class-decisions.routes.test.ts
-!tests/integration/enrollments.routes.test.ts
-!tests/integration/finance.routes.test.ts
-!tests/integration/academic-grading.routes.test.ts
+# Tests are versioned; keep local manual experiments and output private.
+tests/manual/
+tests/.env*
 
 # Template xls
 templates/

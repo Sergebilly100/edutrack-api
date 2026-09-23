@@ -68,6 +68,13 @@ type ParentNotificationRow = {
 export class ParentPortalRepository {
   constructor(private readonly db: TenantDb) {}
 
+  async getActiveSchoolYearId(): Promise<string | null> {
+    const result = await this.db.execute<{ id: string }>(sql`
+      SELECT id::text FROM school_years WHERE status = 'active' LIMIT 1
+    `);
+    return result.rows[0]?.id ?? null;
+  }
+
   async findParentByPhone(phone: string): Promise<ParentRow | null> {
     const result = await this.db.execute<ParentRow>(sql`
       SELECT id::text, phone, full_name, email, password_hash, must_change_password, is_active

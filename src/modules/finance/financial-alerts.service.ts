@@ -7,20 +7,30 @@ type SmsQueueHandle = {
     name: string,
     data: Record<string, unknown>,
     options?: Record<string, unknown>
-  ) => Promise<{ id?: string | number } | undefined> | Promise<unknown> | unknown;
+  ) => Promise<unknown> | unknown;
 };
 
-/** Détermine si une règle s'applique à l'état de cache d'un élève (pur). */
+/** Détermine si une règle de retard s'applique (les préventives dépendent des échéances). */
 export const isRuleDue = (
   rule: Pick<FinancialAlertRule, 'type' | 'daysOffset'>,
   student: { status: 'up_to_date' | 'late' | 'waived'; daysLate: number | null }
 ): boolean => {
-  if (rule.type === 'preventive') {
-    // Préventive : traitée via la fenêtre avant échéance (voir listPreventiveReminders).
-    return false;
-  }
-  if (student.status !== 'late') return false;
+  if (rule.type === 'preventive' || student.status !== 'late') return false;
   return (student.daysLate ?? 0) >= rule.daysOffset;
+};
+
+export const buildFinancialReminderMessage = (reminder: {
+  ruleType: FinancialAlertRule['type'];
+  studentName: string;
+  daysLate: number | null;
+}): string => {
+  if (reminder.ruleType === 'preventive') {
+    return `Rappel - Une echeance de scolarite de ${reminder.studentName} approche. Merci de prevoir le reglement aupres de l'ecole.`;
+  }
+  if (reminder.ruleType === 'severe_late') {
+    return `URGENT - Scolarite de ${reminder.studentName} en retard de ${reminder.daysLate ?? 0} jours. Merci de regulariser rapidement.`;
+  }
+  return `Rappel - Scolarite de ${reminder.studentName} en retard. Merci de regulariser aupres de l'ecole.`;
 };
 
 export class FinancialAlertsService {
@@ -30,126 +40,71 @@ export class FinancialAlertsService {
   ) {}
 
   async runDaily(schemaName: string): Promise<{ sentCount: number; skippedCount: number }> {
-    this.schemaNameRef = schemaName;
-    return withTenantSchema(schemaName, async (tenantDb) =>
-      this.runDailyOnDb(tenantDb, schemaName)
-    );
+    return withTenantSchema(schemaName, (tenantDb) => this.runDailyOnDb(tenantDb, schemaName));
   }
 
-  /** Cœur testable : envoie les relances dues sur une connexion tenant arbitraire. */
+  /** Journalise chaque canal séparément : une panne SMS ne redépose pas l'in-app. */
   async runDailyOnDb(
     tenantDb: ConstructorParameters<typeof FinancialAlertsRepository>[0],
     schemaName = ''
   ): Promise<{ sentCount: number; skippedCount: number }> {
-    const repository = new FinancialAlertsRepository(tenantDb);
-    const yearId = await this.activeYearId(repository);
+    const repository = tenantDb === this.repository.db ? this.repository : new FinancialAlertsRepository(tenantDb);
+    const yearId = await repository.getActiveSchoolYearId();
     if (!yearId) return { sentCount: 0, skippedCount: 0 };
-    this.schemaNameRef = schemaName;
 
     const due = await repository.listDueReminders(yearId);
     let sentCount = 0;
     let skippedCount = 0;
-
     for (const reminder of due) {
-      if (await repository.wasReminderSentRecently(reminder.studentId, reminder.ruleId)) {
-        skippedCount += 1;
-        continue;
-      }
+      const message = buildFinancialReminderMessage(reminder);
+      const channels: Array<'in_app' | 'sms'> = reminder.channel === 'both'
+        ? ['in_app', 'sms'] : [reminder.channel];
+      let delivered = false;
+      let allSkipped = true;
 
-      const message =
-        reminder.ruleType === 'severe_late'
-          ? `URGENT - Scolarite de ${reminder.studentName} en retard de ${reminder.daysLate ?? 0} jours. Merci de regulariser rapidement.`
-          : `Rappel - Scolarite de ${reminder.studentName} en retard. Merci de regulariser aupres de l'ecole.`;
-
-      try {
-        let inAppRecipientCount = 0;
-        if (reminder.channel === 'in_app' || reminder.channel === 'both') {
-          inAppRecipientCount = await repository.insertInAppPaymentReminder({
-            studentId: reminder.studentId,
-            studentName: reminder.studentName,
-            ruleId: reminder.ruleId,
-            ruleType: reminder.ruleType,
-            message,
-          });
-        }
-
-        if (reminder.channel === 'in_app') {
-          await repository.insertAlertLog({
-            studentId: reminder.studentId,
-            ruleId: reminder.ruleId,
-            channel: reminder.channel,
-            status: inAppRecipientCount > 0 ? 'sent' : 'failed',
-            message: inAppRecipientCount > 0
-              ? message
-              : 'Aucun compte parent actif lié à cet élève pour la relance in-app',
-          });
-          sentCount += inAppRecipientCount > 0 ? 1 : 0;
-          continue;
-        }
-
-        let smsQueued = false;
-        if (this.smsQueue && reminder.parentPhone) {
-          const queueRef = `fin-alert-${reminder.ruleId}-${reminder.studentId}-${Date.now()}`;
-          await this.smsQueue.add(
-            'send-sms',
-            {
-              type: 'send-sms',
-              to: reminder.parentPhone,
-              message,
-              notificationType: 'payment_reminder',
-              schemaName: this.schemaNameRef,
-              recipientPhone: reminder.parentPhone,
-              queueRef,
-            },
-            { attempts: 3, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: true }
-          );
-          smsQueued = true;
-        } else if (!reminder.parentPhone) {
-          // Le canal in-app peut tout de même avoir été déposé pour un parent.
-          if (inAppRecipientCount === 0) {
-            await repository.insertAlertLog({
+      for (const channel of channels) {
+        if (await repository.wasReminderSentRecently(reminder.studentId, reminder.ruleId, channel)) continue;
+        allSkipped = false;
+        try {
+          if (channel === 'in_app') {
+            const recipientCount = await repository.insertInAppPaymentReminder({
               studentId: reminder.studentId,
+              studentName: reminder.studentName,
               ruleId: reminder.ruleId,
-              channel: reminder.channel,
-              status: 'failed',
-              message: 'Aucun numéro parent ni compte parent actif disponible',
+              ruleType: reminder.ruleType,
+              message,
             });
-            continue;
+            if (recipientCount === 0) throw new Error('Aucun compte parent actif lié à cet élève');
+          } else {
+            if (!this.smsQueue || !reminder.parentPhone) throw new Error('Canal SMS indisponible');
+            const queueRef = `fin-alert-${reminder.ruleId}-${reminder.studentId}-${Date.now()}`;
+            await this.smsQueue.add('send-sms', {
+              type: 'send-sms', to: reminder.parentPhone, message,
+              notificationType: 'payment_reminder', schemaName,
+              recipientPhone: reminder.parentPhone, queueRef,
+            }, { attempts: 3, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: true });
           }
+          await repository.insertAlertLog({
+            studentId: reminder.studentId, ruleId: reminder.ruleId,
+            channel, status: 'sent', message,
+          });
+          delivered = true;
+        } catch {
+          // Aucun nom, numéro ou message fournisseur dans les logs applicatifs.
+          appLogger.warn({ studentId: reminder.studentId, ruleId: reminder.ruleId, channel }, '[financial-alerts] canal indisponible');
+          await repository.insertAlertLog({
+            studentId: reminder.studentId, ruleId: reminder.ruleId,
+            channel, status: 'failed', message: channel === 'in_app'
+              ? 'Relance in-app non remise à un compte parent actif'
+              : 'Relance SMS non mise en file',
+          }).catch(() => undefined);
         }
-
-        await repository.insertAlertLog({
-          studentId: reminder.studentId,
-          ruleId: reminder.ruleId,
-          channel: reminder.channel,
-          status: smsQueued || inAppRecipientCount > 0 ? 'sent' : 'failed',
-          message: smsQueued || inAppRecipientCount > 0
-            ? message
-            : 'Aucun canal de relance disponible',
-        });
-        sentCount += smsQueued || inAppRecipientCount > 0 ? 1 : 0;
-      } catch (error) {
-        // Les relances ne doivent jamais faire échouer le lot quotidien.
-        appLogger.warn({ err: error }, '[financial-alerts] envoi relance impossible');
-        await repository.insertAlertLog({
-          studentId: reminder.studentId,
-          ruleId: reminder.ruleId,
-          channel: reminder.channel,
-          status: 'failed',
-          message: error instanceof Error ? error.message : undefined,
-        }).catch(() => undefined);
       }
+      if (delivered) sentCount += 1;
+      if (allSkipped) skippedCount += 1;
     }
-
     return { sentCount, skippedCount };
-  }
-
-  private schemaNameRef = '';
-
-  private activeYearId(repository: FinancialAlertsRepository): Promise<string | null> {
-    return repository.getActiveSchoolYearId();
   }
 }
 
-// Ré-export pratique pour server.ts / tests.
 export { FinancialAlertsRepository };

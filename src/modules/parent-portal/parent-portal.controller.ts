@@ -1,8 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { ZodError } from 'zod';
-import { sql } from 'drizzle-orm';
 
-import { db, withTenantSchema } from '../../shared/database/db.js';
+import { withTenantSchema } from '../../shared/database/db.js';
 import {
   checkStudentAccess,
   ParentAccessError,
@@ -221,14 +220,10 @@ export default async function parentPortalController(app: FastifyInstance): Prom
   app.get('/api/v1/parent/school-config', { preHandler: requireParent }, async (request, reply) => {
     try {
       const claims = request.claims!;
-      const result = await db.execute<{ active_school_year: string | null }>(sql`
-        SELECT active_school_year
-        FROM public.tenants
-        WHERE schema_name = ${claims.schemaName}
-        LIMIT 1
-      `);
-      const row = result.rows[0];
-      return reply.send({ activeSchoolYear: row?.active_school_year ?? null });
+      const config = await withTenantSchema(claims.schemaName, (tenantDb) =>
+        buildParentPortalService(tenantDb).getSchoolConfig()
+      );
+      return reply.send(config);
     } catch (error) {
       return handleError(reply, error);
     }
