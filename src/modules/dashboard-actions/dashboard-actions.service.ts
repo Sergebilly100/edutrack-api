@@ -17,6 +17,7 @@ export const EMPTY_SOURCES: MigratedSources = {
 };
 
 const WEEKLY_ABSENCE_THRESHOLD = 3; // reprend le seuil du bloc "Priorités du jour" remplacé
+const STUDENT_RISK_PRIORITY_THRESHOLD = 5; // seuil de priorité dashboard : au-delà de 5 élèves en risque, la carte passe en haut de pile
 
 export class DashboardActionsService {
   constructor(private readonly repository: DashboardActionsRepository) {}
@@ -53,7 +54,7 @@ export class DashboardActionsService {
     const atRisk = (riskCounts['warning'] ?? 0) + (riskCounts['critical'] ?? 0);
     await this.repository.replaceType('student_at_risk',
       atRisk > 0
-        ? [{ referenceId: null, priority: atRisk >= 5 ? 'high' : 'medium', message: `${atRisk} élève(s) à examiner (niveau warning/critical)` }]
+        ? [{ referenceId: null, priority: atRisk >= STUDENT_RISK_PRIORITY_THRESHOLD ? 'high' : 'medium', message: `${atRisk} élève(s) à examiner (niveau warning/critical)` }]
         : []);
 
     await this.repository.replaceType('teacher_at_risk',

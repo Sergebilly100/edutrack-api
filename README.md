@@ -10,6 +10,10 @@
 
 Version : **1.0.0** stable.
 
+Démo locale : `npm run demo:create -- --name=demo_t3 --type=seeded`.
+Voir le [guide de provisionnement isolé](docs/demo/README.md) et le
+[rapport du parcours à vide](docs/demo/verification.md).
+
 ---
 
 ## Ce que fait l'application
