@@ -94,6 +94,17 @@ export class DashboardActionsRepository {
     return out;
   }
 
+  async countTeachersAtRisk(): Promise<number> {
+    const result = await this.db.execute<{ count: number }>(sql`
+      SELECT COUNT(*)::int AS count
+      FROM teacher_risk_status trs
+      INNER JOIN teachers t ON t.id = trs.teacher_id
+      INNER JOIN users u ON u.id = t.user_id AND u.is_active = true
+      WHERE trs.absences_signal = true
+    `);
+    return getRows<{ count: number }>(result)[0]?.count ?? 0;
+  }
+
   async listBlockedClasses(limit = 10): Promise<Array<{ classId: string; className: string; incomplete: number }>> {
     const result = await this.db.execute<{ class_id: string; class_name: string; incomplete: number }>(sql`
       SELECT c.id::text AS class_id, c.name AS class_name, COUNT(*)::int AS incomplete

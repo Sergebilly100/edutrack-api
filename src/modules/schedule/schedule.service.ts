@@ -22,6 +22,7 @@ import {
   type TeacherCatalogItem,
   type TimeSlotCatalogItem,
   findOrCreateTimeSlot,
+  hasTeacherSubjectAssignment,
   isTeacherBlocked,
 } from './schedule.repository.js';
 
@@ -324,9 +325,12 @@ export const resolveTimeSlotId = async (
 
 export const assertTeacherCanBeScheduled = async (
   db: QueryExecutor,
-  teacherId: string
+  input: { teacherId: string; classId: string; subject: string }
 ): Promise<void> => {
-  if (await isTeacherBlocked(db, teacherId)) {
+  if (await isTeacherBlocked(db, input.teacherId)) {
     throw new Error('Teacher is blocked and cannot be scheduled');
+  }
+  if (!(await hasTeacherSubjectAssignment(db, input))) {
+    throw new Error('Teacher must be assigned to this subject and class before scheduling');
   }
 };

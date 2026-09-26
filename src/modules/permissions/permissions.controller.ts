@@ -90,6 +90,7 @@ export default async function permissionsController(app: FastifyInstance): Promi
           return buildPermissionsService(tenantDb).updateSchoolConfig(claims.schemaName, {
             ...(body.name !== undefined ? { name: body.name } : {}),
             ...(body.city !== undefined ? { city: body.city } : {}),
+            ...(body.address !== undefined ? { address: body.address } : {}),
             ...(body.teachingType !== undefined ? { teachingType: body.teachingType } : {}),
             ...(body.logoUrl !== undefined ? { logoUrl: body.logoUrl } : {}),
             ...(body.activeSchoolYear !== undefined

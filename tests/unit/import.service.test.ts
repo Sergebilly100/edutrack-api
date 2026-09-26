@@ -6,6 +6,7 @@ import { ImportModuleError, ImportService } from '../../src/modules/import-expor
 const repository = {
   listClasses: vi.fn(),
   listTeacherDirectory: vi.fn(),
+  listScheduleAssignments: vi.fn(),
   listRooms: vi.fn(),
   listTimeSlots: vi.fn(),
   findOrCreateTimeSlot: vi.fn(),
@@ -83,8 +84,13 @@ beforeEach(() => {
       name: 'Ibrahim Diallo',
       username: 'diallo.ibra',
       subjects: ['Mathématiques'],
+      is_blocked: false,
+      is_active: true,
     },
   ]);
+  repository.listScheduleAssignments.mockResolvedValue(
+    ['Mathématiques', 'Physique', 'SVT'].map((subject) => ({ teacher_id: 'teacher-1', class_id: 'class-1', subject }))
+  );
   repository.listRooms.mockResolvedValue([{ id: 'room-1', name: 'Salle A1' }]);
   repository.listTimeSlots.mockResolvedValue([
     {
@@ -642,7 +648,10 @@ describe('import.service - schedule dry-run', () => {
 
   it('prof avec accent différent → ligne valide', async () => {
     repository.listTeacherDirectory.mockResolvedValueOnce([
-      { teacher_id: 'teacher-accent', user_id: 'user-accent', name: 'Jean Traoré', username: 'traore.jean', subjects: ['Mathématiques'] },
+      { teacher_id: 'teacher-accent', user_id: 'user-accent', name: 'Jean Traoré', username: 'traore.jean', subjects: ['Mathématiques'], is_blocked: false, is_active: true },
+    ]);
+    repository.listScheduleAssignments.mockResolvedValue([
+      { teacher_id: 'teacher-accent', class_id: 'class-1', subject: 'Mathématiques' },
     ]);
     const service = new ImportService(repository);
 

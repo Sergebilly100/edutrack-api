@@ -277,9 +277,10 @@ describe('parent auth + parent routes integration', () => {
       .set('authorization', `Bearer ${token}`);
 
     expect(response.status).toBe(200);
-    expect(response.body.status).toBeTruthy();
-    expect(response.body.ends_at).toBeTruthy();
-    expect(typeof response.body.days_remaining).toBe('number');
+    expect(response.body.subscription.status).toBeTruthy();
+    expect(response.body.subscription.ends_at).toBeTruthy();
+    expect(typeof response.body.subscription.days_remaining).toBe('number');
+    expect(response.body.offer).toMatchObject({ billing: 'per_child_per_month' });
   });
 
   it('GET /parent/students/:id/schedule retourne l\'EDT avec statuts corrects', async () => {
@@ -298,6 +299,40 @@ describe('parent auth + parent routes integration', () => {
     expect(allSlots.length).toBeGreaterThan(0);
     const allowedStatuses = new Set(['present', 'absent', 'upcoming', 'unknown']);
     expect(allSlots.every((slot: { status: string }) => allowedStatuses.has(slot.status))).toBe(true);
+  });
+
+  it('retourne subscription:null et expose un tarif uniquement lorsque l’offre SMS est disponible', async () => {
+    const phone = '2250709994444';
+    const parents = await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('parents')} (full_name, phone, password_hash, must_change_password, is_active)
+       VALUES ('Parent sans abonnement', $1, $2, false, true) RETURNING id::text`,
+      [phone, await argon2.hash(parentPassword)]
+    );
+    await queryTenant(
+      `INSERT INTO ${tenantTable('parent_student_links')} (parent_id, student_id, subscription_id) VALUES ($1, $2, NULL)`,
+      [parents[0]!.id, linkedStudentId]
+    );
+    const login = await request().post('/api/v1/auth/login/parent').set('x-tenant-schema', TEST_SCHEMA_NAME)
+      .send({ phone, password: parentPassword });
+    expect(login.status).toBe(200);
+    try {
+      for (const [enabled, monetized, price, available] of [
+        [true, true, 1250, true], [false, true, 1250, false],
+        [true, false, 1250, false], [true, true, 0, false],
+      ] as const) {
+        await queryPublic(`UPDATE public.school_sms_features SET is_enabled=$1, monetize_parent_alerts=$2, sms_unit_price_fcfa=$3
+          WHERE tenant_id=(SELECT id FROM public.tenants WHERE schema_name=$4)`, [enabled, monetized, price, TEST_SCHEMA_NAME]);
+        const response = await request().get('/api/v1/parent/subscription/status')
+          .set('authorization', `Bearer ${login.body.accessToken}`);
+        expect(response.status).toBe(200);
+        expect(response.body).toEqual({ subscription: null, offer: {
+          available, unit_price_fcfa: available ? price : null, billing: 'per_child_per_month',
+        } });
+      }
+    } finally {
+      await queryPublic(`UPDATE public.school_sms_features SET is_enabled=true, monetize_parent_alerts=true, sms_unit_price_fcfa=1000
+        WHERE tenant_id=(SELECT id FROM public.tenants WHERE schema_name=$1)`, [TEST_SCHEMA_NAME]);
+    }
   });
 
   it('Parent avec mot de passe temporaire: accès bloqué hors /auth/change-password, puis accès rétabli', async () => {

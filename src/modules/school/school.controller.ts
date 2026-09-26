@@ -16,6 +16,7 @@ type TenantInfoRow = {
   subdomain: string;
   plan: 'essential' | 'pro' | 'establishment';
   city: string | null;
+  address: string | null;
   teaching_type: 'primaire' | 'secondaire' | 'superieur' | 'mixte' | null;
   max_users: number;
   student_label: string | null;
@@ -36,6 +37,7 @@ type DirectorPhoneRow = {
 const schoolInfoPatchSchema = z.object({
   name: z.string().trim().min(2).max(255).optional(),
   city: z.string().trim().min(2).max(100).optional(),
+  address: z.string().trim().min(3).max(255).optional(),
   phone: z.string().trim().min(6).max(20).optional(),
 });
 
@@ -154,7 +156,7 @@ const resolveSchemaNameFromPublicRequest = async (request: FastifyRequest): Prom
 
 const fetchSchoolInfoBySchema = async (schemaName: string) => {
   const tenantResult = await db.execute<TenantInfoRow>(sql`
-    SELECT t.id, t.name, t.subdomain, t.plan, t.city, t.teaching_type, t.max_users,
+    SELECT t.id, t.name, t.subdomain, t.plan, t.city, t.address, t.teaching_type, t.max_users,
            COALESCE(t.student_label, 'Élève') AS student_label,
            COALESCE(t.director_title, 'Directeur') AS director_title,
            COALESCE(t.max_sms_per_month, 2000) AS max_sms_per_month,
@@ -214,7 +216,7 @@ const fetchSchoolInfoBySchema = async (schemaName: string) => {
     use_real_hours: tenant.use_real_hours ?? false,
     geo_check_enabled: tenant.geo_check_enabled ?? false,
     current_users: tenantMetrics.currentUsers,
-    address: '',
+    address: tenant.address ?? '',
     phone: tenantMetrics.directorPhone,
     onboarding_completed: tenant.onboarding_completed,
   };
@@ -269,7 +271,7 @@ export default async function schoolController(app: FastifyInstance): Promise<vo
       const claims = request.claims!;
       const body = schoolInfoPatchSchema.parse(request.body ?? {});
 
-      if (body.name) {
+      if (body.name !== undefined) {
         await db.execute(sql`
           UPDATE public.tenants
           SET name = ${body.name}, updated_at = NOW()
@@ -277,7 +279,7 @@ export default async function schoolController(app: FastifyInstance): Promise<vo
         `);
       }
 
-      if (body.city) {
+      if (body.city !== undefined) {
         await db.execute(sql`
           UPDATE public.tenants
           SET city = ${body.city}, updated_at = NOW()
@@ -285,7 +287,15 @@ export default async function schoolController(app: FastifyInstance): Promise<vo
         `);
       }
 
-      if (body.phone) {
+      if (body.address !== undefined) {
+        await db.execute(sql`
+          UPDATE public.tenants
+          SET address = ${body.address}, updated_at = NOW()
+          WHERE schema_name = ${claims.schemaName}
+        `);
+      }
+
+      if (body.phone !== undefined) {
         await withTenantSchema(claims.schemaName, async (tenantDb) => {
           await tenantDb.execute(sql`
             UPDATE users

@@ -103,6 +103,7 @@ type SchoolLookupRow = {
   plan: TenantListItem['plan'];
   status: TenantListItem['status'];
   city: string | null;
+  address: string | null;
   teaching_type: TeachingType | null;
   max_admin_positions: number;
   max_users: number;
@@ -1180,6 +1181,7 @@ export const createSchool = async (
       plan,
       status,
       city,
+      address,
       teaching_type,
       max_admin_positions,
       max_users,
@@ -1194,6 +1196,7 @@ export const createSchool = async (
       ${payload.plan},
       ${tenantStatus}::tenant_status,
       ${payload.city},
+      ${payload.address},
       ${payload.teaching_type},
       ${planConfig.max_admin_positions},
       ${planConfig.max_users},
@@ -1381,6 +1384,7 @@ export const getSchoolDetails = async (
       t.plan,
       t.status,
       t.city,
+      t.address,
       t.teaching_type,
       t.max_admin_positions,
       t.max_users,
@@ -1422,6 +1426,7 @@ export const getSchoolDetails = async (
       plan: tenant.plan,
       status: tenant.status,
       city: tenant.city,
+      address: tenant.address,
       teachingType: tenant.teaching_type,
       maxAdminPositions: tenant.max_admin_positions,
       maxUsers: tenant.max_users,
@@ -1815,6 +1820,7 @@ export const updateSchoolConfig = async (
       plan = CASE WHEN ${payload.plan !== undefined} THEN ${payload.plan ?? null}::tenant_plan ELSE plan END,
       status = CASE WHEN ${payload.status !== undefined} THEN ${payload.status ?? null}::tenant_status ELSE status END,
       city = CASE WHEN ${payload.city !== undefined} THEN ${payload.city ?? null} ELSE city END,
+      address = CASE WHEN ${payload.address !== undefined} THEN ${payload.address ?? null} ELSE address END,
       teaching_type = CASE WHEN ${payload.teaching_type !== undefined}
         THEN ${payload.teaching_type ?? null}::teaching_type
         ELSE teaching_type END,

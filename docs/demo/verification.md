@@ -1,8 +1,25 @@
-# Recette du démarrage à vide — 24 septembre 2026
+# Recette initiale du démarrage à vide — 24 septembre 2026
 
-## Conclusion et environnement
+## Statut de ce document
 
-Le provisionnement des deux profils fonctionne. Le parcours à vide a été exécuté jusqu'à une inscription confirmée, un encaissement, une salle, un cours visible et la finalisation de l'onboarding. **Le parcours n'est pas exempt de bugs** : les trois saisies rapides de l'assistant sont incompatibles avec les contrats API actuels. Les formulaires complets et l'import permettent de poursuivre. Aucun correctif produit n'est inclus dans cette tâche.
+Ce document est l'archive de la recette effectuée **avant** les corrections du parcours. Il conserve volontairement les réponses HTTP, captures et reproductions du 24 septembre ; ses constats ne décrivent donc pas l'état courant du produit.
+
+L'état courant et les vérifications associées sont dans la [vérification des corrections du 26 septembre](corrections-verification.md). Ce second rapport distingue les décisions déjà appliquées des travaux restant réellement à faire.
+
+| Décision discutée | État actuel | Référence détaillée |
+| --- | --- | --- |
+| Retirer les ajouts rapides de professeur, d'élève et de créneau de l'assistant | Appliqué. L'assistant dirige désormais vers les configurations et l'import initial des profils professeurs ; il ne crée plus ces contrats incomplets. | [Comparaison au plan](corrections-verification.md#comparaison-au-plan-approuvé) |
+| Réserver l'ouverture de la première année au super administrateur | Règle métier conservée et expliquée dans l'assistant. Ce n'est plus un point de friction à corriger. | [Comparaison au plan](corrections-verification.md#comparaison-au-plan-approuvé) |
+| Créer le premier EDT après les inscriptions et les affectations | Appliqué. Sans période, l'écran EDT redirige vers l'import contextualisé ; l'EDT ne fait plus partie de la configuration initiale. | [Comparaison au plan](corrections-verification.md#comparaison-au-plan-approuvé) |
+| Corriger les remises, tolérances et caches financiers | Appliqué et couvert par des tests ciblés ; le recalcul est livré en mode simulation par défaut. | [B06 dans la comparaison](corrections-verification.md#comparaison-au-plan-approuvé) |
+| Distinguer les professeurs à suivre des risques élèves | Appliqué pour les signaux d'absence enseignants ; le cas reposant uniquement sur les retards reste à préciser. | [B07 dans la comparaison](corrections-verification.md#comparaison-au-plan-approuvé) |
+| Corriger le guide et le rendu mobile | Appliqué et vérifié par les tests ciblés et les viewports 320, 360 et 393 px. | [B04/B05 dans la comparaison](corrections-verification.md#comparaison-au-plan-approuvé) |
+
+Les sections suivantes restent utiles comme preuve de la recette initiale, mais sont libellées explicitement comme historiques afin de ne pas être confondues avec le plan livré.
+
+## Constat de la recette initiale et environnement
+
+Le provisionnement des deux profils fonctionnait. Le parcours à vide avait été exécuté jusqu'à une inscription confirmée, un encaissement, une salle, un cours visible et la finalisation de l'onboarding. **À cette date, le parcours n'était pas exempt de bugs** : les trois saisies rapides de l'assistant étaient incompatibles avec les contrats API. Les corrections de ces constats sont documentées dans le rapport de suivi ; elles ne faisaient pas partie du livrable initial.
 
 Recette sur Chromium local via Playwright, interface React et contrôleurs/services/PostgreSQL réels, sans simulation de réponses HTTP. Base séparée `edutrack_demo_validation_20260924`, tenant `school_demo_empty_browser`, créé avec le profil `empty`, et tenant d'authentification super administrateur distinct. API de recette sur 3101, frontend sur 5174 ; les processus utilisateur sur les ports habituels n'ont pas été remplacés. Les workers et les envois externes sont neutralisés dans le serveur de recette. Les formulaires, autorisations, imports et écritures métier utilisent le vrai code applicatif.
 
@@ -10,7 +27,7 @@ Contrôle complémentaire à 393 × 851 pixels. **Pas de téléphone physique Te
 
 L'instance locale livrée `school_demo_empty` est restée vierge : le remplissage manuel a porté sur l'instance distincte de la base de validation.
 
-## Étapes exécutées
+## Étapes exécutées le 24 septembre — état historique avant corrections
 
 | Étape | Navigation et saisie | Résultat observé |
 | --- | --- | --- |
@@ -39,7 +56,7 @@ L'instance locale livrée `school_demo_empty` est restée vierge : le remplissag
 
 Aucune erreur JavaScript non interceptée ni réponse HTTP 500 observée sur ces étapes. Le `401` de rafraîchissement sans cookie lors du premier chargement est suivi du formulaire de connexion normal ; ce n'est pas un blocage.
 
-## Bugs reproduits — à corriger dans une tâche séparée
+## Bugs reproduits avant corrections — état historique
 
 ### B01 — Ajout rapide professeur bloquant dans l'onboarding
 
@@ -74,25 +91,25 @@ Aucune erreur JavaScript non interceptée ni réponse HTTP 500 observée sur ces
 - Observé : carte de pilotage et actions larges d'environ **421 px**, portions de texte/graphique coupées à droite ([capture](evidence/mobile-dashboard.png)). `documentElement.scrollWidth` ne dépasse pas le viewport : un simple test de défilement horizontal ne détecte donc pas le contenu rogné.
 - La reproduction est limitée à Chromium avec viewport mobile, à confirmer sur Tecno/Itel.
 
-## Frictions et dépendances sans erreur serveur
+## Frictions et dépendances observées avant corrections — état historique
 
-- **F01 — Ouverture de l'année réservée au super administrateur.** Le prompt suggère un directeur autonome ; le code V2 refuse cette opération au directeur (`403` confirmé en intégration). L'état vide explique la dépendance. Prévoir l'intervention du super administrateur avant les classes et inscriptions ; ne pas traiter cette règle comme une erreur de permission.
+- **F01 — Ouverture de l'année réservée au super administrateur.** Constat de cadrage du 24 septembre : le code V2 refuse cette opération au directeur (`403` confirmé en intégration). La décision ultérieure a confirmé qu'il s'agit d'une règle métier, à préserver et à expliquer dans l'assistant, non d'un défaut.
 - **F02 — Tarif à configurer avant passage en caisse.** Le `409` est utile et explicite, mais ne propose pas de lien vers Administration → Paramètres → Finance. L'utilisateur doit retrouver cet écran puis revenir au dossier. Le règlement fonctionne dès que le plan existe.
 - **F03 — Première période d'emploi du temps peu découvrable.** L'écran demande de « créer une période », sans commande locale. Le bouton d'import conduit à un assistant initialement positionné sur Élèves ; il faut sélectionner Emploi du temps, fournir les dates et importer un fichier. Ce chemin crée correctement période, créneau horaire et cours.
 - **F04 — Import intégré à l'assistant non contextualisé.** Les étapes Professeurs et Emploi du temps affichent toutes deux l'import initialement positionné sur Élèves. Le type doit être choisi manuellement, bien que l'étape annonce déjà ce qu'il faut importer.
 
-## Anomalies métier révélées par le seed
+## Anomalies métier révélées par le seed avant corrections — état historique
 
-Ces points ne proviennent pas du provisionnement et n'ont pas été corrigés.
+Ces points ne provenaient pas du provisionnement. B06 et B07 ont depuis été corrigés ; les reproductions ci-dessous sont conservées pour expliquer leur origine et leurs données de test.
 
 - **B06 — Signe de la remise dans le cache financier.** Plan de 300 000 FCFA, remise positive de 30 000 FCFA : montant métier attendu 270 000 FCFA. `finance.service.ts` soustrait correctement la remise, mais `financial-cache.repository.ts` additionne `plan_total + discount_amount`. Lecture effective dans `school_demo_t3` : `total_due_year = 330000.00`. Les neuf familles remisées conservent des données source correctes et un échéancier individualisé ; le seed ne falsifie pas la remise pour masquer le bug. Corriger le calcul puis recalculer les caches dans une tâche dédiée.
 - **B07 — Action « professeurs à risque » issue du compteur élèves.** Le job a réellement produit quatre types : `teacher_absences_high` (6 absences sur 7 jours), `validations_pending` (3 décisions), `student_at_risk` (6 élèves) et `teacher_at_risk` (« 3 prof(s) au niveau critique »). Or le calcul des risques enseignants identifie un seul professeur avec signal d'absences. `DashboardActionsService.generateAll` réutilise `countRiskByLevel()` basé sur `student_risk_status` pour cette carte. La liste des vrais risques enseignants reste alimentée séparément.
 
-## Parents et périmètre d'accès
+## Parents et périmètre d'accès observés le 24 septembre — état historique
 
-Deux connexions réelles ont été vérifiées par tests d'intégration : parent abonné et parent sans abonnement. Chacun peut se connecter et lister uniquement son enfant. Le statut d'abonnement est `200 active` pour le premier et `404 SUBSCRIPTION_NOT_FOUND` pour le second. Le produit actuel permet donc l'accès de base dans les deux cas ; aucun verrou supplémentaire n'a été inventé pour la démo.
+Deux connexions réelles avaient été vérifiées par tests d'intégration : parent abonné et parent sans abonnement. Chacun pouvait se connecter et lister uniquement son enfant. À cette date, le statut d'abonnement était `200 active` pour le premier et `404 SUBSCRIPTION_NOT_FOUND` pour le second. Le contrat de statut a depuis été corrigé : il retourne explicitement l'absence d'abonnement et l'offre éventuelle de l'école ; voir le [rapport de suivi](corrections-verification.md#comparaison-au-plan-approuvé).
 
-## Isolation et validation technique
+## Isolation et validation technique de la recette initiale
 
 - Provisionnement réel par la nouvelle commande dans la base locale : `school_demo_t3` et `school_demo_empty`. Aucun tenant préexistant supprimé, réinitialisé ou ciblé par une mutation du script.
 - Comparaison avant/après sur **579 tables préexistantes**, réparties entre le schéma public et neuf schémas scolaires. Les données scolaires et les lignes publiques préexistantes étaient inchangées lors du provisionnement. Une différence apparente des modèles SMS venait du filtre de comparaison `NOT IN` appliqué à des `tenant_id NULL` ; la lecture complète a confirmé une empreinte identique, sans correction de données.

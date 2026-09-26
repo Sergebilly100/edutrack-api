@@ -217,6 +217,7 @@ describe('admin V3 routes', () => {
         name: 'Lycée Test',
         subdomain: 'lycee-test',
         city: 'Abidjan',
+        address: 'Rue des écoles, Cocody',
         teaching_type: 'secondaire',
         director_name: 'Directeur Test',
         director_phone: '2250700000001',
@@ -228,6 +229,7 @@ describe('admin V3 routes', () => {
 
     expect(response.statusCode).toBe(201);
     expect(mocks.createSchool).toHaveBeenCalledTimes(1);
+    expect(mocks.createSchool.mock.calls[0]?.[1]).toMatchObject({ address: 'Rue des écoles, Cocody' });
     expect(response.json().tenantId).toBe(TENANT_ID);
     await app.close();
   });

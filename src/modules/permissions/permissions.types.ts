@@ -157,6 +157,7 @@ export const updateSchoolConfigBodySchema = z
   .object({
     name: z.string().trim().min(2).max(255).optional(),
     city: z.string().trim().min(2).max(255).optional(),
+    address: z.string().trim().min(3).max(255).optional(),
     teachingType: z
       .enum(['general', 'technical', 'mixed', 'primaire', 'secondaire', 'superieur', 'mixte'])
       .optional(),
@@ -174,6 +175,7 @@ export const updateSchoolConfigBodySchema = z
     (value) =>
       value.name !== undefined ||
       value.city !== undefined ||
+      value.address !== undefined ||
       value.teachingType !== undefined ||
       value.logoUrl !== undefined ||
       value.activeSchoolYear !== undefined ||

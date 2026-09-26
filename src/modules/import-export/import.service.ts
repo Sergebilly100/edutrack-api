@@ -8,6 +8,7 @@ import { createTemporaryParentCredentials } from '../parents/parent-accounts.ser
 import {
   canonicalizeSubject,
   canonicalizeSubjectList,
+  normalizeSubjectKey,
 } from '../../shared/utils/subject-normalization.js';
 
 import {
@@ -31,7 +32,7 @@ import type {
 import { IMPORT_PHONE_REGEX } from './import.types.js';
 
 const STUDENTS_REQUIRED_HEADERS = ['Prénom*', 'Nom*'] as const;
-const TEACHERS_REQUIRED_HEADERS = ['Nom*', 'Prénom*', 'Type*', 'Matières*'] as const;
+const TEACHERS_REQUIRED_HEADERS = ['Nom*', 'Prénom*', 'Type*'] as const;
 const SCHEDULE_HEADERS = ['Nom professeur*', 'Classe*', 'Matière*', 'Jour*', 'Créneau*', 'Salle'] as const;
 
 const PREVIEW_LIMIT = 5;
@@ -1035,11 +1036,8 @@ export class ImportService {
       const subjects = canonicalizeSubjectList(
         parseSubjects(subjectsRaw).map((subject) => canonicalizeSubject(subject, subjectCatalog))
       );
-      if (subjects.length === 0) {
-        errors.push(
-          makeError({ row: line, column: 'Matières*', message: 'Au moins une matière requise' })
-        );
-      }
+      // L'import initial crée des profils et contrats. Les affectations
+      // matière–classe sont réalisées plus tard, après les inscriptions.
       subjects.forEach((subject) => subjectCatalog.add(subject));
 
       let hourlyRate: number | null = null;
@@ -1261,10 +1259,11 @@ export class ImportService {
       };
     }
 
-    const [classes, teacherDirectory, timeSlots] = await Promise.all([
+    const [classes, teacherDirectory, timeSlots, assignments] = await Promise.all([
       this.repository.listClasses(db),
       this.repository.listTeacherDirectory(db),
       this.repository.listTimeSlots(db),
+      this.repository.listScheduleAssignments(db),
     ]);
 
     const classesByName = new Map(classes.map((item) => [normalizeKey(item.name), item.id]));
@@ -1363,6 +1362,19 @@ export class ImportService {
 
       if (!subject) {
         errors.push(makeError({ row: line, column: 'Matière*', message: 'Matière requise' }));
+      }
+
+      if (teacherMatches.length === 1) {
+        const teacher = teacherDirectory.find((item) => item.teacher_id === teacherMatches[0]);
+        if (teacher?.is_blocked || teacher?.is_active === false) {
+          errors.push(makeError({ row: line, column: 'Nom professeur*', message: 'Professeur bloqué ou inactif' }));
+        } else if (subject && classesByName.has(normalizeKey(className)) && !assignments.some((assignment) =>
+          assignment.teacher_id === teacherMatches[0]
+          && assignment.class_id === classesByName.get(normalizeKey(className))
+          && normalizeSubjectKey(assignment.subject) === normalizeSubjectKey(subject)
+        )) {
+          errors.push(makeError({ row: line, column: 'Matière*', message: "Le professeur doit être affecté à cette matière dans cette classe de l'année active" }));
+        }
       }
 
       if (!day || !(day in DAY_MAP)) {
@@ -1719,26 +1731,6 @@ export class ImportService {
       this.repository.listRooms(db),
     ]);
 
-    let schedulePeriodId: string;
-    // si une période est spécifiée dans les paramètres d'import, on la crée ou la récupère en base, sinon on utilise la période active actuelle.
-    if (period) {
-      schedulePeriodId = await this.repository.findOrCreateSchedulePeriod(db, {
-        name: `Import EDT ${periodStart} - ${periodEnd}`,
-        validFrom: periodStart,
-        validTo: periodEnd,
-      });
-    } else {
-      const activePeriodId = await this.repository.findActiveSchedulePeriodId(db, today);
-      if (!activePeriodId) {
-        throw new ImportModuleError(
-          'Aucune période EDT active trouvée. Sélectionnez une période avant import.',
-          400,
-          'IMPORT_NO_ACTIVE_PERIOD'
-        );
-      }
-      schedulePeriodId = activePeriodId;
-    }
-
     const classIdByName = new Map(classes.map((item) => [normalizeKey(item.name), item.id]));
     const slotByLabel = new Map(
       timeSlots.map((item) => [
@@ -1832,6 +1824,18 @@ export class ImportService {
     // run est la fonction qui contient la logique principale d'import du planning. Elle itère sur les lignes validées du fichier Excel,
     // résout les références aux classes, enseignants, créneaux horaires, salles, et effectue les opérations d'insertion ou de mise à jour dans la base de données.
     const run = async (executor: QueryExecutor): Promise<ConfirmReport> => {
+      // La période et tous les créneaux sont écrits dans la même transaction.
+      const schedulePeriodId = period
+        ? await this.repository.findOrCreateSchedulePeriod(executor, {
+          name: `Import EDT ${periodStart} - ${periodEnd}`,
+          validFrom: periodStart,
+          validTo: periodEnd,
+        })
+        : await this.repository.findActiveSchedulePeriodId(executor, today);
+      if (!schedulePeriodId) {
+        throw new ImportModuleError('Aucune période EDT active trouvée.', 400, 'IMPORT_NO_ACTIVE_PERIOD');
+      }
+      const assignments = await this.repository.listScheduleAssignments(executor);
       let imported = 0;
       let updated = 0;
       const upsertedScheduleIds: string[] = [];
@@ -1848,6 +1852,16 @@ export class ImportService {
             'Références invalides détectées au moment de la confirmation',
             400,
             'IMPORT_REFERENCE_ERROR'
+          );
+        }
+
+        if (!assignments.some((assignment) => assignment.teacher_id === teacherId
+          && assignment.class_id === classId
+          && normalizeSubjectKey(assignment.subject) === normalizeSubjectKey(row.subject))) {
+          throw new ImportModuleError(
+            `Le professeur ${row.teacherName} n'est pas affecté à ${row.subject} pour la classe ${row.className}`,
+            400,
+            'IMPORT_TEACHER_ASSIGNMENT_REQUIRED'
           );
         }
 

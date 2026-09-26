@@ -66,6 +66,7 @@ export const tenants = pgTable('tenants', {
   plan: tenantPlanEnum('plan').notNull().default('essential'),
   status: tenantStatusEnum('status').notNull().default('trial'),
   city: varchar('city', { length: 120 }),
+  address: varchar('address', { length: 255 }),
   teachingType: teachingTypeEnum('teaching_type'),
   maxAdminPositions: integer('max_admin_positions').notNull().default(5),
   maxUsers: integer('max_users').notNull().default(10),

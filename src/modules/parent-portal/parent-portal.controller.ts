@@ -133,7 +133,6 @@ export default async function parentPortalController(app: FastifyInstance): Prom
           { parentId: request.parentId!, allowedStudentIds: request.allowedStudentIds ?? [] }
         );
       });
-
       return reply.send(result);
     } catch (error) {
       return handleError(reply, error);

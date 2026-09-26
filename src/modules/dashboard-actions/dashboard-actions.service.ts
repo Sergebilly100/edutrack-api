@@ -57,10 +57,10 @@ export class DashboardActionsService {
         ? [{ referenceId: null, priority: atRisk >= STUDENT_RISK_PRIORITY_THRESHOLD ? 'high' : 'medium', message: `${atRisk} élève(s) à examiner (niveau warning/critical)` }]
         : []);
 
-    await this.repository.replaceType('teacher_at_risk',
-      (riskCounts['critical'] ?? 0) > 0
-        ? [{ referenceId: null, priority: 'medium', message: `${riskCounts['critical']} prof(s) au niveau critique` }]
-        : []);
+    const teachersAtRisk = await this.repository.countTeachersAtRisk();
+    await this.repository.replaceType('teacher_at_risk', teachersAtRisk > 0
+      ? [{ referenceId: null, priority: 'high', message: `${teachersAtRisk} professeur(s) à suivre pour leur assiduité` }]
+      : []);
 
     const blocked = await this.repository.listBlockedClasses(10);
     await this.repository.replaceType('report_cards_blocked',
@@ -79,7 +79,7 @@ export class DashboardActionsService {
       (pendingValidations > 0 ? 1 : 0) +
       (commissionOverdue > 0 ? 1 : 0) +
       (atRisk > 0 ? 1 : 0) +
-      ((riskCounts['critical'] ?? 0) > 0 ? 1 : 0) +
+      (teachersAtRisk > 0 ? 1 : 0) +
       blocked.length,
     };
   }

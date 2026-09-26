@@ -31,6 +31,7 @@ type SchoolConfigRow = {
   subdomain: string;
   plan: 'essential' | 'pro' | 'establishment';
   city: string | null;
+  address: string | null;
   teaching_type: string | null;
   max_users: number;
   max_admin_positions: number;
@@ -154,6 +155,7 @@ export class PermissionsRepository {
         tenants.subdomain,
         tenants.plan,
         tenants.city,
+        tenants.address,
         tenants.teaching_type,
         tenants.max_users,
         tenants.max_admin_positions,
@@ -592,6 +594,7 @@ export class PermissionsRepository {
     input: {
       name?: string;
       city?: string;
+      address?: string;
       teachingType?: string;
       logoUrl?: string | null;
       stampImageUrl?: string | null;
@@ -606,6 +609,7 @@ export class PermissionsRepository {
       SET
         name = CASE WHEN ${input.name !== undefined} THEN ${input.name ?? null} ELSE name END,
         city = CASE WHEN ${input.city !== undefined} THEN ${input.city ?? null} ELSE city END,
+        address = CASE WHEN ${input.address !== undefined} THEN ${input.address ?? null} ELSE address END,
         teaching_type = CASE
           WHEN ${input.teachingType !== undefined}
             THEN ${input.teachingType ?? null}

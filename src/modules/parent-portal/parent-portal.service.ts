@@ -310,19 +310,31 @@ export class ParentPortalService {
   }
 
   async getSubscriptionStatus(context: ServiceContext): Promise<{
-    status: ParentSubscriptionStatus;
-    starts_at: string;
-    ends_at: string;
-    days_remaining: number;
-    student_count: number;
-    monthly_amount_fcfa: number;
-    total_amount_fcfa: number;
-    duration_months: number;
-    auto_renew_alert: boolean;
+    subscription: {
+      status: ParentSubscriptionStatus;
+      starts_at: string;
+      ends_at: string;
+      days_remaining: number;
+      student_count: number;
+      monthly_amount_fcfa: number;
+      total_amount_fcfa: number;
+      duration_months: number;
+      auto_renew_alert: boolean;
+    } | null;
+    offer: { available: boolean; unit_price_fcfa: number | null; billing: 'per_child_per_month' };
   }> {
     const row = await this.repository.getActiveOrLatestSubscription(context.parentId);
+    const feature = await this.repository.getSmsOfferSettings();
+    const unitPrice = feature?.sms_unit_price_fcfa ?? null;
+    const available = feature?.is_enabled === true && feature.monetize_parent_alerts === true
+      && unitPrice !== null && unitPrice > 0;
+    const offer = {
+      available,
+      unit_price_fcfa: available ? unitPrice : null,
+      billing: 'per_child_per_month' as const,
+    };
     if (!row) {
-      throw new ParentPortalError('Subscription not found', 404, 'SUBSCRIPTION_NOT_FOUND');
+      return { subscription: null, offer };
     }
 
     const now = new Date();
@@ -330,15 +342,18 @@ export class ParentPortalService {
     const daysRemaining = Math.max(0, Math.ceil((end.getTime() - now.getTime()) / (24 * 3600 * 1000)));
 
     return {
-      status: row.status,
-      starts_at: row.starts_at,
-      ends_at: row.ends_at,
-      days_remaining: daysRemaining,
-      student_count: row.student_count,
-      monthly_amount_fcfa: Math.round(row.total_amount_fcfa / Math.max(1, row.duration_months)),
-      total_amount_fcfa: row.total_amount_fcfa,
-      duration_months: row.duration_months,
-      auto_renew_alert: row.auto_renew_alert,
+      offer,
+      subscription: {
+        status: row.status,
+        starts_at: row.starts_at,
+        ends_at: row.ends_at,
+        days_remaining: daysRemaining,
+        student_count: row.student_count,
+        monthly_amount_fcfa: Math.round(row.total_amount_fcfa / Math.max(1, row.duration_months)),
+        total_amount_fcfa: row.total_amount_fcfa,
+        duration_months: row.duration_months,
+        auto_renew_alert: row.auto_renew_alert,
+      },
     };
   }
 

@@ -121,9 +121,10 @@ export class FinancialCacheService {
     totalDueYear: number;
     earliestOverdueStepDueDate: string | null;
   }) {
+    const expectedToDate = Math.max(0, Math.min(snapshot.expectedToDate, snapshot.totalDueYear));
     const status = resolveIndividualFinancialStatus({
       totalDue: snapshot.totalDueYear,
-      cumulativeExpectedAtDate: snapshot.expectedToDate,
+      cumulativeExpectedAtDate: expectedToDate,
       confirmedPaid: snapshot.paidConfirmed,
       waivedAmount: snapshot.waivedAmount,
     }).cacheStatus;
@@ -139,7 +140,7 @@ export class FinancialCacheService {
         : null;
     return {
       studentId: snapshot.studentId,
-      expectedToDate: snapshot.expectedToDate,
+      expectedToDate,
       paidConfirmed: snapshot.paidConfirmed,
       waivedAmount: snapshot.waivedAmount,
       totalDueYear: snapshot.totalDueYear,

@@ -88,7 +88,7 @@ export class FinancialCacheRepository {
              COALESCE(cov.paid_confirmed, 0)::text AS paid_confirmed,
              COALESCE(cov.waived_amount, 0)::text AS waived_amount,
              COALESCE(GREATEST(
-               COALESCE(scope.override_total_amount, scope.plan_total + COALESCE(scope.discount_amount, 0), 0),
+               COALESCE(scope.override_total_amount, scope.plan_total - COALESCE(scope.discount_amount, 0), 0),
                0
              ), 0)::text AS total_due_year,
              CASE WHEN custom_steps.step_count > 0
@@ -193,8 +193,8 @@ export class FinancialCacheRepository {
              sfs.school_year_id,
              SUM(sfs.total_expected_to_date),
              SUM(sfs.total_paid),
-             COUNT(*) FILTER (WHERE sfs.status = 'up_to_date'),
-             COUNT(*) FILTER (WHERE sfs.status <> 'up_to_date'),
+             COUNT(*) FILTER (WHERE sfs.status <> 'late'),
+             COUNT(*) FILTER (WHERE sfs.status = 'late'),
              NOW()
       FROM student_financial_status sfs
       INNER JOIN students s ON s.id = sfs.student_id AND s.is_active = true
@@ -221,8 +221,8 @@ export class FinancialCacheRepository {
              CASE WHEN SUM(sfs.total_expected_to_date) > 0
                   THEN LEAST(1, SUM(sfs.total_paid) / SUM(sfs.total_expected_to_date))
                   ELSE 1 END,
-             COUNT(*) FILTER (WHERE sfs.status = 'up_to_date'),
-             COUNT(*) FILTER (WHERE sfs.status <> 'up_to_date'),
+             COUNT(*) FILTER (WHERE sfs.status <> 'late'),
+             COUNT(*) FILTER (WHERE sfs.status = 'late'),
              COALESCE((
                SELECT SUM(p.amount) FROM payments p
                WHERE p.school_year_id = sfs.school_year_id

@@ -199,11 +199,12 @@ export class FinanceService {
   async getFinancialStatus(studentId: string, schoolYearId: string, asOfDate = todayIso()) {
     const due = await this.getAmountDue(studentId, schoolYearId);
     const { confirmedPaid, waivedAmount } = await this.repository.getPaymentCoverage(studentId, schoolYearId);
-    const cumulativeExpectedAtDate = await this.repository.getExpectedAtDate(
+    const scheduledExpectedAtDate = await this.repository.getExpectedAtDate(
       studentId,
       schoolYearId,
       asOfDate
     );
+    const cumulativeExpectedAtDate = Math.max(0, Math.min(due.tuitionDue, scheduledExpectedAtDate));
     const individualStatus = resolveIndividualFinancialStatus({
       totalDue: due.totalDue,
       cumulativeExpectedAtDate,

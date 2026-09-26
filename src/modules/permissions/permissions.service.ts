@@ -117,11 +117,11 @@ export class PermissionsService {
     }
   }
 
-  async getConfig(schemaName: string) {
+  async getConfig(schemaName: string, includeAdministration = true) {
     const [schoolConfig, positions, users, currentUsers, adminUsersCount] = await Promise.all([
       this.repository.getSchoolConfigBySchemaName(schemaName),
-      this.repository.listPositions(),
-      this.repository.listAdministrativeUsers(),
+      includeAdministration ? this.repository.listPositions() : Promise.resolve([]),
+      includeAdministration ? this.repository.listAdministrativeUsers() : Promise.resolve([]),
       this.repository.countActiveUsers(),
       this.repository.countActiveAdministrativeUsers(),
     ]);
@@ -136,6 +136,7 @@ export class PermissionsService {
         subdomain: schoolConfig.subdomain,
         plan: schoolConfig.plan,
         city: schoolConfig.city ?? '',
+        address: schoolConfig.address ?? '',
         teachingType: schoolConfig.teaching_type ?? 'general',
         maxUsers: schoolConfig.max_users,
         currentUsers: adminUsersCount,
@@ -166,6 +167,7 @@ export class PermissionsService {
     input: {
       name?: string;
       city?: string;
+      address?: string;
       teachingType?: string;
       logoUrl?: string | null;
       stampImageUrl?: string | null;
@@ -176,7 +178,8 @@ export class PermissionsService {
     }
   ) {
     await this.repository.updateSchoolConfig(schemaName, input);
-    return this.getConfig(schemaName);
+    const { school } = await this.getConfig(schemaName, false);
+    return { school };
   }
 
   async updateLimits(schemaName: string, input: { maxAdminPositions: number }) {

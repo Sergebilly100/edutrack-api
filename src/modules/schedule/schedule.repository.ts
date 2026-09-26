@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { QueryResult, QueryResultRow } from 'pg';
+import { normalizeSubjectKey } from '../../shared/utils/subject-normalization.js';
 
 export type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
 
@@ -784,8 +785,7 @@ export const createSchedule = async (
   input: ScheduleMutationInput
 ): Promise<{ id: string }> => {
   const result = await db.execute<{ id: string }>(sql`
-    WITH created_schedule AS (
-      INSERT INTO schedules (
+    INSERT INTO schedules (
         schedule_period_id,
         teacher_id,
         class_id,
@@ -809,17 +809,7 @@ export const createSchedule = async (
         ${input.endDate ?? null}::date,
         ${input.isActive ?? true}
       )
-      RETURNING id, teacher_id, class_id, subject, is_active
-    ), assigned_subject AS (
-      INSERT INTO teacher_subject_assignments (teacher_id, subject_id, class_id)
-      SELECT created.teacher_id, subject.id, created.class_id
-      FROM created_schedule created
-      INNER JOIN classes school_class ON school_class.id = created.class_id
-      INNER JOIN subjects subject ON subject.level_id = school_class.level_id AND subject.name = created.subject
-      WHERE created.is_active = true
-      ON CONFLICT (teacher_id, subject_id, class_id) DO NOTHING
-    )
-    SELECT id FROM created_schedule
+      RETURNING id
   `);
 
   const [row] = getRows<{ id: string }>(result);
@@ -836,8 +826,7 @@ export const updateSchedule = async (
   input: ScheduleMutationInput
 ): Promise<{ id: string } | null> => {
   const result = await db.execute<{ id: string }>(sql`
-    WITH updated_schedule AS (
-      UPDATE schedules
+    UPDATE schedules
       SET
         schedule_period_id = ${input.schedulePeriodId},
         teacher_id = ${input.teacherId},
@@ -853,17 +842,7 @@ export const updateSchedule = async (
         END,
         is_active = ${input.isActive ?? true}
       WHERE id = ${scheduleId}
-      RETURNING id, teacher_id, class_id, subject, is_active
-    ), assigned_subject AS (
-      INSERT INTO teacher_subject_assignments (teacher_id, subject_id, class_id)
-      SELECT updated.teacher_id, subject.id, updated.class_id
-      FROM updated_schedule updated
-      INNER JOIN classes school_class ON school_class.id = updated.class_id
-      INNER JOIN subjects subject ON subject.level_id = school_class.level_id AND subject.name = updated.subject
-      WHERE updated.is_active = true
-      ON CONFLICT (teacher_id, subject_id, class_id) DO NOTHING
-    )
-    SELECT id FROM updated_schedule
+      RETURNING id
   `);
 
   const [row] = getRows<{ id: string }>(result);
@@ -924,6 +903,25 @@ export const isTeacherBlocked = async (
   `);
 
   return getRows<{ is_blocked: boolean }>(result)[0]?.is_blocked === true;
+};
+
+export const hasTeacherSubjectAssignment = async (
+  db: QueryExecutor,
+  input: { teacherId: string; classId: string; subject: string }
+): Promise<boolean> => {
+  const result = await db.execute<{ subject: string }>(sql`
+    SELECT subject.name AS subject
+    FROM teacher_subject_assignments tsa
+    INNER JOIN subjects subject ON subject.id = tsa.subject_id
+    INNER JOIN teachers t ON t.id = tsa.teacher_id AND t.is_blocked = false
+    INNER JOIN users u ON u.id = t.user_id AND u.is_active = true
+    INNER JOIN classes c ON c.id = tsa.class_id AND c.is_active = true
+    INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
+    WHERE tsa.teacher_id = ${input.teacherId}::uuid
+      AND tsa.class_id = ${input.classId}::uuid
+  `);
+  return getRows<{ subject: string }>(result).some((row) =>
+    normalizeSubjectKey(row.subject) === normalizeSubjectKey(input.subject));
 };
 
 export const findScheduleConflicts = async (

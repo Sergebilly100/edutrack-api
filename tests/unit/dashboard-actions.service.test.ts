@@ -8,12 +8,14 @@ const repository = {
   replaceType: vi.fn(),
   resolve: vi.fn(),
   countRiskByLevel: vi.fn(),
+  countTeachersAtRisk: vi.fn(),
   listBlockedClasses: vi.fn(),
 } as unknown as DashboardActionsRepository;
 
 beforeEach(() => {
   vi.clearAllMocks();
   repository.countRiskByLevel.mockResolvedValue({});
+  repository.countTeachersAtRisk.mockResolvedValue(0);
   repository.listBlockedClasses.mockResolvedValue([]);
   repository.replaceType.mockResolvedValue(undefined);
 });
@@ -70,7 +72,7 @@ describe('DashboardActionsService.generateAll (8 types)', () => {
     expect(call![1]).toHaveLength(1);
   });
 
-  it('génère student_at_risk / teacher_at_risk depuis les niveaux de risque', async () => {
+  it('ne mélange jamais les risques élèves avec les actions professeurs', async () => {
     const service = new DashboardActionsService(repository);
     repository.countRiskByLevel.mockResolvedValue({ warning: 6, critical: 2 });
     await service.generateAll({});
@@ -80,7 +82,7 @@ describe('DashboardActionsService.generateAll (8 types)', () => {
     const teacherCall = calls.find((call) => call[0] === 'teacher_at_risk')!;
     expect(studentCall[1][0]!.message).toContain('8 élève(s)');
     expect(studentCall[1][0]!.priority).toBe('high'); // >= 5
-    expect(teacherCall[1][0]!.message).toContain('2 prof(s)');
+    expect(teacherCall[1]).toHaveLength(0);
   });
 
   it('génère report_cards_blocked par classe avec référence', async () => {
@@ -97,5 +99,14 @@ describe('DashboardActionsService.generateAll (8 types)', () => {
       priority: 'medium',
       message: expect.stringContaining('5ème B'),
     });
+  });
+
+  it('génère le suivi enseignant sans aucun risque élève et compte uniquement les actions créées', async () => {
+    repository.countTeachersAtRisk.mockResolvedValue(2);
+    const result = await new DashboardActionsService(repository).generateAll();
+    expect(repository.replaceType).toHaveBeenCalledWith('teacher_at_risk', [expect.objectContaining({
+      message: '2 professeur(s) à suivre pour leur assiduité',
+    })]);
+    expect(result.generated).toBe(1);
   });
 });

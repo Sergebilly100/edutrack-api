@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { getAuthHeaders, queryTenant, request, tenantTable, TEST_SCHEMA_NAME } from './setup.js';
+import { getAuthHeaders, getSeedContext, queryTenant, request, tenantTable, TEST_SCHEMA_NAME } from './setup.js';
 import { withTenantSchema } from '../../src/shared/database/db.js';
 import { buildFinancialCacheService } from '../../src/modules/finance/financial-cache.service.js';
 
@@ -169,5 +169,32 @@ describe('financial cache integration (6a)', () => {
     expect(Number(summary.body.school.total_paid)).toBe(100_000);
     expect(Number(summary.body.school.total_expected_to_date)).toBe(200_000);
     expect(Number(summary.body.school.recovery_rate)).toBe(0.5);
+    expect(Number(summary.body.school.students_late_count)).toBe(0);
+  });
+
+  it.each([
+    { discount: 30000, override: null, step: null, total: 270000, expected: 100000 },
+    { discount: 500000, override: null, step: null, total: 0, expected: 0 },
+    { discount: null, override: 80000, step: null, total: 80000, expected: 80000 },
+    { discount: null, override: 80000, step: 50000, total: 80000, expected: 50000 },
+  ])('applique remise, montant et échéancier personnalisés : %j', async ({ discount, override, step, total, expected }) => {
+    const [year] = await queryTenant<IdRow>('SELECT id FROM school_years WHERE label=$1', [`fc-${suffix}`]);
+    const [schoolClass] = await queryTenant<IdRow>("SELECT id FROM classes WHERE name LIKE 'FC class %' LIMIT 1");
+    const [student] = await queryTenant<IdRow>("INSERT INTO students (class_id, first_name, last_name) VALUES ($1,'Revue','Remise') RETURNING id", [schoolClass!.id]);
+    await queryTenant('INSERT INTO student_tuition_overrides (student_id, school_year_id, discount_amount, override_total_amount, reason, granted_by_user_id) VALUES ($1,$2,$3,$4,$5,$6)',
+      [student!.id, year!.id, discount, override, 'Revue du cache', getSeedContext().directorUserId]);
+    if (step !== null) await queryTenant('INSERT INTO student_tuition_schedule_steps (student_id,school_year_id,due_date,cumulative_amount_expected) VALUES ($1,$2,CURRENT_DATE-5,$3)', [student!.id, year!.id, step]);
+    await withTenantSchema(TEST_SCHEMA_NAME, (db) => buildFinancialCacheService(db).recalcAll(year!.id));
+    const [cached] = await queryTenant<{ total_due_year: string; total_expected_to_date: string; total_paid: string }>('SELECT total_due_year,total_expected_to_date,total_paid FROM student_financial_status WHERE student_id=$1', [student!.id]);
+    expect(Number(cached?.total_due_year)).toBe(total);
+    expect(Number(cached?.total_expected_to_date)).toBe(expected);
+    expect(Number(cached?.total_paid)).toBe(0);
+    const status = await request().get(`/api/v1/students/${student!.id}/financial-status?school_year_id=${year!.id}`)
+      .set(await getAuthHeaders('director'));
+    expect(status.status).toBe(200);
+    expect(status.body.financialStatus.cumulativeExpectedAtDate).toBe(expected);
+    expect(status.body.financialStatus.standing).toBe(expected === 0 ? 'up_to_date' : 'late');
+    const [source] = await queryTenant<{ discount_amount: string }>('SELECT discount_amount FROM student_tuition_overrides WHERE student_id=$1', [student!.id]);
+    expect(Number(source?.discount_amount)).toBe(Number(discount));
   });
 });

@@ -68,6 +68,23 @@ type ParentNotificationRow = {
 export class ParentPortalRepository {
   constructor(private readonly db: TenantDb) {}
 
+  async getSmsOfferSettings() {
+    const result = await this.db.execute<{
+      is_enabled: boolean;
+      monetize_parent_alerts: boolean;
+      sms_unit_price_fcfa: number | null;
+    }>(sql`
+      SELECT COALESCE(f.is_enabled, false) AS is_enabled,
+             COALESCE(f.monetize_parent_alerts, false) AS monetize_parent_alerts,
+             f.sms_unit_price_fcfa
+      FROM public.tenants t
+      LEFT JOIN public.school_sms_features f ON f.tenant_id = t.id
+      WHERE t.schema_name = current_schema()
+      LIMIT 1
+    `);
+    return result.rows[0] ?? null;
+  }
+
   async getActiveSchoolYearId(): Promise<string | null> {
     const result = await this.db.execute<{ id: string }>(sql`
       SELECT id::text FROM school_years WHERE status = 'active' LIMIT 1

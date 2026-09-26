@@ -103,9 +103,9 @@ describe('demo creation: isolated critical path', () => {
       expect(children.status).toBe(200);
       expect(children.body.data).toHaveLength(1);
       const subscription = await request().get('/api/v1/parent/subscription/status').set(headers);
-      expect(subscription.status).toBe(subscribed ? 200 : 404);
-      if (subscribed) expect(subscription.body.status).toBe('active');
-      else expect(subscription.body.code).toBe('SUBSCRIPTION_NOT_FOUND');
+      expect(subscription.status).toBe(200);
+      if (subscribed) expect(subscription.body.subscription.status).toBe('active');
+      else expect(subscription.body.subscription).toBeNull();
     }
   }, 120_000);
 });

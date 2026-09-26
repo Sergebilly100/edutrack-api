@@ -28,7 +28,10 @@ type TeacherDirectoryRow = {
   name: string;
   username: string;
   subjects: string[] | null;
+  is_blocked: boolean;
+  is_active: boolean;
 };
+type ScheduleAssignmentRow = { teacher_id: string; class_id: string; subject: string };
 type RoomRow = { id: string; name: string; building: string | null; capacity: number | null; is_active: boolean };
 type TimeSlotRow = { id: string; label: string; start_time: string; end_time: string };
 type SchedulePeriodRow = { id: string; valid_from?: string; valid_to?: string };
@@ -78,6 +81,7 @@ const getRows = <T>(result: unknown): T[] => {
 export type ImportRepository = {
   listClasses: (db: QueryExecutor) => Promise<ClassRow[]>;
   listTeacherDirectory: (db: QueryExecutor) => Promise<TeacherDirectoryRow[]>;
+  listScheduleAssignments: (db: QueryExecutor) => Promise<ScheduleAssignmentRow[]>;
   listRooms: (db: QueryExecutor) => Promise<RoomRow[]>;
   upsertRoom: (
     db: QueryExecutor,
@@ -206,12 +210,25 @@ export const defaultImportRepository: ImportRepository = {
 
   async listTeacherDirectory(db) {
     const result = await db.execute(sql`
-      SELECT t.id AS teacher_id, t.user_id, u.name, t.username, t.subjects
+      SELECT t.id AS teacher_id, t.user_id, u.name, t.username, t.subjects, t.is_blocked, u.is_active
       FROM teachers t
       INNER JOIN users u ON u.id = t.user_id
     `);
 
     return getRows<TeacherDirectoryRow>(result);
+  },
+
+  async listScheduleAssignments(db) {
+    const result = await db.execute(sql`
+      SELECT tsa.teacher_id::text, tsa.class_id::text, s.name AS subject
+      FROM teacher_subject_assignments tsa
+      INNER JOIN teachers t ON t.id = tsa.teacher_id AND t.is_blocked = false
+      INNER JOIN users u ON u.id = t.user_id AND u.is_active = true
+      INNER JOIN subjects s ON s.id = tsa.subject_id
+      INNER JOIN classes c ON c.id = tsa.class_id AND c.is_active = true
+      INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
+    `);
+    return getRows<ScheduleAssignmentRow>(result);
   },
 
   async listRooms(db) {
@@ -648,6 +665,7 @@ export const defaultImportRepository: ImportRepository = {
     if (existing) {
       await db.execute(sql`
         UPDATE users
+        SET
           name = ${params.displayName},
           phone = ${row.phone},
           email = ${row.email ?? null},
@@ -752,7 +770,6 @@ export const defaultImportRepository: ImportRepository = {
 
     if (existing) {
       await db.execute(sql`
-        WITH updated_schedule AS (
           UPDATE schedules
           SET
             class_id = ${params.classId},
@@ -762,22 +779,11 @@ export const defaultImportRepository: ImportRepository = {
             start_date = ${params.startDate}::date,
             end_date = NULL
           WHERE id = ${existing.id}
-          RETURNING teacher_id, class_id, subject
-        ), assigned_subject AS (
-          INSERT INTO teacher_subject_assignments (teacher_id, subject_id, class_id)
-          SELECT updated.teacher_id, subject.id, updated.class_id
-          FROM updated_schedule updated
-          INNER JOIN classes school_class ON school_class.id = updated.class_id
-          INNER JOIN subjects subject ON subject.level_id = school_class.level_id AND subject.name = updated.subject
-          ON CONFLICT (teacher_id, subject_id, class_id) DO NOTHING
-        )
-        SELECT 1
       `);
       return { result: 'updated', id: existing.id };
     }
 
     const insertResult = await db.execute(sql`
-      WITH inserted_schedule AS (
         INSERT INTO schedules (
           schedule_period_id,
           teacher_id,
@@ -800,16 +806,7 @@ export const defaultImportRepository: ImportRepository = {
           ${params.startDate}::date,
           true
         )
-        RETURNING id, teacher_id, class_id, subject
-      ), assigned_subject AS (
-        INSERT INTO teacher_subject_assignments (teacher_id, subject_id, class_id)
-        SELECT inserted.teacher_id, subject.id, inserted.class_id
-        FROM inserted_schedule inserted
-        INNER JOIN classes school_class ON school_class.id = inserted.class_id
-        INNER JOIN subjects subject ON subject.level_id = school_class.level_id AND subject.name = inserted.subject
-        ON CONFLICT (teacher_id, subject_id, class_id) DO NOTHING
-      )
-      SELECT id FROM inserted_schedule
+        RETURNING id
     `);
 
     const insertedId = getRows<ScheduleInsertRow>(insertResult)[0]?.id;

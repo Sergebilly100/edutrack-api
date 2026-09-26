@@ -177,6 +177,13 @@ const handleError = (
       statusCode: 409,
     });
   }
+  if (message === 'Teacher must be assigned to this subject and class before scheduling') {
+    return reply.code(400).send({
+      error: 'Affectez ce professeur actif à cette matière et cette classe avant de créer un créneau.',
+      code: 'TEACHER_ASSIGNMENT_REQUIRED',
+      statusCode: 400,
+    });
+  }
   if (message === 'Room already has a course at the same time') {
     return reply.code(409).send({
       error: message,
@@ -444,7 +451,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
         const body = schedulePayloadSchema.parse(request.body);
         const db = ensureTenantDb(request);
         await ensureScheduleTemporalColumns(db);
-        await assertTeacherCanBeScheduled(db, body.teacher_id);
+        await assertTeacherCanBeScheduled(db, { teacherId: body.teacher_id, classId: body.class_id, subject: body.subject });
         const canonicalSubject = canonicalizeSubject(body.subject);
         const today = getTodayIso();
         const effectiveFrom = body.effective_from ?? today;
@@ -536,7 +543,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
         const body = schedulePayloadSchema.parse(request.body);
         const db = ensureTenantDb(request);
         await ensureScheduleTemporalColumns(db);
-        await assertTeacherCanBeScheduled(db, body.teacher_id);
+        await assertTeacherCanBeScheduled(db, { teacherId: body.teacher_id, classId: body.class_id, subject: body.subject });
         const canonicalSubject = canonicalizeSubject(body.subject);
         const today = getTodayIso();
         const effectiveFrom = body.effective_from ?? today;

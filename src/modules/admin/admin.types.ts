@@ -42,6 +42,7 @@ export const createSchoolBodySchema = z.object({
     .toLowerCase()
     .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
   city: z.string().trim().min(1).max(120),
+  address: z.string().trim().min(3).max(255),
   teaching_type: z.enum(TEACHING_TYPE_VALUES),
   director_name: z.string().trim().min(2).max(255),
   director_phone: z.string().regex(/^225\d{10}$/),
@@ -165,6 +166,7 @@ export const updateSchoolConfigBodySchema = z
     max_users: z.coerce.number().int().min(1).max(500).optional(),
     max_sms_per_month: z.coerce.number().int().min(0).max(200000).optional(),
     city: z.string().trim().min(1).max(120).optional(),
+    address: z.string().trim().min(3).max(255).optional(),
     teaching_type: z.enum(TEACHING_TYPE_VALUES).optional(),
     student_label: z.string().trim().min(1).max(120).optional(),
     director_title: z.string().trim().min(1).max(120).optional(),
@@ -188,6 +190,7 @@ export const updateSchoolConfigBodySchema = z
       value.max_users !== undefined ||
       value.max_sms_per_month !== undefined ||
       value.city !== undefined ||
+      value.address !== undefined ||
       value.teaching_type !== undefined ||
       value.student_label !== undefined ||
       value.director_title !== undefined ||
@@ -297,6 +300,7 @@ export type SchoolDetailsResult = {
     plan: TenantPlan;
     status: TenantStatus;
     city: string | null;
+    address: string | null;
     teachingType: TeachingType | null;
     maxAdminPositions: number;
     maxUsers: number;

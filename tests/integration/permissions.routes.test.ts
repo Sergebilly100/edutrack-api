@@ -106,7 +106,7 @@ const makeUser = (overrides: Record<string, unknown> = {}) => ({
 // ─── beforeEach ─────────────────────────────────────────────────────────────
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
 
   mocks.argon2Hash.mockResolvedValue('hashed-pw');
   mocks.getPlanLimitsBySchemaName.mockResolvedValue({ max_users: 100, max_admin_positions: 10 });
