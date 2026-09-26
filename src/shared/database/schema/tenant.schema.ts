@@ -609,7 +609,8 @@ export const importMappingProfiles = tenant.table(
     id: uuid('id').defaultRandom().primaryKey(),
     importType: varchar('import_type', { length: 80 }).notNull(),
     label: varchar('label', { length: 255 }),
-    createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id),
+    // Mapping authors can be platform super administrators from another tenant.
+    createdByUserId: uuid('created_by_user_id').notNull(),
     isActive: boolean('is_active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),

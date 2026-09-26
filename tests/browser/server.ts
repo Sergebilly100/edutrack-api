@@ -8,6 +8,9 @@ process.env.AUTH_ADMIN_SCHEMA = process.env.QA_BROWSER_SCHEMA;
 process.env.SMS_MOCK = 'true';
 const { startTestApp, stopTestApp, getSeedContext, queryTenant, queryPublic, getAuthHeaders, request, TEST_SCHEMA_NAME } = await import('../support/school-harness.js');
 await startTestApp();
+const { db } = await import('../../src/shared/database/db.js');
+const { ensureAdminPublicInfrastructure } = await import('../../src/modules/admin/admin.infrastructure.service.js');
+await ensureAdminPublicInfrastructure(db);
 const context = getSeedContext();
 await queryPublic(`INSERT INTO public.tenants (name, subdomain, schema_name, plan, status, max_users, onboarding_completed)
  VALUES ('École QA navigateur', $2, $1, 'pro', 'active', 50, true)`, [TEST_SCHEMA_NAME, TEST_SCHEMA_NAME.replaceAll('_', '-')]);

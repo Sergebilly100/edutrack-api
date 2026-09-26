@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { buildMidyearImportService } from './modules/finance/midyear-import.service.js';
 
 import cors from '@fastify/cors';
 import etag from '@fastify/etag';
@@ -297,7 +298,7 @@ app.addHook('onRequest', async (request, reply) => {
 });
 
 app.register(authController);
-app.register(adminController, { deadLetterQueue });
+app.register(adminController, { deadLetterQueue, midyearImportFactory: buildMidyearImportService });
 app.register(academicController);
 app.register(classDecisionsController);
 app.register(conductController);

@@ -1,6 +1,8 @@
 import ExcelJS from 'exceljs';
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { ensureAdminPublicInfrastructure } from '../../src/modules/admin/admin.infrastructure.service.js';
+import { db } from '../../src/shared/database/db.js';
 import { signAccessToken } from '../../src/modules/auth/auth.service.js';
 import { getSeedContext, queryPublic, queryTenant, request, TEST_SCHEMA_NAME } from './setup.js';
 
@@ -10,9 +12,13 @@ type IdRow = { id: string };
 
 describe('mid-year onboarding flag (8a)', () => {
   let tenantId = '';
+  let yearId = '';
   let adminHeaders: Record<string, string> = {};
 
   beforeAll(async () => {
+    await ensureAdminPublicInfrastructure(db);
+    await queryTenant("UPDATE school_years SET status = 'closed' WHERE status = 'active'");
+    yearId = (await queryTenant<IdRow>(`INSERT INTO school_years (label, start_date, end_date, end_of_year_review_start_date, status) VALUES ($1, '2090-09-01', '2091-06-30', '2091-05-01', 'active') RETURNING id::text`, [`reprise-${suffix}`]))[0]!.id;
     const rows = await queryPublic<IdRow>(
       `INSERT INTO public.tenants (name, subdomain, schema_name, plan, status, max_users, onboarding_completed)
        VALUES ($1, $2, $3, 'pro', 'active', 50, true)
@@ -40,7 +46,7 @@ describe('mid-year onboarding flag (8a)', () => {
     const details = await request()
       .get(`/api/v1/admin/schools/${tenantId}`)
       .set(adminHeaders);
-    expect(details.status).toBe(200);
+    expect(details.status, JSON.stringify(details.body)).toBe(200);
     expect(details.body.metadata.midYearOnboarding).toBe(true);
   });
 
@@ -80,7 +86,7 @@ describe('mid-year onboarding flag (8a)', () => {
     const details = await request()
       .get(`/api/v1/admin/schools/${response.body.tenantId}`)
       .set(adminHeaders);
-    expect(details.status).toBe(200);
+    expect(details.status, JSON.stringify(details.body)).toBe(200);
     expect(details.body.metadata.midYearOnboarding).toBe(true);
   });
 
@@ -107,20 +113,19 @@ describe('mid-year onboarding flag (8a)', () => {
 
     const analysis = await request()
       .post(`/api/v1/admin/schools/${tenantId}/midyear-import/levels/analyze`)
+      .query({ school_year_id: yearId })
       .set(adminHeaders)
       .attach('file', file, 'niveaux.xlsx');
     expect(analysis.status, JSON.stringify(analysis.body)).toBe(200);
     expect(analysis.body.missingTargets).toEqual([]);
 
-    await queryTenant('UPDATE school_years SET status = $1 WHERE status = $2', ['closed', 'active']);
-    await queryTenant(
-      `INSERT INTO school_years (label, start_date, end_date, end_of_year_review_start_date, status)
-       VALUES ($1, '2090-09-01', '2091-06-30', '2091-05-01', 'active')`,
-      [`reprise-${suffix}`]
-    );
+    const preview = await request().post(`/api/v1/admin/schools/${tenantId}/midyear-import/levels/preview`)
+      .query({ school_year_id: yearId }).set(adminHeaders).attach('file', file, 'niveaux.xlsx');
+    expect(preview.status, JSON.stringify(preview.body)).toBe(200);
 
     const confirmed = await request()
       .post(`/api/v1/admin/schools/${tenantId}/midyear-import/levels/confirm`)
+      .query({ school_year_id: yearId, preview_token: preview.body.previewToken })
       .set(adminHeaders)
       .attach('file', file, 'niveaux.xlsx');
     expect(confirmed.status, JSON.stringify(confirmed.body)).toBe(200);
@@ -147,19 +152,22 @@ describe('mid-year onboarding flag (8a)', () => {
       const profile = await request().get(`${base}/profile`).set(adminHeaders);
       expect(profile.status).toBe(200);
       expect(profile.body.profile.fields.map((field: { targetField: string }) => field.targetField).sort()).toEqual([...targets].sort());
-      const preview = await request().post(`${base}/analyze`).set(adminHeaders).attach('file', file, `qa-${type}.xlsx`);
+      const preview = await request().post(`${base}/analyze`).query({ school_year_id: yearId }).set(adminHeaders).attach('file', file, `qa-${type}.xlsx`);
       expect(preview.status, JSON.stringify(preview.body)).toBe(200);
       expect(preview.body).toMatchObject({ rowCount: 1, missingTargets: [] });
-      const result = await request().post(`${base}/confirm`).set(adminHeaders).attach('file', file, `qa-${type}.xlsx`);
+      const checked = await request().post(`${base}/preview`).query({ school_year_id: yearId }).set(adminHeaders).attach('file', file, `qa-${type}.xlsx`);
+      expect(checked.status, JSON.stringify(checked.body)).toBe(200);
+      const result = await request().post(`${base}/confirm`).query({ school_year_id: yearId, preview_token: checked.body.previewToken }).set(adminHeaders).attach('file', file, `qa-${type}.xlsx`);
       expect(result.status, JSON.stringify(result.body)).toBe(200);
-      expect(result.body).toEqual({ createdCount: 1, errors: [], totalRows: 1 });
+      expect(result.body).toMatchObject({ createdCount: 1, errors: [], totalRows: 1 });
     };
 
     await importFile('subjects', ['Niveau', 'Discipline', 'Coef'], [levelName, 'Mathématiques reprise QA', 4], ['niveau', 'matiere', 'coefficient']);
     await importFile('rooms', ['Salle', 'Places'], [`Salle reprise ${suffix}`, 35], ['nom', 'capacite']);
     await importFile('classes', ['Groupe', 'Niveau'], [className, levelName], ['nom', 'niveau']);
-    await importFile('students', ['Code', 'Nom', 'Prénom', 'Groupe', 'Contact'], [matricule, 'Reprise', 'Aya', className, '2250700007777'], ['matricule', 'nom', 'prenom', 'classe', 'parent_phone']);
-    await importFile('payments', ['Code', 'Déjà versé'], [matricule, 30_000], ['matricule', 'montant']);
+    await importFile('students', ['Code', 'Nom', 'Prénom', 'Niveau', 'Groupe', 'Contact'], [matricule, 'Reprise', 'Aya', levelName, className, '2250700007777'], ['matricule', 'nom', 'prenom', 'niveau', 'classe', 'parent_phone']);
+    await queryTenant(`INSERT INTO tuition_plans (level_id, school_year_id, total_amount) SELECT id, $1, 100000 FROM levels WHERE name = $2`, [yearId, levelName]);
+    await importFile('payments', ['Code', 'Déjà versé', 'Date', 'Reçu', 'Mode'], [matricule, 30_000, '2090-10-12', 'REF-MID-' + suffix, 'mobile_money'], ['matricule', 'montant', 'date', 'reference', 'method']);
 
     const subjects = await queryTenant<{ name: string; coefficient: string }>('SELECT name, coefficient::text FROM subjects WHERE name=$1', ['Mathématiques reprise QA']);
     expect(subjects).toEqual([{ name: 'Mathématiques reprise QA', coefficient: '4.000' }]);
@@ -167,7 +175,7 @@ describe('mid-year onboarding flag (8a)', () => {
     expect(rooms[0]?.capacity).toBe(35);
     expect(rooms[0]?.qr_token).toBeTruthy();
     const links = await queryTenant<{ phone: string; class_name: string }>(`SELECT p.phone, c.name AS class_name
-      FROM students s JOIN classes c ON c.id=s.class_id
+      FROM students s JOIN enrollments e ON e.student_id=s.id JOIN classes c ON c.id=e.class_id
       JOIN parent_student_links l ON l.student_id=s.id JOIN parents p ON p.id=l.parent_id
       WHERE s.matricule=$1`, [matricule]);
     expect(links).toEqual([{ phone: '2250700007777', class_name: className }]);

@@ -506,7 +506,8 @@ const initApp = async (): Promise<FastifyInstance> => {
   testApp.register(dashboardActionsController);
   testApp.register(enrollmentsController);
   testApp.register(financeController);
-  testApp.register(adminController);
+  const { buildMidyearImportService } = await import('../../src/modules/finance/midyear-import.service.js');
+  testApp.register(adminController, { midyearImportFactory: buildMidyearImportService });
   testApp.register(attendanceController);
   testApp.register(billingController);
   testApp.register(scheduleController);

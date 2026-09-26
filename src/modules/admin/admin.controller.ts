@@ -71,9 +71,9 @@ import {
   updateSchoolSmsFeatureConfig,
   updateTenant,
 } from './admin.service.js';
-import { buildMidyearImportService, MidyearImportError } from '../finance/midyear-import.service.js';
+import { MidyearImportError, type MidyearImportFactory } from '../../shared/import-mapping/midyear.types.js';
+import { getRecoveryTenantSchema } from './midyear-target.repository.js';
 import { adminAuditOnSend } from '../../shared/middleware/admin-audit.middleware.js';
-import { sql } from 'drizzle-orm';
 import { withTenantSchema } from '../../shared/database/db.js';
 import {
   authenticateRequest,
@@ -89,6 +89,7 @@ import type { DeadLetterPayload } from '../../shared/queue/dead-letter-queue.js'
 
 type AdminControllerOptions = {
   deadLetterQueue?: Queue<DeadLetterPayload>;
+  midyearImportFactory?: MidyearImportFactory;
 };
 
 const handleError = (reply: FastifyReply, error: unknown, request?: FastifyRequest): FastifyReply => {
@@ -168,6 +169,10 @@ export default async function adminController(
   options: AdminControllerOptions = {}
 ): Promise<void> {
   const { deadLetterQueue } = options;
+  const buildMidyearImportService: MidyearImportFactory = (db) => {
+    if (!options.midyearImportFactory) throw new MidyearImportError('Service de reprise indisponible', 503, 'RECOVERY_UNAVAILABLE');
+    return options.midyearImportFactory(db);
+  };
   app.addHook('onSend', adminAuditOnSend);
   app.addHook('onResponse', async (request) => {
     await releaseTenantDb(request);
@@ -338,10 +343,19 @@ export default async function adminController(
       }).strict()).default([]),
     }).strict()).min(1),
   }).strict();
+  const handleMidyearError = (reply: FastifyReply, error: unknown, request: FastifyRequest) => {
+    if (error instanceof MidyearImportError) {
+      return reply.code(error.statusCode).send({ error: error.message, code: error.code, statusCode: error.statusCode });
+    }
+    if (error instanceof ZodError) return handleError(reply, error, request);
+    // Mapping writes can contain personal labels or values in PostgreSQL errors.
+    request.log.error({ actorUserId: request.user?.userId, code: 'RECOVERY_REQUEST_FAILED' }, 'Recovery request failed');
+    return reply.code(500).send({ error: 'La reprise est indisponible. Réessayez après avoir vérifié le fichier.', code: 'RECOVERY_REQUEST_FAILED', statusCode: 500 });
+  };
   const midyearFile = async (
     request: FastifyRequest,
     reply: FastifyReply,
-    action: 'analyze' | 'confirm',
+    action: 'analyze' | 'preview' | 'confirm',
     routeImportType: string,
   ): Promise<FastifyReply> => {
     try {
@@ -349,28 +363,28 @@ export default async function adminController(
       const importType = z
         .enum(['levels', 'subjects', 'rooms', 'classes', 'students', 'payments'])
         .parse(routeImportType);
+      const query = z.object({
+        school_year_id: z.uuid(),
+        preview_token: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+      }).strict().parse(request.query);
+      if (action === 'confirm' && !query.preview_token) {
+        throw new MidyearImportError('Prévisualisez avant de confirmer la reprise', 400, 'RECOVERY_PREVIEW_REQUIRED');
+      }
       const data = await request.file();
-      if (!data) return reply.code(400).send({ error: 'No file provided', code: 'BAD_REQUEST', statusCode: 400 });
-      const chunks: Buffer[] = [];
-      for await (const chunk of data.file) chunks.push(chunk as Buffer);
-      const fileBuffer = Buffer.concat(chunks);
+      if (!data) return reply.code(400).send({ error: 'Fichier manquant', code: 'BAD_REQUEST', statusCode: 400 });
+      const fileBuffer = await data.toBuffer();
 
-      const schemaNameResult = await ensurePublicDb(request).execute<{ schema_name: string }>(
-        sql`SELECT schema_name FROM public.tenants WHERE id = ${tenantId} LIMIT 1`
-      );
-      const targetSchema = schemaNameResult.rows?.[0]?.schema_name;
-      if (!targetSchema) return reply.code(404).send({ error: 'Tenant not found', code: 'NOT_FOUND', statusCode: 404 });
+      const targetSchema = await getRecoveryTenantSchema(ensurePublicDb(request), tenantId);
 
       const result = await withTenantSchema(targetSchema, async (tenantDb) => {
         const service = buildMidyearImportService(tenantDb);
-        return action === 'analyze' ? service.analyze(importType, fileBuffer) : service.confirm(importType, fileBuffer);
+        if (action === 'analyze') return service.analyze(importType, fileBuffer, query.school_year_id);
+        if (action === 'preview') return service.preview(importType, fileBuffer, query.school_year_id);
+        return service.confirm(importType, fileBuffer, query.school_year_id, query.preview_token!, request.user!.userId);
       });
       return reply.send(result);
     } catch (error) {
-      if (error instanceof MidyearImportError) {
-        return reply.code(error.statusCode).send({ error: error.message, code: error.code, statusCode: error.statusCode });
-      }
-      return handleError(reply, error, request);
+      return handleMidyearError(reply, error, request);
     }
   };
 
@@ -381,18 +395,13 @@ export default async function adminController(
       async (request, reply) => {
         try {
           const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
-          const schemaNameResult = await ensurePublicDb(request).execute<{ schema_name: string }>(
-            sql`SELECT schema_name FROM public.tenants WHERE id = ${tenantId} LIMIT 1`
-          );
-          const targetSchema = schemaNameResult.rows?.[0]?.schema_name;
-          if (!targetSchema) return reply.code(404).send({ error: 'Tenant not found', code: 'NOT_FOUND', statusCode: 404 });
+          const targetSchema = await getRecoveryTenantSchema(ensurePublicDb(request), tenantId);
           const profile = await withTenantSchema(targetSchema, (tenantDb) =>
             buildMidyearImportService(tenantDb).getProfile(importType)
           );
           return reply.send({ profile });
         } catch (error) {
-          if (error instanceof MidyearImportError) return reply.code(error.statusCode).send({ error: error.message, code: error.code, statusCode: error.statusCode });
-          return handleError(reply, error, request);
+          return handleMidyearError(reply, error, request);
         }
       },
     );
@@ -403,11 +412,7 @@ export default async function adminController(
         try {
           const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
           const body = midyearMappingProfileBodySchema.parse(request.body);
-          const schemaNameResult = await ensurePublicDb(request).execute<{ schema_name: string }>(
-            sql`SELECT schema_name FROM public.tenants WHERE id = ${tenantId} LIMIT 1`
-          );
-          const targetSchema = schemaNameResult.rows?.[0]?.schema_name;
-          if (!targetSchema) return reply.code(404).send({ error: 'Tenant not found', code: 'NOT_FOUND', statusCode: 404 });
+          const targetSchema = await getRecoveryTenantSchema(ensurePublicDb(request), tenantId);
           const profile = await withTenantSchema(targetSchema, (tenantDb) =>
             buildMidyearImportService(tenantDb).saveProfile({
               importType,
@@ -418,8 +423,7 @@ export default async function adminController(
           );
           return reply.send({ profile });
         } catch (error) {
-          if (error instanceof MidyearImportError) return reply.code(error.statusCode).send({ error: error.message, code: error.code, statusCode: error.statusCode });
-          return handleError(reply, error, request);
+          return handleMidyearError(reply, error, request);
         }
       },
     );
@@ -427,6 +431,11 @@ export default async function adminController(
       `/api/v1/admin/schools/:tenantId/midyear-import/${importType}/analyze`,
       { preHandler: preHandlers },
       async (request, reply) => midyearFile(request, reply, 'analyze', importType),
+    );
+    app.post(
+      `/api/v1/admin/schools/:tenantId/midyear-import/${importType}/preview`,
+      { preHandler: preHandlers },
+      async (request, reply) => midyearFile(request, reply, 'preview', importType),
     );
     app.post(
       `/api/v1/admin/schools/:tenantId/midyear-import/${importType}/confirm`,
