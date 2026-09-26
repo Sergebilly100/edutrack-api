@@ -2,7 +2,7 @@ import ExcelJS from 'exceljs';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import type { Test } from 'supertest';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
   getAuthHeaders,
@@ -470,6 +470,18 @@ describe('import integration - teachers', () => {
 // ---------------------------------------------------------------------------
 
 describe('import integration - schedule', () => {
+  beforeAll(async () => {
+    // EDT import requires an active year and explicit pedagogical assignments.
+    const context = getSeedContext();
+    const [year] = await queryTenant<{ id: string }>(`INSERT INTO school_years (label, start_date, end_date, status)
+      VALUES ('09/2026 - 06/2027', '2026-09-01', '2027-06-30', 'active') RETURNING id`);
+    const [level] = await queryTenant<{ id: string }>(`INSERT INTO levels (name, order_index) VALUES ('Import EDT', 1) RETURNING id`);
+    const [subject] = await queryTenant<{ id: string }>(`INSERT INTO subjects (level_id, name, coefficient)
+      VALUES ($1, 'Mathématiques', 1) RETURNING id`, [level!.id]);
+    const [schoolClass] = await queryTenant<{ id: string }>('UPDATE classes SET level_id=$1, school_year_id=$2 WHERE name=$3 RETURNING id', [level!.id, year!.id, context.className]);
+    await queryTenant('INSERT INTO teacher_subject_assignments (teacher_id, class_id, subject_id) VALUES ($1, $2, $3)', [context.teacherId, schoolClass!.id, subject!.id]);
+  });
+
   it('POST /api/v1/import/schedule/dry-run - valide avec période → valid=1, errors=[]', async () => {
     const headers = await getAuthHeaders('director');
     const { className } = getSeedContext();
@@ -553,6 +565,8 @@ describe('import integration - schedule', () => {
     );
     const subjectId = subjects[0]?.id;
     expect(subjectId).toBeTruthy();
+    await queryTenant('INSERT INTO teacher_subject_assignments (teacher_id, class_id, subject_id) VALUES ($1, $2, $3)', [context.teacherId, classId, subjectId]);
+
 
     const [{ name: teacherName }] = await queryTenant<{ name: string }>(
       `SELECT u.name FROM ${tenantTable('teachers')} t INNER JOIN ${tenantTable('users')} u ON u.id = t.user_id WHERE t.id = $1`,

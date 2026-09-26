@@ -3,7 +3,10 @@ import { sql } from 'drizzle-orm';
 import { ZodError, z } from 'zod';
 
 import { db, withTenantSchema } from '../../shared/database/db.js';
-import { authenticateRequest, requireDirectorOrSecretary } from '../../shared/middleware/auth.middleware.js';
+import { authenticateRequest, requirePermission } from '../../shared/middleware/auth.middleware.js';
+import { attachTenantDb, releaseTenantDb } from '../../shared/middleware/tenant.middleware.js';
+import { OnboardingRepository } from './onboarding.repository.js';
+import { OnboardingPrerequisitesError, OnboardingService } from './onboarding.service.js';
 import { logger } from '../../shared/observability/logger.js';
 import {
   extractHostname,
@@ -55,6 +58,11 @@ const getRows = <TRow,>(result: unknown): TRow[] => {
 };
 
 const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
+  if (error instanceof OnboardingPrerequisitesError) {
+    return reply.code(error.statusCode).send({
+      error: error.message, code: error.code, statusCode: error.statusCode, missing: error.missing,
+    });
+  }
   if (error instanceof ZodError) {
     return reply.code(400).send({
       error: 'Validation error',
@@ -223,6 +231,15 @@ const fetchSchoolInfoBySchema = async (schemaName: string) => {
 };
 
 export default async function schoolController(app: FastifyInstance): Promise<void> {
+  app.addHook('onResponse', releaseTenantDb);
+  app.get('/api/v1/school/onboarding-status', {
+    preHandler: [requirePermission('settings.school'), attachTenantDb],
+  }, async (request, reply) => {
+    try {
+      const service = new OnboardingService(new OnboardingRepository(request.db!));
+      return reply.send(await service.status(request.user!.schemaName));
+    } catch (error) { return handleError(reply, error); }
+  });
   app.get('/api/v1/school/public-info', async (request, reply) => {
     try {
       const schemaName = await resolveSchemaNameFromPublicRequest(request);
@@ -266,7 +283,7 @@ export default async function schoolController(app: FastifyInstance): Promise<vo
     }
   });
 
-  app.patch('/api/v1/school/info', { preHandler: requireDirectorOrSecretary }, async (request, reply) => {
+  app.patch('/api/v1/school/info', { preHandler: requirePermission('settings.school') }, async (request, reply) => {
     try {
       const claims = request.claims!;
       const body = schoolInfoPatchSchema.parse(request.body ?? {});
@@ -320,15 +337,13 @@ export default async function schoolController(app: FastifyInstance): Promise<vo
 
   app.patch(
     '/api/v1/school/onboarding-complete',
-    { preHandler: requireDirectorOrSecretary },
+    { preHandler: [requirePermission('settings.school'), attachTenantDb] },
     async (request, reply) => {
       try {
         const claims = request.claims!;
-        await db.execute(sql`
-          UPDATE public.tenants
-          SET onboarding_completed = true, updated_at = NOW()
-          WHERE schema_name = ${claims.schemaName}
-        `);
+        const service = new OnboardingService(new OnboardingRepository(request.db!));
+        await service.complete(request.user!.schemaName);
+        await releaseTenantDb(request);
 
         const school = await fetchSchoolInfoBySchema(claims.schemaName);
         return reply.send(school);

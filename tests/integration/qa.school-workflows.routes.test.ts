@@ -136,9 +136,16 @@ describe('F01–F07/F30/F34/F35 — parcours école avec persistance', () => {
     expect(initial.status).toBe(200);
     expect(initial.body.onboarding_completed).toBe(false);
     expect((await request().patch('/api/v1/school/onboarding-complete').set(teacher)).status).toBe(403);
-    const saved = await request().patch('/api/v1/school/info').set(director).send({ name: 'École QA configurée', city: 'Abidjan' });
+    const saved = await request().patch('/api/v1/school/info').set(director).send({ name: 'École QA configurée', city: 'Abidjan', address: 'Abidjan, Cocody', phone: '2250700003333' });
     expect(saved.status).toBe(200);
     expect(saved.body).toMatchObject({ name: 'École QA configurée', city: 'Abidjan', onboarding_completed: false });
+    expect((await request().patch('/api/v1/school/onboarding-complete').set(director)).status).toBe(409);
+    // F35 now requires actual academic and financial configuration.
+    const [year] = await queryTenant<{ id: string }>(`INSERT INTO school_years (label, start_date, end_date, status)
+      VALUES ('09/2098 - 06/2099', '2098-09-01', '2099-06-30', 'active') RETURNING id`);
+    const [level] = await queryTenant<{ id: string }>(`INSERT INTO levels (name, order_index) VALUES ('F35', 1) RETURNING id`);
+    await queryTenant(`INSERT INTO subjects (level_id, name, coefficient) VALUES ($1, 'Mathématiques F35', 1)`, [level!.id]);
+    await queryTenant(`INSERT INTO tuition_plans (level_id, school_year_id, total_amount) VALUES ($1, $2, 100000)`, [level!.id, year!.id]);
     expect((await request().patch('/api/v1/school/onboarding-complete').set(director)).status).toBe(200);
     const reloaded = await request().get('/api/v1/school/info').set(director);
     expect(reloaded.body).toMatchObject({ name: 'École QA configurée', city: 'Abidjan', onboarding_completed: true });
