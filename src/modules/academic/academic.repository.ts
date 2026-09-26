@@ -282,7 +282,7 @@ export class AcademicRepository {
         c.name,
         (
           SELECT COUNT(*)::int
-          FROM students s
+          FROM students_with_class s
           WHERE s.class_id = c.id
             AND s.is_active = true
             AND NOT EXISTS (
@@ -335,7 +335,7 @@ export class AcademicRepository {
         c.name,
         (
           SELECT COUNT(*)::int
-          FROM students s
+          FROM students_with_class s
           WHERE s.class_id = c.id
             AND s.is_active = true
         ) AS student_count,
@@ -384,7 +384,7 @@ export class AcademicRepository {
         c.name,
         (
           SELECT COUNT(*)::int
-          FROM students s
+          FROM students_with_class s
           WHERE s.class_id = c.id
             AND s.is_active = true
         ) AS student_count,
@@ -425,7 +425,7 @@ export class AcademicRepository {
         c.name,
         (
           SELECT COUNT(*)::int
-          FROM students s
+          FROM students_with_class s
           WHERE s.class_id = c.id
             AND s.is_active = true
         ) AS student_count,

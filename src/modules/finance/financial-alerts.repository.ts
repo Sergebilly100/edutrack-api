@@ -107,7 +107,7 @@ export class FinancialAlertsRepository {
              r.type::text AS rule_type,
              r.channel::text AS channel
       FROM student_financial_status sfs
-      INNER JOIN students s ON s.id = sfs.student_id AND s.is_active = true
+      INNER JOIN students_with_class s ON s.id = sfs.student_id AND s.is_active = true
       INNER JOIN financial_alert_rules r
         ON r.is_active = true
        AND (
@@ -245,7 +245,7 @@ export class FinancialAlertsRepository {
              concat_ws(' ', s.first_name, s.last_name) AS student_name,
              r.type::text AS rule_type, l.channel::text, l.status, l.sent_at::text
       FROM financial_alert_logs l
-      INNER JOIN students s ON s.id = l.student_id
+      INNER JOIN students_with_class s ON s.id = l.student_id
       INNER JOIN financial_alert_rules r ON r.id = l.rule_id
       ORDER BY l.sent_at DESC, l.id DESC
       LIMIT ${input.limit} OFFSET ${input.offset}

@@ -154,6 +154,12 @@ describe('createStudent()', () => {
 // ─── updateStudent ────────────────────────────────────────────────────────────
 
 describe('updateStudent()', () => {
+  it('refuse de déplacer la classe depuis le profil d’un élève inscrit', async () => {
+    repository.updateStudent.mockRejectedValue(new Error('Enrollment owns class'));
+    await expect(buildService().updateStudent('s-1', {})).rejects.toMatchObject({
+      code: 'ENROLLMENT_CLASS_MANAGED', statusCode: 409,
+    });
+  });
   it('lève STUDENT_NOT_FOUND si repository retourne null', async () => {
     repository.updateStudent.mockResolvedValue(null);
     await expect(buildService().updateStudent('missing', {})).rejects.toMatchObject({

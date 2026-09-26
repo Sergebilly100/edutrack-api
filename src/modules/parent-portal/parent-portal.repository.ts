@@ -189,7 +189,7 @@ export class ParentPortalRepository {
     const result = await this.db.execute<{ student_id: string }>(sql`
       SELECT DISTINCT psl.student_id::text AS student_id
       FROM parent_student_links psl
-      INNER JOIN students s ON s.id = psl.student_id
+      INNER JOIN students_with_class s ON s.id = psl.student_id
       WHERE psl.parent_id = ${parentId}::uuid
         AND s.is_active = true
         AND s.lifecycle_status = 'active'
@@ -206,7 +206,7 @@ export class ParentPortalRepository {
         s.last_name,
         c.name AS class_name
       FROM parent_student_links psl
-      INNER JOIN students s ON s.id = psl.student_id
+      INNER JOIN students_with_class s ON s.id = psl.student_id
       INNER JOIN classes c ON c.id = s.class_id
       WHERE psl.parent_id = ${parentId}::uuid
         AND s.is_active = true
@@ -222,7 +222,7 @@ export class ParentPortalRepository {
       SELECT EXISTS (
         SELECT 1
         FROM parent_student_links psl
-        INNER JOIN students s ON s.id = psl.student_id
+        INNER JOIN students_with_class s ON s.id = psl.student_id
         WHERE psl.parent_id = ${parentId}::uuid
           AND psl.student_id = ${studentId}::uuid
           AND s.is_active = true
@@ -235,7 +235,7 @@ export class ParentPortalRepository {
   async getStudentClassId(studentId: string): Promise<string | null> {
     const result = await this.db.execute<{ class_id: string }>(sql`
       SELECT class_id::text AS class_id
-      FROM students
+      FROM students_with_class
       WHERE id = ${studentId}::uuid
       LIMIT 1
     `);

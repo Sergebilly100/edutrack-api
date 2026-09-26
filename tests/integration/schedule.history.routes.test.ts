@@ -46,6 +46,28 @@ const mondayForIsoDate = (isoDate: string): string => {
   return toIsoDate(date);
 };
 
+// The current schedule contract requires explicit assignments; fixtures must
+// provide them before testing schedule-history behavior.
+const ensureTeachingAssignment = async (teacherId: string, classId: string, names: string[]) => {
+  await queryTenant(`INSERT INTO school_years (label, start_date, end_date, status)
+    SELECT 'Schedule history year', '2000-09-01', '2100-06-30', 'active'
+    WHERE NOT EXISTS (SELECT 1 FROM school_years WHERE status = 'active')`);
+  await queryTenant(`UPDATE classes SET school_year_id = (SELECT id FROM school_years WHERE status = 'active' LIMIT 1)
+    WHERE id = $1::uuid`, [classId]);
+  await queryTenant(`INSERT INTO levels (name,order_index,is_exam_class)
+    SELECT 'Schedule history level', 998, false WHERE NOT EXISTS (SELECT 1 FROM levels WHERE name = 'Schedule history level')`);
+  await queryTenant(`UPDATE classes SET level_id = (SELECT id FROM levels WHERE name = 'Schedule history level')
+    WHERE id = $1::uuid AND level_id IS NULL`, [classId]);
+  for (const name of names) {
+    await queryTenant(`INSERT INTO subjects (level_id,name,coefficient)
+      SELECT level_id, $2, 1 FROM classes WHERE id = $1::uuid
+      ON CONFLICT (level_id,name) DO NOTHING`, [classId, name]);
+    await queryTenant(`INSERT INTO teacher_subject_assignments (teacher_id,subject_id,class_id)
+      SELECT $1::uuid, subject.id, class.id FROM classes class JOIN subjects subject ON subject.level_id = class.level_id
+      WHERE class.id = $2::uuid AND subject.name = $3 ON CONFLICT DO NOTHING`, [teacherId,classId,name]);
+  }
+};
+
 const createScheduleFixture = async (input: {
   teacherId: string;
   classId: string;
@@ -55,12 +77,14 @@ const createScheduleFixture = async (input: {
   validTo: string;
   subject: string;
   endDate?: string | null;
+  additionalSubjects?: string[];
 }): Promise<{
   scheduleId: string;
   schedulePeriodId: string;
   timeSlotId: string;
   dayOfWeek: number;
 }> => {
+  await ensureTeachingAssignment(input.teacherId, input.classId, [input.subject, ...(input.additionalSubjects ?? [])]);
   const suffix = buildUniqueSuffix();
   const period = await queryTenant<{ id: string }>(
     `
@@ -130,7 +154,7 @@ const createScheduleFixture = async (input: {
 };
 
 describe('schedule history protection integration', () => {
-  it('rattache automatiquement le professeur, la classe et la matière à la création du créneau', async () => {
+  it('exige l’affectation explicite du professeur avant la création du créneau', async () => {
     const headers = await getAuthHeaders('director');
     const context = getSeedContext();
     const today = toIsoDate(new Date());
@@ -201,6 +225,24 @@ describe('schedule history protection integration', () => {
     const timeSlotId = timeSlots[0]?.id;
     expect(timeSlotId).toBeTruthy();
 
+    const rejected = await request()
+      .post('/api/v1/schedule')
+      .set(headers)
+      .send({
+        schedule_period_id: schedulePeriodId,
+        teacher_id: context.teacherId,
+        class_id: classId,
+        room_id: roomId,
+        time_slot_id: timeSlotId,
+        day_of_week: isoDayOfWeek(effectiveFrom!),
+        subject: subjectName,
+        effective_from: effectiveFrom,
+        recurrence: 'recurring',
+        is_active: true,
+      });
+    expect(rejected.status).toBe(400);
+    expect(rejected.body.code).toBe('TEACHER_ASSIGNMENT_REQUIRED');
+    await ensureTeachingAssignment(context.teacherId, classId!, [subjectName]);
     const response = await request()
       .post('/api/v1/schedule')
       .set(headers)
@@ -322,6 +364,7 @@ describe('schedule history protection integration', () => {
       validFrom: addDays(today, -30),
       validTo: addDays(today, 30),
       subject: 'Mathématiques',
+      additionalSubjects: ['Physique'],
     });
 
     await queryTenant(
@@ -455,6 +498,7 @@ describe('schedule history protection integration', () => {
       validFrom: addDays(today, 1),
       validTo: addDays(today, 30),
       subject: 'Anglais',
+      additionalSubjects: ['Espagnol'],
     });
 
     const response = await request()
@@ -581,6 +625,7 @@ describe('schedule history protection integration', () => {
       validFrom: addDays(today, -30),
       validTo: addDays(today, 30),
       subject: 'Sciences',
+      additionalSubjects: ['Sciences physiques'],
     });
 
     const response = await request()
@@ -643,6 +688,7 @@ describe('schedule history protection integration', () => {
       [context.scheduleId]
     );
 
+    await ensureTeachingAssignment(context.teacherId, base[0]!.class_id, ['Test verrou passé']);
     const putResponse = await request()
       .put(`/api/v1/schedule/${context.scheduleId}`)
       .set(headers)

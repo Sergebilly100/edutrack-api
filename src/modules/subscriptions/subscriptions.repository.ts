@@ -297,7 +297,7 @@ export class SubscriptionsRepository {
           NULL::date AS ends_at,
           NULL::varchar(20) AS subscription_status,
           1 AS priority
-        FROM students
+        FROM students_with_class
         WHERE id = ${studentId}::uuid
           AND parent_phone IS NOT NULL
         UNION ALL
@@ -309,7 +309,7 @@ export class SubscriptionsRepository {
           NULL::date AS ends_at,
           NULL::varchar(20) AS subscription_status,
           2 AS priority
-        FROM students
+        FROM students_with_class
         WHERE id = ${studentId}::uuid
           AND parent_phone_2 IS NOT NULL
       ),
@@ -530,7 +530,7 @@ export class SubscriptionsRepository {
           (
             SELECT json_agg(json_build_object('id', s.id::text, 'full_name', CONCAT(s.first_name, ' ', s.last_name)))
             FROM parent_student_links psl
-            INNER JOIN students s ON s.id = psl.student_id
+            INNER JOIN students_with_class s ON s.id = psl.student_id
             WHERE psl.parent_id = p.id
           ),
           '[]'::json
@@ -606,7 +606,7 @@ export class SubscriptionsRepository {
         c.name,
         COUNT(s.id)::int AS students_count
       FROM classes c
-      LEFT JOIN students s ON s.class_id = c.id AND s.is_active = true
+      LEFT JOIN students_with_class s ON s.class_id = c.id AND s.is_active = true
       WHERE c.is_active = true
         AND (
           c.school_year_id IS NULL
@@ -644,7 +644,7 @@ export class SubscriptionsRepository {
 
     const countResult = await this.tenantDb.execute<{ total: number }>(sql`
       SELECT COUNT(*)::int AS total
-      FROM students s
+      FROM students_with_class s
       WHERE s.class_id = ${params.classId}::uuid
         AND s.is_active = true
         AND (
@@ -663,7 +663,7 @@ export class SubscriptionsRepository {
         c.id::text AS class_id,
         c.name AS class_name,
         s.matricule::text AS registration_number
-      FROM students s
+      FROM students_with_class s
       INNER JOIN classes c ON c.id = s.class_id
       WHERE s.class_id = ${params.classId}::uuid
         AND s.is_active = true
@@ -723,7 +723,7 @@ export class SubscriptionsRepository {
     if (studentIds.length === 0) return [];
     const result = await this.tenantDb.execute<StudentRow>(sql`
       SELECT id::text AS id, CONCAT(first_name, ' ', last_name) AS full_name
-      FROM students
+      FROM students_with_class
       WHERE id IN (${sql.join(studentIds.map((id) => sql`${id}::uuid`), sql`, `)})
     `);
     return result.rows;
@@ -893,7 +893,7 @@ export class SubscriptionsRepository {
         c.name AS class_name,
         s.matricule::text AS registration_number
       FROM parent_student_links psl
-      INNER JOIN students s ON s.id = psl.student_id
+      INNER JOIN students_with_class s ON s.id = psl.student_id
       LEFT JOIN classes c ON c.id = s.class_id
       WHERE psl.subscription_id = ${subscriptionId}::uuid
       ORDER BY s.last_name, s.first_name
@@ -939,7 +939,7 @@ export class SubscriptionsRepository {
         c.name AS class_name,
         s.matricule::text AS registration_number
       FROM parent_student_links psl
-      INNER JOIN students s ON s.id = psl.student_id
+      INNER JOIN students_with_class s ON s.id = psl.student_id
       LEFT JOIN classes c ON c.id = s.class_id
       WHERE psl.subscription_id IN (${idList})
       ORDER BY s.last_name, s.first_name

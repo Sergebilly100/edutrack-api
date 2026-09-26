@@ -24,8 +24,11 @@ export function buildDashboardRepository(db: TenantDb) {
       db.execute<{ active_students: number; active_teachers: number; active_classes: number }>(sql`
         SELECT
           (SELECT COUNT(*)::int
-           FROM students s
+           FROM students_with_class s
            WHERE s.is_active = true
+             AND s.class_id IS NOT NULL
+             AND EXISTS (SELECT 1 FROM classes current_class WHERE current_class.id = s.class_id
+               AND (${schoolYearId ?? null}::uuid IS NULL OR current_class.school_year_id = ${schoolYearId ?? null}::uuid))
              AND NOT EXISTS (
                SELECT 1
                FROM enrollments e
@@ -53,7 +56,7 @@ export function buildDashboardRepository(db: TenantDb) {
                    COUNT(s.id)::int AS student_count,
                    COUNT(rc.id) FILTER (WHERE rc.status IN ('generated', 'published'))::int AS card_count
             FROM classes c
-            LEFT JOIN students s ON s.class_id = c.id
+            LEFT JOIN students_with_class s ON s.class_id = c.id
               AND s.is_active = true
               AND NOT EXISTS (
                 SELECT 1
@@ -124,7 +127,7 @@ export function buildDashboardRepository(db: TenantDb) {
           INNER JOIN subjects s ON s.id = e.subject_id
           INNER JOIN classes c ON c.id = e.class_id
           INNER JOIN levels l ON l.id = c.level_id
-          INNER JOIN students st ON st.id = eg.student_id AND st.class_id = c.id AND st.is_active = true
+          INNER JOIN students_with_class st ON st.id = eg.student_id AND st.class_id = c.id AND st.is_active = true
           WHERE c.is_active = true AND c.school_year_id = (SELECT id FROM selected_year)
             AND e.class_id = c.id
             AND NOT EXISTS (
@@ -410,7 +413,7 @@ export function buildDashboardRepository(db: TenantDb) {
         SELECT st.id AS student_id, s.id AS schedule_id
         FROM schedules s
         INNER JOIN active_period ap ON ap.id = s.schedule_period_id
-        INNER JOIN students st ON st.class_id = s.class_id
+        INNER JOIN students_with_class st ON st.class_id = s.class_id
         WHERE s.is_active = true
           AND st.is_active = true
           AND s.day_of_week = EXTRACT(ISODOW FROM ${date}::date)::int

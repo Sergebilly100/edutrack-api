@@ -67,6 +67,7 @@ describe('mid-year onboarding flag (8a)', () => {
         name: `École reprise ${schoolSuffix}`,
         subdomain: `reprise-${schoolSuffix}`,
         city: 'Abidjan',
+        address: 'Rue de l’école, Cocody',
         teaching_type: 'secondaire',
         director_name: 'Directrice Reprise',
         director_phone: '2250700000001',

@@ -92,7 +92,7 @@ export class ClassDecisionsRepository {
         cd.next_level_id,
         next_level.name AS next_level_name,
         cd.validated_at
-      FROM students s
+      FROM students_with_class s
       INNER JOIN classes c ON c.id = s.class_id
       INNER JOIN levels current_level ON current_level.id = c.level_id
       LEFT JOIN class_decisions cd
@@ -175,7 +175,7 @@ export class ClassDecisionsRepository {
     const result = await this.db.execute<DecisionRow>(sql`
       WITH eligible_student AS (
         SELECT s.id
-        FROM students s
+        FROM students_with_class s
         INNER JOIN classes c ON c.id = s.class_id
         WHERE s.id = ${input.studentId}::uuid
           AND s.is_active = true
@@ -223,7 +223,7 @@ export class ClassDecisionsRepository {
         next_level.name AS next_level_name,
         cd.validated_at
       FROM upserted cd
-      INNER JOIN students s ON s.id = cd.student_id
+      INNER JOIN students_with_class s ON s.id = cd.student_id
       INNER JOIN classes c ON c.id = s.class_id
       INNER JOIN levels current_level ON current_level.id = c.level_id
       LEFT JOIN levels next_level ON next_level.id = cd.next_level_id
@@ -275,7 +275,7 @@ export class ClassDecisionsRepository {
         const result = await transactionDb.execute<{ student_id: string }>(sql`
           WITH eligible_student AS (
             SELECT s.id
-            FROM students s
+            FROM students_with_class s
             INNER JOIN classes c ON c.id = s.class_id
             WHERE s.id = ${input.studentId}::uuid
               AND s.is_active = true

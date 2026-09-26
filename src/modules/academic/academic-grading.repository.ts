@@ -188,7 +188,7 @@ export class AcademicGradingRepository {
                COUNT(rc.id) FILTER (WHERE rc.status IN ('generated', 'published'))::int AS card_count
         FROM grading_periods gp
         INNER JOIN classes c ON c.school_year_id = gp.school_year_id AND c.is_active = true
-        LEFT JOIN students s ON s.class_id = c.id AND s.is_active = true
+        LEFT JOIN students_with_class s ON s.class_id = c.id AND s.is_active = true
         LEFT JOIN report_cards rc ON rc.student_id = s.id AND rc.grading_period_id = gp.id
         WHERE gp.id = ANY(ARRAY[${sql.join(periodIds.map((id) => sql`${id}::uuid`), sql`, `)}]::uuid[])
         GROUP BY gp.id, c.id
@@ -508,7 +508,7 @@ export class AcademicGradingRepository {
 
   async studentBelongsToClass(studentId: string, classId: string): Promise<boolean> {
     const result = await this.db.execute<{ exists: boolean }>(sql`
-      SELECT EXISTS (SELECT 1 FROM students WHERE id = ${studentId}::uuid AND class_id = ${classId}::uuid AND is_active = true) AS exists
+      SELECT EXISTS (SELECT 1 FROM students_with_class WHERE id = ${studentId}::uuid AND class_id = ${classId}::uuid AND is_active = true) AS exists
     `);
     return rows(result)[0]?.exists ?? false;
   }
@@ -620,7 +620,7 @@ export class AcademicGradingRepository {
     const result = await this.db.execute<{ missing_count: string }>(sql`
       SELECT COUNT(*)::text AS missing_count
       FROM evaluations e
-      CROSS JOIN students s
+      CROSS JOIN students_with_class s
       LEFT JOIN evaluation_grades eg
         ON eg.evaluation_id = e.id AND eg.student_id = s.id
       WHERE e.teacher_id = ${teacherId}::uuid

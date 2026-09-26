@@ -1079,7 +1079,7 @@ export class AttendanceRepository {
         s.subject,
         sp.school_phone
       FROM attendances_student ast
-      INNER JOIN students st ON st.id = ast.student_id
+      INNER JOIN students_with_class st ON st.id = ast.student_id
       INNER JOIN schedules s ON s.id = ast.schedule_id
       CROSS JOIN tenant_ctx tc
       LEFT JOIN school_phone_ctx sp ON true
@@ -1126,7 +1126,7 @@ export class AttendanceRepository {
   async listStudentsByClass(classId: string): Promise<StudentIdRow[]> {
     const result = await this.db.execute<StudentIdRow>(sql`
       SELECT id::text AS id
-      FROM students
+      FROM students_with_class
       WHERE class_id = ${classId}
         AND is_active = true
     `);
@@ -1151,7 +1151,7 @@ export class AttendanceRepository {
       SELECT
         st.id::text AS student_id,
         COALESCE(ast.status::text, 'unmarked') AS status
-      FROM students st
+      FROM students_with_class st
       LEFT JOIN attendances_student ast
         ON ast.student_id = st.id
        AND ast.schedule_id = ${params.scheduleId}::uuid

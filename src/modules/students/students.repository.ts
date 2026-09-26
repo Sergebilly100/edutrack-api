@@ -43,8 +43,8 @@ export type StudentMutationResult = {
 
 type StudentRow = {
   id: string;
-  class_id: string;
-  class_name: string;
+  class_id: string | null;
+  class_name: string | null;
   first_name: string;
   last_name: string;
   matricule: string | null;
@@ -65,7 +65,9 @@ type TotalRow = { total: string | number };
 
 type ExistingStudentRow = {
   id: string;
-  class_id: string;
+  class_id: string | null;
+  resolved_class_id: string | null;
+  has_enrollment: boolean;
   first_name: string;
   last_name: string;
   matricule: string | null;
@@ -408,8 +410,8 @@ export class StudentsRepository {
           s.is_assigned,
           s.lifecycle_status,
           s.created_at
-        FROM students s
-        INNER JOIN classes c ON c.id = s.class_id
+        FROM students_with_class s
+        LEFT JOIN classes c ON c.id = s.class_id
         ${where}
         ORDER BY s.created_at DESC
         LIMIT ${query.limit}
@@ -417,8 +419,8 @@ export class StudentsRepository {
       `),
       this.db.execute(sql`
         SELECT COUNT(*) AS total
-        FROM students s
-        INNER JOIN classes c ON c.id = s.class_id
+        FROM students_with_class s
+        LEFT JOIN classes c ON c.id = s.class_id
         ${where}
       `),
     ]);
@@ -479,9 +481,9 @@ export class StudentsRepository {
 
       const created = getRows<StudentRow>(result)[0];
       if (!created) throw new Error('Unable to create student');
-      if (!created.class_name) throw new Error('Class not found');
+      if (input.class_id && !created.class_name) throw new Error('Class not found');
 
-      if (created.is_active) {
+      if (created.is_active && created.class_id) {
         await this.adjustClassStudentCount(created.class_id, 1, executor);
       }
 
@@ -511,8 +513,8 @@ export class StudentsRepository {
         s.parent_name, s.parent_phone, s.parent_email,
         s.parent_name_2, s.parent_phone_2,
         s.notes, s.is_active, s.is_assigned, s.lifecycle_status, s.created_at
-      FROM students s
-      INNER JOIN classes c ON c.id = s.class_id
+      FROM students_with_class s
+      LEFT JOIN classes c ON c.id = s.class_id
       WHERE s.id = ${studentId}
       LIMIT 1
     `);
@@ -528,7 +530,10 @@ export class StudentsRepository {
   ): Promise<StudentMutationResult | null> {
     return runInTransaction(this.db, async (executor) => {
     const currentResult = await executor.execute(sql`
-      SELECT id, class_id, first_name, last_name, matricule, birth_date::text AS birth_date,
+      SELECT id, class_id,
+             (SELECT class_id FROM students_with_class WHERE id = students.id) AS resolved_class_id,
+             EXISTS (SELECT 1 FROM enrollments WHERE student_id = students.id) AS has_enrollment,
+             first_name, last_name, matricule, birth_date::text AS birth_date,
              parent_name, parent_phone, parent_email,
              parent_name_2, parent_phone_2,
              notes, is_active, is_assigned, lifecycle_status
@@ -540,7 +545,12 @@ export class StudentsRepository {
     const current = getRows<ExistingStudentRow>(currentResult)[0];
     if (!current) return null;
 
-    const nextClassId = input.class_id ?? current.class_id;
+    if (current.has_enrollment && input.class_id !== undefined && input.class_id !== current.resolved_class_id) {
+      throw new Error('Enrollment owns class');
+    }
+    const nextClassId = current.has_enrollment ? current.class_id : input.class_id ?? current.class_id;
+    const previousClassId = current.has_enrollment ? current.resolved_class_id : current.class_id;
+    const nextMembershipClassId = current.has_enrollment ? current.resolved_class_id : nextClassId;
     const nextLifecycleStatus = input.lifecycle_status ?? current.lifecycle_status;
     const nextIsActive = nextLifecycleStatus === 'active'
       ? (input.is_active ?? current.is_active)
@@ -588,11 +598,11 @@ export class StudentsRepository {
 
     if (!getRows<{ id: string }>(updateResult)[0]) return null;
 
-    if (current.class_id !== nextClassId) {
-      if (current.is_active) await this.adjustClassStudentCount(current.class_id, -1, executor);
-      if (nextIsActive) await this.adjustClassStudentCount(nextClassId, 1, executor);
+    if (previousClassId !== nextMembershipClassId) {
+      if (current.is_active) await this.adjustClassStudentCount(previousClassId, -1, executor);
+      if (nextIsActive) await this.adjustClassStudentCount(nextMembershipClassId, 1, executor);
     } else if (current.is_active !== nextIsActive) {
-      await this.adjustClassStudentCount(nextClassId, nextIsActive ? 1 : -1, executor);
+      await this.adjustClassStudentCount(nextMembershipClassId, nextIsActive ? 1 : -1, executor);
     }
 
     const student = await this.findStudentByIdWithExecutor(studentId, executor);
@@ -620,12 +630,12 @@ export class StudentsRepository {
     const result = await this.db.execute(sql`
       UPDATE students s
       SET is_active = false
-      FROM classes c
       WHERE s.id = ${studentId}
         AND s.is_active = true
-        AND c.id = s.class_id
       RETURNING
-        s.id, s.class_id, c.name AS class_name,
+        s.id,
+        (SELECT class_id FROM students_with_class WHERE id = s.id) AS class_id,
+        (SELECT c.name FROM students_with_class v JOIN classes c ON c.id = v.class_id WHERE v.id = s.id) AS class_name,
         s.first_name, s.last_name, s.matricule, s.birth_date::text AS birth_date,
         s.parent_name, s.parent_phone, s.parent_email,
         s.parent_name_2, s.parent_phone_2,
@@ -675,7 +685,7 @@ export class StudentsRepository {
             a.excuse_reason,
             sms_log.status::text AS sms_status
           FROM attendances_student a
-          INNER JOIN students s ON s.id = a.student_id
+          INNER JOIN students_with_class s ON s.id = a.student_id
           LEFT JOIN schedules sch ON sch.id = a.schedule_id
           LEFT JOIN time_slots ts ON ts.id = sch.time_slot_id
           LEFT JOIN rooms r ON r.id = sch.room_id
@@ -721,9 +731,9 @@ export class StudentsRepository {
           FROM notifications_log n
           WHERE n.type = 'student_absent_parent'
             AND n.recipient_phone IN (
-              SELECT parent_phone FROM students WHERE id = ${studentId}
+              SELECT parent_phone FROM students_with_class WHERE id = ${studentId}
               UNION
-              SELECT parent_phone_2 FROM students WHERE id = ${studentId}
+              SELECT parent_phone_2 FROM students_with_class WHERE id = ${studentId}
             )
           ORDER BY COALESCE(n.sent_at, n.created_at) DESC, n.created_at DESC
           LIMIT 50
@@ -828,7 +838,7 @@ export class StudentsRepository {
         st.first_name,
         st.parent_phone,
         parent_contact.email AS parent_email
-      FROM students st
+      FROM students_with_class st
       LEFT JOIN LATERAL (
         SELECT p.email
         FROM parent_student_links psl
@@ -991,7 +1001,7 @@ export class StudentsRepository {
           sms_log.status::text AS sms_status,
           a.created_at
         FROM attendances_student a
-        INNER JOIN students s ON s.id = a.student_id
+        INNER JOIN students_with_class s ON s.id = a.student_id
         INNER JOIN classes c ON c.id = s.class_id
         LEFT JOIN LATERAL (
           SELECT n.status
@@ -1015,7 +1025,7 @@ export class StudentsRepository {
       this.db.execute(sql`
         SELECT COUNT(*) AS total
         FROM attendances_student a
-        INNER JOIN students s ON s.id = a.student_id
+        INNER JOIN students_with_class s ON s.id = a.student_id
         INNER JOIN classes c ON c.id = s.class_id
         ${where}
       `),
@@ -1041,7 +1051,7 @@ export class StudentsRepository {
         a.status::text AS status,
         sms_log.status::text AS sms_status
       FROM attendances_student a
-      INNER JOIN students s ON s.id = a.student_id
+      INNER JOIN students_with_class s ON s.id = a.student_id
       INNER JOIN classes c ON c.id = s.class_id
       LEFT JOIN LATERAL (
         SELECT n.status
@@ -1143,7 +1153,7 @@ export class StudentsRepository {
           CASE WHEN COALESCE(nl.failed_count, 0) > 0 THEN 1 ELSE 0 END AS has_failed
         FROM attendances_student ast
         INNER JOIN schedules s ON s.id = ast.schedule_id
-        INNER JOIN students st ON st.id = ast.student_id
+        INNER JOIN students_with_class st ON st.id = ast.student_id
         LEFT JOIN LATERAL (
           SELECT
             COUNT(*) FILTER (WHERE n.status IN ('sent', 'delivered'))::int AS sent_count,
@@ -1191,7 +1201,7 @@ export class StudentsRepository {
           ELSE 'none'
         END AS sms_summary
       FROM student_absences sa
-      INNER JOIN students st ON st.id = sa.student_id
+      INNER JOIN students_with_class st ON st.id = sa.student_id
       INNER JOIN classes c ON c.id = st.class_id
       LEFT JOIN class_scheduled cs ON cs.class_id = st.class_id
       WHERE ${sql.join(filters, sql` AND `)}
@@ -1239,7 +1249,7 @@ export class StudentsRepository {
         nl2.status::text AS sms2_status,
         nl2.sent_at::text AS sms2_sent_at
       FROM attendances_student ast
-      INNER JOIN students st ON st.id = ast.student_id
+      INNER JOIN students_with_class st ON st.id = ast.student_id
       -- FIX B1: LEFT JOIN instead of INNER JOIN so absences without schedule_id are included
       LEFT JOIN schedules s ON s.id = ast.schedule_id
       LEFT JOIN classes c ON c.id = s.class_id
@@ -1309,8 +1319,8 @@ export class StudentsRepository {
         s.parent_name, s.parent_phone, s.parent_email,
         s.parent_name_2, s.parent_phone_2,
         s.notes, s.is_active, s.is_assigned, s.lifecycle_status, s.created_at
-      FROM students s
-      INNER JOIN classes c ON c.id = s.class_id
+      FROM students_with_class s
+      LEFT JOIN classes c ON c.id = s.class_id
       WHERE s.id = ${studentId}
       LIMIT 1
     `);
@@ -1320,10 +1330,11 @@ export class StudentsRepository {
   }
 
   private async adjustClassStudentCount(
-    classId: string,
+    classId: string | null,
     delta: number,
     executor: QueryExecutor = this.db
   ): Promise<void> {
+    if (!classId) return;
     await executor.execute(sql`
       UPDATE classes
       SET student_count = GREATEST(student_count + ${delta}, 0)

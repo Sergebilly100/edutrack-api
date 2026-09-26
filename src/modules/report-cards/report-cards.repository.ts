@@ -93,7 +93,7 @@ export class ReportCardsRepository {
                COUNT(rc.id) FILTER (WHERE rc.status IN ('generated', 'published'))::int AS card_count
         FROM grading_periods gp
         INNER JOIN classes c ON c.school_year_id = gp.school_year_id AND c.is_active = true
-        LEFT JOIN students s ON s.class_id = c.id AND s.is_active = true
+        LEFT JOIN students_with_class s ON s.class_id = c.id AND s.is_active = true
         LEFT JOIN report_cards rc ON rc.student_id = s.id AND rc.grading_period_id = gp.id
         WHERE gp.school_year_id = ${schoolYearId}::uuid
         GROUP BY gp.id, c.id
@@ -117,7 +117,7 @@ export class ReportCardsRepository {
   async listClassStudents(classId: string): Promise<Array<{ id: string; fullName: string }>> {
     const result = await this.db.execute<{ id: string; full_name: string }>(sql`
       SELECT s.id::text, concat_ws(' ', s.first_name, s.last_name) AS full_name
-      FROM students s
+      FROM students_with_class s
       WHERE s.class_id = ${classId}::uuid AND s.is_active = true
       ORDER BY s.last_name ASC, s.first_name ASC
     `);
@@ -152,7 +152,7 @@ export class ReportCardsRepository {
     const result = await this.db.execute<{ student_id: string; subject_id: string; average: string }>(sql`
       SELECT spa.student_id::text, spa.subject_id::text, spa.average::text
       FROM student_period_averages spa
-      INNER JOIN students s ON s.id = spa.student_id
+      INNER JOIN students_with_class s ON s.id = spa.student_id
       WHERE s.class_id = ${classId}::uuid
         AND spa.grading_period_id = ${gradingPeriodId}::uuid
         AND spa.subject_id IS NOT NULL
@@ -173,7 +173,7 @@ export class ReportCardsRepository {
     const result = await this.db.execute<{ student_id: string; average: string }>(sql`
       SELECT spa.student_id::text, spa.average::text
       FROM student_period_averages spa
-      INNER JOIN students s ON s.id = spa.student_id
+      INNER JOIN students_with_class s ON s.id = spa.student_id
       WHERE s.class_id = ${classId}::uuid
         AND spa.grading_period_id = ${gradingPeriodId}::uuid
         AND spa.subject_id IS NULL
@@ -356,7 +356,7 @@ export class ReportCardsRepository {
              concat_ws(' ', s.first_name, s.last_name) AS student_name,
              rc.general_average::text, rc.rank, rc.status::text
       FROM report_cards rc
-      INNER JOIN students s ON s.id = rc.student_id
+      INNER JOIN students_with_class s ON s.id = rc.student_id
       WHERE rc.class_id = ${classId}::uuid AND rc.grading_period_id = ${gradingPeriodId}::uuid
       ORDER BY rc.rank ASC
     `);
@@ -386,7 +386,7 @@ export class ReportCardsRepository {
              COUNT(DISTINCT s.id)::int AS headcount,
              COUNT(DISTINCT spa.student_id)::int AS with_general
       FROM classes c
-      LEFT JOIN students s ON s.class_id = c.id AND s.is_active = true
+      LEFT JOIN students_with_class s ON s.class_id = c.id AND s.is_active = true
       LEFT JOIN student_period_averages spa
         ON spa.student_id = s.id AND spa.grading_period_id = ${gradingPeriodId}::uuid AND spa.subject_id IS NULL
       WHERE c.school_year_id = ${schoolYearId}::uuid AND c.is_active = true
@@ -493,7 +493,7 @@ export class ReportCardsRepository {
              rc.class_headcount, rc.status::text, rc.generated_at::text, rc.published_at::text,
              cd.final_decision::text AS decision
       FROM report_cards rc
-      INNER JOIN students s ON s.id = rc.student_id
+      INNER JOIN students_with_class s ON s.id = rc.student_id
       INNER JOIN classes c ON c.id = rc.class_id
       INNER JOIN grading_periods gp ON gp.id = rc.grading_period_id
       LEFT JOIN class_decisions cd ON cd.id = rc.class_decision_id

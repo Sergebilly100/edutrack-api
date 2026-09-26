@@ -35,7 +35,7 @@ export const studentsListQuerySchema = z.object({
 });
 
 export const createStudentBodySchema = z.object({
-  class_id: z.uuid(),
+  class_id: z.uuid().nullable().optional().default(null),
   first_name: z.string().trim().min(1).max(100),
   last_name: z.string().trim().min(1).max(100),
   matricule: z.string().trim().min(1).max(50).nullable().optional().default(null),
@@ -138,8 +138,8 @@ export type PaginationMeta = {
 
 export type StudentRecord = {
   id: string;
-  classId: string;
-  className: string;
+  classId: string | null;
+  className: string | null;
   firstName: string;
   lastName: string;
   matricule: string | null;
@@ -190,8 +190,8 @@ export type StudentDetailRecord = {
   lastName: string;
   matricule: string | null;
   birthDate: string | null;
-  className: string;
-  classId: string;
+  className: string | null;
+  classId: string | null;
   isActive: boolean;
   isAssigned: boolean | null;
   lifecycleStatus: z.infer<typeof studentLifecycleStatusSchema>;

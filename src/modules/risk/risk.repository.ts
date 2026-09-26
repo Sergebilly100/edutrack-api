@@ -172,7 +172,7 @@ export class RiskRepository {
              latest.average::text AS avg_latest,
              previous.average::text AS avg_previous,
              COALESCE((sfs.status = 'late'), false) AS payment_late
-      FROM students s
+      FROM students_with_class s
       LEFT JOIN absence_counts ac ON ac.student_id = s.id
       LEFT JOIN LATERAL (
         SELECT ra.average FROM ranked_averages ra WHERE ra.student_id = s.id AND ra.rn = 1
@@ -183,7 +183,7 @@ export class RiskRepository {
       LEFT JOIN student_financial_status sfs
         ON sfs.student_id = s.id
        AND sfs.school_year_id = (SELECT id FROM school_years WHERE status = 'active' LIMIT 1)
-      WHERE s.is_active = true
+      WHERE s.is_active = true AND s.class_id IS NOT NULL
     `);
 
     const map = new Map<string, {
@@ -244,7 +244,7 @@ export class RiskRepository {
 
   async listStudentIds(): Promise<string[]> {
     const result = await this.db.execute<{ id: string }>(sql`
-      SELECT id::text FROM students WHERE is_active = true
+      SELECT id::text FROM students_with_class WHERE is_active = true AND class_id IS NOT NULL
     `);
     return getRows<{ id: string }>(result).map((row) => row.id);
   }
@@ -350,7 +350,7 @@ export class RiskRepository {
                ${riskLevel}::text AS level,
                srs.computed_at::text
         FROM student_risk_status srs
-        INNER JOIN students s ON s.id = srs.student_id
+        INNER JOIN students_with_class s ON s.id = srs.student_id
         LEFT JOIN classes c ON c.id = s.class_id
         LEFT JOIN levels l ON l.id = c.level_id
         WHERE ${conditions}
@@ -361,7 +361,7 @@ export class RiskRepository {
       this.db.execute<{ total: string | number }>(sql`
         SELECT COUNT(*) AS total
         FROM student_risk_status srs
-        INNER JOIN students s ON s.id = srs.student_id
+        INNER JOIN students_with_class s ON s.id = srs.student_id
         LEFT JOIN classes c ON c.id = s.class_id
         LEFT JOIN levels l ON l.id = c.level_id
         WHERE ${conditions}
@@ -434,7 +434,7 @@ export class RiskRepository {
       SELECT COUNT(DISTINCT s.id)::int AS count
       FROM classes c
       INNER JOIN teachers t ON t.id = c.homeroom_teacher_id
-      LEFT JOIN students s ON s.class_id = c.id AND s.is_active = true
+      LEFT JOIN students_with_class s ON s.class_id = c.id AND s.is_active = true
       WHERE t.user_id = ${userId}::uuid
     `);
     const count = getRows<{ count: number }>(result)[0]?.count ?? 0;
@@ -443,7 +443,7 @@ export class RiskRepository {
       SELECT DISTINCT s.id::text AS student_id
       FROM classes c
       INNER JOIN teachers t ON t.id = c.homeroom_teacher_id
-      INNER JOIN students s ON s.class_id = c.id AND s.is_active = true
+      INNER JOIN students_with_class s ON s.class_id = c.id AND s.is_active = true
       WHERE t.user_id = ${userId}::uuid
     `);
     return getRows<{ student_id: string }>(rows).map((row) => row.student_id);

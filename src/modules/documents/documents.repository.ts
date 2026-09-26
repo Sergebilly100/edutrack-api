@@ -69,7 +69,7 @@ export class DocumentsRepository {
   async studentExists(studentId: string): Promise<boolean> {
     const result = await this.tenantDb.execute(sql`
       SELECT id
-      FROM students
+      FROM students_with_class
       WHERE id = ${studentId}
       LIMIT 1
     `);

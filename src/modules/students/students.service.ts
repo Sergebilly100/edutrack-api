@@ -173,6 +173,9 @@ export class StudentsService {
       return result.student;
     } catch (error) {
       if (error instanceof StudentsModuleError) throw error;
+      if (error instanceof Error && error.message === 'Enrollment owns class') {
+        throw new StudentsModuleError('Modifiez la classe depuis l’inscription de l’élève', 409, 'ENROLLMENT_CLASS_MANAGED');
+      }
       if (isMatriculeUniqueViolation(error)) {
         throw new StudentsModuleError(
           'Ce matricule est déjà utilisé par un autre élève',

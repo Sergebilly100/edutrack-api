@@ -390,7 +390,7 @@ export const defaultImportRepository: ImportRepository = {
         s.parent_name_2,
         s.parent_phone_2,
         s.is_active
-      FROM students s
+      FROM students_with_class s
       INNER JOIN classes c ON c.id = s.class_id
     `);
 
@@ -522,13 +522,13 @@ export const defaultImportRepository: ImportRepository = {
     const existingResult = row.matricule
       ? await db.execute(sql`
           SELECT id, matricule
-          FROM students
+          FROM students_with_class
           WHERE LOWER(matricule) = LOWER(${row.matricule})
           LIMIT 1
         `)
       : await db.execute(sql`
           SELECT id, matricule
-          FROM students
+          FROM students_with_class
           WHERE class_id = (
             SELECT c.id
             FROM classes c

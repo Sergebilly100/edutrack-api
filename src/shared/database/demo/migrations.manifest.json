@@ -75,5 +75,6 @@
   "0070_payment_receipt_number_sequence.sql": "bb7db6b2b7723660e86fbf456493cf1622336ba44c7ad9d76d3bd880936ae377",
   "0071_student_tuition_schedule_steps.sql": "7a75db1b0c1395e810859730fc1433260a8aabbb6c62b9e66c1a28447bec106b",
   "0072_evaluations_optional_lesson_slot.sql": "cd21251098f92ac0ea8318998cda88d60888c2a59fa7675ee683f993dd3d7aaa",
-  "0073_school_address.sql": "0bae45331b5482ca9e17d497bd300d744f46a72074000d70f3585df2425be70c"
+  "0073_school_address.sql": "0bae45331b5482ca9e17d497bd300d744f46a72074000d70f3585df2425be70c",
+  "0074_historical_student_profiles.sql": "a248c642979d118c52f1ff3583a28e24a32a1b92746726ee61d486e9aee2a0bb"
 }

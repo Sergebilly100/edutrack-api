@@ -512,36 +512,29 @@ export class FinanceRepository {
   }
 
   async confirmEnrollment(id: string, actorUserId: string): Promise<void> {
+    const context = await this.db.execute<{ class_id: string; previous_class_id: string | null }>(sql`
+      SELECT e.class_id, s.class_id AS previous_class_id
+      FROM enrollments e JOIN students_with_class s ON s.id = e.student_id
+      WHERE e.id = ${id}::uuid
+    `);
+    const membership = rows<{ class_id: string; previous_class_id: string | null }>(context)[0];
+    if (!membership) return;
+    // The service already holds the enrollment lock in its payment transaction.
+    // Serialize class counts before changing membership; a fresh statement then
+    // sees confirmed enrollments without copying their class onto the profile.
     await this.db.execute(sql`
-      WITH confirmed_enrollment AS (
-        UPDATE enrollments
-        SET status = 'confirmed', confirmed_by_user_id = ${actorUserId}::uuid, updated_at = NOW()
-        WHERE id = ${id}::uuid
-        RETURNING student_id, class_id
-      ), students_to_move AS (
-        SELECT student.id, student.class_id AS previous_class_id, confirmed_enrollment.class_id AS target_class_id
-        FROM students student
-        INNER JOIN confirmed_enrollment ON confirmed_enrollment.student_id = student.id
-        WHERE student.class_id IS DISTINCT FROM confirmed_enrollment.class_id
-      ), moved_student AS (
-        UPDATE students student
-        SET class_id = students_to_move.target_class_id
-        FROM students_to_move
-        WHERE student.id = students_to_move.id
-        RETURNING student.id
-      )
+      SELECT id FROM classes WHERE id IN (${membership.class_id}::uuid, ${membership.previous_class_id}::uuid)
+      ORDER BY id FOR UPDATE
+    `);
+    await this.db.execute(sql`
+      UPDATE enrollments SET status = 'confirmed', confirmed_by_user_id = ${actorUserId}::uuid, updated_at = NOW()
+      WHERE id = ${id}::uuid
+    `);
+    await this.db.execute(sql`
       UPDATE classes class
-      SET student_count = GREATEST(
-        0,
-        class.student_count + CASE
-          WHEN class.id = students_to_move.previous_class_id THEN -1
-          WHEN class.id = students_to_move.target_class_id THEN 1
-          ELSE 0
-        END
-      )
-      FROM students_to_move
-      INNER JOIN moved_student ON moved_student.id = students_to_move.id
-      WHERE class.id IN (students_to_move.previous_class_id, students_to_move.target_class_id)
+      SET student_count = (SELECT COUNT(*)::int FROM students_with_class student
+        WHERE student.is_active AND student.class_id = class.id)
+      WHERE class.id IN (${membership.previous_class_id}::uuid, ${membership.class_id}::uuid)
     `);
   }
 

@@ -13,7 +13,7 @@ export type StudentDossierProfile = {
   id: string;
   firstName: string;
   lastName: string;
-  className: string;
+  className: string | null;
   matricule: string | null;
 };
 
@@ -30,12 +30,12 @@ export class StudentDossierRepository {
       id: string;
       first_name: string;
       last_name: string;
-      class_name: string;
+      class_name: string | null;
       matricule: string | null;
     }>(sql`
       SELECT s.id::text, s.first_name, s.last_name, c.name AS class_name, s.matricule
-      FROM students s
-      INNER JOIN classes c ON c.id = s.class_id
+      FROM students_with_class s
+      LEFT JOIN classes c ON c.id = s.class_id
       WHERE s.id = ${studentId}::uuid
       LIMIT 1
     `);
@@ -61,7 +61,7 @@ export class StudentDossierRepository {
     const result = await this.db.execute<{ has_access: boolean }>(sql`
       SELECT EXISTS (
         SELECT 1
-        FROM students st
+        FROM students_with_class st
         INNER JOIN schedules s ON s.class_id = st.class_id
         INNER JOIN schedule_periods sp ON sp.id = s.schedule_period_id
         WHERE st.id = ${studentId}::uuid

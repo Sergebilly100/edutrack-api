@@ -343,9 +343,8 @@ export const students = tenant.table(
   'students',
   {
     id: uuid('id').defaultRandom().primaryKey(),
-    classId: uuid('class_id')
-      .notNull()
-      .references(() => classes.id),
+    // Compatibility for V1 profiles; enrollment owns class/year for V2.
+    classId: uuid('class_id').references(() => classes.id),
     matricule: varchar('matricule', { length: 50 }).unique(),
     firstName: varchar('first_name', { length: 100 }).notNull(),
     lastName: varchar('last_name', { length: 100 }).notNull(),
@@ -356,6 +355,8 @@ export const students = tenant.table(
     parentName2: varchar('parent_name_2', { length: 255 }),
     parentPhone2: varchar('parent_phone_2', { length: 20 }),
     notes: text('notes'),
+    isAssigned: boolean('is_assigned'),
+    lifecycleStatus: studentLifecycleStatusEnum('lifecycle_status').notNull().default('active'),
     isActive: boolean('is_active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
       .notNull()
@@ -365,6 +366,27 @@ export const students = tenant.table(
     studentsClassIdx: index('idx_students_class').on(table.classId),
   })
 );
+
+// Read contract maintained by the C7 custom Drizzle migration. All profile writes
+// target students; school membership reads use this enrollment-derived view.
+export const studentsWithClass = tenant.view('students_with_class', {
+  id: uuid('id').notNull(),
+  classId: uuid('class_id'),
+  matricule: varchar('matricule', { length: 50 }),
+  firstName: varchar('first_name', { length: 100 }).notNull(),
+  lastName: varchar('last_name', { length: 100 }).notNull(),
+  birthDate: date('birth_date'),
+  parentName: varchar('parent_name', { length: 255 }),
+  parentPhone: varchar('parent_phone', { length: 20 }),
+  parentEmail: varchar('parent_email', { length: 255 }),
+  parentName2: varchar('parent_name_2', { length: 255 }),
+  parentPhone2: varchar('parent_phone_2', { length: 20 }),
+  notes: text('notes'),
+  isActive: boolean('is_active').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+  isAssigned: boolean('is_assigned'),
+  lifecycleStatus: studentLifecycleStatusEnum('lifecycle_status').notNull(),
+}).existing();
 
 export const classDecisions = tenant.table(
   'class_decisions',

@@ -13,6 +13,9 @@ import {
 
 import { SENSITIVE_ACTION_RATE_LIMIT } from '../../shared/utils/rate-limit.js';
 import { ImportModuleError, buildImportService } from './import.service.js';
+import { HistoricalStudentsRepository } from './historical-students.repository.js';
+import { HistoricalStudentsService } from './historical-students.service.js';
+import { historicalProfileBodySchema } from './historical-students.types.js';
 import { importTypeParamsSchema, type ImportType } from './import.types.js';
 
 const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
@@ -188,6 +191,48 @@ export default async function importExportController(app: FastifyInstance): Prom
     await releaseTenantDb(request);
   });
 
+  const historicalService = (request: FastifyRequest) =>
+    new HistoricalStudentsService(new HistoricalStudentsRepository(ensureTenantDb(request)));
+  const historicalGuards = [requirePermission('import.students'), attachTenantDb];
+
+  app.get('/api/v1/import/historical-students/profile', { preHandler: historicalGuards }, async (request, reply) => {
+    try {
+      const service = historicalService(request);
+      await service.assertDirector(request.claims!.role);
+      return reply.send({ profile: await service.getProfile() });
+    } catch (error) { return handleError(reply, error); }
+  });
+  app.put('/api/v1/import/historical-students/profile', { preHandler: historicalGuards }, async (request, reply) => {
+    try {
+      const service = historicalService(request);
+      await service.assertDirector(request.claims!.role);
+      const body = historicalProfileBodySchema.parse(request.body);
+      return reply.send({ profile: await service.saveProfile(body.fields, request.user!.userId) });
+    } catch (error) { return handleError(reply, error); }
+  });
+  app.get('/api/v1/import/historical-students/template', { preHandler: historicalGuards }, async (request, reply) => {
+    try {
+      const service = historicalService(request);
+      await service.assertDirector(request.claims!.role);
+      return reply.header('Content-Disposition', 'attachment; filename="profils-historiques.xlsx"')
+        .type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').send(await service.template());
+    } catch (error) { return handleError(reply, error); }
+  });
+  for (const action of ['analyze', 'confirm'] as const) {
+    app.post(`/api/v1/import/historical-students/${action}`, {
+      preHandler: historicalGuards, config: { rateLimit: SENSITIVE_ACTION_RATE_LIMIT },
+    }, async (request, reply) => {
+      try {
+        const service = historicalService(request);
+        await service.assertDirector(request.claims!.role);
+        const { fileBuffer } = await readImportPayload(request);
+        return reply.send(action === 'analyze'
+          ? await service.analyze(fileBuffer)
+          : await service.confirm(fileBuffer, request.user!.userId));
+      } catch (error) { return handleError(reply, error); }
+    });
+  }
+
   // ce endpoint permet de télécharger un template Excel pour le type d'import spécifié (students, teachers, schedule). 
   // Le template est stocké dans le dossier "templates" à la racine du projet et doit être nommé selon le format "{type}.xlsx". Seuls les utilisateurs ayant la permission d'import correspondante peuvent accéder au template. Si le template n'existe pas, une erreur 404 est retournée.
   app.get(
@@ -196,6 +241,10 @@ export default async function importExportController(app: FastifyInstance): Prom
     async (request, reply) => {
       try {
         const { type } = importTypeParamsSchema.parse(request.params ?? {});
+        if (type === 'students') {
+          await new HistoricalStudentsService(new HistoricalStudentsRepository(ensureTenantDb(request)))
+            .assertLegacyImportAllowed(request.claims!.role);
+        }
         const templatePath = path.resolve(process.cwd(), 'templates', `${type}.xlsx`);
 
         if (!existsSync(templatePath)) {
@@ -229,6 +278,10 @@ export default async function importExportController(app: FastifyInstance): Prom
     async (request, reply) => {
       try {
         const { type } = importTypeParamsSchema.parse(request.params ?? {});
+        if (type === 'students') {
+          await new HistoricalStudentsService(new HistoricalStudentsRepository(ensureTenantDb(request)))
+            .assertLegacyImportAllowed(request.claims!.role);
+        }
         const payload = await readImportPayload(request);
         const service = buildImportService();
         const report = await service.dryRun(type, payload.fileBuffer, ensureTenantDb(request), {
@@ -255,6 +308,10 @@ export default async function importExportController(app: FastifyInstance): Prom
     async (request, reply) => {
       try {
         const { type } = importTypeParamsSchema.parse(request.params ?? {});
+        if (type === 'students') {
+          await new HistoricalStudentsService(new HistoricalStudentsRepository(ensureTenantDb(request)))
+            .assertLegacyImportAllowed(request.claims!.role);
+        }
         const payload = await readImportPayload(request);
         const service = buildImportService();
 

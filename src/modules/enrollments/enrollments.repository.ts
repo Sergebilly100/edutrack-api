@@ -75,7 +75,7 @@ export class EnrollmentsRepository {
       FROM enrollments e
       INNER JOIN classes c ON c.id = e.class_id
       INNER JOIN school_years sy ON sy.id = e.school_year_id
-      INNER JOIN students s ON s.id = e.student_id
+      INNER JOIN students_with_class s ON s.id = e.student_id
       LEFT JOIN required_document_types rdt ON rdt.level_id = c.level_id AND rdt.is_active
       LEFT JOIN student_documents sd ON sd.student_id = e.student_id AND sd.document_type_id = rdt.id
       WHERE (${filters.schoolYearId ?? null}::uuid IS NULL OR e.school_year_id = ${filters.schoolYearId ?? null}::uuid)
@@ -129,7 +129,7 @@ export class EnrollmentsRepository {
         enrollment.id::text AS enrollment_id,
         enrollment.status::text AS enrollment_status,
         enrollment_class.name AS enrollment_class_name
-      FROM students s
+      FROM students_with_class s
       INNER JOIN classes current_class ON current_class.id = s.class_id
       INNER JOIN school_years source_year ON source_year.id = current_class.school_year_id
       LEFT JOIN school_years target_year ON target_year.id = ${input.schoolYearId ?? null}::uuid
@@ -169,7 +169,7 @@ export class EnrollmentsRepository {
   async getStudentSummaryProfile(studentId: string): Promise<StudentSummaryProfile | null> {
     const result = await this.db.execute<StudentSummaryProfile>(sql`
       SELECT id::text, first_name, last_name, matricule
-      FROM students
+      FROM students_with_class
       WHERE id = ${studentId}::uuid
       LIMIT 1
     `);
@@ -233,7 +233,7 @@ export class EnrollmentsRepository {
       FROM enrollments e
       INNER JOIN classes c ON c.id = e.class_id
       INNER JOIN school_years sy ON sy.id = e.school_year_id
-      INNER JOIN students s ON s.id = e.student_id
+      INNER JOIN students_with_class s ON s.id = e.student_id
       LEFT JOIN required_document_types rdt ON rdt.level_id = c.level_id AND rdt.is_active
       LEFT JOIN student_documents sd ON sd.student_id = e.student_id AND sd.document_type_id = rdt.id
       WHERE e.id = ${id}::uuid
@@ -251,8 +251,8 @@ export class EnrollmentsRepository {
       SELECT s.id, s.is_active, s.lifecycle_status, c.school_year_id AS current_school_year_id,
              c.level_id AS current_level_id,
              cd.final_decision, cd.next_level_id
-      FROM students s
-      INNER JOIN classes c ON c.id = s.class_id
+      FROM students_with_class s
+      LEFT JOIN classes c ON c.id = s.class_id
       LEFT JOIN class_decisions cd ON cd.student_id = s.id AND cd.school_year_id = c.school_year_id
       WHERE s.id = ${studentId}::uuid LIMIT 1
     `);
@@ -275,7 +275,7 @@ export class EnrollmentsRepository {
         target_year.id::text AS target_school_year_id,
         target_year.status::text AS target_school_year_status,
         target_year.start_date::text AS target_school_year_start_date
-      FROM students student
+      FROM students_with_class student
       INNER JOIN classes source_class ON source_class.id = student.class_id
       INNER JOIN school_years source_year ON source_year.id = source_class.school_year_id
       LEFT JOIN school_years target_year ON target_year.id = ${targetSchoolYearId}::uuid
@@ -300,7 +300,7 @@ export class EnrollmentsRepository {
       parent_phone_2: string | null;
     }>(sql`
       SELECT id, first_name, parent_phone, parent_phone_2
-      FROM students
+      FROM students_with_class
       WHERE id = ${studentId}::uuid
       LIMIT 1
     `);

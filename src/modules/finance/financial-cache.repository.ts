@@ -189,7 +189,7 @@ export class FinancialCacheRepository {
         class_id, school_year_id, total_expected_to_date, total_paid,
         students_up_to_date_count, students_late_count, last_computed_at
       )
-      SELECT s.class_id,
+      SELECT COALESCE(e.class_id, s.class_id),
              sfs.school_year_id,
              SUM(sfs.total_expected_to_date),
              SUM(sfs.total_paid),
@@ -198,8 +198,10 @@ export class FinancialCacheRepository {
              NOW()
       FROM student_financial_status sfs
       INNER JOIN students s ON s.id = sfs.student_id AND s.is_active = true
+      LEFT JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = sfs.school_year_id
+      INNER JOIN classes c ON c.id = COALESCE(e.class_id, s.class_id) AND c.school_year_id = sfs.school_year_id
       WHERE sfs.school_year_id = ${schoolYearId}::uuid
-      GROUP BY s.class_id, sfs.school_year_id
+      GROUP BY COALESCE(e.class_id, s.class_id), sfs.school_year_id
       ON CONFLICT ("class_id", "school_year_id") DO UPDATE SET
         total_expected_to_date = EXCLUDED.total_expected_to_date,
         total_paid = EXCLUDED.total_paid,
@@ -347,7 +349,7 @@ export class FinancialCacheRepository {
       INNER JOIN tuition_plans tp ON tp.id = sa.tuition_plan_id
       LEFT JOIN LATERAL (
         SELECT COUNT(*)::int AS student_count
-        FROM students s
+        FROM students_with_class s
         INNER JOIN classes c ON c.id = s.class_id
         WHERE s.is_active = true
           AND c.is_active = true
@@ -372,7 +374,8 @@ export class FinancialCacheRepository {
              p.receipt_number
       FROM payments p
       INNER JOIN students s ON s.id = p.student_id
-      LEFT JOIN classes c ON c.id = s.class_id
+      LEFT JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = p.school_year_id
+      LEFT JOIN classes c ON c.id = COALESCE(e.class_id, s.class_id) AND c.school_year_id = p.school_year_id
       WHERE p.school_year_id = ${schoolYearId}::uuid
         AND p.status = 'confirmed'
       ORDER BY p.payment_date DESC, p.created_at DESC
@@ -415,7 +418,8 @@ export class FinancialCacheRepository {
       FROM students s
       INNER JOIN student_financial_status sfs ON sfs.student_id = s.id
         AND sfs.school_year_id = ${schoolYearId}::uuid
-      WHERE s.class_id = ${classId}::uuid AND s.is_active = true
+      LEFT JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = sfs.school_year_id
+      WHERE COALESCE(e.class_id, s.class_id) = ${classId}::uuid AND s.is_active = true
       ORDER BY CASE sfs.status WHEN 'late' THEN 0 ELSE 1 END,
                sfs.days_late DESC NULLS LAST,
                s.last_name ASC

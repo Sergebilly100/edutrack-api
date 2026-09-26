@@ -251,7 +251,9 @@ describe('enrollments integration', () => {
     const movedStudent = await queryTenant<{ class_id: string }>(`
       SELECT class_id::text FROM ${tenantTable('students')} WHERE id = $1::uuid
     `, [studentId]);
-    expect(movedStudent[0]?.class_id).toBe(academic.targetClassId);
+    expect(movedStudent[0]?.class_id).toBe(academic.currentClassId);
+    const enrolledProfile = await request().get(`/api/v1/students/${studentId}`).set(headers);
+    expect(enrolledProfile.body.data.classId).toBe(academic.targetClassId);
   });
 
   it('calcule l’impayé antérieur côté serveur puis débloque après règlement', async () => {

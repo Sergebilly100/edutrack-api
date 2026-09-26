@@ -164,7 +164,7 @@ export class ConductRepository {
              c.id::text AS class_id,
              c.name AS class_name,
              c.level_id::text AS level_id
-      FROM students s
+      FROM students_with_class s
       INNER JOIN classes c ON c.id = s.class_id
       WHERE s.id = ${studentId}::uuid
       LIMIT 1
@@ -278,7 +278,7 @@ export class ConductRepository {
                COUNT(rc.id) FILTER (WHERE rc.status IN ('generated', 'published'))::int AS card_count
         FROM target_period gp
         INNER JOIN classes c ON c.school_year_id = gp.school_year_id AND c.is_active = true
-        LEFT JOIN students s ON s.class_id = c.id AND s.is_active = true
+        LEFT JOIN students_with_class s ON s.class_id = c.id AND s.is_active = true
         LEFT JOIN report_cards rc ON rc.student_id = s.id AND rc.grading_period_id = gp.id
         GROUP BY c.id
       )
@@ -300,7 +300,7 @@ export class ConductRepository {
         FROM grading_periods gp
         INNER JOIN target_period tp ON tp.school_year_id = gp.school_year_id
         INNER JOIN classes c ON c.school_year_id = gp.school_year_id AND c.is_active = true
-        LEFT JOIN students s ON s.class_id = c.id AND s.is_active = true
+        LEFT JOIN students_with_class s ON s.class_id = c.id AND s.is_active = true
         LEFT JOIN report_cards rc ON rc.student_id = s.id AND rc.grading_period_id = gp.id
         GROUP BY gp.id, c.id
       ), period_progress AS (
@@ -336,7 +336,7 @@ export class ConductRepository {
     const ids = sql.join(studentIds.map((studentId) => sql`${studentId}::uuid`), sql`, `);
     const result = await this.db.execute<{ count: string }>(sql`
       SELECT COUNT(*)::text AS count
-      FROM students
+      FROM students_with_class
       WHERE id IN (${ids}) AND class_id = ${classId}::uuid AND is_active = true
     `);
     return Number(getRows<{ count: string }>(result)[0]?.count ?? 0) === studentIds.length;
@@ -357,7 +357,7 @@ export class ConductRepository {
              tci.note::text,
              tci.observation,
              tci.created_at::text
-      FROM students s
+      FROM students_with_class s
       LEFT JOIN teacher_conduct_inputs tci
         ON tci.student_id = s.id
        AND tci.teacher_id = ${teacherId}::uuid
@@ -395,7 +395,7 @@ export class ConductRepository {
       VALUES (
         ${input.student_id}::uuid,
         ${input.teacherId}::uuid,
-        (SELECT class_id FROM students WHERE id = ${input.student_id}::uuid),
+        (SELECT class_id FROM students_with_class WHERE id = ${input.student_id}::uuid),
         ${input.grading_period_id}::uuid,
         ${input.note},
         ${input.observation ?? null}
@@ -417,7 +417,7 @@ export class ConductRepository {
     }>(sql`
       WITH target_student AS (
         SELECT class_id
-        FROM students
+        FROM students_with_class
         WHERE id = ${studentId}::uuid
       ), expected_teachers AS (
         SELECT DISTINCT tsa.teacher_id, tsa.class_id
@@ -576,7 +576,7 @@ export class ConductRepository {
     const result = await this.db.execute(sql`
       SELECT 1
       FROM educator_assignments ea
-      INNER JOIN students s ON s.id = ${studentId}::uuid
+      INNER JOIN students_with_class s ON s.id = ${studentId}::uuid
       INNER JOIN classes c ON c.id = s.class_id
       WHERE ea.user_id = ${userId}::uuid
         AND (ea.class_id = c.id OR ea.level_id = c.level_id)
@@ -588,7 +588,7 @@ export class ConductRepository {
   async isHomeroomTeacherForStudent(userId: string, studentId: string): Promise<boolean> {
     const result = await this.db.execute(sql`
       SELECT 1
-      FROM students s
+      FROM students_with_class s
       INNER JOIN classes c ON c.id = s.class_id
       INNER JOIN teachers t ON t.id = c.homeroom_teacher_id
       WHERE s.id = ${studentId}::uuid
