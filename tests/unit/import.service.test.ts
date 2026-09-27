@@ -928,3 +928,21 @@ describe('import.service - parseDateToIso (via dry-run students)', () => {
     );
   });
 });
+
+describe('C10 initial teacher import', () => {
+  it('accepts profile/contract only and ignores legacy subjects and classes on reimport', async () => {
+    const file = await toWorkbookBuffer([{ 'Matricule': 'P-001', 'Nom*': 'Diallo', 'Prénom*': 'Ibrahim', 'Téléphone': '2250700000001', 'Type*': 'vacataire', 'Taux horaire FCFA': '5000', 'Matières*': 'Inventée', 'Classes': 'Inventée' }]);
+    const service = new ImportService(repository);
+    const preview = await service.dryRun('teachers', file, db);
+    expect(preview.errors).toEqual([]);
+    expect(preview.toUpdate?.some((row) => row.changes?.subjects)).toBe(false);
+    await service.confirm('teachers', file, db);
+    expect(repository.upsertTeacher.mock.calls[0][1]).not.toHaveProperty('subjects');
+    expect(repository.upsertTeacher.mock.calls[0][1]).not.toHaveProperty('teaching_assignments');
+  });
+  it('rejects a vacataire contract without its hourly rate', async () => {
+    const file = await toWorkbookBuffer([{ 'Nom*': 'Diallo', 'Prénom*': 'Ibrahim', 'Téléphone': '2250700000001', 'Type*': 'vacataire' }]);
+    const report = await new ImportService(repository).dryRun('teachers', file, db);
+    expect(report.errors).toContainEqual(expect.objectContaining({ column: 'Taux horaire FCFA' }));
+  });
+});

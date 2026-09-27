@@ -14,6 +14,7 @@ export type RecoveryImpact = {
   classesCreated: number; classesReused: number;
   enrollmentsCreated: number; enrollmentsReused: number;
   paymentsCreated: number; paymentsReused: number;
+  assignmentsCreated?: number;
 };
 export type RecoveryRow = {
   rowNumber: number;
@@ -23,19 +24,22 @@ export type RecoveryRow = {
   levelId?: string;
   enrollmentId?: string;
   reused?: boolean;
+  teachingAssignments?: Array<{ teacherId: string; subjectId: string; classId: string }>;
 };
 export type RecoveryPreview = {
   schoolYearId: string;
   validRows: RecoveryRow[];
-  errors: Array<{ rowNumber: number; reason: string }>;
+  errors: Array<{ rowNumber: number; reason: string; column?: string; value?: string }>;
   totalRows: number;
   impact: RecoveryImpact;
   classesWithoutTeacherAssignments: number;
+  classesWithoutHomeroomTeacher?: Array<{ id: string; name: string }>;
   previewToken: string;
 };
 export type RecoveryResult = {
   createdCount: number; reusedCount: number;
   errors: RecoveryPreview['errors']; totalRows: number; impact: RecoveryImpact;
+  classesWithoutHomeroomTeacher?: Array<{ id: string; name: string }>;
 };
 
 /** Supplied by the composition root, so admin never imports the finance module. */

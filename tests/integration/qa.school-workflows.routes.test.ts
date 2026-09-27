@@ -114,19 +114,31 @@ describe('F01–F07/F30/F34/F35 — parcours école avec persistance', () => {
     const headers = await getAuthHeaders('director');
     const [source] = await queryTenant<{ schedule_period_id: string; teacher_id: string; class_id: string; room_id: string; time_slot_id: string }>(
       'SELECT schedule_period_id, teacher_id, class_id, room_id, time_slot_id FROM schedules WHERE id=$1', [getSeedContext().scheduleId]);
-    const result = await request().post(`/api/v1/schedule/periods/${source!.schedule_period_id}/duplicate`).set(headers)
-      .send({ new_name: 'Période dupliquée QA', new_valid_from: '2095-01-01', new_valid_to: '2095-03-31' });
-    expect(result.status, JSON.stringify(result.body)).toBe(201);
-    expect(result.body.copied_schedules_count).toBe(1);
-    const periodId = result.body.period.id as string;
-    expect(periodId).not.toBe(source!.schedule_period_id);
-    const copied = await queryTenant<{ teacher_id: string; class_id: string; room_id: string; time_slot_id: string }>(
-      'SELECT teacher_id, class_id, room_id, time_slot_id FROM schedules WHERE schedule_period_id=$1', [periodId]);
-    expect(copied).toEqual([{ teacher_id: source!.teacher_id, class_id: source!.class_id, room_id: source!.room_id, time_slot_id: source!.time_slot_id }]);
-    const listed = await request().get('/api/v1/schedule/periods').set(headers);
-    expect(listed.body.periods).toEqual(expect.arrayContaining([expect.objectContaining({ id: periodId, name: 'Période dupliquée QA' })]));
-    const original = await queryTenant<{ count: number }>('SELECT COUNT(*)::int AS count FROM schedules WHERE schedule_period_id=$1', [source!.schedule_period_id]);
-    expect(original[0]?.count).toBe(1);
+    // C10: duplication requires an exact assignment in the active school year.
+    const [initialClass] = await queryTenant<{ level_id: string | null; school_year_id: string | null }>('SELECT level_id, school_year_id FROM classes WHERE id=$1', [source!.class_id]);
+    const [year] = await queryTenant<{ id: string }>("INSERT INTO school_years (label,start_date,end_date,status) VALUES ('F06 QA','2094-09-01','2096-06-30','active') RETURNING id");
+    const [level] = await queryTenant<{ id: string }>("INSERT INTO levels (name,order_index) VALUES ('F06 QA',1) RETURNING id");
+    const [subject] = await queryTenant<{ id: string }>("INSERT INTO subjects (name,level_id,coefficient) SELECT subject, $1, 1 FROM schedules WHERE id=$2 RETURNING id", [level.id,getSeedContext().scheduleId]);
+    await queryTenant('UPDATE classes SET level_id=$1,school_year_id=$2 WHERE id=$3',[level.id,year.id,source!.class_id]);
+    await queryTenant('INSERT INTO teacher_subject_assignments (teacher_id,subject_id,class_id) VALUES ($1,$2,$3)',[source!.teacher_id,subject.id,source!.class_id]);
+    try {
+      const result = await request().post(`/api/v1/schedule/periods/${source!.schedule_period_id}/duplicate`).set(headers)
+        .send({ new_name: 'Période dupliquée QA', new_valid_from: '2095-01-01', new_valid_to: '2095-03-31' });
+      expect(result.status, JSON.stringify(result.body)).toBe(201);
+      expect(result.body.copied_schedules_count).toBe(1);
+      const periodId = result.body.period.id as string;
+      expect(periodId).not.toBe(source!.schedule_period_id);
+      const copied = await queryTenant<{ teacher_id: string; class_id: string; room_id: string; time_slot_id: string }>(
+        'SELECT teacher_id, class_id, room_id, time_slot_id FROM schedules WHERE schedule_period_id=$1', [periodId]);
+      expect(copied).toEqual([{ teacher_id: source!.teacher_id, class_id: source!.class_id, room_id: source!.room_id, time_slot_id: source!.time_slot_id }]);
+      const listed = await request().get('/api/v1/schedule/periods').set(headers);
+      expect(listed.body.periods).toEqual(expect.arrayContaining([expect.objectContaining({ id: periodId, name: 'Période dupliquée QA' })]));
+      const original = await queryTenant<{ count: number }>('SELECT COUNT(*)::int AS count FROM schedules WHERE schedule_period_id=$1', [source!.schedule_period_id]);
+      expect(original[0]?.count).toBe(1);
+    } finally {
+      await queryTenant("UPDATE school_years SET status='closed' WHERE id=$1",[year.id]);
+      await queryTenant('UPDATE classes SET level_id=$1,school_year_id=$2 WHERE id=$3',[initialClass.level_id,initialClass.school_year_id,source!.class_id]);
+    }
   });
 
   it('F35 : sauvegarde les informations et la fin de configuration, interdit au professeur', async () => {

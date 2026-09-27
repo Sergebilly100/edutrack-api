@@ -33,6 +33,7 @@ import { IMPORT_PHONE_REGEX } from './import.types.js';
 
 const STUDENTS_REQUIRED_HEADERS = ['Prénom*', 'Nom*'] as const;
 const TEACHERS_REQUIRED_HEADERS = ['Nom*', 'Prénom*', 'Type*'] as const;
+const TEACHER_PROFILE_HEADERS = new Set(['Matricule', 'Nom*', 'Prénom*', 'Type*', 'Téléphone', 'Téléphone*', 'Email', 'Email*', 'Taux horaire FCFA', 'Salaire mensuel FCFA']);
 const SCHEDULE_HEADERS = ['Nom professeur*', 'Classe*', 'Matière*', 'Jour*', 'Créneau*', 'Salle'] as const;
 
 const PREVIEW_LIMIT = 5;
@@ -342,12 +343,6 @@ const parseTimeSlotLabel = (label: string): { startTime: string; endTime: string
 const buildTimeSlotLookupKey = (startTime: string, endTime: string): string =>
   `${startTime.slice(0, 5)}-${endTime.slice(0, 5)}`;
 
-const parseSubjects = (value: string): string[] =>
-  value
-    .split(',')
-    .map((item) => normalizeCell(item))
-    .filter((item) => item.length > 0);
-
 const generateRoomQrToken = (): string => randomBytes(32).toString('hex');
 
 const parseDateToIso = (value: string): string | null => {
@@ -441,12 +436,6 @@ const validateSchedulePeriodInput = (period?: SchedulePeriodInput): SchedulePeri
 
   return period;
 };
-
-const normalizeSubjectsForCompare = (subjects: string[]): string =>
-  [...subjects]
-    .map((item) => normalizeKey(item))
-    .sort()
-    .join(',');
 
 // ---------------------------------------------------------------------------
 // Identity key helpers - single source of truth for deduplication
@@ -933,9 +922,6 @@ export class ImportService {
         .filter((item) => item.matricule)
         .map((item) => [normalizeKey(item.matricule as string), item])
     );
-    const subjectCatalog = new Set(
-      existingTeachers.flatMap((item) => canonicalizeSubjectList(item.subjects))
-    );
     const existingUsernames = directory.map((item) => item.username);
     const byName = new Map<string, string[]>();
     for (const item of directory) {
@@ -958,10 +944,9 @@ export class ImportService {
       const matricule = normalizeCell(sheetRow.values['Matricule']);
       const lastName = normalizeCell(sheetRow.values['Nom*']);
       const firstName = normalizeCell(sheetRow.values['Prénom*']);
-      const phone = normalizeCell(sheetRow.values['Téléphone']);
-      const email = normalizeCell(sheetRow.values['Email']);
+      const phone = normalizeCell(sheetRow.values['Téléphone'] ?? sheetRow.values['Téléphone*']);
+      const email = normalizeCell(sheetRow.values['Email'] ?? sheetRow.values['Email*']);
       const type = normalizeKey(sheetRow.values['Type*']);
-      const subjectsRaw = normalizeCell(sheetRow.values['Matières*']);
       const hourlyRateRaw = normalizeCell(sheetRow.values['Taux horaire FCFA']);
       const monthlySalaryRaw = normalizeCell(sheetRow.values['Salaire mensuel FCFA']);
       const normalizedMatricule = matricule ? normalizeKey(matricule) : null;
@@ -1033,13 +1018,6 @@ export class ImportService {
         );
       }
 
-      const subjects = canonicalizeSubjectList(
-        parseSubjects(subjectsRaw).map((subject) => canonicalizeSubject(subject, subjectCatalog))
-      );
-      // L'import initial crée des profils et contrats. Les affectations
-      // matière–classe sont réalisées plus tard, après les inscriptions.
-      subjects.forEach((subject) => subjectCatalog.add(subject));
-
       let hourlyRate: number | null = null;
       if (hourlyRateRaw) {
         const parsedRate = Number(hourlyRateRaw);
@@ -1072,6 +1050,10 @@ export class ImportService {
         } else {
           monthlySalary = parsedSalary;
         }
+      }
+
+      if (type === 'vacataire' && hourlyRate === null) {
+        errors.push(makeError({ row: line, column: 'Taux horaire FCFA', message: 'Taux horaire requis pour un professeur vacataire' }));
       }
 
       if (type === 'permanent' && monthlySalary === null) {
@@ -1134,7 +1116,6 @@ export class ImportService {
         phone: phone || null,
         email: email || null,
         type: type as 'vacataire' | 'permanent',
-        subjects,
         hourlyRate,
         monthlySalary: type === 'permanent' ? monthlySalary : null,
         username: resolvedUsername,
@@ -1161,9 +1142,6 @@ export class ImportService {
       }
       if (existing.type !== (type as 'vacataire' | 'permanent')) {
         changes.type = { before: existing.type, after: type };
-      }
-      if (normalizeSubjectsForCompare(existing.subjects) !== normalizeSubjectsForCompare(subjects)) {
-        changes.subjects = { before: existing.subjects.join(', '), after: subjects.join(', ') };
       }
       if ((existing.hourlyRate ?? null) !== (hourlyRate ?? null)) {
         changes.hourlyRate = {
@@ -1207,7 +1185,10 @@ export class ImportService {
       report: {
         valid: validRows.length,
         errors,
-        preview: previewWorkbookRows(parsed.rows),
+        preview: previewWorkbookRows(parsed.rows.map((row) => ({
+          ...row,
+          values: Object.fromEntries(Object.entries(row.values).filter(([header]) => TEACHER_PROFILE_HEADERS.has(header))),
+        }))),
         toAdd,
         toUpdate,
         toDelete,

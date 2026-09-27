@@ -1,3 +1,4 @@
+import type { AssignmentSnapshot } from '../../shared/import-mapping/teacher-assignments.js';
 import { sql } from 'drizzle-orm';
 import type { TenantDb } from '../../shared/database/db.js';
 import { MappingRepository } from '../../shared/import-mapping/mapping.repository.js';
@@ -9,9 +10,11 @@ import { FinancialCacheService } from './financial-cache.service.js';
 import type { PaymentMethod } from './finance.types.js';
 
 export type RecoverySnapshot = {
+  teachers?: AssignmentSnapshot['teachers'];
+  assignments?: AssignmentSnapshot['assignments'];
   year: { id: string; startDate: string; endDate: string };
   levels: Array<{ id: string; name: string }>;
-  classes: Array<{ id: string; name: string; levelId: string | null; isActive: boolean; hasAssignments: boolean }>;
+  classes: Array<{ id: string; name: string; levelId: string | null; isActive: boolean; hasAssignments: boolean; homeroomTeacherId?: string | null }>;
   students: Array<{ id: string; matricule: string | null; firstName: string; lastName: string; isActive: boolean; lifecycleStatus: string }>;
   enrollments: Array<{ id: string; studentId: string; classId: string; status: string }>;
   payments: Array<{ id: string; studentId: string; reference: string | null; amount: string; date: string; method: string; status: string; source: string }>;
@@ -31,7 +34,7 @@ export class MidyearImportRepository extends MappingRepository {
     // One connection per tenant. Keep queries sequential, including inside transactions.
     const levels = await this.db.execute<RecoverySnapshot['levels'][number]>(sql`SELECT id::text, name FROM levels ORDER BY id`);
     const classes = await this.db.execute<RecoverySnapshot['classes'][number]>(sql`
-      SELECT c.id::text, c.name, c.level_id::text AS "levelId", c.is_active AS "isActive",
+      SELECT c.id::text, c.name, c.level_id::text AS "levelId", c.is_active AS "isActive", c.homeroom_teacher_id::text AS "homeroomTeacherId",
         EXISTS(SELECT 1 FROM teacher_subject_assignments a WHERE a.class_id = c.id) AS "hasAssignments"
       FROM classes c WHERE c.school_year_id = ${yearId}::uuid ORDER BY c.id
     `);
@@ -54,7 +57,16 @@ export class MidyearImportRepository extends MappingRepository {
     `);
     const rooms = await this.db.execute<RecoverySnapshot['rooms'][number]>(sql`SELECT id::text, name FROM rooms ORDER BY id`);
     const subjects = await this.db.execute<RecoverySnapshot['subjects'][number]>(sql`SELECT id::text, name, level_id::text AS "levelId" FROM subjects ORDER BY id`);
-    return { year, levels: levels.rows, classes: classes.rows, students: students.rows, enrollments: enrollments.rows,
+    const teachers = await this.db.execute<AssignmentSnapshot['teachers'][number]>(sql`
+      SELECT t.id::text, t.matricule, t.is_blocked AS "isBlocked", u.is_active AS "isActive"
+      FROM teachers t JOIN users u ON u.id = t.user_id ORDER BY t.id
+    `);
+    const assignments = await this.db.execute<AssignmentSnapshot['assignments'][number]>(sql`
+      SELECT a.teacher_id::text AS "teacherId", a.subject_id::text AS "subjectId", a.class_id::text AS "classId"
+      FROM teacher_subject_assignments a JOIN classes c ON c.id = a.class_id
+      WHERE c.school_year_id = ${yearId}::uuid ORDER BY a.teacher_id, a.subject_id, a.class_id
+    `);
+    return { teachers: teachers.rows, assignments: assignments.rows, year, levels: levels.rows, classes: classes.rows, students: students.rows, enrollments: enrollments.rows,
       payments: payments.rows, plans: plans.rows, rooms: rooms.rows, subjects: subjects.rows };
   }
 
@@ -89,6 +101,15 @@ export class MidyearImportRepository extends MappingRepository {
     const finance = new FinanceRepository(this.db);
     for (const row of rows) {
       const v = row.values;
+      if (importType === 'teacher_assignments') {
+        for (const pair of row.teachingAssignments ?? []) {
+          await this.db.execute(sql`
+            INSERT INTO teacher_subject_assignments (teacher_id, subject_id, class_id)
+            VALUES (${pair.teacherId}::uuid, ${pair.subjectId}::uuid, ${pair.classId}::uuid)
+          `);
+        }
+        continue;
+      }
       if (importType === 'students') {
         let classId = row.classId;
         if (!classId) {
@@ -150,6 +171,21 @@ export class MidyearImportRepository extends MappingRepository {
           case 'classes': await this.db.execute(sql`INSERT INTO classes (name, level_id, school_year_id, is_active) VALUES (${v.nom}, ${row.levelId}::uuid, ${yearId}::uuid, true)`); break;
         }
       }
+    }
+    if (importType === 'teacher_assignments') {
+      const teacherIds = [...new Set(rows.flatMap((row) => (row.teachingAssignments ?? []).map((pair) => pair.teacherId)))];
+      for (const teacherId of teacherIds) await this.db.execute(sql`
+        UPDATE teachers SET subjects = ARRAY(
+          SELECT DISTINCT s.name FROM teacher_subject_assignments a
+          JOIN subjects s ON s.id = a.subject_id JOIN classes c ON c.id = a.class_id
+          JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
+          WHERE a.teacher_id = ${teacherId}::uuid ORDER BY s.name
+        ), updated_at = NOW(), updated_by = ${localActorId}::uuid WHERE id = ${teacherId}::uuid
+      `);
+      await this.db.execute(sql`
+        INSERT INTO import_history (import_type, imported_count, updated_count, imported_by, imported_by_role)
+        VALUES ('teachers', ${rows.reduce((count, row) => count + (row.teachingAssignments?.length ?? 0), 0)}, 0, ${localActorId}::uuid, 'super_admin')
+      `);
     }
     if (importType === 'students' || importType === 'classes') {
       await this.db.execute(sql`

@@ -461,6 +461,14 @@ export const findActiveSchedulePeriodByWeek = async (
   return row ? mapPeriod(row) : null;
 };
 
+export const listScheduleCopyTargets = async (db: QueryExecutor, periodId: string) => {
+  const result = await db.execute<{ teacherId: string; classId: string; subject: string }>(sql`
+    SELECT teacher_id::text AS "teacherId", class_id::text AS "classId", subject
+    FROM schedules WHERE schedule_period_id = ${periodId}::uuid
+  `);
+  return getRows<{ teacherId: string; classId: string; subject: string }>(result);
+};
+
 export const duplicatePeriodWithSchedules = async (
   db: QueryExecutor,
   sourcePeriodId: string,
@@ -915,7 +923,7 @@ export const hasTeacherSubjectAssignment = async (
     INNER JOIN subjects subject ON subject.id = tsa.subject_id
     INNER JOIN teachers t ON t.id = tsa.teacher_id AND t.is_blocked = false
     INNER JOIN users u ON u.id = t.user_id AND u.is_active = true
-    INNER JOIN classes c ON c.id = tsa.class_id AND c.is_active = true
+    INNER JOIN classes c ON c.id = tsa.class_id AND c.is_active = true AND c.level_id = subject.level_id
     INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
     WHERE tsa.teacher_id = ${input.teacherId}::uuid
       AND tsa.class_id = ${input.classId}::uuid

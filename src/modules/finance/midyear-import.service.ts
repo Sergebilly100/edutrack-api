@@ -1,3 +1,4 @@
+import { validateTeacherAssignmentRows } from '../../shared/import-mapping/teacher-assignments.js';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
   normalizeMappingLabel, resolveMappingByHeaders, translateMappedValue,
@@ -22,6 +23,7 @@ export const MIDYEAR_IMPORTS: Record<string, { targets: TargetDef[] }> = {
     { key: 'matricule', required: true }, { key: 'nom', required: true }, { key: 'prenom', required: true },
     { key: 'niveau', required: true }, { key: 'classe', required: true }, { key: 'parent_phone', required: false },
   ] },
+  teacher_assignments: { targets: ['matricule', 'matiere', 'classes'].map((key) => ({ key, required: true })) },
   payments: { targets: ['matricule', 'montant', 'date', 'reference', 'method'].map((key) => ({ key, required: true })) },
 };
 const PAYMENT_METHODS = new Set(['cash', 'mobile_money', 'bank_transfer']);
@@ -55,6 +57,14 @@ const emptyImpact = (): RecoveryImpact => ({ profilesCreated: 0, profilesReused:
 
 /** Pure row validation, shared by preview and the locked confirmation. */
 export function validateRecoveryRows(importType: string, rows: RecoveryRow[], snapshot: RecoverySnapshot) {
+  if (importType === 'teacher_assignments') {
+    const result = validateTeacherAssignmentRows(rows, { teachers: snapshot.teachers ?? [], assignments: snapshot.assignments ?? [], classes: snapshot.classes, subjects: snapshot.subjects });
+    return { ...result, totalRows: rows.length,
+      impact: { ...emptyImpact(), assignmentsCreated: result.validRows.reduce((count, row) => count + row.teachingAssignments.length, 0) },
+      classesWithoutTeacherAssignments: snapshot.classes.filter((c) => c.isActive && !c.hasAssignments && !result.validRows.some((row) => row.teachingAssignments.some((pair) => pair.classId === c.id))).length,
+      classesWithoutHomeroomTeacher: snapshot.classes.filter((c) => c.isActive && !c.homeroomTeacherId).map(({ id, name }) => ({ id, name })),
+    };
+  }
   const validRows: RecoveryRow[] = [];
   const errors: RecoveryPreview['errors'] = [];
   const impact = emptyImpact();
@@ -201,6 +211,9 @@ export class MidyearImportService {
     if (importType === 'payments' && fields.some((f) => f.translations.length && (f.targetField !== 'method' || f.translations.some((t) => !PAYMENT_METHODS.has(t.targetValue))))) {
       throw new MidyearImportError('Seul le moyen de paiement accepte des traductions explicites vers cash, mobile_money ou bank_transfer', 400, 'MAPPING_METHOD_TRANSLATIONS_INVALID');
     }
+    if (importType === 'teacher_assignments' && fields.some((field) => field.translations.length)) {
+      throw new MidyearImportError('Les matricules, matières et classes doivent être conservés sans traduction', 400, 'MAPPING_ASSIGNMENT_TRANSLATIONS_INVALID');
+    }
     return config;
   }
   async saveProfile(input: { importType: string; label?: string; actorUserId: string; fields: MappingFieldDefinition[] }) {
@@ -258,7 +271,7 @@ export class MidyearImportService {
         await repository.apply(importType, preview.validRows, yearId, actorUserId);
         await repository.recordAudit(importType, yearId, actorUserId, preview.impact);
         const reusedCount = preview.validRows.filter((row) => importType === 'students' ? Boolean(row.enrollmentId) : row.reused).length;
-        return { createdCount: preview.validRows.length - reusedCount, reusedCount, errors: preview.errors, totalRows: preview.totalRows, impact: preview.impact };
+        return { createdCount: preview.validRows.length - reusedCount, reusedCount, errors: preview.errors, totalRows: preview.totalRows, impact: preview.impact, classesWithoutHomeroomTeacher: preview.classesWithoutHomeroomTeacher };
       });
     } catch (error) {
       if (error instanceof MidyearImportError) throw error;

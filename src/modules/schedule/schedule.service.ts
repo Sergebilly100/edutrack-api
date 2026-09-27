@@ -12,6 +12,7 @@ import {
   type ClassCatalogItem,
   createSchedulePeriod,
   duplicatePeriodWithSchedules,
+  listScheduleCopyTargets,
   findActiveSchedulePeriodByDate,
   findActiveSchedulePeriodByWeek,
   findSchedulePeriodById,
@@ -258,12 +259,19 @@ export const duplicatePeriod = async (
     throw new Error('new_valid_from must be before or equal to new_valid_to');
   }
 
-  return duplicatePeriodWithSchedules(db, sourcePeriodId, {
-    name: newPeriod.newName,
-    validFrom: newPeriod.newValidFrom,
-    validTo: newPeriod.newValidTo,
-    createdBy: newPeriod.createdBy,
-  });
+  return db.transaction(async (tx) => {
+    const executor = tx as unknown as QueryExecutor;
+    const schedules = await listScheduleCopyTargets(executor, sourcePeriodId);
+    for (const schedule of schedules) {
+      await assertTeacherCanBeScheduled(executor, { teacherId: schedule.teacherId, classId: schedule.classId, subject: schedule.subject });
+    }
+    return duplicatePeriodWithSchedules(executor, sourcePeriodId, {
+      name: newPeriod.newName,
+      validFrom: newPeriod.newValidFrom,
+      validTo: newPeriod.newValidTo,
+      createdBy: newPeriod.createdBy,
+    });
+  }, { isolationLevel: 'serializable' });
 };
 
 export const createPeriodFromInput = async (

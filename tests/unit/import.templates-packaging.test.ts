@@ -18,3 +18,13 @@ describe('import templates packaging', () => {
     expect(dockerfile).toContain('COPY --from=build /app/templates ./templates');
   });
 });
+
+it('C10 ships a profile/contract template without subjects or classes and explains later assignments', async () => {
+  const { default: ExcelJS } = await import('exceljs');
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(path.join(process.cwd(), 'templates', 'teachers.xlsx'));
+  const headers = workbook.worksheets[0].getRow(1).values as string[];
+  expect(headers).toContain('Téléphone'); expect(headers).toContain('Email');
+  expect(headers.some((header) => /Matière|Classe/.test(header))).toBe(false);
+  expect(workbook.getWorksheet('INSTRUCTIONS')?.getRow(3).getCell(1).text).toContain('Après les inscriptions');
+});

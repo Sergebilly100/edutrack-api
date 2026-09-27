@@ -1,5 +1,16 @@
 import { z } from 'zod';
 
+export class TeachersModuleError extends Error {
+  constructor(
+    message: string,
+    public readonly statusCode: number,
+    public readonly code: string
+  ) {
+    super(message);
+    this.name = 'TeachersModuleError';
+  }
+}
+
 export const PHONE_CI_REGEX = /^225\d{10}$/;
 export const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 

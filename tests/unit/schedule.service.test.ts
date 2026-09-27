@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const repositoryMocks = vi.hoisted(() => ({
   createSchedulePeriod: vi.fn(),
   duplicatePeriodWithSchedules: vi.fn(),
+  listScheduleCopyTargets: vi.fn().mockResolvedValue([]),
+  isTeacherBlocked: vi.fn().mockResolvedValue(false),
+  hasTeacherSubjectAssignment: vi.fn().mockResolvedValue(true),
   findActiveSchedulePeriodByDate: vi.fn(),
   findSchedulePeriodById: vi.fn(),
   listSchedulesForPeriodAndDay: vi.fn(),
@@ -12,6 +15,9 @@ const repositoryMocks = vi.hoisted(() => ({
 vi.mock('../../src/modules/schedule/schedule.repository.js', () => ({
   createSchedulePeriod: repositoryMocks.createSchedulePeriod,
   duplicatePeriodWithSchedules: repositoryMocks.duplicatePeriodWithSchedules,
+  listScheduleCopyTargets: repositoryMocks.listScheduleCopyTargets,
+  isTeacherBlocked: repositoryMocks.isTeacherBlocked,
+  hasTeacherSubjectAssignment: repositoryMocks.hasTeacherSubjectAssignment,
   findActiveSchedulePeriodByDate: repositoryMocks.findActiveSchedulePeriodByDate,
   findSchedulePeriodById: repositoryMocks.findSchedulePeriodById,
   listSchedulesForPeriodAndDay: repositoryMocks.listSchedulesForPeriodAndDay,
@@ -26,7 +32,7 @@ import {
   hasFutureOccurrenceInPeriod,
 } from '../../src/modules/schedule/schedule.service.js';
 
-const db = {} as never;
+const db = { transaction: async (run: (tx: unknown) => Promise<unknown>) => run(db) } as never;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -225,5 +231,16 @@ describe('schedule.service', () => {
     });
 
     expect(result).toBe(false);
+  });
+});
+
+describe('C10 schedule duplication', () => {
+  it.each(['blocked', 'unassigned'])('rejects %s teachers before copying any schedule', async (state) => {
+    repositoryMocks.findSchedulePeriodById.mockResolvedValue({ id: 'period-1' });
+    repositoryMocks.listScheduleCopyTargets.mockResolvedValue([{ teacherId: 'teacher', classId: 'class', subject: 'Maths' }]);
+    repositoryMocks.isTeacherBlocked.mockResolvedValue(state === 'blocked');
+    repositoryMocks.hasTeacherSubjectAssignment.mockResolvedValue(false);
+    await expect(duplicatePeriod(db, 'period-1', { newName: 'Copie', newValidFrom: '2026-10-01', newValidTo: '2026-10-31', createdBy: 'user' })).rejects.toThrow(state === 'blocked' ? 'Teacher is blocked' : 'Teacher must be assigned');
+    expect(repositoryMocks.duplicatePeriodWithSchedules).not.toHaveBeenCalled();
   });
 });

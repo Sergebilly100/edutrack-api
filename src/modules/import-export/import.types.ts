@@ -80,7 +80,6 @@ export type TeacherImportRow = {
   phone: string | null;
   email: string | null;
   type: 'vacataire' | 'permanent';
-  subjects: string[];
   hourlyRate: number | null;
   monthlySalary: number | null;
   username: string;

@@ -361,7 +361,7 @@ export default async function adminController(
     try {
       const { tenantId } = schoolTenantIdParamsSchema.parse(request.params);
       const importType = z
-        .enum(['levels', 'subjects', 'rooms', 'classes', 'students', 'payments'])
+        .enum(['levels', 'subjects', 'rooms', 'classes', 'students', 'teacher_assignments', 'payments'])
         .parse(routeImportType);
       const query = z.object({
         school_year_id: z.uuid(),
@@ -388,7 +388,7 @@ export default async function adminController(
     }
   };
 
-  for (const importType of ['levels', 'subjects', 'rooms', 'classes', 'students', 'payments'] as const) {
+  for (const importType of ['levels', 'subjects', 'rooms', 'classes', 'students', 'teacher_assignments', 'payments'] as const) {
     app.get(
       `/api/v1/admin/schools/:tenantId/midyear-import/${importType}/profile`,
       { preHandler: preHandlers },

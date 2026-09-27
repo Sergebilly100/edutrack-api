@@ -22,6 +22,7 @@ const repository = {
   getTeacherById: vi.fn(),
   countActiveUsers: vi.fn(),
   listSubjectCatalog: vi.fn(),
+  listClassesWithoutHomeroomTeacher: vi.fn().mockResolvedValue([]),
   countValidTeachingAssignments: vi.fn(),
   createTeacher: vi.fn(),
   updateTeacher: vi.fn(),
@@ -160,7 +161,7 @@ describe('teachers.service', () => {
       );
 
       expect(repository.countValidTeachingAssignments).toHaveBeenCalledWith(teaching_assignments);
-      expect(repository.createTeacher).toHaveBeenCalledWith(expect.objectContaining({ teaching_assignments }));
+      expect(repository.createTeacher).toHaveBeenCalledWith(expect.objectContaining({ teaching_assignments }), expect.any(Function));
     });
 
     it('refuse une association matière-classe de niveaux différents', async () => {
@@ -184,7 +185,7 @@ describe('teachers.service', () => {
       );
 
       expect(repository.createTeacher).toHaveBeenCalledWith(
-        expect.objectContaining({ subjects: ['Français'] })
+        expect.objectContaining({ subjects: ['Français'] }), expect.any(Function)
       );
     });
 
@@ -295,7 +296,8 @@ describe('teachers.service', () => {
           hourly_rate: baseTeacher.hourly_rate,
           monthly_salary: 400000,
         }),
-        null
+        null,
+        expect.any(Function)
       );
       expect(result.type).toBe('permanent');
       expect(result.hourly_rate).toBe(baseTeacher.hourly_rate);
@@ -349,7 +351,8 @@ describe('teachers.service', () => {
           hourly_rate: baseTeacher.hourly_rate,
           monthly_salary: 350000,
         }),
-        null
+        null,
+        expect.any(Function)
       );
     });
 
@@ -374,7 +377,8 @@ describe('teachers.service', () => {
           monthly_salary: basePermanent.monthly_salary,
           hourly_rate: 6000,
         }),
-        null
+        null,
+        expect.any(Function)
       );
     });
   });
@@ -427,4 +431,39 @@ describe('teachers.service', () => {
       });
     });
   });
+});
+
+describe('C10 assignment guards', () => {
+  it.each([{ is_blocked: true }, { is_active: false }])('rejects assignments for an unavailable teacher: %j', async (state) => {
+    repository.getTeacherById.mockResolvedValue({ ...baseTeacher, ...state });
+    repository.updateTeacher.mockClear();
+    const service = new TeachersService(repository as never);
+    await expect(service.updateTeacher('teacher-1', { teaching_assignments: [{ subject_id: 'subject', class_id: 'class' }] })).rejects.toMatchObject({ code: 'TEACHER_UNAVAILABLE' });
+    expect(repository.updateTeacher).not.toHaveBeenCalled();
+  });
+  it('rejects duplicate pairs instead of silently deduplicating at confirmation', async () => {
+    repository.getTeacherById.mockResolvedValue(baseTeacher);
+    const pair = { subject_id: 'subject', class_id: 'class' };
+    await expect(new TeachersService(repository as never).updateTeacher('teacher-1', { teaching_assignments: [pair, pair] })).rejects.toMatchObject({ code: 'DUPLICATE_TEACHING_ASSIGNMENT' });
+  });
+});
+
+it('C10 rechecks availability under the write transaction before assigning a teacher blocked since preview', async () => {
+  repository.getTeacherById.mockResolvedValue(baseTeacher);
+  repository.countValidTeachingAssignments.mockResolvedValue(1);
+  repository.updateTeacher.mockImplementationOnce(async (_id, _input, _actor, validate) => {
+    await validate(repository, { ...baseTeacher, is_blocked: true });
+    return baseTeacher;
+  });
+  await expect(new TeachersService(repository as never).updateTeacher('teacher-1', { teaching_assignments: [{ subject_id: 'subject', class_id: 'class' }] })).rejects.toMatchObject({ code: 'TEACHER_UNAVAILABLE' });
+});
+
+it('C10 never fails a successful assignment update because the homeroom reminder is unavailable', async () => {
+  repository.getTeacherById.mockResolvedValue(baseTeacher);
+  repository.countValidTeachingAssignments.mockResolvedValue(1);
+  repository.updateTeacher.mockResolvedValue(baseTeacher);
+  repository.listClassesWithoutHomeroomTeacher.mockRejectedValueOnce(new Error('Reminder unavailable'));
+  const result = await new TeachersService(repository as never).updateTeacher('teacher-1', { teaching_assignments: [{ subject_id: 'subject', class_id: 'class' }] });
+  expect(result.id).toBe('teacher-1');
+  expect(result.classes_without_homeroom_teacher).toEqual([]);
 });

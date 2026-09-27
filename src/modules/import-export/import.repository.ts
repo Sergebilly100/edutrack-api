@@ -225,7 +225,7 @@ export const defaultImportRepository: ImportRepository = {
       INNER JOIN teachers t ON t.id = tsa.teacher_id AND t.is_blocked = false
       INNER JOIN users u ON u.id = t.user_id AND u.is_active = true
       INNER JOIN subjects s ON s.id = tsa.subject_id
-      INNER JOIN classes c ON c.id = tsa.class_id AND c.is_active = true
+      INNER JOIN classes c ON c.id = tsa.class_id AND c.is_active = true AND c.level_id = s.level_id
       INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
     `);
     return getRows<ScheduleAssignmentRow>(result);
@@ -648,11 +648,6 @@ export const defaultImportRepository: ImportRepository = {
   },
 
   async upsertTeacher(db, row, params) {
-    const subjectsSql =
-      row.subjects.length > 0
-        ? sql`ARRAY[${sql.join(row.subjects.map((subject) => sql`${subject}`), sql`, `)}]::text[]`
-        : sql`'{}'::text[]`;
-
     const existingResult = await db.execute(sql`
       SELECT id, user_id
       FROM teachers
@@ -678,7 +673,6 @@ export const defaultImportRepository: ImportRepository = {
         SET
           matricule = ${row.matricule},
           type = ${row.type},
-          subjects = ${subjectsSql},
           hourly_rate = ${row.hourlyRate},
           monthly_salary = ${row.monthlySalary}
         WHERE id = ${existing.id}
@@ -729,7 +723,6 @@ export const defaultImportRepository: ImportRepository = {
         username,
         matricule,
         type,
-        subjects,
         hourly_rate,
         monthly_salary
       )
@@ -738,7 +731,6 @@ export const defaultImportRepository: ImportRepository = {
         ${row.username},
         ${row.matricule},
         ${row.type},
-        ${subjectsSql},
         ${row.hourlyRate},
         ${row.monthlySalary}
       )

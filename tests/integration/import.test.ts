@@ -533,8 +533,8 @@ describe('import integration - schedule', () => {
     const suffix = Date.now().toString();
     const subjectName = `Importtest ${suffix}`;
 
-    const classes = await queryTenant<{ class_id: string }>(
-      `SELECT class_id FROM ${tenantTable('schedules')} WHERE id = $1`,
+    const classes = await queryTenant<{ class_id: string; level_id: string }>(
+      `SELECT s.class_id, c.level_id FROM ${tenantTable('schedules')} s JOIN ${tenantTable('classes')} c ON c.id=s.class_id WHERE s.id = $1`,
       [context.scheduleId]
     );
     const classId = classes[0]?.class_id;
@@ -606,6 +606,8 @@ describe('import integration - schedule', () => {
       [context.teacherId, classId, subjectId]
     );
     expect(assignments[0]?.count).toBe(1);
+    // Restore the shared class's level so later tests retain valid subject dependencies.
+    await queryTenant('UPDATE classes SET level_id = $1 WHERE id = $2', [classes[0].level_id, classId]);
   });
 
   it('POST /api/v1/import/schedule/confirm - sans conflictAcknowledged + conflit → 400 IMPORT_CONFLICT_ACK_REQUIRED', async () => {

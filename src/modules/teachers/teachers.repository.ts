@@ -22,7 +22,7 @@ type SqlExecutor = {
 export type QueryExecutor = SqlExecutor & {
   // Drizzle node-postgres expose transaction() : la callback reçoit un exécuteur
   // lié au même client PG (BEGIN/COMMIT/ROLLBACK automatiques).
-  transaction: <T>(callback: (tx: SqlExecutor) => Promise<T>) => Promise<T>;
+  transaction: <T>(callback: (tx: SqlExecutor) => Promise<T>, config?: { isolationLevel: 'serializable' }) => Promise<T>;
 };
 
 // Forme brute renvoyée par PostgreSQL (snake_case).
@@ -191,7 +191,8 @@ const TEACHER_SELECT = sql`
       ) ORDER BY sub.name, c.name)
       FROM teacher_subject_assignments tsa
       INNER JOIN subjects sub ON sub.id = tsa.subject_id
-      INNER JOIN classes c ON c.id = tsa.class_id
+      INNER JOIN classes c ON c.id = tsa.class_id AND c.is_active = true
+      INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
       WHERE tsa.teacher_id = t.id
     ), '[]'::json) AS teaching_assignments
     , COALESCE((
@@ -226,8 +227,18 @@ export class TeachersRepository {
       FROM (VALUES ${sql.join(assignments.map((assignment) => sql`(${assignment.subject_id}::uuid, ${assignment.class_id}::uuid)`), sql`, `)}) AS input(subject_id, class_id)
       INNER JOIN subjects sub ON sub.id = input.subject_id
       INNER JOIN classes c ON c.id = input.class_id AND c.is_active = true AND c.level_id = sub.level_id
+      INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
     `);
     return Number(getRows<CountRow>(result)[0]?.count ?? 0);
+  }
+
+  async listClassesWithoutHomeroomTeacher(): Promise<Array<{ id: string; name: string }>> {
+    const result = await this.db.execute(sql`
+      SELECT c.id::text, c.name FROM classes c
+      JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
+      WHERE c.is_active = true AND c.homeroom_teacher_id IS NULL ORDER BY c.name
+    `);
+    return getRows<{ id: string; name: string }>(result);
   }
 
   async listSubjectCatalog(): Promise<string[]> {
@@ -331,7 +342,7 @@ export class TeachersRepository {
     return getRows<TeacherRow>(result)[0] ?? null;
   }
 
-  async createTeacher(input: CreateTeacherInput): Promise<TeacherRow> {
+  async createTeacher(input: CreateTeacherInput, validate?: (repository: TeachersRepository) => Promise<void>): Promise<TeacherRow> {
     // Only load usernames with the same prefix to avoid loading entire table
     const normalizedLast = (input.last_name || 'user')
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '') || 'user';
@@ -371,6 +382,8 @@ export class TeachersRepository {
     // laissait un user orphelin dont le téléphone/email bloquait toute
     // recréation ultérieure via users_phone_unique / users_email_unique.
     const teacher = await this.db.transaction(async (tx) => {
+      const repository = new TeachersRepository(tx as QueryExecutor);
+      await validate?.(repository);
       const userResult = await tx.execute(sql`
         INSERT INTO users (role, name, phone, email, password_hash, is_active, must_change_password)
         VALUES ('teacher', ${input.name}, ${input.phone}, ${input.email ?? null}, ${passwordHash}, true, true)
@@ -418,7 +431,7 @@ export class TeachersRepository {
         `);
       }
       return created;
-    });
+    }, { isolationLevel: 'serializable' });
 
     const created = await this.getTeacherById(teacher.id);
     if (!created) throw new Error('Failed to load created teacher');
@@ -429,93 +442,101 @@ export class TeachersRepository {
   async updateTeacher(
     teacherId: string,
     input: UpdateTeacherInput,
-    actorId?: string | null
+    actorId?: string | null,
+    validate?: (repository: TeachersRepository, current: TeacherRow) => Promise<void>
   ): Promise<TeacherRow | null> {
-    const current = await this.getTeacherById(teacherId);
-    if (!current) return null;
+    return this.db.transaction(async (tx) => {
+      const repository = new TeachersRepository(tx as QueryExecutor);
+      await tx.execute(sql`SELECT id FROM teachers WHERE id = ${teacherId}::uuid FOR UPDATE`);
+      const current = await repository.getTeacherById(teacherId);
+      if (!current) return null;
+      await validate?.(repository, current);
 
-    // ── Mise à jour users (infos personnelles + is_active) ────────────────────
-    const nextFirstName = input.first_name ?? current.first_name;
-    const nextLastName = input.last_name ?? current.last_name ?? '';
-    const nextFullName = `${nextFirstName} ${nextLastName}`.trim();
+      // ── Mise à jour users (infos personnelles + is_active) ────────────────────
+      const nextFirstName = input.first_name ?? current.first_name;
+      const nextLastName = input.last_name ?? current.last_name ?? '';
+      const nextFullName = `${nextFirstName} ${nextLastName}`.trim();
 
-    await this.db.execute(sql`
-      UPDATE users
-      SET
-        name      = ${nextFullName},
-        phone     = ${input.phone === undefined ? current.phone : input.phone},
-        email     = ${input.email === undefined ? current.email : input.email},
-        is_active = ${input.is_active ?? current.is_active}
-      WHERE id = ${current.user_id}
-    `);
+      await tx.execute(sql`
+        UPDATE users
+        SET
+          name      = ${nextFullName},
+          phone     = ${input.phone === undefined ? current.phone : input.phone},
+          email     = ${input.email === undefined ? current.email : input.email},
+          is_active = ${input.is_active ?? current.is_active}
+        WHERE id = ${current.user_id}
+      `);
 
-    // ── Mise à jour teachers (données pédagogiques + blocage métier) ──────────
-    //
-    // Logique blocage :
-    //   is_blocked = true  → stocker blocked_reason + horodatage NOW()
-    //   is_blocked = false → effacer blocked_reason et blocked_at
-    //   is_blocked absent  → conserver l'état courant
-    const nextIsBlocked = input.is_blocked ?? current.is_blocked;
+      // ── Mise à jour teachers (données pédagogiques + blocage métier) ──────────
+      //
+      // Logique blocage :
+      //   is_blocked = true  → stocker blocked_reason + horodatage NOW()
+      //   is_blocked = false → effacer blocked_reason et blocked_at
+      //   is_blocked absent  → conserver l'état courant
+      const nextIsBlocked = input.is_blocked ?? current.is_blocked;
 
-    let blockedReasonSql: ReturnType<typeof sql>;
-    let blockedAtSql: ReturnType<typeof sql>;
+      let blockedReasonSql: ReturnType<typeof sql>;
+      let blockedAtSql: ReturnType<typeof sql>;
 
-    if (input.is_blocked === true) {
-      // Blocage : persiste le motif (peut être null si absent)
-      blockedReasonSql = sql`${input.blocked_reason ?? null}`;
-      blockedAtSql = sql`NOW()`;
-    } else if (input.is_blocked === false) {
-      // Déblocage : efface le motif et l'horodatage
-      blockedReasonSql = sql`NULL`;
-      blockedAtSql = sql`NULL`;
-    } else {
-      // Pas de changement de statut de blocage :
-      // si blocked_reason est fourni on le met à jour, sinon on conserve
-      blockedReasonSql =
-        input.blocked_reason !== undefined
-          ? sql`${input.blocked_reason}`
-          : sql`${current.blocked_reason}`;
-      blockedAtSql = current.blocked_at === null ? sql`NULL` : sql`${current.blocked_at}`;
-    }
-    const subjectsArray = input.subjects ?? current.subjects ?? [];
-    // Array littéral PG via sql.join paramétré (pattern prouvé : seed.ts /
-    // attendance.repository). Chaque élément est un placeholder bindé - pas
-    // d'échappement manuel de quotes, défense en profondeur vs SQLi.
-    // Tableau vide => `ARRAY[]::text[]`, valide en PG.
-    const subjectsLiteral = sql`ARRAY[${sql.join(
-      subjectsArray.map((s) => sql`${s}`),
-      sql`, `
-    )}]::text[]`;
-    // undefined = conserver la valeur courante ; null/valeur = écraser.
-    const nextMatricule = input.matricule === undefined ? current.matricule : input.matricule;
-    const matriculeSql = nextMatricule === null ? sql`NULL` : sql`${nextMatricule}`;
-    const monthlySalaryVal = input.monthly_salary === undefined ? current.monthly_salary : input.monthly_salary;
-    const hourlyRateVal = input.hourly_rate === undefined ? current.hourly_rate : input.hourly_rate;
-    const monthlySalarySql = monthlySalaryVal === null ? sql`NULL` : sql`${monthlySalaryVal}`;
-    const hourlyRateSql = hourlyRateVal === null ? sql`NULL` : sql`${hourlyRateVal}`;
+      if (input.is_blocked === true) {
+        // Blocage : persiste le motif (peut être null si absent)
+        blockedReasonSql = sql`${input.blocked_reason ?? null}`;
+        blockedAtSql = sql`NOW()`;
+      } else if (input.is_blocked === false) {
+        // Déblocage : efface le motif et l'horodatage
+        blockedReasonSql = sql`NULL`;
+        blockedAtSql = sql`NULL`;
+      } else {
+        // Pas de changement de statut de blocage :
+        // si blocked_reason est fourni on le met à jour, sinon on conserve
+        blockedReasonSql =
+          input.blocked_reason !== undefined
+            ? sql`${input.blocked_reason}`
+            : sql`${current.blocked_reason}`;
+        blockedAtSql = current.blocked_at === null ? sql`NULL` : sql`${current.blocked_at}`;
+      }
+      const subjectsArray = input.subjects ?? current.subjects ?? [];
+      // Array littéral PG via sql.join paramétré (pattern prouvé : seed.ts /
+      // attendance.repository). Chaque élément est un placeholder bindé - pas
+      // d'échappement manuel de quotes, défense en profondeur vs SQLi.
+      // Tableau vide => `ARRAY[]::text[]`, valide en PG.
+      const subjectsLiteral = sql`ARRAY[${sql.join(
+        subjectsArray.map((s) => sql`${s}`),
+        sql`, `
+      )}]::text[]`;
+      // undefined = conserver la valeur courante ; null/valeur = écraser.
+      const nextMatricule = input.matricule === undefined ? current.matricule : input.matricule;
+      const matriculeSql = nextMatricule === null ? sql`NULL` : sql`${nextMatricule}`;
+      const monthlySalaryVal = input.monthly_salary === undefined ? current.monthly_salary : input.monthly_salary;
+      const hourlyRateVal = input.hourly_rate === undefined ? current.hourly_rate : input.hourly_rate;
+      const monthlySalarySql = monthlySalaryVal === null ? sql`NULL` : sql`${monthlySalaryVal}`;
+      const hourlyRateSql = hourlyRateVal === null ? sql`NULL` : sql`${hourlyRateVal}`;
 
-    const updatedBySql = actorId ? sql`${actorId}::uuid` : sql`NULL`;
+      const updatedBySql = actorId ? sql`${actorId}::uuid` : sql`NULL`;
 
-    await this.db.execute(sql`
-      UPDATE teachers
-      SET
-        matricule      = ${matriculeSql},
-        type           = ${input.type ?? current.type},
-        subjects       = ${subjectsLiteral},
-        hourly_rate    = ${hourlyRateSql},
-        monthly_salary = ${monthlySalarySql},
-        is_blocked     = ${nextIsBlocked},
-        blocked_reason = ${blockedReasonSql},
-        blocked_at     = ${blockedAtSql},
-        updated_at     = NOW(),
-        updated_by     = ${updatedBySql}
-      WHERE id = ${teacherId}
-    `);
+      await tx.execute(sql`
+        UPDATE teachers
+        SET
+          matricule      = ${matriculeSql},
+          type           = ${input.type ?? current.type},
+          subjects       = ${subjectsLiteral},
+          hourly_rate    = ${hourlyRateSql},
+          monthly_salary = ${monthlySalarySql},
+          is_blocked     = ${nextIsBlocked},
+          blocked_reason = ${blockedReasonSql},
+          blocked_at     = ${blockedAtSql},
+          updated_at     = NOW(),
+          updated_by     = ${updatedBySql}
+        WHERE id = ${teacherId}
+      `);
 
-    if (input.teaching_assignments !== undefined) {
-      const teachingAssignments = input.teaching_assignments;
-      await this.db.transaction(async (tx) => {
-        await tx.execute(sql`DELETE FROM teacher_subject_assignments WHERE teacher_id = ${teacherId}::uuid`);
+      if (input.teaching_assignments !== undefined) {
+        const teachingAssignments = input.teaching_assignments;
+        await tx.execute(sql`
+          DELETE FROM teacher_subject_assignments a USING classes c, school_years sy
+          WHERE a.teacher_id = ${teacherId}::uuid AND c.id = a.class_id
+            AND sy.id = c.school_year_id AND sy.status = 'active'
+        `);
         if (teachingAssignments.length) {
           await tx.execute(sql`
             INSERT INTO teacher_subject_assignments (teacher_id, subject_id, class_id)
@@ -527,11 +548,12 @@ export class TeachersRepository {
             ON CONFLICT (teacher_id, subject_id, class_id) DO NOTHING
           `);
         }
-      });
-    }
+      }
 
-    return this.getTeacherById(teacherId);
+      return repository.getTeacherById(teacherId);
+    }, { isolationLevel: 'serializable' });
   }
+
 
   /**
    * Génère un nouveau mot de passe temporaire pour le prof, le hashe, met must_change_password=true.

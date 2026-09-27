@@ -11,16 +11,8 @@ import { canonicalizeSubject, canonicalizeSubjectList } from '../../shared/utils
 import { defaultEmailSender } from '../notifications/notifications.service.js';
 import { logger } from '../../shared/observability/logger.js';
 
-export class TeachersModuleError extends Error {
-  constructor(
-    message: string,
-    public readonly statusCode: number,
-    public readonly code: string
-  ) {
-    super(message);
-    this.name = 'TeachersModuleError';
-  }
-}
+export { TeachersModuleError } from './teachers.types.js';
+import { TeachersModuleError } from './teachers.types.js';
 
 // Extrait les champs utiles d'une erreur PostgreSQL (driver pg / DrizzleQueryError).
 // L'erreur Drizzle enveloppe l'erreur pg d'origine dans `cause`, qui porte
@@ -158,18 +150,30 @@ const toDTO = (row: {
 export class TeachersService {
   constructor(private readonly repository: TeachersRepository) {}
 
-  private async assertTeachingAssignments(assignments: Array<{ subject_id: string; class_id: string }> | undefined): Promise<void> {
+  private async assertTeachingAssignments(assignments: Array<{ subject_id: string; class_id: string }> | undefined, repository = this.repository): Promise<void> {
     if (assignments === undefined) return;
     const uniqueAssignments = [...new Map(
       assignments.map((assignment) => [`${assignment.subject_id}:${assignment.class_id}`, assignment])
     ).values()];
-    const validCount = await this.repository.countValidTeachingAssignments(uniqueAssignments);
+    if (uniqueAssignments.length !== assignments.length) {
+      throw new TeachersModuleError('Une association matière–classe ne peut apparaître qu’une fois', 400, 'DUPLICATE_TEACHING_ASSIGNMENT');
+    }
+    const validCount = await repository.countValidTeachingAssignments(uniqueAssignments);
     if (validCount !== uniqueAssignments.length) {
       throw new TeachersModuleError(
-        'Chaque matière doit correspondre au niveau de la classe sélectionnée',
+        'Chaque matière doit correspondre au niveau d’une classe active de l’année active',
         400,
         'INVALID_TEACHING_ASSIGNMENT'
       );
+    }
+  }
+
+  private async getHomeroomReminder(): Promise<Array<{ id: string; name: string }>> {
+    try {
+      return await this.repository.listClassesWithoutHomeroomTeacher();
+    } catch {
+      logger.warn({ code: 'HOMEROOM_REMINDER_UNAVAILABLE' }, 'Homeroom reminder unavailable');
+      return [];
     }
   }
 
@@ -226,8 +230,8 @@ export class TeachersService {
       const created = await this.repository.createTeacher({
         ...input,
         subjects: canonicalizeSubjectList(input.subjects, subjectCatalog),
-      });
-      return toDTO(created);
+      }, (repository) => this.assertTeachingAssignments(input.teaching_assignments, repository));
+      return { ...toDTO(created), classes_without_homeroom_teacher: input.teaching_assignments === undefined ? [] : await this.getHomeroomReminder() };
     } catch (error) {
       if (isMatriculeUniqueViolation(error)) {
         throw new TeachersModuleError(
@@ -246,6 +250,10 @@ export class TeachersService {
     const current = await this.repository.getTeacherById(teacherId);
     if (!current) {
       throw new TeachersModuleError('Teacher not found', 404, 'TEACHER_NOT_FOUND');
+    }
+
+    if (input.teaching_assignments !== undefined && (current.is_blocked || !current.is_active || input.is_blocked === true || input.is_active === false)) {
+      throw new TeachersModuleError('Un professeur bloqué ou inactif ne peut recevoir d’affectation', 409, 'TEACHER_UNAVAILABLE');
     }
 
     await this.assertTeachingAssignments(input.teaching_assignments);
@@ -313,7 +321,13 @@ export class TeachersService {
           hourly_rate: nextHourlyRate,
           monthly_salary: nextMonthlySalary,
         },
-        actorId ?? null
+        actorId ?? null,
+        async (repository, lockedTeacher) => {
+          if (input.teaching_assignments !== undefined && (lockedTeacher.is_blocked || !lockedTeacher.is_active || input.is_blocked === true || input.is_active === false)) {
+            throw new TeachersModuleError('Un professeur bloqué ou inactif ne peut recevoir d’affectation', 409, 'TEACHER_UNAVAILABLE');
+          }
+          await this.assertTeachingAssignments(input.teaching_assignments, repository);
+        }
       );
     } catch (error) {
       if (isMatriculeUniqueViolation(error)) {
@@ -330,7 +344,7 @@ export class TeachersService {
     if (!updated) {
       throw new TeachersModuleError('Teacher not found', 404, 'TEACHER_NOT_FOUND');
     }
-    return toDTO(updated);
+    return { ...toDTO(updated), classes_without_homeroom_teacher: input.teaching_assignments === undefined ? [] : await this.getHomeroomReminder() };
   }
 
   async softDeleteTeacher(teacherId: string) {
