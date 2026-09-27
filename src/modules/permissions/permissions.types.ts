@@ -71,6 +71,11 @@ export const PERMISSION_KEYS = [
   'subscriptions.revenue',
 ] as const satisfies readonly PermissionKey[];
 
+// Les gardes API sont typés avec PermissionKey : toute extension de ce type
+// doit aussi être inscrite au catalogue, sinon le build échoue.
+type CatalogueCoverage<T extends (typeof PERMISSION_KEYS)[number]> = T;
+export type CataloguedPermissionKey = CatalogueCoverage<PermissionKey>;
+
 const permissionKeySchema = z.enum(PERMISSION_KEYS);
 
 export const createPositionBodySchema = z.object({

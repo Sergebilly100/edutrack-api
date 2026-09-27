@@ -1,6 +1,7 @@
 import argon2 from 'argon2';
 
 import { PermissionsRepository } from './permissions.repository.js';
+import { buildPermissionCatalogue } from './permissions.catalogue.js';
 import { recordPasswordReset } from '../../shared/auth/token-version.js';
 
 type ClaimsCoreFields = {
@@ -84,6 +85,44 @@ export class PermissionsModuleError extends Error {
 export class PermissionsService {
   constructor(private readonly repository: PermissionsRepository) {}
 
+  private async requireSchoolConfig(schemaName: string) {
+    const config = await this.repository.getSchoolConfigBySchemaName(schemaName);
+    if (!config) {
+      throw new PermissionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
+    }
+    return config;
+  }
+
+  async getCatalogue(schemaName: string) {
+    const config = await this.requireSchoolConfig(schemaName);
+    return buildPermissionCatalogue({
+      canEditSmsTemplate: config.can_edit_sms_template,
+      smsEnabled: config.sms_enabled,
+      monetizeParentAlerts: config.monetize_parent_alerts,
+    });
+  }
+
+  private async validateSavablePermissions(schemaName: string, permissions: readonly PermissionKey[]) {
+    const catalogue = await this.getCatalogue(schemaName);
+    for (const key of new Set(permissions)) {
+      const entry = catalogue.permissions.find((permission) => permission.key === key);
+      if (!entry) {
+        throw new PermissionsModuleError('Permission inconnue', 400, 'INVALID_PERMISSION');
+      }
+      if (!entry.available) {
+        throw new PermissionsModuleError(
+          `${entry.label} : ${entry.unavailableReason}`, 403, 'PERMISSION_FEATURE_UNAVAILABLE'
+        );
+      }
+    }
+    return dedupePermissions(permissions);
+  }
+
+  async getSchoolConfig(schemaName: string) {
+    const { school } = await this.getConfig(schemaName, false);
+    return { school };
+  }
+
   // Règle d'exclusivité : la permission de finalisation de la conduite ne peut
   // être détenue que par un seul poste actif à la fois dans l'école.
   /**
@@ -122,8 +161,8 @@ export class PermissionsService {
       this.repository.getSchoolConfigBySchemaName(schemaName),
       includeAdministration ? this.repository.listPositions() : Promise.resolve([]),
       includeAdministration ? this.repository.listAdministrativeUsers() : Promise.resolve([]),
-      this.repository.countActiveUsers(),
-      this.repository.countActiveAdministrativeUsers(),
+      includeAdministration ? this.repository.countActiveUsers() : Promise.resolve(0),
+      includeAdministration ? this.repository.countActiveAdministrativeUsers() : Promise.resolve(0),
     ]);
 
     if (!schoolConfig) {
@@ -139,9 +178,7 @@ export class PermissionsService {
         address: schoolConfig.address ?? '',
         teachingType: schoolConfig.teaching_type ?? 'general',
         maxUsers: schoolConfig.max_users,
-        currentUsers: adminUsersCount,
-        totalUsers: currentUsers,
-        adminUsersCount,
+        ...(includeAdministration ? { currentUsers: adminUsersCount, totalUsers: currentUsers, adminUsersCount } : {}),
         canEditSmsTemplate: schoolConfig.can_edit_sms_template,
         allowTeacherQrSkip: schoolConfig.allow_teacher_qr_skip,
         logoUrl: schoolConfig.logo_url,
@@ -151,13 +188,9 @@ export class PermissionsService {
       limits: {
         maxAdminPositions: schoolConfig.max_admin_positions,
       },
-      positions: positions.map((position) => ({
-        ...position,
-        permissions: withFeaturePermissionGuards(position.permissions, {
-          canEditSmsTemplate: schoolConfig.can_edit_sms_template,
-          monetizeParentAlerts: schoolConfig.monetize_parent_alerts,
-        }),
-      })),
+      // Retourner les attributions enregistrées sans les filtrer : les droits
+      // inactifs sont expliqués par le catalogue, jamais retirés à la lecture.
+      positions,
       users,
     };
   }
@@ -178,8 +211,7 @@ export class PermissionsService {
     }
   ) {
     await this.repository.updateSchoolConfig(schemaName, input);
-    const { school } = await this.getConfig(schemaName, false);
-    return { school };
+    return this.getSchoolConfig(schemaName);
   }
 
   async updateLimits(schemaName: string, input: { maxAdminPositions: number }) {
@@ -194,15 +226,7 @@ export class PermissionsService {
     }
 
     const positions = await this.repository.listPositions();
-    return {
-      positions: positions.map((position) => ({
-        ...position,
-        permissions: withFeaturePermissionGuards(position.permissions, {
-          canEditSmsTemplate: schoolConfig.can_edit_sms_template,
-          monetizeParentAlerts: schoolConfig.monetize_parent_alerts,
-        }),
-      })),
-    };
+    return { positions };
   }
 
   async createPosition(input: {
@@ -211,15 +235,18 @@ export class PermissionsService {
     createdBy: string;
     schemaName: string;
   }) {
-    const schoolConfig = await this.repository.getSchoolConfigBySchemaName(input.schemaName);
-    if (!schoolConfig) {
-      throw new PermissionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
+    if (input.permissions.includes(PermissionsService.EXCLUSIVE_PERMISSION)) {
+      return this.repository.withExclusivePermissionLock((repository) =>
+        new PermissionsService(repository).saveNewPosition(input)
+      );
     }
+    return this.saveNewPosition(input);
+  }
 
-    const guardedPermissions = withFeaturePermissionGuards(input.permissions, {
-      canEditSmsTemplate: schoolConfig.can_edit_sms_template,
-      monetizeParentAlerts: schoolConfig.monetize_parent_alerts,
-    });
+  private async saveNewPosition(input: {
+    name: string; permissions: PermissionKey[]; createdBy: string; schemaName: string;
+  }) {
+    const guardedPermissions = await this.validateSavablePermissions(input.schemaName, input.permissions);
     await this.assertExclusivePermissionAvailable(guardedPermissions);
 
     const position = await this.repository.createPosition({
@@ -235,17 +262,24 @@ export class PermissionsService {
     positionId: string,
     input: { name?: string; permissions?: PermissionKey[]; schemaName: string }
   ) {
-    const schoolConfig = await this.repository.getSchoolConfigBySchemaName(input.schemaName);
-    if (!schoolConfig) {
-      throw new PermissionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
+    if (input.permissions?.includes(PermissionsService.EXCLUSIVE_PERMISSION)) {
+      return this.repository.withExclusivePermissionLock((repository) =>
+        new PermissionsService(repository).savePositionChanges(positionId, input)
+      );
     }
+    return this.savePositionChanges(positionId, input);
+  }
 
+  private async savePositionChanges(
+    positionId: string,
+    input: { name?: string; permissions?: PermissionKey[]; schemaName: string }
+  ) {
+    // Un changement de nom conserve les droits existants, même si un service
+    // a été désactivé depuis leur attribution.
+    if (input.permissions === undefined) await this.requireSchoolConfig(input.schemaName);
     const nextPermissions =
       input.permissions !== undefined
-        ? withFeaturePermissionGuards(input.permissions, {
-            canEditSmsTemplate: schoolConfig.can_edit_sms_template,
-            monetizeParentAlerts: schoolConfig.monetize_parent_alerts,
-          })
+        ? await this.validateSavablePermissions(input.schemaName, input.permissions)
         : undefined;
 
     if (nextPermissions) {

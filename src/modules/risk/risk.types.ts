@@ -4,6 +4,13 @@ export const riskRuleUpsertSchema = z.object({
   thresholdValue: z.number().finite().min(0),
   periodDays: z.number().int().min(0).max(365).default(30),
   isActive: z.boolean(),
+  lateMinutes: z.number().int().min(0).nullable().optional(),
+});
+
+export const teacherLatenessRuleUpsertSchema = riskRuleUpsertSchema.extend({
+  thresholdValue: z.number().int().min(1),
+  periodDays: z.literal(30).default(30),
+  lateMinutes: z.number().int().min(0),
 });
 
 const riskLevelSchema = z.enum(['attention', 'warning', 'critical']);

@@ -36,6 +36,7 @@ type SchoolConfigRow = {
   max_users: number;
   max_admin_positions: number;
   can_edit_sms_template: boolean;
+  sms_enabled: boolean;
   monetize_parent_alerts: boolean;
   allow_teacher_qr_skip: boolean;
   logo_url: string | null;
@@ -90,6 +91,15 @@ const mapPosition = (row: PositionListRow) => ({
 
 export class PermissionsRepository {
   constructor(private readonly db: QueryExecutor) {}
+
+  async withExclusivePermissionLock<T>(operation: (repository: PermissionsRepository) => Promise<T>): Promise<T> {
+    return this.db.transaction(async (tx) => {
+      // Sérialiser vérification + écriture par école, sans changer le schéma
+      // ni les attributions historiques. Le verrou est libéré au commit/rollback.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(current_schema()), hashtext('conduct.finalize'))`);
+      return operation(new PermissionsRepository(tx));
+    });
+  }
 
   async countActiveUsers(): Promise<number> {
     const result = await this.db.execute<AssignmentCountRow>(sql`
@@ -160,6 +170,7 @@ export class PermissionsRepository {
         tenants.max_users,
         tenants.max_admin_positions,
         COALESCE(tenants.can_edit_sms_template, false) AS can_edit_sms_template,
+        COALESCE(features.is_enabled, false) AS sms_enabled,
         COALESCE(features.monetize_parent_alerts, false) AS monetize_parent_alerts,
         COALESCE(tenants.allow_teacher_qr_skip, false) AS allow_teacher_qr_skip,
         tenants.logo_url,

@@ -35,6 +35,20 @@ export const isAbsenceRisk = (
   isActive: boolean
 ): boolean => isActive && absenceCount >= threshold;
 
+export const TEACHER_LATENESS_PERIOD_DAYS = 30;
+
+/** Aucun nombre de retards par défaut : l'école doit enregistrer sa règle. */
+export const calculateTeacherSignals = (
+  absenceCount: number,
+  absenceRule: RiskRuleValues,
+  latenessCount: number,
+  latenessRule: RiskRuleValues | undefined
+) => {
+  const absencesSignal = isAbsenceRisk(absenceCount, absenceRule.thresholdValue, absenceRule.isActive);
+  const latenessSignal = Boolean(latenessRule?.isActive && latenessCount >= latenessRule.thresholdValue);
+  return { absencesSignal, latenessSignal, riskScore: Number(absencesSignal) + Number(latenessSignal) };
+};
+
 export const isGradeDropRisk = (
   drop: number | null,
   threshold: number,

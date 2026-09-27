@@ -20,7 +20,7 @@ const requireAnyPermission =
     }
   };
 import { buildRiskService } from './risk.service.js';
-import { riskRuleUpsertSchema, riskStudentsQuerySchema, riskTeachersQuerySchema } from './risk.types.js';
+import { riskRuleUpsertSchema, teacherLatenessRuleUpsertSchema, riskStudentsQuerySchema, riskTeachersQuerySchema } from './risk.types.js';
 
 const handleError = (
   request: FastifyRequest,
@@ -109,7 +109,9 @@ export default async function riskController(app: FastifyInstance): Promise<void
         const params = z
           .object({ subjectType: z.enum(['student', 'teacher']), signalType: z.string().min(1) })
           .parse(request.params);
-        const body = riskRuleUpsertSchema.parse(request.body ?? {});
+        const schema = params.subjectType === 'teacher' && params.signalType === 'lateness'
+          ? teacherLatenessRuleUpsertSchema : riskRuleUpsertSchema;
+        const body = schema.parse(request.body ?? {});
         await withTenantSchema(claims.schemaName, async (tenantDb) =>
           buildRiskService(tenantDb).upsertRule({
             subjectType: params.subjectType,
@@ -117,6 +119,7 @@ export default async function riskController(app: FastifyInstance): Promise<void
             thresholdValue: body.thresholdValue,
             periodDays: body.periodDays,
             isActive: body.isActive,
+            lateMinutes: body.lateMinutes,
           })
         );
         return reply.send({ success: true });

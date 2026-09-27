@@ -8,6 +8,7 @@ import {
   isPaymentRisk,
   resolveRiskRule,
   resolveRollingRiskRule,
+  TEACHER_LATENESS_PERIOD_DAYS,
 } from './risk.calculations.js';
 
 
@@ -28,6 +29,7 @@ export type RiskRule = {
   thresholdValue: number;
   periodDays: number;
   isActive: boolean;
+  lateMinutes?: number | null;
 };
 
 export type StudentRiskListInput = {
@@ -68,10 +70,12 @@ export type TeacherRiskRow = {
   teacher_id: string;
   teacher_name: string;
   absence_count: number;
+  lateness_count: number;
   attendance_rate: number;
   absences_signal: boolean;
+  lateness_signal: boolean;
   risk_score: number;
-  level: 'none' | 'attention';
+  level: 'none' | 'attention' | 'warning';
 };
 
 export class RiskRepository {
@@ -80,14 +84,14 @@ export class RiskRepository {
   async listRules(): Promise<RiskRule[]> {
     const result = await this.db.execute<{
       id: string; subject_type: string; signal_type: string;
-      threshold_value: string; period_days: number; is_active: boolean;
+      threshold_value: string; period_days: number; is_active: boolean; late_minutes: number | null;
     }>(sql`
-      SELECT id::text, subject_type, signal_type, threshold_value::text, period_days, is_active
+      SELECT id::text, subject_type, signal_type, threshold_value::text, period_days, is_active, late_minutes
       FROM risk_alert_rules ORDER BY subject_type, signal_type
     `);
     return getRows<{
       id: string; subject_type: string; signal_type: string;
-      threshold_value: string; period_days: number; is_active: boolean;
+      threshold_value: string; period_days: number; is_active: boolean; late_minutes: number | null;
     }>(result).map((row) => ({
       id: row.id,
       subjectType: row.subject_type as RiskRule['subjectType'],
@@ -95,6 +99,7 @@ export class RiskRepository {
       thresholdValue: Number(row.threshold_value),
       periodDays: row.period_days,
       isActive: row.is_active,
+      lateMinutes: row.late_minutes,
     }));
   }
 
@@ -104,14 +109,16 @@ export class RiskRepository {
     thresholdValue: number;
     periodDays: number;
     isActive: boolean;
+    lateMinutes?: number | null;
   }): Promise<void> {
     await this.db.execute(sql`
-      INSERT INTO risk_alert_rules (subject_type, signal_type, threshold_value, period_days, is_active)
-      VALUES (${input.subjectType}, ${input.signalType}, ${input.thresholdValue}, ${input.periodDays}, ${input.isActive})
+      INSERT INTO risk_alert_rules (subject_type, signal_type, threshold_value, period_days, is_active, late_minutes)
+      VALUES (${input.subjectType}, ${input.signalType}, ${input.thresholdValue}, ${input.periodDays}, ${input.isActive}, ${input.lateMinutes ?? null})
       ON CONFLICT ("subject_type", "signal_type") DO UPDATE SET
         threshold_value = EXCLUDED.threshold_value,
         period_days = EXCLUDED.period_days,
         is_active = EXCLUDED.is_active,
+        late_minutes = EXCLUDED.late_minutes,
         updated_at = NOW()
     `);
   }
@@ -242,6 +249,16 @@ export class RiskRepository {
     return map;
   }
 
+  async computeTeacherLatenessCounts(): Promise<Map<string, number>> {
+    const result = await this.db.execute<{ teacher_id: string; cnt: number }>(sql`
+      SELECT teacher_id::text, COUNT(*)::int AS cnt FROM attendances_teacher
+      WHERE status = 'late'
+        AND date BETWEEN CURRENT_DATE - (${TEACHER_LATENESS_PERIOD_DAYS - 1})::int AND CURRENT_DATE
+      GROUP BY teacher_id
+    `);
+    return new Map(getRows<{ teacher_id: string; cnt: number }>(result).map((row) => [row.teacher_id, Number(row.cnt)]));
+  }
+
   async listStudentIds(): Promise<string[]> {
     const result = await this.db.execute<{ id: string }>(sql`
       SELECT id::text FROM students_with_class WHERE is_active = true AND class_id IS NOT NULL
@@ -253,7 +270,7 @@ export class RiskRepository {
     const result = await this.db.execute<{ id: string }>(sql`
       SELECT t.id::text FROM teachers t
       INNER JOIN users u ON u.id = t.user_id
-      WHERE u.is_active = true
+      WHERE u.is_active = true AND t.is_blocked = false
     `);
     return getRows<{ id: string }>(result).map((row) => row.id);
   }
@@ -286,17 +303,19 @@ export class RiskRepository {
   async upsertTeacherRisk(input: {
     teacherId: string;
     absencesSignal: boolean;
+    latenessSignal: boolean;
     riskScore: number;
     level: 'none' | 'attention' | 'warning' | 'critical';
   }): Promise<void> {
     await this.db.execute(sql`
       INSERT INTO teacher_risk_status (
-        teacher_id, absences_signal, risk_score, level, computed_at
+        teacher_id, absences_signal, lateness_signal, risk_score, level, computed_at
       ) VALUES (
-        ${input.teacherId}::uuid, ${input.absencesSignal}, ${input.riskScore}, ${input.level}::risk_level, NOW()
+        ${input.teacherId}::uuid, ${input.absencesSignal}, ${input.latenessSignal}, ${input.riskScore}, ${input.level}::risk_level, NOW()
       )
       ON CONFLICT ("teacher_id") DO UPDATE SET
         absences_signal = EXCLUDED.absences_signal,
+        lateness_signal = EXCLUDED.lateness_signal,
         risk_score = EXCLUDED.risk_score,
         level = EXCLUDED.level,
         computed_at = NOW()
@@ -375,7 +394,9 @@ export class RiskRepository {
 
   async listTeacherRisks(input: TeacherRiskListInput): Promise<{ rows: TeacherRiskRow[]; total: number }> {
     const offset = (input.page - 1) * input.limit;
-    const teacherAbsenceRule = (await this.listRules()).find(
+    const rules = await this.listRules();
+    const latenessRule = rules.find((rule) => rule.subjectType === 'teacher' && rule.signalType === 'lateness');
+    const teacherAbsenceRule = rules.find(
       (rule) => rule.subjectType === 'teacher' && rule.signalType === 'absences'
     );
     const ruleConfig = resolveRollingRiskRule(
@@ -386,32 +407,47 @@ export class RiskRepository {
     const dateRange = input.month
       ? sql`at.date >= ${startDate}::date AND at.date < (${startDate}::date + INTERVAL '1 month')`
       : sql`at.date >= CURRENT_DATE - (${ruleConfig.periodDays})::int`;
+    const latenessRange = input.month ? dateRange
+      : sql`at.date BETWEEN CURRENT_DATE - (${TEACHER_LATENESS_PERIOD_DAYS - 1})::int AND CURRENT_DATE`;
+    const latenessCounts = sql`
+      SELECT at.teacher_id, COUNT(*)::int AS cnt FROM attendances_teacher at
+      WHERE at.status = 'late' AND ${latenessRange} GROUP BY at.teacher_id
+    `;
     const teacherCounts = sql`
       SELECT t.id::text AS teacher_id,
              u.name AS teacher_name,
              COUNT(at.id) FILTER (WHERE at.status = 'absent')::int AS absence_count,
+             COALESCE(lc.cnt, 0)::int AS lateness_count,
              CASE WHEN COUNT(at.id) > 0
                   THEN ROUND(100.0 * (COUNT(at.id) - COUNT(at.id) FILTER (WHERE at.status = 'absent')) / COUNT(at.id))::int
                   ELSE 100 END AS attendance_rate
       FROM teachers t
       INNER JOIN users u ON u.id = t.user_id AND u.is_active = true
       LEFT JOIN attendances_teacher at ON at.teacher_id = t.id AND ${dateRange}
-      GROUP BY t.id, u.name
+      LEFT JOIN (${latenessCounts}) lc ON lc.teacher_id = t.id
+      WHERE t.is_blocked = false
+      GROUP BY t.id, u.name, lc.cnt
     `;
-    const isAtRisk = sql`${ruleConfig.isActive} AND absence_count >= ${ruleConfig.thresholdValue}`;
+    const absenceSignal = sql`(${ruleConfig.isActive} AND absence_count >= ${ruleConfig.thresholdValue})`;
+    const latenessSignal = latenessRule
+      ? sql`(${latenessRule.isActive} AND lateness_count >= ${latenessRule.thresholdValue})` : sql`FALSE`;
+    const score = sql`(CASE WHEN ${absenceSignal} THEN 1 ELSE 0 END + CASE WHEN ${latenessSignal} THEN 1 ELSE 0 END)`;
+    const isAtRisk = sql`(${absenceSignal} OR ${latenessSignal})`;
     const [itemsResult, totalResult] = await Promise.all([
       this.db.execute<TeacherRiskRow>(sql`
         WITH teacher_counts AS (${teacherCounts})
         SELECT teacher_id,
                teacher_name,
                absence_count,
+               lateness_count,
                attendance_rate,
-               ${isAtRisk} AS absences_signal,
-               CASE WHEN ${isAtRisk} THEN 1 ELSE 0 END::int AS risk_score,
-               CASE WHEN ${isAtRisk} THEN 'attention' ELSE 'none' END AS level
+               ${absenceSignal} AS absences_signal,
+               ${latenessSignal} AS lateness_signal,
+               ${score}::int AS risk_score,
+               CASE WHEN ${score} = 2 THEN 'warning' WHEN ${score} = 1 THEN 'attention' ELSE 'none' END AS level
         FROM teacher_counts
         WHERE (${input.atRisk} = false OR ${isAtRisk})
-        ORDER BY ${isAtRisk} DESC, absence_count DESC, teacher_name ASC
+        ORDER BY ${score} DESC, absence_count DESC, lateness_count DESC, teacher_name ASC
         LIMIT ${input.limit}
         OFFSET ${offset}
       `),

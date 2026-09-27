@@ -1568,6 +1568,34 @@ export const reportCards = tenant.table(
   })
 );
 
+// Règles et statuts existants depuis 0062, déclarés pour leurs évolutions Drizzle.
+export const riskLevelEnum = tenant.enum('risk_level', ['none', 'attention', 'warning', 'critical']);
+
+export const riskAlertRules = tenant.table('risk_alert_rules', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  subjectType: varchar('subject_type', { length: 16 }).notNull(),
+  signalType: varchar('signal_type', { length: 30 }).notNull(),
+  thresholdValue: numeric('threshold_value', { precision: 10, scale: 2 }).notNull(),
+  lateMinutes: integer('late_minutes'),
+  periodDays: integer('period_days').notNull().default(30),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({ subjectSignalUnique: unique('risk_alert_rules_subject_signal_unique').on(table.subjectType, table.signalType) }));
+
+export const teacherRiskStatus = tenant.table('teacher_risk_status', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  teacherId: uuid('teacher_id').notNull().references(() => teachers.id, { onDelete: 'cascade' }),
+  absencesSignal: boolean('absences_signal').notNull().default(false),
+  latenessSignal: boolean('lateness_signal').notNull().default(false),
+  riskScore: integer('risk_score').notNull().default(0),
+  level: riskLevelEnum('level').notNull().default('none'),
+  computedAt: timestamp('computed_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  teacherUnique: unique('teacher_risk_status_teacher_unique').on(table.teacherId),
+  levelIdx: index('idx_teacher_risk_level').on(table.level),
+}));
+
 export const reportCardLines = tenant.table(
   'report_card_lines',
   {

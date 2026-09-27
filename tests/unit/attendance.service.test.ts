@@ -29,6 +29,7 @@ vi.mock('../../src/shared/queue/attendance-queue.js', () => ({
 import { AttendanceService } from '../../src/modules/attendance/attendance.service.js';
 
 const repository = {
+  getTeacherLateToleranceMinutes: vi.fn(),
   findTeacherByUserId: vi.fn(),
   findScheduleContextForTeacher: vi.fn(),
   upsertCheckIn: vi.fn(),
@@ -51,6 +52,7 @@ const repository = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  repository.getTeacherLateToleranceMinutes.mockResolvedValue(15);
   repository.getSchoolFeatureFlags.mockResolvedValue({
     use_real_hours: false,
     geo_check_enabled: false,

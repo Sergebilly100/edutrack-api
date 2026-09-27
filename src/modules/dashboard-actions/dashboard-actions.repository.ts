@@ -100,7 +100,7 @@ export class DashboardActionsRepository {
       FROM teacher_risk_status trs
       INNER JOIN teachers t ON t.id = trs.teacher_id
       INNER JOIN users u ON u.id = t.user_id AND u.is_active = true
-      WHERE trs.absences_signal = true
+      WHERE (trs.absences_signal = true OR trs.lateness_signal = true) AND t.is_blocked = false
     `);
     return getRows<{ count: number }>(result)[0]?.count ?? 0;
   }

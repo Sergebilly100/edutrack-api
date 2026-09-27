@@ -6,6 +6,17 @@ import {
 } from '../../../../src/shared/utils/attendance.js';
 
 describe('shared/utils/attendance', () => {
+  it('applique la tolérance configurée au statut, y compris à la limite et après la fin', () => {
+    const start = new Date('2026-04-14T07:30:00Z');
+    const end = new Date('2026-04-14T09:00:00Z');
+    expect(calculateAttendanceStatus(new Date('2026-04-14T07:35:00Z'), start, end, 5).status).toBe('present');
+    expect(calculateAttendanceStatus(new Date('2026-04-14T07:36:00Z'), start, end, 5).status).toBe('late');
+    expect(calculateAttendanceStatus(start, start, end, 0).status).toBe('present');
+    expect(calculateAttendanceStatus(new Date('2026-04-14T07:31:00Z'), start, end, 0).status).toBe('late');
+    expect(calculateAttendanceStatus(new Date('2026-04-14T07:50:00Z'), start, end, 25).status).toBe('present');
+    expect(calculateAttendanceStatus(new Date('2026-04-14T09:01:00Z'), start, end, 120).status).toBe('absent');
+  });
+
   it('check-in a H+8min -> present, lateMinutes=8', () => {
     const slotStart = new Date('2026-04-14T07:30:00.000Z');
     const slotEnd = new Date('2026-04-14T09:00:00.000Z');

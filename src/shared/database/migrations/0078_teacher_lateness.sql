@@ -1,0 +1,2 @@
+ALTER TABLE "tenant"."risk_alert_rules" ADD COLUMN IF NOT EXISTS "late_minutes" integer;--> statement-breakpoint
+ALTER TABLE "tenant"."teacher_risk_status" ADD COLUMN IF NOT EXISTS "lateness_signal" boolean DEFAULT false NOT NULL;

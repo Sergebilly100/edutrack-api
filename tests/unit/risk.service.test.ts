@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_RISK_RULES,
+  calculateTeacherSignals,
   isAbsenceRisk,
   isGradeDropRisk,
   isPaymentRisk,
@@ -29,6 +30,16 @@ describe('deriveLevel (niveau de risque par score)', () => {
 });
 
 describe('risk signal calculations', () => {
+  it('combine les signaux enseignants sans seuil de retards implicite', () => {
+    const absenceRule = DEFAULT_RISK_RULES.teacherAbsences;
+    const latenessRule = { thresholdValue: 4, periodDays: 30, isActive: true };
+    expect(calculateTeacherSignals(3, absenceRule, 100, undefined)).toEqual({ absencesSignal: true, latenessSignal: false, riskScore: 1 });
+    expect(calculateTeacherSignals(0, absenceRule, 3, latenessRule).riskScore).toBe(0);
+    expect(calculateTeacherSignals(0, absenceRule, 4, latenessRule)).toEqual({ absencesSignal: false, latenessSignal: true, riskScore: 1 });
+    expect(calculateTeacherSignals(3, absenceRule, 4, latenessRule)).toEqual({ absencesSignal: true, latenessSignal: true, riskScore: 2 });
+    expect(calculateTeacherSignals(3, { ...absenceRule, isActive: false }, 4, { ...latenessRule, isActive: false }).riskScore).toBe(0);
+  });
+
   it('utilise les valeurs sûres par défaut pour chaque signal', () => {
     expect(DEFAULT_RISK_RULES).toEqual({
       studentAbsences: { thresholdValue: 3, periodDays: 30, isActive: true },

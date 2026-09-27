@@ -6,7 +6,7 @@ import {
 } from './risk.repository.js';
 import {
   DEFAULT_RISK_RULES,
-  isAbsenceRisk,
+  calculateTeacherSignals,
   resolveRollingRiskRule,
 } from './risk.calculations.js';
 
@@ -92,24 +92,20 @@ export class RiskService {
     const rules = await this.repository.listRules();
     const rule = rules.find((r) => r.subjectType === 'teacher' && r.signalType === 'absences');
     const ruleConfig = resolveRollingRiskRule(rule, DEFAULT_RISK_RULES.teacherAbsences);
+    const latenessRule = rules.find((r) => r.subjectType === 'teacher' && r.signalType === 'lateness');
 
     const counts = await this.repository.computeTeacherAbsenceCounts(ruleConfig.periodDays);
+    const latenessCounts = latenessRule?.isActive
+      ? await this.repository.computeTeacherLatenessCounts() : new Map<string, number>();
     const teacherIds = await this.repository.listTeacherIds();
 
     let count = 0;
     for (const teacherId of teacherIds) {
-      const absences = counts.get(teacherId) ?? 0;
-      const active = isAbsenceRisk(
-        absences,
-        ruleConfig.thresholdValue,
-        ruleConfig.isActive
-      );
-      const score = active ? 1 : 0;
+      const signals = calculateTeacherSignals(counts.get(teacherId) ?? 0, ruleConfig, latenessCounts.get(teacherId) ?? 0, latenessRule);
       await this.repository.upsertTeacherRisk({
         teacherId,
-        absencesSignal: active,
-        riskScore: score,
-        level: deriveLevel(score),
+        ...signals,
+        level: deriveLevel(signals.riskScore),
       });
       count += 1;
     }

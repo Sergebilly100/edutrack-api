@@ -30,11 +30,12 @@ const toUtcDateTime = (date: string, time: string): Date => {
   return new Date(`${date}T${time}.000Z`);
 };
 
-// Cette fonction calcule le statut de présence d'un pointage en fonction de l'heure de scan du QR code par rapport aux horaires du cours, en tenant compte d'une tolérance de 15 minutes pour les retards.
+// La tolérance est configurable par école ; 15 minutes conserve le comportement historique.
 export const calculateAttendanceStatus = (
   checkedInAt: Date | null,
   slotStart: Date,
-  slotEnd: Date
+  slotEnd: Date,
+  lateToleranceMinutes = 15
 ): AttendanceStatusResult => {
   if (!checkedInAt || checkedInAt > slotEnd) {
     return { status: ATTENDANCE_STATUS.ABSENT, lateMinutes: null };
@@ -42,7 +43,7 @@ export const calculateAttendanceStatus = (
 
   const diffMinutes = Math.floor((checkedInAt.getTime() - slotStart.getTime()) / 60000);
 
-  if (diffMinutes <= 15) {
+  if (diffMinutes <= lateToleranceMinutes) {
     return { status: ATTENDANCE_STATUS.PRESENT, lateMinutes: Math.max(0, diffMinutes) };
   }
 

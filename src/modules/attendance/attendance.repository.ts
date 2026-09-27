@@ -245,6 +245,15 @@ const normalizeSubjectSql = (value: ReturnType<typeof sql>): ReturnType<typeof s
 export class AttendanceRepository {
   constructor(private readonly db: QueryExecutor) {}
 
+  /** La désactivation du signal de risque ne change pas la qualification du pointage. */
+  async getTeacherLateToleranceMinutes(): Promise<number> {
+    const result = await this.db.execute<{ late_minutes: number | null }>(sql`
+      SELECT late_minutes FROM risk_alert_rules
+      WHERE subject_type = 'teacher' AND signal_type = 'lateness'
+    `);
+    return result.rows[0]?.late_minutes ?? 15;
+  }
+
   async markMissingTeacherAttendancesAsAbsent(): Promise<number> {
     const result = await this.db.execute<{ id: string }>(sql`
       WITH now_ctx AS (

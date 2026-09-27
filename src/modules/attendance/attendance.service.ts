@@ -175,7 +175,8 @@ export class AttendanceService {
     const checkedInAt = resolveActualOccurredAt(input.clientTimestamp);
     const slotStart = toSlotDateTime(date, schedule.slotStartTime);
     const slotEnd = toSlotDateTime(date, schedule.slotEndTime);
-    const status = calculateAttendanceStatus(checkedInAt, slotStart, slotEnd);
+    const tolerance = await this.repository.getTeacherLateToleranceMinutes();
+    const status = calculateAttendanceStatus(checkedInAt, slotStart, slotEnd, tolerance);
     const flags = await this.repository.getSchoolFeatureFlags(context.schemaName);
     const geo = resolveGeo({
       enabled: flags.geo_check_enabled,
@@ -572,7 +573,8 @@ export class AttendanceService {
       if (!existing?.checked_in_at) {
         const slotStart = toSlotDateTime(date, schedule.slotStartTime);
         const slotEnd = toSlotDateTime(date, schedule.slotEndTime);
-        const status = calculateAttendanceStatus(scannedAt, slotStart, slotEnd);
+        const tolerance = await this.repository.getTeacherLateToleranceMinutes();
+        const status = calculateAttendanceStatus(scannedAt, slotStart, slotEnd, tolerance);
 
         await this.repository.upsertCheckIn({
           teacherId: teacher.id,

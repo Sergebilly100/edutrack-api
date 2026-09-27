@@ -61,6 +61,36 @@ const handleError = (
 
 export default async function permissionsController(app: FastifyInstance): Promise<void> {
   app.get(
+    '/api/v1/permissions/catalogue',
+    { preHandler: requirePermission('settings.positions') },
+    async (request, reply) => {
+      try {
+        const schemaName = request.user!.schemaName;
+        return reply.send(await withTenantSchema(schemaName, (tenantDb) =>
+          buildPermissionsService(tenantDb).getCatalogue(schemaName)
+        ));
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.get(
+    '/api/v1/permissions/config/school',
+    { preHandler: requirePermission('settings.school') },
+    async (request, reply) => {
+      try {
+        const schemaName = request.user!.schemaName;
+        return reply.send(await withTenantSchema(schemaName, (tenantDb) =>
+          buildPermissionsService(tenantDb).getSchoolConfig(schemaName)
+        ));
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.get(
     '/api/v1/permissions/config',
     { preHandler: requirePermission('settings.positions') },
     async (request, reply) => {

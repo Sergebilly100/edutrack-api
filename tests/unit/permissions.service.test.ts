@@ -25,6 +25,7 @@ import {
   PermissionsService,
   resolveEffectivePermissions,
 } from '../../src/modules/permissions/permissions.service.js';
+import { PERMISSION_KEYS } from '../../src/modules/permissions/permissions.types.js';
 
 const repository = {
   getSchoolConfigBySchemaName: vi.fn(),
@@ -44,10 +45,15 @@ const repository = {
   updateAdministrativeUserPasswordHash: vi.fn(),
   revokeAllUserRefreshTokens: vi.fn(),
   findAdministrativeUserById: vi.fn(),
+  listPositions: vi.fn(),
+  listAdministrativeUsers: vi.fn(),
+  updateSchoolConfig: vi.fn(),
+  withExclusivePermissionLock: vi.fn(),
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  repository.withExclusivePermissionLock.mockImplementation((operation) => operation(repository));
   mocks.hash.mockResolvedValue('hashed-password');
   mocks.getPlanLimitsBySchemaName.mockResolvedValue({ max_users: 100, max_admin_positions: 10 });
   mocks.recordPasswordReset.mockResolvedValue(undefined);
@@ -511,7 +517,7 @@ describe('permissions.service resetAdministrativeUserPassword', () => {
 // Suite 6 : withSmsTemplatePermissionGuard (via createPosition)
 // ---------------------------------------------------------------------------
 describe('permissions.service withSmsTemplatePermissionGuard (via createPosition)', () => {
-  it('ne sauvegarde pas settings.sms_templates si can_edit_sms_template est false', async () => {
+  it('refuse explicitement settings.sms_templates si can_edit_sms_template est false', async () => {
     repository.getSchoolConfigBySchemaName.mockResolvedValue({ can_edit_sms_template: false });
     repository.createPosition.mockResolvedValue({
       id: 'pos-1',
@@ -520,18 +526,13 @@ describe('permissions.service withSmsTemplatePermissionGuard (via createPosition
     });
 
     const service = new PermissionsService(repository as never);
-    await service.createPosition({
+    await expect(service.createPosition({
       name: 'Poste Test',
       permissions: ['teachers.view', 'settings.sms_templates'],
       createdBy: 'dir-1',
       schemaName: 'school_sainte_marie',
-    });
-
-    expect(repository.createPosition).toHaveBeenCalledWith(
-      expect.objectContaining({
-        permissions: expect.not.arrayContaining(['settings.sms_templates']),
-      })
-    );
+    })).rejects.toMatchObject({ code: 'PERMISSION_FEATURE_UNAVAILABLE', statusCode: 403 });
+    expect(repository.createPosition).not.toHaveBeenCalled();
   });
 
   it('sauvegarde settings.sms_templates si can_edit_sms_template est true', async () => {
@@ -641,5 +642,68 @@ describe('permissions.service exclusivité conduct.finalize', () => {
     await service.updatePosition('pos-1', { permissions: ['students.view'], schemaName: 'school_test' });
 
     expect(repository.findPositionHoldingExclusivePermission).not.toHaveBeenCalled();
+  });
+});
+
+describe('C14 sauvegarde exhaustive et conservation des attributions', () => {
+  it.each(PERMISSION_KEYS)('autorise la sauvegarde de %s quand ses services sont actifs', async (permission) => {
+    repository.getSchoolConfigBySchemaName.mockResolvedValue({
+      can_edit_sms_template: true, sms_enabled: true, monetize_parent_alerts: true,
+    });
+    repository.findPositionHoldingExclusivePermission.mockResolvedValue(null);
+    repository.createPosition.mockResolvedValue({ permissions: [permission] });
+    repository.updatePosition.mockResolvedValue({ permissions: [permission] });
+    const service = new PermissionsService(repository as never);
+    await service.createPosition({ name: 'Poste', permissions: [permission], createdBy: 'dir', schemaName: 'school_test' });
+    await service.updatePosition('poste', { permissions: [permission], schemaName: 'school_test' });
+    expect(repository.createPosition).toHaveBeenCalledWith(expect.objectContaining({ permissions: [permission] }));
+    expect(repository.updatePosition).toHaveBeenCalledWith('poste', { permissions: [permission] });
+  });
+
+  const conditionalKeys = PERMISSION_KEYS.filter((key) => key === 'settings.sms_templates' || key.startsWith('subscriptions.'));
+  it.each(conditionalKeys)('refuse %s à la création et à la mise à jour sans son activation', async (permission) => {
+    const service = new PermissionsService(repository as never);
+    await expect(service.createPosition({ name: 'Poste', permissions: [permission], createdBy: 'dir', schemaName: 'school_test' }))
+      .rejects.toMatchObject({ code: 'PERMISSION_FEATURE_UNAVAILABLE', statusCode: 403 });
+    await expect(service.updatePosition('poste', { permissions: [permission], schemaName: 'school_test' }))
+      .rejects.toMatchObject({ code: 'PERMISSION_FEATURE_UNAVAILABLE', statusCode: 403 });
+    expect(repository.createPosition).not.toHaveBeenCalled();
+    expect(repository.updatePosition).not.toHaveBeenCalled();
+  });
+
+  it.each([[true, false], [false, true]])('requiert service SMS=%s et monétisation=%s ensemble', async (smsEnabled, monetizeParentAlerts) => {
+    repository.getSchoolConfigBySchemaName.mockResolvedValue({ sms_enabled: smsEnabled, monetize_parent_alerts: monetizeParentAlerts });
+    await expect(new PermissionsService(repository as never).createPosition({
+      name: 'Poste', permissions: ['subscriptions.view'], createdBy: 'dir', schemaName: 'school_test',
+    })).rejects.toMatchObject({ code: 'PERMISSION_FEATURE_UNAVAILABLE' });
+    expect(repository.createPosition).not.toHaveBeenCalled();
+  });
+
+  it('ne consulte aucun poste ou utilisateur pour lire ou modifier les informations école', async () => {
+    const service = new PermissionsService(repository as never);
+    expect(Object.keys(await service.getSchoolConfig('school_test'))).toEqual(['school']);
+    expect(Object.keys(await service.updateSchoolConfig('school_test', { name: 'École' }))).toEqual(['school']);
+    expect(repository.listPositions).not.toHaveBeenCalled();
+    expect(repository.listAdministrativeUsers).not.toHaveBeenCalled();
+    expect(repository.countActiveUsers).not.toHaveBeenCalled();
+    expect(repository.countActiveAdministrativeUsers).not.toHaveBeenCalled();
+  });
+
+  it('la lecture et le renommage ne retirent pas des droits historiques devenus inactifs', async () => {
+    const permissions = ['settings.sms_templates', 'subscriptions.view'];
+    repository.listPositions.mockResolvedValue([{ id: 'poste', permissions }]);
+    repository.listAdministrativeUsers.mockResolvedValue([]);
+    const service = new PermissionsService(repository as never);
+    expect((await service.getConfig('school_test')).positions[0].permissions).toEqual(permissions);
+    expect((await service.listPositions('school_test')).positions[0].permissions).toEqual(permissions);
+    await service.updatePosition('poste', { name: 'Nouveau nom', schemaName: 'school_test' });
+    expect(repository.updatePosition).toHaveBeenCalledWith('poste', { name: 'Nouveau nom' });
+  });
+
+  it('dédoublonne la sélection explicite sans ajouter de droit de lecture implicitement', async () => {
+    await new PermissionsService(repository as never).createPosition({
+      name: 'Poste', permissions: ['payments.cancel', 'attendance.mark_students', 'payments.cancel'], createdBy: 'dir', schemaName: 'school_test',
+    });
+    expect(repository.createPosition).toHaveBeenCalledWith(expect.objectContaining({ permissions: ['attendance.mark_students', 'payments.cancel'] }));
   });
 });

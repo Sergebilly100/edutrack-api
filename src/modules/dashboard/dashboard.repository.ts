@@ -194,16 +194,24 @@ export function buildDashboardRepository(db: TenantDb) {
         LEFT JOIN level_grade_counts lgc ON lgc.level_id = lc.level_id
         ORDER BY lc.order_index, lc.level_name
       `),
-      db.execute<{ student_absences: number; student_grades: number; student_payments: number; teacher_absences: number }>(sql`
+      db.execute<{ student_absences: number; student_grades: number; student_payments: number; teacher_absences: number; teacher_lateness: number; teachers_at_risk: number }>(sql`
+        WITH eligible_teacher_risks AS (
+          SELECT trs.absences_signal, trs.lateness_signal
+          FROM teacher_risk_status trs
+          INNER JOIN teachers t ON t.id = trs.teacher_id AND t.is_blocked = false
+          INNER JOIN users u ON u.id = t.user_id AND u.is_active = true
+        )
         SELECT
           (SELECT COUNT(*)::int FROM student_risk_status WHERE absences_signal = true) AS student_absences,
           (SELECT COUNT(*)::int FROM student_risk_status WHERE grades_signal = true) AS student_grades,
           (SELECT COUNT(*)::int FROM student_risk_status WHERE payment_signal = true) AS student_payments,
-          (SELECT COUNT(*)::int FROM teacher_risk_status WHERE absences_signal = true) AS teacher_absences
+          (SELECT COUNT(*)::int FROM eligible_teacher_risks WHERE absences_signal = true) AS teacher_absences,
+          (SELECT COUNT(*)::int FROM eligible_teacher_risks WHERE lateness_signal = true) AS teacher_lateness,
+          (SELECT COUNT(*)::int FROM eligible_teacher_risks WHERE absences_signal OR lateness_signal) AS teachers_at_risk
       `),
     ]);
     const population = populationResult.rows[0] ?? { active_students: 0, active_teachers: 0, active_classes: 0 };
-    const risks = risksResult.rows[0] ?? { student_absences: 0, student_grades: 0, student_payments: 0, teacher_absences: 0 };
+    const risks = risksResult.rows[0] ?? { student_absences: 0, student_grades: 0, student_payments: 0, teacher_absences: 0, teacher_lateness: 0, teachers_at_risk: 0 };
     return {
       population: { activeStudents: population.active_students, activeTeachers: population.active_teachers, activeClasses: population.active_classes },
       academic: academicResult.rows.map((row) => ({
@@ -218,7 +226,7 @@ export function buildDashboardRepository(db: TenantDb) {
         gradeCount: row.grade_count,
         gradesAtLeastTen: row.grades_at_least_ten,
       })),
-      risks: { studentAbsences: risks.student_absences, studentGrades: risks.student_grades, studentPayments: risks.student_payments, teacherAbsences: risks.teacher_absences },
+      risks: { studentAbsences: risks.student_absences, studentGrades: risks.student_grades, studentPayments: risks.student_payments, teacherAbsences: risks.teacher_absences, teacherLateness: risks.teacher_lateness, teachersAtRisk: risks.teachers_at_risk },
     };
   }
 
