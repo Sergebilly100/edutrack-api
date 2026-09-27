@@ -123,7 +123,7 @@ describe('F01–F07/F30/F34/F35 — parcours école avec persistance', () => {
     await queryTenant('INSERT INTO teacher_subject_assignments (teacher_id,subject_id,class_id) VALUES ($1,$2,$3)',[source!.teacher_id,subject.id,source!.class_id]);
     try {
       const result = await request().post(`/api/v1/schedule/periods/${source!.schedule_period_id}/duplicate`).set(headers)
-        .send({ new_name: 'Période dupliquée QA', new_valid_from: '2095-01-01', new_valid_to: '2095-03-31' });
+        .send({ new_name: 'Période dupliquée QA', new_valid_from: '2095-01-03', new_valid_to: '2095-04-03' });
       expect(result.status, JSON.stringify(result.body)).toBe(201);
       expect(result.body.copied_schedules_count).toBe(1);
       const periodId = result.body.period.id as string;

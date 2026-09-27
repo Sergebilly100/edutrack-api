@@ -18,7 +18,7 @@ export type QueryExecutor = {
 };
 
 export type TransactionalQueryExecutor = QueryExecutor & {
-  transaction: <T>(fn: (tx: QueryExecutor) => Promise<T>) => Promise<T>;
+  transaction: <T>(fn: (tx: QueryExecutor) => Promise<T>, options?: { isolationLevel: 'serializable' }) => Promise<T>;
 };
 
 type ClassRow = { id: string; name: string };

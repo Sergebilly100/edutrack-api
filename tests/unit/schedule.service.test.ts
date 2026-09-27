@@ -166,14 +166,14 @@ describe('schedule.service', () => {
     const result = await duplicatePeriod(db, 'period-1', {
       newName: 'Copie',
       newValidFrom: '2026-04-20',
-      newValidTo: '2026-04-25',
+      newValidTo: '2026-04-26',
       createdBy: 'user-1',
     });
 
     expect(repositoryMocks.duplicatePeriodWithSchedules).toHaveBeenCalledWith(db, 'period-1', {
       name: 'Copie',
       validFrom: '2026-04-20',
-      validTo: '2026-04-25',
+      validTo: '2026-04-26',
       createdBy: 'user-1',
     });
     expect(result).toEqual({ period: { id: 'period-2' }, copiedCount: 5 });
@@ -195,15 +195,15 @@ describe('schedule.service', () => {
 
     const result = await createPeriodFromInput(db, {
       name: 'Période',
-      validFrom: '2026-04-01',
-      validTo: '2026-04-30',
+      validFrom: '2026-04-06',
+      validTo: '2026-05-03',
       createdBy: 'user-1',
     });
 
     expect(repositoryMocks.createSchedulePeriod).toHaveBeenCalledWith(db, {
       name: 'Période',
-      validFrom: '2026-04-01',
-      validTo: '2026-04-30',
+      validFrom: '2026-04-06',
+      validTo: '2026-05-03',
       createdBy: 'user-1',
     });
     expect(result).toEqual({ id: 'period-1' });
@@ -240,7 +240,7 @@ describe('C10 schedule duplication', () => {
     repositoryMocks.listScheduleCopyTargets.mockResolvedValue([{ teacherId: 'teacher', classId: 'class', subject: 'Maths' }]);
     repositoryMocks.isTeacherBlocked.mockResolvedValue(state === 'blocked');
     repositoryMocks.hasTeacherSubjectAssignment.mockResolvedValue(false);
-    await expect(duplicatePeriod(db, 'period-1', { newName: 'Copie', newValidFrom: '2026-10-01', newValidTo: '2026-10-31', createdBy: 'user' })).rejects.toThrow(state === 'blocked' ? 'Teacher is blocked' : 'Teacher must be assigned');
+    await expect(duplicatePeriod(db, 'period-1', { newName: 'Copie', newValidFrom: '2026-10-05', newValidTo: '2026-11-01', createdBy: 'user' })).rejects.toThrow(state === 'blocked' ? 'Teacher is blocked' : 'Teacher must be assigned');
     expect(repositoryMocks.duplicatePeriodWithSchedules).not.toHaveBeenCalled();
   });
 });

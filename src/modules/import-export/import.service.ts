@@ -2,6 +2,7 @@ import argon2 from 'argon2';
 import { randomBytes } from 'node:crypto';
 import ExcelJS from 'exceljs';
 
+import { weeklyPeriodSchema } from '../../shared/utils/schedule-period.js';
 import { emit } from '../../shared/events/event-bus.js';
 import { generateUsername } from '../../shared/utils/username.js';
 import { createTemporaryParentCredentials } from '../parents/parent-accounts.service.js';
@@ -375,65 +376,18 @@ const parseDateToIso = (value: string): string | null => {
   return parsed.toISOString().slice(0, 10);
 };
 
-const isMonday = (isoDate: string): boolean => {
-  const parsed = new Date(`${isoDate}T00:00:00.000Z`);
-  if (Number.isNaN(parsed.getTime())) {
-    return false;
-  }
-
-  return parsed.getUTCDay() === 1;
-};
-
-const isSunday = (isoDate: string): boolean => {
-  const parsed = new Date(`${isoDate}T00:00:00.000Z`);
-  if (Number.isNaN(parsed.getTime())) {
-    return false;
-  }
-
-  return parsed.getUTCDay() === 0;
-};
-
-// validateSchedulePeriodInput est une fonction qui valide les paramètres de période d'import du planning, 
-// en s'assurant que les dates sont au format ISO, que weekStart est un lundi, que weekEnd est un lundi ultérieur à weekStart, 
-// et que la période couvre un nombre entier de semaines.
-const validateSchedulePeriodInput = (period?: SchedulePeriodInput): SchedulePeriodInput | undefined => {
-  if (!period) {
-    return undefined;
-  }
-
-  if (!period.weekStart || !period.weekEnd) {
+const validateSchedulePeriodInput = (period?: SchedulePeriodInput): SchedulePeriodInput => {
+  if (!period?.weekStart || !period.weekEnd) {
     throw new ImportModuleError(
-      'Période EDT invalide: weekStart et weekEnd sont requis.',
+      "Sélectionnez les deux dates de la période : du lundi au dimanche.",
       400,
       'IMPORT_INVALID_PERIOD'
     );
   }
-
-  // Un EDT doit toujours couvrir au moins une semaine complète, pour éviter les cas où des cours seraient perdus faute de période suffisamment longue pour les accueillir.
-  if (!isMonday(period.weekStart) || !isSunday(period.weekEnd) || period.weekStart >= period.weekEnd) {
-    throw new ImportModuleError(
-      `Impossible ! Les emplois du temps doivent couvrir des semaines complètes du lundi au dimanche entre ${period.weekStart} et ${period.weekEnd}`,
-      400,
-      'IMPORT_INVALID_PERIOD_RANGE'
-    );
+  const result = weeklyPeriodSchema.safeParse({ validFrom: period.weekStart, validTo: period.weekEnd });
+  if (!result.success) {
+    throw new ImportModuleError(result.error.issues[0]!.message, 400, 'IMPORT_INVALID_PERIOD_RANGE');
   }
-
-  const start = new Date(`${period.weekStart}T00:00:00.000Z`);
-  const end = new Date(`${period.weekEnd}T00:00:00.000Z`);
-  const diffMs = end.getTime() - start.getTime();
-  // La période couvre des semaines du lundi au dimanche inclus :
-  // on ajoute 1 jour (inclusif sur weekEnd) avant de vérifier le multiple de 7 jours
-  const MS_PER_DAY = 24 * 60 * 60 * 1000;
-  const MS_PER_WEEK = 7 * MS_PER_DAY;
-  const inclusiveMs = diffMs + MS_PER_DAY;
-  if (inclusiveMs % MS_PER_WEEK !== 0) {
-    throw new ImportModuleError(
-      `Impossible ! Les emplois du temps doivent couvrir des semaines complètes du lundi au dimanche entre ${period.weekStart} et ${period.weekEnd}`,
-      400,
-      'IMPORT_INVALID_PERIOD_RANGE'
-    );
-  }
-
   return period;
 };
 
@@ -499,10 +453,11 @@ const hasTransaction = (db: QueryExecutor): db is TransactionalQueryExecutor => 
 
 const runInTransaction = async <T>(
   db: QueryExecutor,
-  run: (executor: QueryExecutor) => Promise<T>
+  run: (executor: QueryExecutor) => Promise<T>,
+  options?: { isolationLevel: 'serializable' }
 ): Promise<T> => {
   if (hasTransaction(db)) {
-    return db.transaction(run);
+    return db.transaction(run, options);
   }
 
   return run(db);
@@ -741,7 +696,7 @@ export class ImportService {
       );
     }
 
-    return this.confirmSchedule(validation, db, options?.schedulePeriod, mode, options?.tenantContext);
+    return this.confirmSchedule(validation, db, options?.schedulePeriod, mode, options?.tenantContext, options?.conflictAcknowledged);
   }
 
   // listHistory retourne les rapports d'import passés pour le tenant, avec pagination et filtres optionnels par mois et type d'import.
@@ -1208,39 +1163,10 @@ export class ImportService {
     db: QueryExecutor,
     schedulePeriod?: SchedulePeriodInput
   ): Promise<ScheduleValidation> {
+    const period = validateSchedulePeriodInput(schedulePeriod);
     const parsed = await parseWorkbook(fileBuffer);
     ensureRequiredHeaders(parsed.rows, SCHEDULE_HEADERS);
-
-    const period = validateSchedulePeriodInput(schedulePeriod);
-    let resolvedPeriodBounds: { validFrom: string; validTo: string } | null = null;
-    if (!period) {
-      const today = new Date().toISOString().slice(0, 10);
-      const activePeriodId = await this.repository.findActiveSchedulePeriodId(db, today);
-      if (!activePeriodId) {
-        throw new ImportModuleError(
-          'Aucune période EDT active trouvée. Sélectionnez une période avant import.',
-          400,
-          'IMPORT_NO_ACTIVE_PERIOD'
-        );
-      }
-      const activePeriod = await this.repository.findSchedulePeriodById(db, activePeriodId);
-      if (!activePeriod) {
-        throw new ImportModuleError(
-          'Période EDT active introuvable.',
-          400,
-          'IMPORT_NO_ACTIVE_PERIOD'
-        );
-      }
-      resolvedPeriodBounds = {
-        validFrom: activePeriod.valid_from,
-        validTo: activePeriod.valid_to,
-      };
-    } else {
-      resolvedPeriodBounds = {
-        validFrom: period.weekStart,
-        validTo: period.weekEnd,
-      };
-    }
+    const resolvedPeriodBounds = { validFrom: period.weekStart, validTo: period.weekEnd };
 
     const [classes, teacherDirectory, timeSlots, assignments] = await Promise.all([
       this.repository.listClasses(db),
@@ -1698,13 +1624,13 @@ export class ImportService {
     db: QueryExecutor,
     schedulePeriod?: SchedulePeriodInput,
     importMode: ImportMode = 'merge',
-    tenantContext?: { tenantId: string; schemaName: string; actorUserId?: string; actorRole?: string }
+    tenantContext?: { tenantId: string; schemaName: string; actorUserId?: string; actorRole?: string },
+    conflictAcknowledged = false
   ): Promise<ConfirmReport> {
     this.ensureNoValidationErrors(validation.report);
     const period = validateSchedulePeriodInput(schedulePeriod);
-    const today = new Date().toISOString().slice(0, 10);
-    const periodStart = period?.weekStart ?? today;
-    const periodEnd = period?.weekEnd ?? periodStart;
+    const periodStart = period.weekStart;
+    const periodEnd = period.weekEnd;
 
     // on charge en parallèle les données de référence nécessaires à l'import du planning : classes, enseignants, créneaux horaires, salles.
     const [classes, teacherDirectory, timeSlots, rooms] = await Promise.all([
@@ -1807,17 +1733,16 @@ export class ImportService {
     // run est la fonction qui contient la logique principale d'import du planning. Elle itère sur les lignes validées du fichier Excel,
     // résout les références aux classes, enseignants, créneaux horaires, salles, et effectue les opérations d'insertion ou de mise à jour dans la base de données.
     const run = async (executor: QueryExecutor): Promise<ConfirmReport> => {
-      // La période et tous les créneaux sont écrits dans la même transaction.
-      const schedulePeriodId = period
-        ? await this.repository.findOrCreateSchedulePeriod(executor, {
-          name: `Import EDT ${periodStart} - ${periodEnd}`,
-          validFrom: periodStart,
-          validTo: periodEnd,
-        })
-        : await this.repository.findActiveSchedulePeriodId(executor, today);
-      if (!schedulePeriodId) {
-        throw new ImportModuleError('Aucune période EDT active trouvée.', 400, 'IMPORT_NO_ACTIVE_PERIOD');
+      // Recontrôler les chevauchements dans la transaction, avant toute écriture.
+      const overlapping = await this.repository.findOverlappingSchedulePeriods(executor, periodStart, periodEnd);
+      if (overlapping.length > 0 && !conflictAcknowledged) {
+        throw new ImportModuleError('Conflits EDT détectés. Merci de confirmer le remplacement.', 400, 'IMPORT_CONFLICT_ACK_REQUIRED');
       }
+      const schedulePeriodId = await this.repository.findOrCreateSchedulePeriod(executor, {
+        name: `Import EDT ${periodStart} - ${periodEnd}`,
+        validFrom: periodStart,
+        validTo: periodEnd,
+      });
       const assignments = await this.repository.listScheduleAssignments(executor);
       let imported = 0;
       let updated = 0;
@@ -1899,7 +1824,7 @@ export class ImportService {
       };
     };
 
-    const report = await runInTransaction(db, run);
+    const report = await runInTransaction(db, run, { isolationLevel: 'serializable' });
 
     if (tenantContext) {
       emit('import.completed', {

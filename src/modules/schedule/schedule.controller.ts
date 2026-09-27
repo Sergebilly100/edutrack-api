@@ -25,12 +25,13 @@ import {
   listActiveSchedulePeriods,
   listSchedulePeriods,
   updateSchedule,
-  updateSchedulePeriod,
+
 } from './schedule.repository.js';
 import {
   computeOneShotEndDate,
   assertTeacherCanBeScheduled,
   createPeriodFromInput,
+  updatePeriodFromInput,
   duplicatePeriod,
   getActiveSchedulesForDate,
   getWeeklySchedulesForDate,
@@ -91,7 +92,7 @@ const handleError = (
 ): FastifyReply => {
   if (error instanceof ZodError) {
     return reply.code(400).send({
-      error: 'Validation error',
+      error: error.issues[0]?.message ?? 'Validation error',
       code: 'BAD_REQUEST',
       statusCode: 400,
     });
@@ -327,7 +328,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
         await ensureScheduleTemporalColumns(ensureTenantDb(request));
         const { id } = paramsIdSchema.parse(request.params);
         const body = periodUpdatePayloadSchema.parse(request.body);
-        const period = await updateSchedulePeriod(ensureTenantDb(request), id, {
+        const period = await updatePeriodFromInput(ensureTenantDb(request), id, {
           name: body.name,
           validFrom: body.valid_from,
           validTo: body.valid_to,

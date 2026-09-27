@@ -553,7 +553,7 @@ describe('import.service - teachers confirm', () => {
 // ---------------------------------------------------------------------------
 
 describe('import.service - schedule dry-run', () => {
-  it('activePeriodId=null → IMPORT_NO_ACTIVE_PERIOD', async () => {
+  it('dates absentes → IMPORT_INVALID_PERIOD', async () => {
     repository.findActiveSchedulePeriodId.mockResolvedValueOnce(null);
     const service = new ImportService(repository);
 
@@ -564,7 +564,7 @@ describe('import.service - schedule dry-run', () => {
     await expect(service.dryRun('schedule', await toWorkbookBuffer(rows), db)).rejects.toMatchObject<
       Partial<ImportModuleError>
     >({
-      code: 'IMPORT_NO_ACTIVE_PERIOD',
+      code: 'IMPORT_INVALID_PERIOD',
       statusCode: 400,
     });
   });
@@ -577,18 +577,9 @@ describe('import.service - schedule dry-run', () => {
       { 'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': 'Mathématiques', 'Jour*': 'Lundi', 'Créneau*': '7h30 - 9h00', Salle: 'Salle A1' },
     ];
 
-    // The active period validFrom = today (2026-04-01, a Wednesday); Lundi 7h30 is already past
-    // for this week (2026-03-30), and next Lundi = 2026-04-06 < period end (2026-04-30) → future.
-    // The slot itself at 07:30 on 2026-04-06 is after now (2026-04-01 08:00), so no error.
-    // To trigger "past" we need a period that ends before the next Monday occurrence.
-    repository.findSchedulePeriodById.mockResolvedValueOnce({
-      id: 'period-1',
-      valid_from: '2026-03-30',
-      valid_to: '2026-04-01', // ends today → next Monday (2026-04-06) is out of range
+    const report = await service.dryRun('schedule', await toWorkbookBuffer(rows), db, {
+      schedulePeriod: { weekStart: '2026-03-23', weekEnd: '2026-03-29' },
     });
-    repository.findActiveSchedulePeriodId.mockResolvedValueOnce('period-1');
-
-    const report = await service.dryRun('schedule', await toWorkbookBuffer(rows), db);
     expect(report.valid).toBe(0);
     expect(report.errors).toEqual(
       expect.arrayContaining([
@@ -608,14 +599,9 @@ describe('import.service - schedule dry-run', () => {
       { 'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': 'Mathématiques', 'Jour*': 'Lundi', 'Créneau*': '7h30 - 9h00', Salle: 'Salle A1' },
     ];
 
-    repository.findSchedulePeriodById.mockResolvedValueOnce({
-      id: 'period-1',
-      valid_from: '2026-03-30',
-      valid_to: '2026-04-30',
+    const report = await service.dryRun('schedule', await toWorkbookBuffer(rows), db, {
+      schedulePeriod: { weekStart: '2026-03-30', weekEnd: '2026-05-03' },
     });
-    repository.findActiveSchedulePeriodId.mockResolvedValueOnce('period-1');
-
-    const report = await service.dryRun('schedule', await toWorkbookBuffer(rows), db);
 
     expect(report.valid).toBe(1);
     expect(report.errors).toEqual(
@@ -640,7 +626,7 @@ describe('import.service - schedule dry-run', () => {
       { 'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': 'Mathématiques', 'Jour*': 'Lundi', 'Créneau*': '7h30 - 9h00', Salle: 'Salle A1' },
     ];
 
-    const report = await service.dryRun('schedule', await toWorkbookBuffer(rows), db);
+    const report = await service.dryRun('schedule', await toWorkbookBuffer(rows), db, { schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-03' } });
     expect(report.errors).toEqual(
       expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining('ambigu') })])
     );
@@ -749,7 +735,7 @@ describe('import.service - schedule confirm', () => {
       { 'Nom professeur*': 'Prof Inconnu', 'Classe*': '3ème A', 'Matière*': 'Mathématiques', 'Jour*': 'Lundi', 'Créneau*': '7h30 - 9h00', Salle: 'Salle A1' },
     ];
 
-    await expect(service.confirm('schedule', await toWorkbookBuffer(rows), db)).rejects.toMatchObject<
+    await expect(service.confirm('schedule', await toWorkbookBuffer(rows), db, { schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-03' } })).rejects.toMatchObject<
       Partial<ImportModuleError>
     >({
       code: 'IMPORT_VALIDATION_FAILED',
@@ -837,12 +823,6 @@ describe('import.service - schedule confirm', () => {
   });
 
   it('créneaux passés en confirm → ignorés sans bloquer les créneaux valides', async () => {
-    repository.findSchedulePeriodById.mockResolvedValue({
-      id: 'period-1',
-      valid_from: '2026-03-30',
-      valid_to: '2026-04-02',
-    });
-    repository.findActiveSchedulePeriodId.mockResolvedValue('period-1');
     repository.listTimeSlots.mockResolvedValue([
       {
         id: 'slot-1',
@@ -863,7 +843,7 @@ describe('import.service - schedule confirm', () => {
       { 'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': 'Physique', 'Jour*': 'Mercredi', 'Créneau*': '09h00 - 10h30', Salle: 'Salle A1' },
     ];
 
-    const report = await service.confirm('schedule', await toWorkbookBuffer(rows), db);
+    const report = await service.confirm('schedule', await toWorkbookBuffer(rows), db, { schedulePeriod: { weekStart: '2026-03-30', weekEnd: '2026-04-05' } });
 
     expect(report.imported).toBe(1);
     expect(report.updated).toBe(0);
@@ -875,7 +855,7 @@ describe('import.service - schedule confirm', () => {
     );
   });
 
-  it('activePeriodId=null en confirm sans période → IMPORT_NO_ACTIVE_PERIOD', async () => {
+  it('confirm sans dates → IMPORT_INVALID_PERIOD', async () => {
     repository.findActiveSchedulePeriodId.mockResolvedValue(null);
     const service = new ImportService(repository);
 
@@ -886,7 +866,7 @@ describe('import.service - schedule confirm', () => {
     await expect(service.confirm('schedule', await toWorkbookBuffer(rows), db)).rejects.toMatchObject<
       Partial<ImportModuleError>
     >({
-      code: 'IMPORT_NO_ACTIVE_PERIOD',
+      code: 'IMPORT_INVALID_PERIOD',
     });
   });
 });

@@ -10,7 +10,7 @@ Le super administrateur dispose du même moteur d’import dans Données profess
 
 Un aperçu signé couvre le fichier, le mapping, l’année et les dépendances. La confirmation revalide les données dans la transaction C8 ; un changement de statut ou de dépendance impose un nouvel aperçu. L’écriture et l’audit sont atomiques. Les confirmations individuelles recontrôlent aussi les associations dans une transaction sérialisable ; la modification du profil et des associations utilise désormais une seule transaction.
 
-Le rappel des classes sans professeur principal s’affiche dans le formulaire et après les mutations/imports. Il ne bloque jamais l’opération ; l’échec du chargement de ce rappel ne transforme pas une sauvegarde réussie en erreur.
+Le rappel des classes sans professeur principal s’affiche dans les pages Professeurs et Élèves, avec un lien direct vers Structure scolaire, onglet Classes (`/academic/classes`). Il est retiré des formulaires individuels et de leurs toasts de sauvegarde. Le rappel des imports super administrateur reste présent. Il ne bloque jamais l’opération ; l’échec de sa vérification peut être relancé sans empêcher l’utilisation des listes.
 
 Les gardes EDT conservent l’exigence d’un professeur actif, non bloqué et d’une association exacte matière–classe de l’année active. La duplication d’une période applique ces gardes à tous les créneaux copiés dans une transaction. L’import EDT ne crée aucune association.
 
@@ -20,7 +20,7 @@ Les gardes EDT conservent l’exigence d’un professeur actif, non bloqué et d
 - Import initial directeur : **Administration → Import de données → Importer les professeurs** ; aucune entrée d’import d’affectations dans l’onboarding.
 - Super administrateur : **Écoles → Voir détail → Données professeurs**.
 - École en reprise : **Écoles → Voir détail → Reprise de données → Professeurs : affectations**, après les étapes de création des classes/inscriptions.
-- Professeur principal : **Académique → Structure scolaire → Classes**.
+- Professeur principal : rappel dans **Vie scolaire → Professeurs** et **Vie scolaire → Élèves**, puis **Ouvrir l’onglet Classes** vers **Académique → Structure scolaire → Classes**.
 
 L’onglet Données professeurs est disponible aussi pour une école hors reprise. Il prolonge la fiche école existante, sans nouvelle route ni modification visuelle de la barre latérale.
 
@@ -51,6 +51,8 @@ Résultats finaux :
 - Playwright `critical-real` : **3/3** parcours C10, Android émulé, bureau et fiche école super administrateur.
 - Lint et build TypeScript des deux projets : réussis ; build PWA réussi. Le frontend conserve l’avertissement existant sur la taille de certains chunks.
 - `git diff --check` : réussi dans les deux projets.
+
+Déplacement du rappel (27 septembre 2026) : **524/524** tests frontend (92 fichiers) et **5/5** parcours navigateur passent. Les tests vérifient l’absence de rappel dans le formulaire, sa présence sur les deux listes, le lien et la sélection de l’onglet Classes sur bureau et Android émulé, les permissions, le filtrage sur les classes actives de l’année active et sa disparition après désignation du professeur principal.
 
 Les fixtures nominales de deux tests EDT ont été complétées pour fournir une affectation valide de l’année active, puisque le refus d’une ancienne affectation incomplète est maintenant le comportement attendu. Un test de dashboard a dépassé son attente lors du passage frontend exécuté en parallèle du navigateur et des builds ; la suite frontend complète relancée passe sans modification de ce module.
 

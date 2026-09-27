@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { mondayDateSchema, sundayDateSchema } from '../../shared/utils/schedule-period.js';
 
 const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Invalid date format');
 
@@ -10,8 +11,8 @@ const timeStringSchema = z
 export const periodPayloadSchema = z
   .object({
     name: z.string().trim().min(1).max(150),
-    valid_from: dateStringSchema,
-    valid_to: dateStringSchema,
+    valid_from: mondayDateSchema,
+    valid_to: sundayDateSchema,
   })
   .refine((value) => value.valid_from <= value.valid_to, {
     message: 'valid_from must be before or equal to valid_to',
@@ -21,8 +22,8 @@ export const periodPayloadSchema = z
 export const periodUpdatePayloadSchema = z
   .object({
     name: z.string().trim().min(1).max(150).optional(),
-    valid_from: dateStringSchema.optional(),
-    valid_to: dateStringSchema.optional(),
+    valid_from: mondayDateSchema.optional(),
+    valid_to: sundayDateSchema.optional(),
     is_active: z.boolean().optional(),
   })
   .refine((value) => Object.values(value).some((v) => v !== undefined), {
@@ -44,8 +45,8 @@ export const periodUpdatePayloadSchema = z
 export const periodDuplicatePayloadSchema = z
   .object({
     new_name: z.string().trim().min(1).max(150),
-    new_valid_from: dateStringSchema,
-    new_valid_to: dateStringSchema,
+    new_valid_from: mondayDateSchema,
+    new_valid_to: sundayDateSchema,
   })
   .refine((value) => value.new_valid_from <= value.new_valid_to, {
     message: 'new_valid_from must be before or equal to new_valid_to',

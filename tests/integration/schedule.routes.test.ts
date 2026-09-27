@@ -278,8 +278,8 @@ describe('POST /api/v1/schedule/periods/:id/duplicate', () => {
       url: `/api/v1/schedule/periods/${PERIOD_ID}/duplicate`,
       payload: {
         new_name: 'Semestre 2',
-        new_valid_from: '2026-07-01',
-        new_valid_to: '2026-12-31',
+        new_valid_from: '2026-07-06',
+        new_valid_to: '2027-01-03',
       },
     });
 
@@ -292,8 +292,8 @@ describe('POST /api/v1/schedule/periods/:id/duplicate', () => {
       PERIOD_ID,
       expect.objectContaining({
         newName: 'Semestre 2',
-        newValidFrom: '2026-07-01',
-        newValidTo: '2026-12-31',
+        newValidFrom: '2026-07-06',
+        newValidTo: '2027-01-03',
       })
     );
     await app.close();

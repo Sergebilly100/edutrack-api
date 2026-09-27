@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { weeklyPeriodSchema } from '../../shared/utils/schedule-period.js';
 
 import {
   createRoom,
@@ -11,6 +12,8 @@ import {
   type RoomInsertInput,
   type ClassCatalogItem,
   createSchedulePeriod,
+  updateSchedulePeriod,
+  type PeriodUpdateInput,
   duplicatePeriodWithSchedules,
   listScheduleCopyTargets,
   findActiveSchedulePeriodByDate,
@@ -259,6 +262,8 @@ export const duplicatePeriod = async (
     throw new Error('new_valid_from must be before or equal to new_valid_to');
   }
 
+  weeklyPeriodSchema.parse({ validFrom: newPeriod.newValidFrom, validTo: newPeriod.newValidTo });
+
   return db.transaction(async (tx) => {
     const executor = tx as unknown as QueryExecutor;
     const schedules = await listScheduleCopyTargets(executor, sourcePeriodId);
@@ -287,6 +292,7 @@ export const createPeriodFromInput = async (
     throw new Error('valid_from must be before or equal to valid_to');
   }
 
+  weeklyPeriodSchema.parse(input);
   return createSchedulePeriod(db, input);
 };
 
@@ -342,3 +348,21 @@ export const assertTeacherCanBeScheduled = async (
     throw new Error('Teacher must be assigned to this subject and class before scheduling');
   }
 };
+
+/** Valide aussi les bornes conservées lors d'une modification partielle. */
+export const updatePeriodFromInput = async (
+  db: QueryExecutor,
+  periodId: string,
+  input: PeriodUpdateInput
+): Promise<SchedulePeriod | null> => db.transaction(async (tx) => {
+  const executor = tx as unknown as QueryExecutor;
+  const current = await findSchedulePeriodById(executor, periodId);
+  if (!current) return null;
+  if (input.validFrom !== undefined || input.validTo !== undefined) {
+    weeklyPeriodSchema.parse({
+      validFrom: input.validFrom ?? current.valid_from,
+      validTo: input.validTo ?? current.valid_to,
+    });
+  }
+  return updateSchedulePeriod(executor, periodId, input);
+}, { isolationLevel: 'serializable' });
