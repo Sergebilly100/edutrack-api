@@ -99,6 +99,22 @@ export class StudentsService {
     return { data: rows, pagination: toPaginationMeta(query.page, query.limit, total) };
   }
 
+  async listStudentProfiles(query: StudentsListQuery): Promise<{
+    data: StudentRecord[];
+    pagination: PaginationMeta;
+  }> {
+    const { rows, total } = await this.repository.listStudents(query, 'profiles');
+    return { data: rows, pagination: toPaginationMeta(query.page, query.limit, total) };
+  }
+
+  async listFinancialProfiles(query: StudentsListQuery): Promise<{
+    data: StudentRecord[];
+    pagination: PaginationMeta;
+  }> {
+    const { rows, total } = await this.repository.listStudents(query, 'financial');
+    return { data: rows, pagination: toPaginationMeta(query.page, query.limit, total) };
+  }
+
   async teacherCanAccessClass(input: {
     teacherUserId: string;
     classId: string;

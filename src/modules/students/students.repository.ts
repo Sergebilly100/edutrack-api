@@ -312,18 +312,27 @@ const toRecentSmsStatus = (
   return 'not_sent';
 };
 
-const buildStudentsWhere = (query: StudentsListQuery): SQL[] => {
-  // Un dossier non finalisé conserve temporairement sa classe cible pour les
-  // documents et le passage en caisse, mais ne doit pas apparaître dans la
-  // liste ni dans l'effectif de cette classe avant confirmation du paiement.
-  const where: SQL[] = [sql`NOT EXISTS (
-    SELECT 1
-    FROM enrollments e
-    WHERE e.student_id = s.id
+type StudentListScope = 'enrolled' | 'profiles' | 'financial';
+
+const buildStudentsWhere = (query: StudentsListQuery, scope: StudentListScope): SQL[] => {
+  // Les profils restent disponibles pour préparer une inscription. La liste
+  // scolaire exige une inscription confirmée, indépendamment de la classe
+  // conservée sur le profil. Une réinscription en attente ne suffit pas.
+  const membership = scope === 'financial' ? sql`(
+    EXISTS (SELECT 1 FROM enrollments e WHERE e.student_id = s.id)
+    OR EXISTS (SELECT 1 FROM student_financial_status financial WHERE financial.student_id = s.id)
+    OR EXISTS (SELECT 1 FROM payments payment WHERE payment.student_id = s.id)
+  )` : scope === 'profiles' ? sql`NOT EXISTS (
+    SELECT 1 FROM enrollments e WHERE e.student_id = s.id
+  )` : sql`EXISTS (
+    SELECT 1 FROM enrollments e JOIN school_years sy ON sy.id = e.school_year_id
+    WHERE e.student_id = s.id AND e.status = 'confirmed'
       AND e.class_id = s.class_id
-      AND e.school_year_id = c.school_year_id
-      AND e.status IN ('pending_cashier', 'pending_dossier')
-  )`];
+      AND (sy.status = 'active' OR NOT EXISTS (
+        SELECT 1 FROM school_years active_year WHERE active_year.status = 'active'
+      ))
+  )`;
+  const where: SQL[] = [membership];
   if (query.class_id) where.push(sql`s.class_id = ${query.class_id}`);
   if (typeof query.is_active === 'boolean') where.push(sql`s.is_active = ${query.is_active}`);
   if (query.search) {
@@ -386,9 +395,9 @@ export class StudentsRepository {
     return getRows<{ enabled: boolean }>(result)[0]?.enabled ?? false;
   }
 
-  async listStudents(query: StudentsListQuery): Promise<{ rows: StudentRecord[]; total: number }> {
+  async listStudents(query: StudentsListQuery, scope: StudentListScope = 'enrolled'): Promise<{ rows: StudentRecord[]; total: number }> {
     const offset = (query.page - 1) * query.limit;
-    const where = makeWhereClause(buildStudentsWhere(query));
+    const where = makeWhereClause(buildStudentsWhere(query, scope));
 
     const [items, total] = await Promise.all([
       this.db.execute(sql`

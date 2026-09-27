@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { getAuthHeaders, getSeedContext, queryTenant, request, tenantTable } from './setup.js';
+import { getAuthHeaders, getSeedContext, queryPublic, queryTenant, request, tenantTable, TEST_SCHEMA_NAME } from './setup.js';
 
 const createAcademicContext = async (suffix: string) => {
   const years = await queryTenant<{ id: string; label: string }>(`
@@ -35,6 +35,83 @@ const openReEnrollmentCycle = async (academic: Awaited<ReturnType<typeof createA
 };
 
 describe('enrollments integration', () => {
+  it('C12 : contexte serveur, droits et reprise seulement après configuration de la bonne année et du bon niveau', async () => {
+    await queryPublic(`INSERT INTO public.tenants (name, subdomain, schema_name, plan, status, max_users, onboarding_completed)
+      VALUES ('C12 test', $1, $2, 'pro', 'active', 50, true)
+      ON CONFLICT (schema_name) DO NOTHING`, [TEST_SCHEMA_NAME.replaceAll('_', '-'), TEST_SCHEMA_NAME]);
+    const director = await getAuthHeaders('director');
+    const academic = await createAcademicContext('c12-recovery');
+    const students = await queryTenant<{ id: string }>(`
+      INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
+      VALUES ($1::uuid, 'Test', 'C12', 'C12-001') RETURNING id
+    `, [academic.currentClassId]);
+    const created = await request().post('/api/v1/enrollments').set(director).send({
+      studentId: students[0]!.id, classId: academic.targetClassId,
+      schoolYearId: academic.targetYearId, type: 'new_registration',
+    });
+    expect(created.status).toBe(201);
+    const enrollmentId = created.body.enrollment.id as string;
+    const summaryPath = `/api/v1/enrollments/${enrollmentId}/payment-summary`;
+    const missing = await request().get(summaryPath).set(director);
+    const expectedError = { statusCode: 409, code: 'TUITION_PLAN_REQUIRED', context: {
+      schoolYearId: academic.targetYearId, schoolYearLabel: 'c12-recovery-target',
+      levelId: academic.targetLevelId, levelName: 'c12-recovery-level-target',
+    } };
+    expect(missing.status).toBe(409);
+    expect(missing.body).toMatchObject(expectedError);
+    const paymentBody = { amount: 25000, method: 'cash', schoolReceiptReference: 'C12-RECEIPT' };
+    const unpaid = await request().post(`/api/v1/enrollments/${enrollmentId}/confirm-payment`).set(director).send(paymentBody);
+    expect(unpaid.status).toBe(409);
+    expect(unpaid.body).toMatchObject(expectedError);
+
+    const position = await request().post('/api/v1/permissions/positions').set(director)
+      .send({ name: 'Caisse C12', permissions: ['enrollments.confirm_payment'] });
+    expect(position.status, JSON.stringify(position.body)).toBe(201);
+    const positionId = position.body.position.id as string;
+    const userId = getSeedContext().staffUserId;
+    const assigned = await request().post(`/api/v1/permissions/positions/${positionId}/assign`).set(director).send({ userId });
+    expect(assigned.status).toBe(200);
+    const cashier = await getAuthHeaders('staff');
+    try {
+      expect((await request().get(summaryPath).set(cashier)).body).toMatchObject(expectedError);
+      const planBody = { schoolYearId: academic.targetYearId, totalAmount: 120000, currency: 'FCFA', scheduleSteps: [] };
+      const planPath = `/api/v1/tuition-plans/levels/${academic.targetLevelId}`;
+      const forbidden = await request().put(planPath).set(cashier).send(planBody);
+      expect(forbidden.status).toBe(403);
+      expect(forbidden.body.code).toBe('FORBIDDEN');
+      const granted = await request().put(`/api/v1/permissions/positions/${positionId}`).set(director)
+        .send({ permissions: ['enrollments.confirm_payment', 'tuition.edit'] });
+      expect(granted.status).toBe(200);
+      // Editing does not silently grant the unrelated read permissions.
+      expect((await request().get(`/api/v1/tuition-plans?school_year_id=${academic.targetYearId}`).set(cashier)).status).toBe(403);
+      for (const [levelId, schoolYearId] of [
+        [academic.targetLevelId, academic.previousYearId],
+        [academic.currentLevelId, academic.targetYearId],
+      ]) {
+        const otherPlan = await request().put(`/api/v1/tuition-plans/levels/${levelId}`).set(cashier).send({ ...planBody, schoolYearId });
+        expect(otherPlan.status).toBe(200);
+        expect((await request().get(summaryPath).set(cashier)).status).toBe(409);
+        expect((await request().post(`/api/v1/enrollments/${enrollmentId}/confirm-payment`).set(cashier).send(paymentBody)).status).toBe(409);
+      }
+      const invalid = await request().put(planPath).set(cashier).send({ ...planBody, totalAmount: -1 });
+      expect(invalid.status).toBe(400);
+      expect((await request().get(summaryPath).set(cashier)).status).toBe(409);
+      const saved = await request().put(planPath).set(cashier).send(planBody);
+      expect(saved.status).toBe(200);
+      expect(saved.body.tuitionPlan).toMatchObject({ school_year_id: academic.targetYearId, level_id: academic.targetLevelId });
+      const ready = await request().get(summaryPath).set(cashier);
+      expect(ready.status).toBe(200);
+      expect(ready.body).toMatchObject({ enrollment: { id: enrollmentId, schoolYearId: academic.targetYearId }, amountDue: 120000 });
+      const paid = await request().post(`/api/v1/enrollments/${enrollmentId}/confirm-payment`).set(cashier).send(paymentBody);
+      expect(paid.status).toBe(200);
+      expect(paid.body.enrollment.status).toBe('confirmed');
+      expect((await request().get(summaryPath).set(cashier)).body.amountDue).toBe(95000);
+    } finally {
+      await request().delete(`/api/v1/permissions/positions/${positionId}/assign/${userId}`).set(director);
+      await request().delete(`/api/v1/permissions/positions/${positionId}`).set(director);
+    }
+  });
+
   it('réalise une nouvelle inscription jusqu’à la confirmation caisse', async () => {
     const headers = await getAuthHeaders('director');
     const context = getSeedContext();
@@ -292,12 +369,14 @@ describe('enrollments integration', () => {
     // caisse puisse solder l’impayé, même s’il est déjà rattaché à la classe cible.
     await queryTenant(`UPDATE ${tenantTable('students')} SET class_id = $1::uuid WHERE id = $2::uuid`, [academic.targetClassId, studentId]);
     const cashierSearch = await request()
-      .get('/api/v1/students?search=Jean&limit=20')
+      .get('/api/v1/students/financial-profiles?search=Jean&limit=20')
       .set(headers);
     expect(cashierSearch.status).toBe(200);
     expect(cashierSearch.body.data).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: studentId }),
     ]));
+    const schoolRoster = await request().get('/api/v1/students?search=ENR-UNPAID-001').set(headers);
+    expect(schoolRoster.body.data).toEqual([]);
 
     // Le scénario de règlement porte sur l'année close : on restaure donc le
     // rattachement d'origine après avoir vérifié la recherche de caisse.

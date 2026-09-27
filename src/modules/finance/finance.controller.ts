@@ -49,6 +49,7 @@ const handleError = (request: FastifyRequest, reply: FastifyReply, error: unknow
   if (error instanceof FinanceModuleError) {
     return reply.code(error.statusCode).send({
       error: error.message, code: error.code, statusCode: error.statusCode,
+      ...(error.context ? { context: error.context } : {}),
     });
   }
   if (error instanceof PaymentImportError) {

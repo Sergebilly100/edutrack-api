@@ -53,3 +53,39 @@ describe('StudentsRepository.getStudentAbsenceStats()', () => {
     expect(query).not.toContain('WITH active_period AS');
   });
 });
+
+describe('StudentsRepository.listStudents()', () => {
+  it('exige une inscription confirmée dans la requête de liste et de total', async () => {
+    const queries: string[] = [];
+    const db = { execute: vi.fn(async (query: ReturnType<typeof sql>) => {
+      queries.push(renderSql(query));
+      return { rows: [] };
+    }) };
+    await new StudentsRepository(db).listStudents({ page: 1, limit: 20 });
+    expect(queries).toHaveLength(2);
+    for (const query of queries) {
+      expect(query).toContain("e.status = 'confirmed'");
+      expect(query).toContain('e.student_id = s.id');
+      expect(query).toContain("sy.status = 'active'");
+      expect(query).not.toContain("e.status IN ('pending_cashier', 'pending_dossier')");
+    }
+  });
+
+  it('réserve les profils à la préparation et laisse les dossiers existants au parcours inscription/réinscription', async () => {
+    const { repository, getCapturedSql } = buildRepository();
+    await repository.listStudents({ page: 1, limit: 10, search: 'Historique' }, 'profiles');
+    const query = getCapturedSql();
+    expect(query).toContain('NOT EXISTS');
+    expect(query).toContain('e.student_id = s.id');
+    expect(query).not.toContain("e.status = 'confirmed'");
+  });
+
+  it('préserve la recherche financière des anciens dossiers sans les inscrire dans la liste scolaire', async () => {
+    const { repository, getCapturedSql } = buildRepository();
+    await repository.listStudents({ page: 1, limit: 10, search: 'Ancien' }, 'financial');
+    expect(getCapturedSql()).toContain('FROM student_financial_status');
+    expect(getCapturedSql()).toContain('FROM payments');
+    expect(getCapturedSql()).toContain('FROM enrollments e WHERE e.student_id = s.id');
+    expect(getCapturedSql()).not.toContain("sy.status = 'active'");
+  });
+});

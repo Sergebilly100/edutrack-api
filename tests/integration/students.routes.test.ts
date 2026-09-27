@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   buildStudentsService: vi.fn(),
   service: {
     listStudents: vi.fn(),
+    listStudentProfiles: vi.fn(),
+    listFinancialProfiles: vi.fn(),
     teacherCanAccessClass: vi.fn(),
     createStudent: vi.fn(),
     getStudentDetail: vi.fn(),
@@ -140,6 +142,37 @@ beforeEach(() => {
   mocks.service.excuseAbsence.mockResolvedValue({
     id: 'att-1', studentId: 'student-1', date: '2026-04-13', scheduleId: 'sched-1',
     status: 'excused', excuseReason: 'Certificat médical', excusedAt: '2026-04-14T08:00:00.000Z',
+  });
+});
+
+describe('profile search access', () => {
+  it('requires both enrollment creation and profile reading permissions', async () => {
+    const app = await buildApp();
+    mocks.service.listStudentProfiles.mockResolvedValue({ data: [], pagination: { total: 0 } });
+    for (const permissions of ['enrollments.create', 'students.view']) {
+      const denied = await app.inject({ method: 'GET', url: '/api/v1/students/profiles?search=Kone',
+        headers: { authorization: 'Bearer token', 'x-test-permissions': permissions } });
+      expect(denied.statusCode).toBe(403);
+    }
+    const allowed = await app.inject({ method: 'GET', url: '/api/v1/students/profiles?search=Kone',
+      headers: { authorization: 'Bearer token', 'x-test-permissions': 'enrollments.create,students.view' } });
+    expect(allowed.statusCode).toBe(200);
+    expect(mocks.service.getStudentDetail).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('requires a financial permission in addition to profile reading', async () => {
+    const app = await buildApp();
+    mocks.service.listFinancialProfiles.mockResolvedValue({ data: [], pagination: { total: 0 } });
+    for (const permission of ['payments.view', 'payments.record', 'tuition.edit']) {
+      const response = await app.inject({ method: 'GET', url: '/api/v1/students/financial-profiles?search=Kone',
+        headers: { authorization: 'Bearer token', 'x-test-permissions': `students.view,${permission}` } });
+      expect(response.statusCode).toBe(200);
+    }
+    const denied = await app.inject({ method: 'GET', url: '/api/v1/students/financial-profiles?search=Kone',
+      headers: { authorization: 'Bearer token', 'x-test-permissions': 'students.view' } });
+    expect(denied.statusCode).toBe(403);
+    await app.close();
   });
 });
 

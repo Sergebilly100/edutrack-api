@@ -70,6 +70,13 @@ export type AmountDueContext = {
   discount_amount: string | number | null;
 };
 
+export type TuitionPlanRequiredContext = {
+  schoolYearId: string;
+  schoolYearLabel: string;
+  levelId: string;
+  levelName: string;
+};
+
 export type MandatorySubscriptionPlanRow = {
   id: string;
   amount: string | number;
@@ -150,6 +157,23 @@ export class FinanceRepository {
       ORDER BY created_at ASC
     `);
     return rows<MandatorySubscriptionPlanRow>(result);
+  }
+
+  async getTuitionPlanRequiredContext(studentId: string, schoolYearId: string): Promise<TuitionPlanRequiredContext | null> {
+    const result = await this.db.execute<TuitionPlanRequiredContext>(sql`
+      SELECT y.id::text AS "schoolYearId", y.label AS "schoolYearLabel",
+             l.id::text AS "levelId", l.name AS "levelName"
+      FROM students s
+      LEFT JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = ${schoolYearId}::uuid
+      INNER JOIN classes c ON c.id = COALESCE(e.class_id, s.class_id)
+                          AND c.school_year_id = ${schoolYearId}::uuid
+      INNER JOIN school_years y ON y.id = c.school_year_id
+      INNER JOIN levels l ON l.id = c.level_id
+      WHERE s.id = ${studentId}::uuid
+      ORDER BY e.enrolled_at DESC NULLS LAST
+      LIMIT 1
+    `);
+    return rows<TuitionPlanRequiredContext>(result)[0] ?? null;
   }
 
   async getConfirmedPaid(studentId: string, schoolYearId: string): Promise<number> {

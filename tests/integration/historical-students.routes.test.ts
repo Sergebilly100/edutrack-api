@@ -49,8 +49,11 @@ describe('director historical import C7', () => {
     expect(students.every((student) => student.class_id === null)).toBe(true);
     expect((await counts(students.map((student) => student.id)))[0]).toEqual({ inscriptions: 0, payments: 0, finance: 0, documents: 0, parents: 0 });
     const list = await request().get('/api/v1/students?search=C7-H1').set(headers);
-    expect(list.body.data).toEqual([expect.objectContaining({ id: students[0]!.id, classId: null, className: null })]);
-    const studentId = list.body.data[0].id;
+    expect(list.body.data).toEqual([]);
+    expect(list.body.pagination.total).toBe(0);
+    const profiles = await request().get('/api/v1/students/profiles?search=C7-H1').set(headers);
+    expect(profiles.body.data).toEqual([expect.objectContaining({ id: students[0]!.id, classId: null, className: null })]);
+    const studentId = profiles.body.data[0].id;
     const detail = await request().get(`/api/v1/students/${studentId}`).set(headers);
     expect(detail.status).toBe(200);
     expect(detail.body.data.classId).toBeNull();
@@ -69,11 +72,19 @@ describe('director historical import C7', () => {
     expect(enrollment.body.enrollment.status).toBe('pending_cashier');
     const beforePayment = await request().get(`/api/v1/students?class_id=${klass.id}`).set(headers);
     expect(beforePayment.body.data).toEqual([]);
+    const pendingRoster = await request().get('/api/v1/students?search=C7-H1').set(headers);
+    expect(pendingRoster.body.data).toEqual([]);
+    expect(pendingRoster.body.pagination.total).toBe(0);
+    const pendingProfiles = await request().get('/api/v1/students/profiles?search=C7-H1').set(headers);
+    expect(pendingProfiles.body.data).toEqual([]);
     const payment = await request().post(`/api/v1/enrollments/${enrollment.body.enrollment.id}/confirm-payment`).set(headers)
       .send({ amount: 50000, method: 'cash', schoolReceiptReference: 'C7-RC-1' });
     expect(payment.status, JSON.stringify(payment.body)).toBe(200);
     const afterPayment = await request().get(`/api/v1/students/${studentId}`).set(headers);
     expect(afterPayment.body.data.classId).toBe(klass.id);
+    const confirmedRoster = await request().get('/api/v1/students?search=C7-H1').set(headers);
+    expect(confirmedRoster.body.data).toEqual([expect.objectContaining({ id: studentId, classId: klass.id })]);
+    expect(confirmedRoster.body.pagination.total).toBe(1);
     expect((await queryTenant('SELECT class_id FROM students WHERE id = $1', [studentId]))[0]?.class_id).toBeNull();
     const persisted = await counts([studentId]);
     expect(persisted[0]).toMatchObject({ inscriptions: 1, payments: 1 });

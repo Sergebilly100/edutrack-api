@@ -34,7 +34,7 @@ const normalizeUploadMime = (value: string): string => {
 const handleError = (request: FastifyRequest, reply: FastifyReply, error: unknown) => {
   if (error instanceof ZodError) return reply.code(400).send({ error: 'Invalid request', code: 'VALIDATION_ERROR', statusCode: 400, details: error.issues });
   if (error instanceof EnrollmentsModuleError) return reply.code(error.statusCode).send({ error: error.message, code: error.code, statusCode: error.statusCode });
-  if (error instanceof FinanceModuleError) return reply.code(error.statusCode).send({ error: error.message, code: error.code, statusCode: error.statusCode });
+  if (error instanceof FinanceModuleError) return reply.code(error.statusCode).send({ error: error.message, code: error.code, statusCode: error.statusCode, ...(error.context ? { context: error.context } : {}) });
   request.log.error({ err: error }, '[enrollments] Unexpected error');
   return reply.code(500).send({ error: 'Internal server error', code: 'INTERNAL_ERROR', statusCode: 500 });
 };

@@ -11,6 +11,7 @@ import {
   FinanceRepository,
   type FinanceDb,
   type PaymentRow,
+  type TuitionPlanRequiredContext,
 } from './finance.repository.js';
 import { FinancialCacheRepository } from './financial-cache.repository.js';
 import { FinancialCacheService } from './financial-cache.service.js';
@@ -27,7 +28,8 @@ import type {
 } from './finance.types.js';
 
 export class FinanceModuleError extends Error {
-  constructor(message: string, public readonly statusCode: number, public readonly code: string) {
+  constructor(message: string, public readonly statusCode: number, public readonly code: string,
+    public readonly context?: TuitionPlanRequiredContext) {
     super(message);
     this.name = 'FinanceModuleError';
   }
@@ -64,7 +66,8 @@ export class FinanceService {
       throw new FinanceModuleError(
         'A tuition plan is required for the student level and school year',
         409,
-        'TUITION_PLAN_REQUIRED'
+        'TUITION_PLAN_REQUIRED',
+        await repository.getTuitionPlanRequiredContext(studentId, schoolYearId) ?? undefined
       );
     }
     const subscriptionLines = subscriptionPlans.map((plan) => ({

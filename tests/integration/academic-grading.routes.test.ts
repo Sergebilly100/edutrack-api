@@ -35,6 +35,8 @@ describe('academic grading integration', () => {
       RETURNING id
     `, [classId, `NOTE-${suffix}`]);
     const studentId = students[0]!.id;
+    await queryTenant(`INSERT INTO enrollments (student_id, class_id, school_year_id, type, status)
+      VALUES ($1, $2, $3, 'new_registration', 'confirmed')`, [studentId, classId, years[0]!.id]);
 
     const mathResponse = await request().post('/api/v1/subjects').set(directorHeaders).send({
       levelId: levels[0]!.id,

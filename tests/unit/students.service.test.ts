@@ -45,6 +45,12 @@ beforeEach(() => {
 // ─── listStudents ─────────────────────────────────────────────────────────────
 
 describe('listStudents()', () => {
+  it('prépare une inscription avec les profils sans les traiter comme des élèves inscrits', async () => {
+    repository.listStudents.mockResolvedValue({ rows: [], total: 0 });
+    const query = { page: 1, limit: 10, search: 'Kone' };
+    expect(await buildService().listStudentProfiles(query)).toEqual({ data: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 0 } });
+    expect(repository.listStudents).toHaveBeenCalledWith(query, 'profiles');
+  });
   it('retourne une pagination correcte', async () => {
     repository.listStudents.mockResolvedValue({
       rows: [

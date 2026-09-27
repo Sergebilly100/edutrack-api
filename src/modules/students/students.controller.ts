@@ -50,6 +50,14 @@ const requireStudentsListAccess = async (
     forbidden(reply, 'Permission students.view required');
   }
 };
+const requireFinancialProfilesAccess = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  await requirePermission('students.view')(request, reply);
+  if (reply.sent) return;
+  if (!request.permissions?.has('payments.view') && !request.permissions?.has('payments.record') && !request.permissions?.has('tuition.edit')) {
+    forbidden(reply, 'Financial permission required');
+  }
+};
+
 import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
 import type { NotificationJobData } from '../notifications/notifications.queue.js';
 
@@ -93,7 +101,11 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
     });
   }
 
-  reply.log.error({ err: error }, '[students] unexpected error');
+  // Une erreur Drizzle contient la requête et ses paramètres (identité/contact).
+  // Conserver uniquement le code technique, le logger porte déjà le requestId.
+  const databaseError = error as { code?: unknown; cause?: { code?: unknown } } | null;
+  const code = databaseError?.cause?.code ?? databaseError?.code;
+  reply.log.error({ code: typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? code : 'INTERNAL_SERVER_ERROR' }, '[students] unexpected error');
   return reply.code(500).send({
     error: 'Unexpected error',
     code: 'INTERNAL_SERVER_ERROR',
@@ -136,6 +148,39 @@ export default async function studentsController(
           return service.listStudents(query);
         });
 
+        return reply.send(result);
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  // Profils réutilisables, réservés au parcours de préparation d'inscription.
+  app.get(
+    '/api/v1/students/profiles',
+    { preHandler: [requirePermission('enrollments.create'), requirePermission('students.view')] },
+    async (request, reply) => {
+      try {
+        const query = studentsListQuerySchema.parse(request.query ?? {});
+        const result = await withTenantSchema(request.claims!.schemaName, async (tenantDb) =>
+          buildStudentsService(tenantDb).listStudentProfiles(query)
+        );
+        return reply.send(result);
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.get(
+    '/api/v1/students/financial-profiles',
+    { preHandler: requireFinancialProfilesAccess },
+    async (request, reply) => {
+      try {
+        const query = studentsListQuerySchema.parse(request.query ?? {});
+        const result = await withTenantSchema(request.claims!.schemaName, async (tenantDb) =>
+          buildStudentsService(tenantDb).listFinancialProfiles(query)
+        );
         return reply.send(result);
       } catch (error) {
         return handleError(reply, error);
