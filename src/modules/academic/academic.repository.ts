@@ -327,6 +327,7 @@ export class AcademicRepository {
           true
         FROM school_years sy
         WHERE sy.status = 'active'
+          AND (${input.expectedSchoolYearId ?? null}::uuid IS NULL OR sy.id = ${input.expectedSchoolYearId ?? null}::uuid)
         LIMIT 1
         RETURNING *
       )

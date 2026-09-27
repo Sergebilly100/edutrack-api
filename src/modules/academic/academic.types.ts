@@ -127,6 +127,7 @@ export const listClassesQuerySchema = z.object({
 export const createClassBodySchema = z.object({
   name: z.string().trim().min(1).max(100),
   levelId: z.string().uuid(),
+  expectedSchoolYearId: z.string().uuid().optional(),
   homeroomTeacherId: z.string().uuid().nullable().optional(),
 });
 

@@ -10,6 +10,30 @@ import {
 } from '../../src/modules/enrollments/enrollments.service.js';
 
 describe('enrollment workflow rules', () => {
+  it.each([
+    [{ levelId: 'other-level' }, 'CLASS_LEVEL_MISMATCH'],
+    [{ expectedActiveSchoolYearId: 'year' }, 'ACTIVE_SCHOOL_YEAR_CHANGED'],
+  ])('valide le contexte de sélection avant toute inscription', async (selection, code) => {
+    const repository = {
+      getStudentContext: vi.fn().mockResolvedValue({ id: 'student', is_active: true, lifecycle_status: 'active' }),
+      getClassContext: vi.fn().mockResolvedValue({ id: 'class', is_active: true, level_id: 'level', school_year_id: 'year', school_year_status: 'closed' }),
+      createEnrollment: vi.fn(),
+    };
+    const service = new EnrollmentsService(repository as never);
+    await expect(service.createEnrollment({ studentId: 'student', classId: 'class', schoolYearId: 'year', type: 'new_registration', hasPreviousYearUnpaid: false, ...selection })).rejects.toMatchObject({ code });
+    expect(repository.createEnrollment).not.toHaveBeenCalled();
+  });
+
+  it('refuse un niveau modifié pendant le retour au dossier existant', async () => {
+    const repository = {
+      findEnrollment: vi.fn().mockResolvedValue({ id: 'enrollment', school_year_id: 'year', status: 'pending_cashier' }),
+      getClassContext: vi.fn().mockResolvedValue({ id: 'class', is_active: true, level_id: 'other-level', school_year_id: 'year', school_year_status: 'active' }),
+      updateEnrollment: vi.fn(),
+    };
+    await expect(new EnrollmentsService(repository as never).updateEnrollment('enrollment', { classId: 'class', levelId: 'level', expectedActiveSchoolYearId: 'year' })).rejects.toMatchObject({ code: 'CLASS_LEVEL_MISMATCH' });
+    expect(repository.updateEnrollment).not.toHaveBeenCalled();
+  });
+
   it('autorise uniquement les transitions modifiables puis la confirmation', () => {
     expect(canTransitionEnrollment('pending_cashier', 'confirmed')).toBe(true);
     expect(canTransitionEnrollment('pending_dossier', 'confirmed')).toBe(true);

@@ -288,6 +288,13 @@ export class AcademicService {
     try {
       const created = await this.repository.createClassForActiveYear(input);
       if (!created) {
+        if (input.expectedSchoolYearId) {
+          throw new AcademicModuleError(
+            'L’année scolaire active a changé. Revenez à l’inscription pour vérifier le dossier.',
+            409,
+            'ACTIVE_SCHOOL_YEAR_CHANGED'
+          );
+        }
         throw new AcademicModuleError(
           'No active school year is configured',
           409,

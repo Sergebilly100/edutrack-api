@@ -109,6 +109,18 @@ describe('academic school year validation', () => {
 });
 
 describe('academic.service', () => {
+  it('refuse une création contextuelle si l’année attendue n’est plus active', async () => {
+    mockRepository.createClassForActiveYear.mockResolvedValue(null);
+    await expect(service.createClass({ name: 'CP1 A', levelId: level.id, expectedSchoolYearId: activeSchoolYear.id })).rejects.toMatchObject({ code: 'ACTIVE_SCHOOL_YEAR_CHANGED', statusCode: 409 });
+  });
+
+  it('transmet l’année attendue au repository sans remplacer le niveau choisi', async () => {
+    const input = { name: 'CP1 A', levelId: level.id, expectedSchoolYearId: activeSchoolYear.id };
+    mockRepository.createClassForActiveYear.mockResolvedValue({ id: 'class' });
+    await expect(service.createClass(input)).resolves.toEqual({ id: 'class' });
+    expect(mockRepository.createClassForActiveYear).toHaveBeenCalledWith(input);
+  });
+
   it("liste les classes de l'année scolaire demandée", async () => {
     mockRepository.findSchoolYearById.mockResolvedValue(activeSchoolYear);
     mockRepository.listClassesBySchoolYear.mockResolvedValue([]);

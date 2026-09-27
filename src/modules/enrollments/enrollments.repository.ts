@@ -313,29 +313,46 @@ export class EnrollmentsRepository {
   }
 
   async getClassContext(classId: string) {
-    const result = await this.db.execute<{ id: string; level_id: string | null; school_year_id: string | null; is_active: boolean }>(sql`
-      SELECT id, level_id, school_year_id, is_active FROM classes WHERE id = ${classId}::uuid LIMIT 1
+    const result = await this.db.execute<{ id: string; level_id: string | null; school_year_id: string | null; is_active: boolean; school_year_status: string | null }>(sql`
+      SELECT c.id, c.level_id, c.school_year_id, c.is_active, sy.status AS school_year_status
+      FROM classes c LEFT JOIN school_years sy ON sy.id = c.school_year_id
+      WHERE c.id = ${classId}::uuid LIMIT 1
     `);
-    return rows<{ id: string; level_id: string | null; school_year_id: string | null; is_active: boolean }>(result)[0] ?? null;
+    return rows<{ id: string; level_id: string | null; school_year_id: string | null; is_active: boolean; school_year_status: string | null }>(result)[0] ?? null;
   }
 
-  async createEnrollment(input: { studentId: string; classId: string; schoolYearId: string; type: EnrollmentType; status: EnrollmentStatus }) {
+  async createEnrollment(input: { studentId: string; classId: string; schoolYearId: string; type: EnrollmentType; status: EnrollmentStatus; levelId?: string; expectedActiveSchoolYearId?: string }) {
     const result = await this.db.execute<{ id: string }>(sql`
       INSERT INTO enrollments (student_id, class_id, school_year_id, type, status)
-      VALUES (${input.studentId}, ${input.classId}, ${input.schoolYearId}, ${input.type}::enrollment_type, ${input.status}::enrollment_status)
+      SELECT ${input.studentId}::uuid, c.id, sy.id, ${input.type}::enrollment_type, ${input.status}::enrollment_status
+      FROM classes c INNER JOIN school_years sy ON sy.id = c.school_year_id
+      WHERE c.id = ${input.classId}::uuid AND sy.id = ${input.schoolYearId}::uuid AND c.is_active
+        AND (${input.levelId ?? null}::uuid IS NULL OR c.level_id = ${input.levelId ?? null}::uuid)
+        AND (${input.expectedActiveSchoolYearId ?? null}::uuid IS NULL
+          OR (sy.id = ${input.expectedActiveSchoolYearId ?? null}::uuid AND sy.status = 'active'))
       RETURNING id
     `);
-    return this.findEnrollment(rows<{ id: string }>(result)[0]!.id);
+    const created = rows<{ id: string }>(result)[0];
+    return created ? this.findEnrollment(created.id) : null;
   }
 
-  async updateEnrollment(id: string, input: { classId?: string; status?: EnrollmentStatus; confirmedByUserId?: string | null }) {
+  async updateEnrollment(id: string, input: { classId?: string; status?: EnrollmentStatus; confirmedByUserId?: string | null; levelId?: string; expectedActiveSchoolYearId?: string }) {
     const result = await this.db.execute<{ id: string }>(sql`
       UPDATE enrollments SET
         class_id = CASE WHEN ${input.classId !== undefined} THEN ${input.classId ?? null}::uuid ELSE class_id END,
         status = CASE WHEN ${input.status !== undefined} THEN ${input.status ?? null}::enrollment_status ELSE status END,
         confirmed_by_user_id = CASE WHEN ${input.confirmedByUserId !== undefined} THEN ${input.confirmedByUserId ?? null}::uuid ELSE confirmed_by_user_id END,
         updated_at = NOW()
-      WHERE id = ${id}::uuid RETURNING id
+      WHERE id = ${id}::uuid
+        AND ((${input.levelId ?? null}::uuid IS NULL AND ${input.expectedActiveSchoolYearId ?? null}::uuid IS NULL)
+          OR EXISTS (
+            SELECT 1 FROM classes c INNER JOIN school_years sy ON sy.id = c.school_year_id
+            WHERE c.id = ${input.classId ?? null}::uuid AND c.is_active AND c.school_year_id = enrollments.school_year_id
+              AND (${input.levelId ?? null}::uuid IS NULL OR c.level_id = ${input.levelId ?? null}::uuid)
+              AND (${input.expectedActiveSchoolYearId ?? null}::uuid IS NULL
+                OR (sy.id = ${input.expectedActiveSchoolYearId ?? null}::uuid AND sy.status = 'active'))
+          ))
+      RETURNING id
     `);
     return rows<{ id: string }>(result).length ? this.findEnrollment(id) : null;
   }

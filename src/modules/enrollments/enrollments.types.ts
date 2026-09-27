@@ -44,6 +44,8 @@ export const createEnrollmentBodySchema = z
     studentId: z.string().uuid(),
     classId: z.string().uuid(),
     schoolYearId: z.string().uuid(),
+    levelId: z.string().uuid().optional(),
+    expectedActiveSchoolYearId: z.string().uuid().optional(),
     type: enrollmentTypeSchema,
     hasPreviousYearUnpaid: z.boolean().default(false),
   })
@@ -52,11 +54,16 @@ export const createEnrollmentBodySchema = z
 export const updateEnrollmentBodySchema = z
   .object({
     classId: z.string().uuid().optional(),
+    levelId: z.string().uuid().optional(),
+    expectedActiveSchoolYearId: z.string().uuid().optional(),
     status: z.enum(['pending_cashier', 'pending_dossier']).optional(),
   })
   .strict()
   .refine((value) => value.classId !== undefined || value.status !== undefined, {
     message: 'At least one field must be provided',
+  })
+  .refine((value) => (!value.levelId && !value.expectedActiveSchoolYearId) || Boolean(value.classId), {
+    message: 'Class selection is required for contextual validation',
   });
 
 export const requiredDocumentListQuerySchema = z.object({ level_id: z.string().uuid().optional() });

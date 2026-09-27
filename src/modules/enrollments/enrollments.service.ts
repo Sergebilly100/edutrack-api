@@ -211,6 +211,7 @@ export class EnrollmentsService {
   async createEnrollment(input: {
     studentId: string; classId: string; schoolYearId: string; type: EnrollmentType;
     hasPreviousYearUnpaid: boolean;
+    levelId?: string; expectedActiveSchoolYearId?: string;
   }) {
     const [student, targetClass] = await Promise.all([
       this.repository.getStudentContext(input.studentId),
@@ -222,6 +223,7 @@ export class EnrollmentsService {
     if (!targetClass || !targetClass.is_active || !targetClass.level_id || targetClass.school_year_id !== input.schoolYearId) {
       throw new EnrollmentsModuleError('Class does not belong to the selected school year', 400, 'CLASS_YEAR_MISMATCH');
     }
+    this.assertClassSelection(targetClass, input);
 
     if (input.type === 're_registration') {
       const yearContext = await this.repository.getReEnrollmentYearContext(input.studentId, input.schoolYearId);
@@ -270,7 +272,7 @@ export class EnrollmentsService {
     const status = resolveInitialEnrollmentStatus(input.type, hasPreviousYearUnpaid);
     try {
       const created = await this.repository.createEnrollment({ ...input, status });
-      if (!created) throw new Error('Failed to create enrollment');
+      if (!created) throw new EnrollmentsModuleError('La classe, le niveau ou l’année a changé. Vérifiez la sélection avant de continuer.', 409, 'CLASS_SELECTION_CHANGED');
       await this.repository.ensureRequiredDocuments(input.studentId, targetClass.level_id);
       const enrollmentWithDocumentStatus = await this.repository.findEnrollment(created.id);
       if (!enrollmentWithDocumentStatus) throw new Error('Failed to reload enrollment');
@@ -291,7 +293,16 @@ export class EnrollmentsService {
     }
   }
 
-  async updateEnrollment(id: string, input: { classId?: string; status?: 'pending_cashier' | 'pending_dossier' }) {
+  private assertClassSelection(targetClass: { level_id: string | null; school_year_id: string | null; school_year_status: string | null }, input: { levelId?: string; expectedActiveSchoolYearId?: string }) {
+    if (input.levelId && targetClass.level_id !== input.levelId) {
+      throw new EnrollmentsModuleError('La classe ne correspond pas au niveau sélectionné.', 400, 'CLASS_LEVEL_MISMATCH');
+    }
+    if (input.expectedActiveSchoolYearId && (targetClass.school_year_id !== input.expectedActiveSchoolYearId || targetClass.school_year_status !== 'active')) {
+      throw new EnrollmentsModuleError('L’année scolaire active a changé. Vérifiez le dossier avant de continuer.', 409, 'ACTIVE_SCHOOL_YEAR_CHANGED');
+    }
+  }
+
+  async updateEnrollment(id: string, input: { classId?: string; status?: 'pending_cashier' | 'pending_dossier'; levelId?: string; expectedActiveSchoolYearId?: string }) {
     const current = await this.repository.findEnrollment(id);
     if (!current) throw new EnrollmentsModuleError('Enrollment not found', 404, 'ENROLLMENT_NOT_FOUND');
     if (current.status === 'confirmed') {
@@ -306,9 +317,11 @@ export class EnrollmentsService {
       if (!targetClass || !targetClass.is_active || !targetClass.level_id || targetClass.school_year_id !== current.school_year_id) {
         throw new EnrollmentsModuleError('Class does not belong to the enrollment school year', 400, 'CLASS_YEAR_MISMATCH');
       }
+      this.assertClassSelection(targetClass, input);
       targetLevelId = targetClass.level_id;
     }
-    await this.repository.updateEnrollment(id, input);
+    const saved = await this.repository.updateEnrollment(id, input);
+    if (!saved) throw new EnrollmentsModuleError('La classe, le niveau ou l’année a changé. Vérifiez la sélection avant de continuer.', 409, 'CLASS_SELECTION_CHANGED');
     if (targetLevelId) await this.repository.ensureRequiredDocuments(current.student_id, targetLevelId);
     const updated = await this.repository.findEnrollment(id);
     if (!updated) throw new EnrollmentsModuleError('Enrollment not found', 404, 'ENROLLMENT_NOT_FOUND');
