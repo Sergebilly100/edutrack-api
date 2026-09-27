@@ -652,6 +652,10 @@ export class StudentsRepository {
   async findStudentDetailById(studentId: string): Promise<StudentDetailRecord | null> {
     const student = await this.findStudentById(studentId);
     if (!student) return null;
+    const sources = await this.db.execute(sql`
+      SELECT school_year_label, old_class_name FROM student_historical_sources
+      WHERE student_id = ${studentId}::uuid ORDER BY school_year_label DESC
+    `);
 
     const [summaryResult, recentAbsencesResult, documentsResult, parentSmsResult] =
       await Promise.all([
@@ -775,6 +779,8 @@ export class StudentsRepository {
 
     return {
       id: student.id,
+      historicalSources: getRows<{ school_year_label: string; old_class_name: string | null }>(sources)
+        .map((source) => ({ schoolYearLabel: source.school_year_label, oldClassName: source.old_class_name })),
       firstName: student.firstName,
       lastName: student.lastName,
       matricule: student.matricule,

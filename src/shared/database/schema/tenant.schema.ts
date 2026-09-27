@@ -1205,6 +1205,7 @@ export const importHistory = tenant.table(
     schedule_period: varchar('schedule_period', { length: 255 }),
     importedBy: uuid('imported_by').references(() => users.id),
     importedByRole: varchar('imported_by_role', { length: 100 }),
+    historicalSchoolYearLabel: varchar('historical_school_year_label', { length: 9 }),
     importedAt: timestamp('imported_at', { withTimezone: true, mode: 'date' })
       .notNull()
       .defaultNow(),
@@ -1214,6 +1215,20 @@ export const importHistory = tenant.table(
     importHistoryImportedAtIdx: index('idx_import_history_imported_at').on(table.importedAt),
   })
 );
+
+// Historical references never constitute an enrollment or a current class.
+export const studentHistoricalSources = tenant.table('student_historical_sources', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  studentId: uuid('student_id').notNull().references(() => students.id, { onDelete: 'cascade' }),
+  schoolYearLabel: varchar('school_year_label', { length: 9 }).notNull(),
+  oldClassName: varchar('old_class_name', { length: 100 }),
+  rowKey: varchar('row_key', { length: 64 }).notNull(),
+  importHistoryId: uuid('import_history_id').notNull().references(() => importHistory.id),
+  importedAt: timestamp('imported_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+}, (table) => ({
+  studentYearUnique: unique('historical_sources_student_year_unique').on(table.studentId, table.schoolYearLabel),
+  rowYearUnique: unique('historical_sources_row_year_unique').on(table.schoolYearLabel, table.rowKey),
+}));
 
 export const documents = tenant.table(
   'documents',

@@ -15,7 +15,7 @@ import { SENSITIVE_ACTION_RATE_LIMIT } from '../../shared/utils/rate-limit.js';
 import { ImportModuleError, buildImportService } from './import.service.js';
 import { HistoricalStudentsRepository } from './historical-students.repository.js';
 import { HistoricalStudentsService } from './historical-students.service.js';
-import { historicalProfileBodySchema } from './historical-students.types.js';
+import { historicalImportRequestSchema, historicalProfileBodySchema } from './historical-students.types.js';
 import { importTypeParamsSchema, type ImportType } from './import.types.js';
 
 const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
@@ -65,6 +65,7 @@ const readImportPayload = async (
   mode: 'merge' | 'replace';
   schedulePeriod?: { weekStart: string; weekEnd: string };
   conflictAcknowledged: boolean;
+  schoolYearLabel?: string;
 }> => {
   const fields: Record<string, string | boolean | number> = {};
   let fileBuffer: Buffer | null = null;
@@ -100,6 +101,7 @@ const readImportPayload = async (
     mode: parsed.mode,
     schedulePeriod,
     conflictAcknowledged: parsed.conflict_acknowledged,
+    schoolYearLabel: typeof fields.schoolYearLabel === 'string' ? fields.schoolYearLabel : undefined,
   };
 };
 
@@ -195,6 +197,11 @@ export default async function importExportController(app: FastifyInstance): Prom
     new HistoricalStudentsService(new HistoricalStudentsRepository(ensureTenantDb(request)));
   const historicalGuards = [requirePermission('import.students'), attachTenantDb];
 
+  app.get('/api/v1/import/context', { preHandler: [requireAnyImportPermission, attachTenantDb] }, async (request, reply) => {
+    try { return reply.send(await historicalService(request).getAccess(request.claims!.role)); }
+    catch (error) { return handleError(reply, error); }
+  });
+
   app.get('/api/v1/import/historical-students/profile', { preHandler: historicalGuards }, async (request, reply) => {
     try {
       const service = historicalService(request);
@@ -225,10 +232,11 @@ export default async function importExportController(app: FastifyInstance): Prom
       try {
         const service = historicalService(request);
         await service.assertDirector(request.claims!.role);
-        const { fileBuffer } = await readImportPayload(request);
+        const { fileBuffer, schoolYearLabel } = await readImportPayload(request);
+        const context = historicalImportRequestSchema.parse({ schoolYearLabel });
         return reply.send(action === 'analyze'
-          ? await service.analyze(fileBuffer)
-          : await service.confirm(fileBuffer, request.user!.userId));
+          ? await service.analyze(fileBuffer, context.schoolYearLabel)
+          : await service.confirm(fileBuffer, request.user!.userId, context.schoolYearLabel));
       } catch (error) { return handleError(reply, error); }
     });
   }
@@ -245,6 +253,7 @@ export default async function importExportController(app: FastifyInstance): Prom
           await new HistoricalStudentsService(new HistoricalStudentsRepository(ensureTenantDb(request)))
             .assertLegacyImportAllowed(request.claims!.role);
         }
+        if (type === 'teachers') await historicalService(request).assertDirector(request.claims!.role);
         const templatePath = path.resolve(process.cwd(), 'templates', `${type}.xlsx`);
 
         if (!existsSync(templatePath)) {
@@ -282,6 +291,7 @@ export default async function importExportController(app: FastifyInstance): Prom
           await new HistoricalStudentsService(new HistoricalStudentsRepository(ensureTenantDb(request)))
             .assertLegacyImportAllowed(request.claims!.role);
         }
+        if (type === 'teachers') await historicalService(request).assertDirector(request.claims!.role);
         const payload = await readImportPayload(request);
         const service = buildImportService();
         const report = await service.dryRun(type, payload.fileBuffer, ensureTenantDb(request), {
@@ -312,17 +322,21 @@ export default async function importExportController(app: FastifyInstance): Prom
           await new HistoricalStudentsService(new HistoricalStudentsRepository(ensureTenantDb(request)))
             .assertLegacyImportAllowed(request.claims!.role);
         }
+        if (type === 'teachers') await historicalService(request).assertDirector(request.claims!.role);
         const payload = await readImportPayload(request);
         const service = buildImportService();
 
         // c'est ici que la logique de confirmation d'import devient cruciale, notamment pour les imports de planning où des conflits peuvent survenir. 
         // Le service doit vérifier que l'utilisateur a bien reconnu les conflits avant de procéder à l'import effectif.
-        const report = await service.confirm(type, payload.fileBuffer, ensureTenantDb(request), {
+        const confirmationOptions = {
           mode: payload.mode,
           schedulePeriod: payload.schedulePeriod,
           conflictAcknowledged: payload.conflictAcknowledged,
           tenantContext: getTenantContext(request),
-        });
+        };
+        const report = type === 'teachers'
+          ? await historicalService(request).duringInitialConfiguration((database) => service.confirm(type, payload.fileBuffer, database, confirmationOptions))
+          : await service.confirm(type, payload.fileBuffer, ensureTenantDb(request), confirmationOptions);
 
         return reply.send(report);
       } catch (error) {

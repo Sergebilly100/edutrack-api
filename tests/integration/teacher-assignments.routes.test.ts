@@ -22,7 +22,7 @@ describe('C10 profiles, enrollments, assignments and first timetable', () => {
   const pairs = () => [{ subject_id: subjects[0], class_id: classes[0] }, { subject_id: subjects[1], class_id: classes[1] }, { subject_id: subjects[2], class_id: classes[2] }];
   beforeAll(async () => {
     director = await getAuthHeaders('director');
-    tenantId = (await queryPublic<Id>(`INSERT INTO public.tenants (name, subdomain, schema_name, plan, status, max_users, onboarding_completed) VALUES ('C10', $1, $2, 'pro', 'active', 100, true) RETURNING id::text`, [TEST_SCHEMA_NAME.replaceAll('_', '-'), TEST_SCHEMA_NAME]))[0].id;
+    tenantId = (await queryPublic<Id>(`INSERT INTO public.tenants (name, subdomain, schema_name, plan, status, max_users, onboarding_completed) VALUES ('C10', $1, $2, 'pro', 'active', 100, false) RETURNING id::text`, [TEST_SCHEMA_NAME.replaceAll('_', '-'), TEST_SCHEMA_NAME]))[0].id;
     admin = { authorization: `Bearer ${await signAccessToken({ sub: getSeedContext().superAdminUserId, role: 'super_admin', schemaName: TEST_SCHEMA_NAME, tenantId })}` };
     await queryTenant("UPDATE school_years SET status='closed' WHERE status='active'");
     await queryTenant("INSERT INTO school_years (label,start_date,end_date,status) VALUES ('C10 historique','2025-09-01','2026-06-30','closed')");

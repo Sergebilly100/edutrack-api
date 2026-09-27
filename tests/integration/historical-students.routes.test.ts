@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import { readFile } from 'node:fs/promises';
+import { HISTORICAL_STUDENT_TARGETS } from '../../src/modules/import-export/historical-students.types.js';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { getAuthHeaders, getSeedContext, queryTenant, queryPublic, request, tenantTable, TEST_SCHEMA_NAME } from './setup.js';
 
@@ -36,11 +37,11 @@ describe('director historical import C7', () => {
     expect(mapping.status, JSON.stringify(mapping.body)).toBe(200);
     expect(mapping.body.profile.importType).toBe('historical_students');
     const buffer = await file([['C7-H1', 'Kone', 'Aya', '2250700000000'], ['C7-H2', 'Yao', 'Jean', ''], ['C7-BAD', '', 'Ali', 'invalid']]);
-    const analysis = await request().post(`${root}/analyze`).set(headers).attach('file', buffer, 'historical.xlsx');
+    const analysis = await request().post(`${root}/analyze`).set(headers).field('schoolYearLabel', '2024-2025').attach('file', buffer, 'historical.xlsx');
     expect(analysis.status).toBe(200);
     expect(analysis.body).toMatchObject({ validCount: 2, rowCount: 3, missingTargets: [] });
     expect(analysis.body.errors).toEqual(expect.arrayContaining([expect.objectContaining({ rowNumber: 4, field: 'nom' }), expect.objectContaining({ rowNumber: 4, field: 'parent_phone' })]));
-    const confirm = await request().post(`${root}/confirm`).set(headers).attach('file', buffer, 'historical.xlsx');
+    const confirm = await request().post(`${root}/confirm`).set(headers).field('schoolYearLabel', '2024-2025').attach('file', buffer, 'historical.xlsx');
     expect(confirm.status, JSON.stringify(confirm.body)).toBe(200);
     expect(confirm.body).toMatchObject({ createdCount: 2, reusedCount: 0, totalRows: 3 });
     const students = await queryTenant<{ id: string; class_id: string | null }>('SELECT id::text, class_id FROM students WHERE matricule IN ($1, $2) ORDER BY matricule', ['C7-H1', 'C7-H2']);
@@ -53,7 +54,7 @@ describe('director historical import C7', () => {
     const detail = await request().get(`/api/v1/students/${studentId}`).set(headers);
     expect(detail.status).toBe(200);
     expect(detail.body.data.classId).toBeNull();
-    const replay = await request().post(`${root}/confirm`).set(headers).attach('file', buffer, 'historical.xlsx');
+    const replay = await request().post(`${root}/confirm`).set(headers).field('schoolYearLabel', '2024-2025').attach('file', buffer, 'historical.xlsx');
     expect(replay.body).toMatchObject({ createdCount: 0, reusedCount: 2 });
     expect((await counts(students.map((student) => student.id)))[0]?.inscriptions).toBe(0);
 
@@ -76,16 +77,16 @@ describe('director historical import C7', () => {
     expect((await queryTenant('SELECT class_id FROM students WHERE id = $1', [studentId]))[0]?.class_id).toBeNull();
     const persisted = await counts([studentId]);
     expect(persisted[0]).toMatchObject({ inscriptions: 1, payments: 1 });
-    const safeReplay = await request().post(`${root}/confirm`).set(headers).attach('file', buffer, 'historical.xlsx');
+    const safeReplay = await request().post(`${root}/confirm`).set(headers).field('schoolYearLabel', '2024-2025').attach('file', buffer, 'historical.xlsx');
     expect(safeReplay.body).toMatchObject({ createdCount: 0, reusedCount: 2 });
     expect(await counts([studentId])).toEqual(persisted);
   });
 
   it('preserves an enrolled profile on identity conflicts and reports the row/field', async () => {
-    const response = await request().post(`${root}/confirm`).set(headers)
+    const response = await request().post(`${root}/confirm`).set(headers).field('schoolYearLabel', '2024-2025')
       .attach('file', await file([['C7-H1', 'Different', 'Identity', '']]), 'conflict.xlsx');
     expect(response.body.createdCount).toBe(0);
-    expect(response.body.errors).toEqual([{ rowNumber: 2, field: 'matricule', reason: 'Matricule déjà utilisé par un autre profil' }]);
+    expect(response.body.errors).toEqual([{ rowNumber: 2, sheetName: 'Historique', field: 'matricule', reason: 'Matricule déjà utilisé par un autre profil' }]);
     expect((await queryTenant('SELECT last_name FROM students WHERE matricule = $1', ['C7-H1']))[0]?.last_name).toBe('Kone');
   });
 
@@ -117,7 +118,7 @@ describe('director historical import C7', () => {
       BEGIN IF NEW.matricule = 'C7-FAIL' THEN RAISE EXCEPTION 'private synthetic payload'; END IF; RETURN NEW; END $$;
       CREATE TRIGGER c7_reject_line BEFORE INSERT ON students FOR EACH ROW EXECUTE FUNCTION c7_reject_line();`);
     try {
-      const response = await request().post(`${root}/confirm`).set(headers).attach('file',
+      const response = await request().post(`${root}/confirm`).set(headers).field('schoolYearLabel', '2024-2025').attach('file',
         await file([['C7-BEFORE', 'Test', 'Before', ''], ['C7-FAIL', 'Test', 'Fail', ''], ['C7-AFTER', 'Test', 'After', '']]), 'transaction.xlsx');
       expect(response.status).toBe(200);
       expect(response.body).toMatchObject({ createdCount: 2, reusedCount: 0 });
@@ -132,26 +133,24 @@ describe('director historical import C7', () => {
   });
 
   it('forbids legacy class import during onboarding and takeover mapping/routes for director', async () => {
-    const legacy = await request().post('/api/v1/import/students/confirm').set(headers).attach('file', await file([['OLD', 'Kone', 'Aya', '']]), 'legacy.xlsx');
+    const legacy = await request().post('/api/v1/import/students/confirm').set(headers).field('schoolYearLabel', '2024-2025').attach('file', await file([['OLD', 'Kone', 'Aya', '']]), 'legacy.xlsx');
     expect(legacy.status).toBe(403);
     expect(legacy.body.code).toBe('HISTORICAL_IMPORT_REQUIRED');
     const mapping = await request().put(`${root}/profile`).set(headers).send({ fields: [...fields.slice(0, 3), { ...fields[3]!, targetField: 'classe' }] });
     expect(mapping.status).toBe(400);
     const tenants = await queryPublic<{ id: string }>('SELECT id::text FROM public.tenants WHERE schema_name = $1', [TEST_SCHEMA_NAME]);
-    const takeover = await request().post(`/api/v1/admin/schools/${tenants[0]!.id}/midyear-import/students/confirm`).set(headers).attach('file', await file([]), 'takeover.xlsx');
+    const takeover = await request().post(`/api/v1/admin/schools/${tenants[0]!.id}/midyear-import/students/confirm`).set(headers).field('schoolYearLabel', '2024-2025').attach('file', await file([]), 'takeover.xlsx');
     expect(takeover.status).toBe(403);
     const teacher = await request().get(`${root}/profile`).set(await getAuthHeaders('teacher'));
     expect(teacher.status).toBe(403);
   });
 
-  it('provides an empty identity/contact template without class/year/payment columns', async () => {
+  it('provides exactly the existing student workbook, including all parent columns and sheets', async () => {
     const response = await request().get(`${root}/template`).set(headers).buffer(true).parse((res, callback) => {
       const chunks: Buffer[] = []; res.on('data', (chunk: Buffer) => chunks.push(chunk)); res.on('end', () => callback(null, Buffer.concat(chunks)));
     });
     expect(response.status).toBe(200);
-    const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(response.body);
-    expect(workbook.worksheets[0]!.getRow(1).values).toEqual([undefined, 'Matricule', 'Nom', 'Prénom', 'Téléphone parent']);
-    expect(workbook.worksheets[0]!.rowCount).toBe(1);
+    expect(response.body).toEqual(await readFile('templates/students.xlsx'));
   });
 
   it('reapplies migration twice without changing legacy classes, enrollment statuses or payments', async () => {
@@ -203,4 +202,112 @@ describe('director historical import C7', () => {
       await queryPublic(`DROP SCHEMA ${target} CASCADE`);
     }
   });
+
+  it('imports the original multi-sheet model with both parents, dates and per-student historical classes', async () => {
+    const model = new ExcelJS.Workbook();
+    await model.xlsx.readFile('templates/students.xlsx');
+    const dataSheets = model.worksheets.filter((sheet) => sheet.name !== 'README');
+    const headersRow = dataSheets[0]!.getRow(1).values as string[];
+    const labels = headersRow.slice(1);
+    const mapping = HISTORICAL_STUDENT_TARGETS.map((target) => ({
+      targetField: target.key, sourceColumnLabel: target.key === 'historical_class' ? 'Classe*' : target.required ? `${target.label}*` : target.label, isRequired: target.required, translations: [],
+    }));
+    // The standard workbook columns are identity, class, DOB and all supported parents.
+    expect(labels).toEqual(['Matricule', 'Prénom*', 'Nom*', 'Classe*', 'Date de naissance', 'Nom parent', 'Téléphone parent', 'Email parent', 'Nom parent 2', 'Téléphone parent 2']);
+    for (const sheet of dataSheets) sheet.spliceRows(2, sheet.rowCount);
+    dataSheets[0]!.addRow(['C7-PARENTS', 'Test', 'Parents', 'Ancienne 4e A', new Date('2010-03-04T00:00:00Z'), 'Parent A', '2250700000000', 'parent@example.ci', 'Parent B', '2250100000000']);
+    dataSheets[1]!.addRow(['C7-SHEET', 'Test', 'Feuille', '', '', 'Parent C', '', '', '', '']);
+    const buffer = Buffer.from(await model.xlsx.writeBuffer());
+    const checked = await request().post(`${root}/analyze`).set(headers).field('schoolYearLabel', '2023/2024').attach('file', buffer, 'students.xlsx');
+    expect(checked.status, JSON.stringify(checked.body)).toBe(200);
+    expect(checked.body).toMatchObject({ schoolYearLabel: '2023-2024', validCount: 2, rowCount: 2, missingTargets: [] });
+    expect(checked.body.matchedFields).toEqual(expect.arrayContaining(mapping.map((field) => expect.objectContaining(field))));
+    expect(checked.body.matchedFields).toHaveLength(10);
+    expect((await request().put(`${root}/profile`).set(headers).send({ fields: mapping })).status).toBe(200);
+    const confirmed = await request().post(`${root}/confirm`).set(headers).field('schoolYearLabel', '2023-2024').attach('file', buffer, 'students.xlsx');
+    expect(confirmed.body).toMatchObject({ createdCount: 2, reusedCount: 0, errors: [] });
+    const profiles = await queryTenant<{ id: string; matricule: string }>("SELECT id,matricule,class_id,birth_date::text,parent_name,parent_phone,parent_email,parent_name_2,parent_phone_2 FROM students WHERE matricule IN ('C7-PARENTS','C7-SHEET') ORDER BY matricule");
+    expect(profiles[0]).toMatchObject({ class_id: null, birth_date: '2010-03-04', parent_name: 'Parent A', parent_phone: '2250700000000', parent_email: 'parent@example.ci', parent_name_2: 'Parent B', parent_phone_2: '2250100000000' });
+    expect((await counts(profiles.map((profile) => profile.id)))[0]).toEqual({ inscriptions: 0, payments: 0, finance: 0, documents: 0, parents: 0 });
+    for (const [index, profile] of profiles.entries()) {
+      const detail = await request().get(`/api/v1/students/${profile.id}`).set(headers);
+      expect(detail.body.data.historicalSources).toEqual([expect.objectContaining({ schoolYearLabel: '2023-2024', oldClassName: index === 0 ? 'Ancienne 4e A' : dataSheets[1]!.name })]);
+    }
+    expect(await queryTenant("SELECT id FROM school_years WHERE label='2023-2024'")).toEqual([]);
+    const replay = await request().post(`${root}/confirm`).set(headers).field('schoolYearLabel', '2023-2024').attach('file', buffer, 'students.xlsx');
+    expect(replay.body).toMatchObject({ createdCount: 0, reusedCount: 2, errors: [] });
+    const history = await request().get('/api/v1/import/history?type=students').set(headers);
+    expect(history.body.items).toEqual(expect.arrayContaining([expect.objectContaining({ historical_school_year_label: '2023-2024' })]));
+  });
+
+  it('allows multiple class-free and matricule-free lots, replays safely and rejects invalid years', async () => {
+    const mapping = fields.slice(1, 3);
+    expect((await request().put(`${root}/profile`).set(headers).send({ fields: mapping })).status).toBe(200);
+    for (const year of [undefined, '', '2024-2026']) {
+      const pending = request().post(`${root}/confirm`).set(headers);
+      if (year !== undefined) pending.field('schoolYearLabel', year);
+      const invalid = await pending.attach('file', await file([['', 'Year', 'Invalid', '']]), 'students.xlsx');
+      expect(invalid.status).toBe(400);
+    }
+    for (const givenName of ['LotOne', 'LotTwo']) {
+      const buffer = await file([['', 'C7SansMatricule', givenName, '']]);
+      const confirm = await request().post(`${root}/confirm`).set(headers).field('schoolYearLabel', '2024-2025').attach('file', buffer, 'students.xlsx');
+      expect(confirm.body).toMatchObject({ createdCount: 1, reusedCount: 0, errors: [] });
+      const replay = await request().post(`${root}/confirm`).set(headers).field('schoolYearLabel', '2024-2025').attach('file', buffer, 'students.xlsx');
+      expect(replay.body).toMatchObject({ createdCount: 0, reusedCount: 1, errors: [] });
+    }
+    const rows = await queryTenant<{ id: string }>("SELECT id FROM students WHERE last_name='C7SansMatricule'");
+    expect(rows).toHaveLength(2);
+    expect((await counts(rows.map((row) => row.id)))[0]).toEqual({ inscriptions: 0, payments: 0, finance: 0, documents: 0, parents: 0 });
+  });
+
+  it('rolls back the profile itself when writing its historical reference fails', async () => {
+    await request().put(`${root}/profile`).set(headers).send({ fields });
+    await queryTenant(`CREATE FUNCTION c7_reject_source() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF EXISTS(SELECT 1 FROM students WHERE id=NEW.student_id AND matricule='C7-SOURCEFAIL')
+      THEN RAISE EXCEPTION 'synthetic private reference'; END IF; RETURN NEW; END $$;
+      CREATE TRIGGER c7_reject_source BEFORE INSERT ON student_historical_sources FOR EACH ROW EXECUTE FUNCTION c7_reject_source();`);
+    try {
+      const response = await request().post(`${root}/confirm`).set(headers).field('schoolYearLabel', '2024-2025').attach('file',
+        await file([['C7-SOURCEFAIL', 'Test', 'SourceFail', ''], ['C7-SOURCEOK', 'Test', 'SourceOk', '']]), 'students.xlsx');
+      expect(response.body).toMatchObject({ createdCount: 1, reusedCount: 0, errors: [expect.objectContaining({ rowNumber: 2, field: 'profil' })] });
+      expect(JSON.stringify(response.body)).not.toContain('synthetic private reference');
+      expect(await queryTenant("SELECT id FROM students WHERE matricule='C7-SOURCEFAIL'")).toEqual([]);
+      expect(await queryTenant("SELECT h.id FROM student_historical_sources h JOIN students s ON s.id=h.student_id WHERE s.matricule='C7-SOURCEOK'")).toHaveLength(1);
+    } finally {
+      await queryTenant('DROP TRIGGER c7_reject_source ON student_historical_sources; DROP FUNCTION c7_reject_source();');
+    }
+  });
+
+  it('reapplies historical source migration without changing references or any existing business data', async () => {
+    const tables = ['students', 'enrollments', 'payments', 'student_financial_status', 'documents', 'student_historical_sources', 'import_history'];
+    const snapshots = await Promise.all(tables.map((table) => queryTenant(`SELECT * FROM ${table} ORDER BY id`)));
+    const source = (await readFile('src/shared/database/migrations/0076_historical_student_sources.sql', 'utf8')).replaceAll('"tenant"', `"${TEST_SCHEMA_NAME}"`);
+    for (let attempt = 0; attempt < 2; attempt++) for (const statement of source.split('--> statement-breakpoint')) await queryTenant(statement);
+    expect(await Promise.all(tables.map((table) => queryTenant(`SELECT * FROM ${table} ORDER BY id`)))).toEqual(snapshots);
+  });
+
+  it('closes student and teacher imports after finalization, including saved mappings and direct URLs', async () => {
+    expect((await request().get('/api/v1/import/context').set(headers)).body).toEqual({ initialConfiguration: true, canImportProfiles: true });
+    await queryPublic('UPDATE public.tenants SET onboarding_completed=true WHERE schema_name=$1', [TEST_SCHEMA_NAME]);
+    try {
+      expect((await request().get('/api/v1/import/context').set(headers)).body).toEqual({ initialConfiguration: false, canImportProfiles: false });
+      for (const path of [`${root}/profile`, `${root}/template`, '/api/v1/import/teachers/template', '/api/v1/import/students/template']) {
+        const response = await request().get(path).set(headers);
+        expect(response.status).toBe(403);
+        expect(response.body.code).toBe('INITIAL_IMPORT_CLOSED');
+      }
+      expect((await request().put(`${root}/profile`).set(headers).send({ fields })).status).toBe(403);
+      for (const path of [`${root}/analyze`, `${root}/confirm`, '/api/v1/import/teachers/dry-run', '/api/v1/import/teachers/confirm', '/api/v1/import/students/confirm']) {
+        const response = await request().post(path).set(headers).field('schoolYearLabel', '2024-2025').attach('file', await file([]), 'students.xlsx');
+        expect(response.status).toBe(403);
+        expect(response.body.code).toBe('INITIAL_IMPORT_CLOSED');
+      }
+      expect((await request().get('/api/v1/import/schedule/template').set(headers)).status).toBe(200);
+      expect((await request().get('/api/v1/import/history').set(headers)).status).toBe(200);
+    } finally {
+      await queryPublic('UPDATE public.tenants SET onboarding_completed=false WHERE schema_name=$1', [TEST_SCHEMA_NAME]);
+    }
+  });
+
 });

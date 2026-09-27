@@ -185,6 +185,7 @@ export type StudentParentSmsRecord = {
 };
 
 export type StudentDetailRecord = {
+  historicalSources?: Array<{ schoolYearLabel: string; oldClassName: string | null }>;
   id: string;
   firstName: string;
   lastName: string;

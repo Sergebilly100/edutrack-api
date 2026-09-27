@@ -48,6 +48,7 @@ type ImportHistoryRow = {
   imported_count: number;
   updated_count: number;
   schedule_period: string | null;
+  historical_school_year_label: string | null;
   imported_by: string | null;
   imported_by_name: string | null;
   imported_by_role: string | null;
@@ -884,6 +885,7 @@ export const defaultImportRepository: ImportRepository = {
           ih.imported_count,
           ih.updated_count,
           ih.schedule_period,
+          ih.historical_school_year_label,
           ih.imported_by::text,
           u.name AS imported_by_name,
           COALESCE(ih.imported_by_role, ap.name, u.role::text) AS imported_by_role

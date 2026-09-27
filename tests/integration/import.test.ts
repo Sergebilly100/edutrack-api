@@ -1,6 +1,4 @@
 import ExcelJS from 'exceljs';
-import path from 'node:path';
-import { existsSync } from 'node:fs';
 import type { Test } from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -8,6 +6,8 @@ import {
   getAuthHeaders,
   getSeedContext,
   queryTenant,
+  queryPublic,
+  TEST_SCHEMA_NAME,
   request,
   tenantTable,
 } from './setup.js';
@@ -70,290 +70,27 @@ const nextFullWeek = (offsetWeeks = 0): { monday: string; sunday: string } => {
 // Students
 // ---------------------------------------------------------------------------
 
-describe('import integration - students', () => {
-  it('POST /api/v1/import/students/dry-run - 10 lignes valides → valid=10, errors=[]', async () => {
-    const headers = await getAuthHeaders('director');
-    const { className } = getSeedContext();
-    const rows = Array.from({ length: 10 }, (_, i) => ({
-      'Prénom*': `DryFirst${i + 1}`,
-      'Nom*': `DryLast${i + 1}`,
-      'Classe*': className,
-      'Téléphone parent': `225070000${String(i + 1).padStart(4, '0')}`,
-    }));
+beforeAll(async () => {
+  await queryPublic(`INSERT INTO public.tenants (name,subdomain,schema_name,plan,status,onboarding_completed)
+    VALUES ('Import initial', $1, $1, 'pro', 'active', false)
+    ON CONFLICT (schema_name) DO UPDATE SET onboarding_completed = false`, [TEST_SCHEMA_NAME]);
+});
 
-    const res = await attachStudents(
-      request().post('/api/v1/import/students/dry-run').set(headers),
-      rows
-    );
-
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ valid: 10, errors: [] });
+describe('legacy student import is replaced by historical profiles', () => {
+  it.each(['dry-run', 'confirm'])('refuses director legacy %s during initial configuration', async (action) => {
+    const response = await attachStudents(request().post(`/api/v1/import/students/${action}`).set(await getAuthHeaders('director')),
+      [{ 'Prénom*': 'Test', 'Nom*': 'Historical' }]);
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe('HISTORICAL_IMPORT_REQUIRED');
   });
-
-  it('POST /api/v1/import/students/dry-run - 3 lignes invalides → bons numéros de ligne', async () => {
-    const headers = await getAuthHeaders('director');
-    const { className } = getSeedContext();
-    const rows = [
-      { 'Prénom*': '', 'Nom*': 'BadOne', 'Classe*': className, 'Téléphone parent': '2250700000001' },
-      { 'Prénom*': 'Bad', 'Nom*': 'Two', 'Classe*': 'Classe inconnue', 'Téléphone parent': '2250700000002' },
-      { 'Prénom*': 'Bad', 'Nom*': 'Three', 'Classe*': className, 'Téléphone parent': '0700000000' },
-    ];
-
-    const res = await attachStudents(
-      request().post('/api/v1/import/students/dry-run').set(headers),
-      rows
-    );
-
-    expect(res.status).toBe(200);
-    expect(res.body.valid).toBe(0);
-    expect(res.body.errors).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ row: 2, column: 'Prénom*' }),
-        expect.objectContaining({ row: 3, column: 'Classe*' }),
-        expect.objectContaining({ row: 4, column: 'Téléphone parent' }),
-      ])
-    );
-  });
-
-  it('POST /api/v1/import/students/confirm - persiste 10 élèves en DB', async () => {
-    const headers = await getAuthHeaders('director');
-    const { className } = getSeedContext();
-    const prefix = uniquePrefix();
-
-    const rows = Array.from({ length: 10 }, (_, i) => ({
-      'Prénom*': `${prefix}_f_${i + 1}`,
-      'Nom*': `${prefix}_l_${i + 1}`,
-      'Classe*': className,
-    }));
-
-    const res = await attachStudents(
-      request().post('/api/v1/import/students/confirm').set(headers),
-      rows
-    );
-
-    expect(res.status).toBe(200);
-
-    const [{ count }] = await queryTenant<{ count: number }>(
-      `SELECT COUNT(*)::int AS count FROM ${tenantTable('students')} WHERE first_name LIKE $1`,
-      [`${prefix}_f_%`]
-    );
-    expect(Number(count)).toBe(10);
-  });
-
-  it('POST /api/v1/import/students/confirm - idempotent (rejeu → pas de doublons)', async () => {
-    const headers = await getAuthHeaders('director');
-    const { className } = getSeedContext();
-    const prefix = uniquePrefix();
-
-    const rows = Array.from({ length: 5 }, (_, i) => ({
-      'Prénom*': `${prefix}_f_${i + 1}`,
-      'Nom*': `${prefix}_l_${i + 1}`,
-      'Classe*': className,
-    }));
-
-    await attachStudents(request().post('/api/v1/import/students/confirm').set(headers), rows);
-    const second = await attachStudents(
-      request().post('/api/v1/import/students/confirm').set(headers),
-      rows
-    );
-
-    expect(second.status).toBe(200);
-    const [{ count }] = await queryTenant<{ count: number }>(
-      `SELECT COUNT(*)::int AS count FROM ${tenantTable('students')} WHERE first_name LIKE $1`,
-      [`${prefix}_f_%`]
-    );
-    expect(Number(count)).toBe(5);
-  });
-
-  it('POST /api/v1/import/students/confirm - crée et lie le parent sans envoyer de SMS', async () => {
-    const headers = await getAuthHeaders('director');
-    const { className } = getSeedContext();
-    const prefix = uniquePrefix();
-    const phone = `22501${Math.random().toString().slice(2, 10).padEnd(8, '0')}`;
-    const rows = [
-      {
-        'Prénom*': `${prefix}_child`,
-        'Nom*': 'ImportParent',
-        'Classe*': className,
-        'Nom parent': `Parent ${prefix}`,
-        'Téléphone parent': phone,
-        'Email parent': `${prefix}@test.ci`,
-      },
-    ];
-
-    const res = await attachStudents(
-      request().post('/api/v1/import/students/confirm').set(headers),
-      rows
-    );
-
-    expect(res.status).toBe(200);
-    expect(res.body.imported).toBe(1);
-    expect(res.body.parentAccountsCreated).toBe(1);
-    expect(res.body.parentAccountsReused).toBe(0);
-    expect(res.body.pendingParentAccess).toEqual([
-      expect.objectContaining({
-        fullName: `Parent ${prefix}`,
-        phone,
-      }),
-    ]);
-
-    const links = await queryTenant<{
-      parent_id: string;
-      access_sent_at: string | null;
-      must_change_password: boolean;
-      subscription_id: string | null;
-    }>(
-      `
-        SELECT
-          p.id::text AS parent_id,
-          p.access_sent_at::text,
-          p.must_change_password,
-          psl.subscription_id::text
-        FROM ${tenantTable('parents')} p
-        INNER JOIN ${tenantTable('parent_student_links')} psl ON psl.parent_id = p.id
-        INNER JOIN ${tenantTable('students')} s ON s.id = psl.student_id
-        WHERE p.phone = $1 AND s.first_name = $2
-      `,
-      [phone, `${prefix}_child`]
-    );
-    expect(links).toHaveLength(1);
-    expect(links[0]).toMatchObject({
-      access_sent_at: null,
-      must_change_password: true,
-      subscription_id: null,
-    });
-
-    const [{ count }] = await queryTenant<{ count: number }>(
-      `
-        SELECT COUNT(*)::int AS count
-        FROM ${tenantTable('notifications_log')}
-        WHERE type = 'parent_access_credentials'
-          AND related_id = $1::uuid
-      `,
-      [links[0]!.parent_id]
-    );
-    expect(count).toBe(0);
-  });
-
-  it('POST /api/v1/import/students/confirm - réutilise un parent existant par téléphone sans SMS', async () => {
-    const headers = await getAuthHeaders('director');
-    const { className } = getSeedContext();
-    const prefix = uniquePrefix();
-    const phone = `22505${Math.random().toString().slice(2, 10).padEnd(8, '0')}`;
-    const firstRows = [
-      {
-        'Prénom*': `${prefix}_first_child`,
-        'Nom*': 'SharedParent',
-        'Classe*': className,
-        'Nom parent': `Parent ${prefix}`,
-        'Téléphone parent': phone,
-      },
-    ];
-    const secondRows = [
-      {
-        'Prénom*': `${prefix}_second_child`,
-        'Nom*': 'SharedParent',
-        'Classe*': className,
-        'Nom parent': `Parent ${prefix}`,
-        'Téléphone parent': phone,
-      },
-    ];
-
-    const first = await attachStudents(
-      request().post('/api/v1/import/students/confirm').set(headers),
-      firstRows
-    );
-    expect(first.status).toBe(200);
-    expect(first.body.parentAccountsCreated).toBe(1);
-
-    const second = await attachStudents(
-      request().post('/api/v1/import/students/confirm').set(headers),
-      secondRows
-    );
-
-    expect(second.status).toBe(200);
-    expect(second.body.parentAccountsCreated).toBe(0);
-    expect(second.body.parentAccountsReused).toBe(1);
-    expect(second.body.pendingParentAccess).toEqual([]);
-
-    const [{ parent_count, link_count, notification_count }] = await queryTenant<{
-      parent_count: number;
-      link_count: number;
-      notification_count: number;
-    }>(
-      `
-        SELECT
-          (SELECT COUNT(*)::int FROM ${tenantTable('parents')} WHERE phone = $1) AS parent_count,
-          (
-            SELECT COUNT(*)::int
-            FROM ${tenantTable('parent_student_links')} psl
-            INNER JOIN ${tenantTable('parents')} p ON p.id = psl.parent_id
-            INNER JOIN ${tenantTable('students')} s ON s.id = psl.student_id
-            WHERE p.phone = $1 AND s.first_name IN ($2, $3)
-          ) AS link_count,
-          (
-            SELECT COUNT(*)::int
-            FROM ${tenantTable('notifications_log')} nl
-            INNER JOIN ${tenantTable('parents')} p ON p.id = nl.related_id
-            WHERE p.phone = $1 AND nl.type = 'parent_access_credentials'
-          ) AS notification_count
-      `,
-      [phone, `${prefix}_first_child`, `${prefix}_second_child`]
-    );
-    expect(parent_count).toBe(1);
-    expect(link_count).toBe(2);
-    expect(notification_count).toBe(0);
-  });
-
-  it('POST /api/v1/import/students/confirm - mode replace désactive les absents', async () => {
-    const headers = await getAuthHeaders('director');
-    const { className } = getSeedContext();
-    const prefix = uniquePrefix();
-
-    // Initial import: 3 students
-    const initial = Array.from({ length: 3 }, (_, i) => ({
-      'Prénom*': `${prefix}_f_${i + 1}`,
-      'Nom*': `${prefix}_l_${i + 1}`,
-      'Classe*': className,
-    }));
-    await attachStudents(
-      request().post('/api/v1/import/students/confirm').set(headers).field('mode', 'merge'),
-      initial
-    );
-
-    // Replace with only 1 student
-    const replacement = [{ 'Prénom*': `${prefix}_f_1`, 'Nom*': `${prefix}_l_1`, 'Classe*': className }];
-    const res = await attachStudents(
-      request().post('/api/v1/import/students/confirm').set(headers).field('mode', 'replace'),
-      replacement
-    );
-
-    expect(res.status).toBe(200);
-
-    const [{ active_count }] = await queryTenant<{ active_count: number }>(
-      `SELECT COUNT(*)::int AS active_count FROM ${tenantTable('students')} WHERE first_name LIKE $1 AND is_active = true`,
-      [`${prefix}_f_%`]
-    );
-    expect(Number(active_count)).toBe(1);
-  });
-
-  it('POST /api/v1/import/students/dry-run - teacher sans permission → 403', async () => {
-    const headers = await getAuthHeaders('teacher');
-    const { className } = getSeedContext();
-
-    const res = await attachStudents(
-      request().post('/api/v1/import/students/dry-run').set(headers),
-      [{ 'Prénom*': 'Awa', 'Nom*': 'Bah', 'Classe*': className }]
-    );
-
-    expect(res.status).toBe(403);
+  it('refuses a teacher without import permission', async () => {
+    const response = await attachStudents(request().post('/api/v1/import/students/dry-run').set(await getAuthHeaders('teacher')),
+      [{ 'Prénom*': 'Test', 'Nom*': 'Historical' }]);
+    expect(response.status).toBe(403);
   });
 });
 
-// ---------------------------------------------------------------------------
-// Teachers
-// ---------------------------------------------------------------------------
-
+// Teacher profile imports remain available until onboarding is finalized.
 describe('import integration - teachers', () => {
   it('POST /api/v1/import/teachers/dry-run - valide → valid=1, errors=[]', async () => {
     const headers = await getAuthHeaders('director');
@@ -670,13 +407,12 @@ describe('import integration - schedule', () => {
 describe('import integration - history', () => {
   it('GET /api/v1/import/history - retourne les imports confirmés', async () => {
     const headers = await getAuthHeaders('director');
-    const { className } = getSeedContext();
     const prefix = uniquePrefix();
 
     // Perform a confirm to ensure at least one history entry
-    await attachStudents(
-      request().post('/api/v1/import/students/confirm').set(headers),
-      [{ 'Prénom*': `${prefix}_h`, 'Nom*': 'History', 'Classe*': className }]
+    await attachTeachers(
+      request().post('/api/v1/import/teachers/confirm').set(headers),
+      [{ 'Prénom*': `${prefix}_h`, 'Nom*': 'History', 'Type*': 'vacataire', 'Taux horaire FCFA': '3000' }]
     );
 
     const res = await request().get('/api/v1/import/history').set(headers);
@@ -715,19 +451,10 @@ describe('import integration - history', () => {
 // ---------------------------------------------------------------------------
 
 describe('import integration - template', () => {
-  it('GET /api/v1/import/students/template - retourne 200 ou 404 selon présence du fichier', async () => {
-    const headers = await getAuthHeaders('director');
-
-    const res = await request().get('/api/v1/import/students/template').set(headers);
-
-    const templateExists = existsSync(path.resolve(process.cwd(), 'templates', 'students.xlsx'));
-    if (templateExists) {
-      expect(res.status).toBe(200);
-      expect(res.headers['content-disposition']).toContain('students-template.xlsx');
-    } else {
-      expect(res.status).toBe(404);
-      expect(res.body.code).toBe('TEMPLATE_NOT_FOUND');
-    }
+  it('refuses the legacy student template during onboarding', async () => {
+    const res = await request().get('/api/v1/import/students/template').set(await getAuthHeaders('director'));
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('HISTORICAL_IMPORT_REQUIRED');
   });
 
   it('GET /api/v1/import/invalid/template - type invalide → 400', async () => {

@@ -756,6 +756,7 @@ export class ImportService {
         imported_count: number;
         updated_count: number;
         schedule_period?: string | null;
+        historical_school_year_label: string | null;
         imported_by: string | null;
         imported_by_name: string | null;
         imported_by_role: string | null;
@@ -773,6 +774,7 @@ export class ImportService {
         imported_count: row.imported_count,
         updated_count: row.updated_count,
         schedule_period: row.schedule_period,
+        historical_school_year_label: row.historical_school_year_label,
         imported_by: row.imported_by,
         imported_by_name: row.imported_by_name,
         imported_by_role: row.imported_by_role,
