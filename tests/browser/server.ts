@@ -26,7 +26,9 @@ const [level] = await queryTenant<{ id: string }>("INSERT INTO levels (name, ord
 await queryTenant(`UPDATE classes SET name='Classe QA', level_id=$1, school_year_id=$2, homeroom_teacher_id=$3 WHERE name=$4`, [level!.id, schoolYear!.id, context.teacherId, context.className]);
 await queryTenant("UPDATE teachers SET username='qa.teacher' WHERE id=$1", [context.teacherId]);
 context.teacherUsername = 'qa.teacher';
-await queryTenant("INSERT INTO classes (name, level_id, school_year_id) VALUES ('Classe inscription QA', $1, $2)", [level!.id, schoolYear!.id]);
+const [registrationClass] = await queryTenant<{ id: string }>(
+  "INSERT INTO classes (name, level_id, school_year_id) VALUES ('Classe inscription QA', $1, $2) RETURNING id",
+  [level!.id, schoolYear!.id]);
 const [klass] = await queryTenant<{ id: string }>("SELECT id FROM classes WHERE name='Classe QA'");
 const [subject] = await queryTenant<{ id: string }>("INSERT INTO subjects (level_id, name, coefficient) VALUES ($1, 'Mathematiques', 4) RETURNING id", [level!.id]);
 const [period] = await queryTenant<{ id: string }>(`INSERT INTO grading_periods (school_year_id, type, order_index, label, start_date, end_date)
@@ -42,6 +44,10 @@ for (const firstName of ['Aya', 'Koffi']) {
   const student = await request().post('/api/v1/students').set(director).send({ class_id: klass!.id, first_name: firstName, last_name: 'Recette', matricule: `QA-${firstName}` });
   assertOk(student);
   studentIds.push(student.body.data.id);
+}
+for (const studentId of studentIds) {
+  await queryTenant(`INSERT INTO enrollments (student_id, class_id, school_year_id, type, status)
+    VALUES ($1, $2, $3, 'new_registration', 'confirmed')`, [studentId, klass!.id, schoolYear!.id]);
 }
 for (const phone of ['2250700008899', '2250700008898']) {
   const [parent] = await queryTenant<{ id: string }>(`INSERT INTO parents (full_name, phone, password_hash, is_active, must_change_password)
@@ -66,7 +72,7 @@ for (const [state, phone, firstName, daysRemaining] of [
   ['absent', '2250000008843', 'Sansabo', null],
 ] as const) {
   const student = await request().post('/api/v1/students').set(director).send({
-    class_id: klass!.id, first_name: firstName, last_name: 'C16', matricule: `QA-C16-${state}`,
+    class_id: registrationClass!.id, first_name: firstName, last_name: 'C16', matricule: `QA-C16-${state}`,
   });
   assertOk(student);
   const [parent] = await queryTenant<{ id: string }>(

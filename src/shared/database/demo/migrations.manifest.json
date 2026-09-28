@@ -78,5 +78,7 @@
   "0073_school_address.sql": "0bae45331b5482ca9e17d497bd300d744f46a72074000d70f3585df2425be70c",
   "0074_historical_student_profiles.sql": "a248c642979d118c52f1ff3583a28e24a32a1b92746726ee61d486e9aee2a0bb",
   "0075_midyear_mapping_platform_actor.sql": "76e43275add0cd5a9bfc10092f8a32338d3117e1bdcfbcee17802c2d825fcdef",
-  "0076_historical_student_sources.sql": "a07e79bda781fd9a95756eff7b437c631989bd6763db1169d46141e1253c7020"
+  "0076_historical_student_sources.sql": "a07e79bda781fd9a95756eff7b437c631989bd6763db1169d46141e1253c7020",
+  "0077_risk_schema_declarations.sql": "7e0f94adc736bf053c4f63b132b03216bf24c7afbfef75b1767c70058e8087d3",
+  "0078_teacher_lateness.sql": "c69487e86e8e63e95bcb57a72a0657e5c85e5464a169f41535064d9022a3a8b9"
 }
