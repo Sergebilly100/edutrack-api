@@ -109,6 +109,9 @@ export class EnrollmentsService {
         confirmedPaid?: number;
         standing?: 'up_to_date' | 'late';
       }>;
+      getEnrollmentPaymentPreview(studentId: string, schoolYearId: string): Promise<{
+        remainingDue: number; currency: string; totalDue: number; confirmedPaid: number;
+      }>;
     }
   ) {}
 
@@ -166,6 +169,17 @@ export class EnrollmentsService {
           currency: financial.currency ?? 'FCFA',
         };
       } catch (error) {
+        if ((error as { code?: string }).code === 'CONFIRMED_ENROLLMENT_REQUIRED') {
+          return {
+            schoolYearId: row.school_year_id,
+            schoolYearLabel: row.school_year_label,
+            className: row.class_name,
+            decision: mapDecisionLabel(row.final_decision),
+            financialStatus: 'unavailable' as const,
+            remainingDue: null,
+            currency: 'FCFA',
+          };
+        }
         if ((error as { code?: string }).code === 'TUITION_PLAN_REQUIRED') {
           return {
             schoolYearId: row.school_year_id,
@@ -198,7 +212,9 @@ export class EnrollmentsService {
     if (!this.finance) {
       throw new EnrollmentsModuleError('Financial module is unavailable', 503, 'FINANCE_MODULE_UNAVAILABLE');
     }
-    const status = await this.finance.getFinancialStatus(enrollment.student_id, enrollment.school_year_id);
+    const status = enrollment.status === 'confirmed'
+      ? await this.finance.getFinancialStatus(enrollment.student_id, enrollment.school_year_id)
+      : await this.finance.getEnrollmentPaymentPreview(enrollment.student_id, enrollment.school_year_id);
     return {
       enrollment: mapEnrollment(enrollment),
       amountDue: status.remainingDue,

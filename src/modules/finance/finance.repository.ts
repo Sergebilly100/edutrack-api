@@ -8,6 +8,7 @@ import type {
   UpsertTuitionPlanInput,
 } from './finance.types.js';
 import type { CumulativeScheduleStep, PaymentStatus, SubscriptionPeriod } from './finance.calculations.js';
+import { confirmedFinancialStudent } from './finance-scope.js';
 
 export type FinanceDb = NodePgDatabase<Record<string, unknown>>;
 
@@ -114,7 +115,14 @@ export class FinanceRepository {
     return receiptNumber;
   }
 
-  async getAmountDueContext(studentId: string, schoolYearId: string): Promise<AmountDueContext | null> {
+  async hasConfirmedEnrollment(studentId: string, schoolYearId: string): Promise<boolean> {
+    const result = await this.db.execute<{ eligible: boolean }>(sql`
+      SELECT ${confirmedFinancialStudent(sql`${studentId}::uuid`, sql`${schoolYearId}::uuid`)} AS eligible
+    `);
+    return rows<{ eligible: boolean }>(result)[0]?.eligible === true;
+  }
+
+  async getAmountDueContext(studentId: string, schoolYearId: string, allowPending = false): Promise<AmountDueContext | null> {
     const result = await this.db.execute<AmountDueContext>(sql`
       SELECT
         s.id::text AS student_id,
@@ -129,20 +137,21 @@ export class FinanceRepository {
         sto.override_total_amount,
         sto.discount_amount
       FROM students s
-      LEFT JOIN enrollments e
+      INNER JOIN enrollments e
         ON e.student_id = s.id
        AND e.school_year_id = ${schoolYearId}::uuid
+       AND ${allowPending ? sql`e.status IN ('pending_cashier', 'pending_dossier')` : sql`e.status = 'confirmed'`}
       INNER JOIN classes c
-        ON c.id = COALESCE(e.class_id, s.class_id)
-       AND c.school_year_id = ${schoolYearId}::uuid
+        ON c.id = e.class_id
+       AND c.school_year_id = ${schoolYearId}::uuid AND c.is_active = true
       INNER JOIN tuition_plans tp
         ON tp.level_id = c.level_id
        AND tp.school_year_id = ${schoolYearId}::uuid
       LEFT JOIN student_tuition_overrides sto
         ON sto.student_id = s.id
        AND sto.school_year_id = ${schoolYearId}::uuid
-      WHERE s.id = ${studentId}::uuid
-      ORDER BY e.enrolled_at DESC NULLS LAST
+      WHERE s.id = ${studentId}::uuid AND s.is_active = true
+      ORDER BY e.enrolled_at DESC
       LIMIT 1
     `);
     return rows<AmountDueContext>(result)[0] ?? null;
@@ -159,17 +168,17 @@ export class FinanceRepository {
     return rows<MandatorySubscriptionPlanRow>(result);
   }
 
-  async getTuitionPlanRequiredContext(studentId: string, schoolYearId: string): Promise<TuitionPlanRequiredContext | null> {
+  async getTuitionPlanRequiredContext(studentId: string, schoolYearId: string, allowPending = false): Promise<TuitionPlanRequiredContext | null> {
     const result = await this.db.execute<TuitionPlanRequiredContext>(sql`
       SELECT y.id::text AS "schoolYearId", y.label AS "schoolYearLabel",
              l.id::text AS "levelId", l.name AS "levelName"
       FROM students s
-      LEFT JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = ${schoolYearId}::uuid
-      INNER JOIN classes c ON c.id = COALESCE(e.class_id, s.class_id)
-                          AND c.school_year_id = ${schoolYearId}::uuid
+      INNER JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = ${schoolYearId}::uuid
+        AND ${allowPending ? sql`e.status IN ('pending_cashier', 'pending_dossier')` : sql`e.status = 'confirmed'`}
+      INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = ${schoolYearId}::uuid AND c.is_active = true
       INNER JOIN school_years y ON y.id = c.school_year_id
       INNER JOIN levels l ON l.id = c.level_id
-      WHERE s.id = ${studentId}::uuid
+      WHERE s.id = ${studentId}::uuid AND s.is_active = true
       ORDER BY e.enrolled_at DESC NULLS LAST
       LIMIT 1
     `);
@@ -248,12 +257,13 @@ export class FinanceRepository {
         ELSE COALESCE(plan_steps.expected, 0)
       END AS expected
       FROM students s
-      LEFT JOIN enrollments e
+      INNER JOIN enrollments e
         ON e.student_id = s.id
        AND e.school_year_id = ${schoolYearId}::uuid
+       AND e.status = 'confirmed'
       INNER JOIN classes c
-        ON c.id = COALESCE(e.class_id, s.class_id)
-       AND c.school_year_id = ${schoolYearId}::uuid
+        ON c.id = e.class_id
+       AND c.school_year_id = ${schoolYearId}::uuid AND c.is_active = true
       INNER JOIN tuition_plans tp
         ON tp.level_id = c.level_id
        AND tp.school_year_id = ${schoolYearId}::uuid
@@ -270,7 +280,7 @@ export class FinanceRepository {
         WHERE tuition_plan_id = tp.id
           AND due_date <= ${asOfDate}::date
       ) plan_steps ON true
-      WHERE s.id = ${studentId}::uuid
+      WHERE s.id = ${studentId}::uuid AND s.is_active = true
       ORDER BY e.enrolled_at DESC NULLS LAST
       LIMIT 1
     `);
@@ -359,10 +369,10 @@ export class FinanceRepository {
              c.id::text AS class_id,
              c.name AS class_name
       FROM payments p
-      INNER JOIN students s ON s.id = p.student_id
-      LEFT JOIN enrollments e
-        ON e.student_id = s.id AND e.school_year_id = p.school_year_id
-      INNER JOIN classes c ON c.id = COALESCE(e.class_id, s.class_id)
+      INNER JOIN students s ON s.id = p.student_id AND s.is_active = true
+      INNER JOIN enrollments e
+        ON e.student_id = s.id AND e.school_year_id = p.school_year_id AND e.status = 'confirmed'
+      INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = p.school_year_id AND c.is_active = true
       WHERE (${input.schoolYearId ?? null}::uuid IS NULL OR p.school_year_id = ${input.schoolYearId ?? null}::uuid)
         AND (${input.from ?? null}::date IS NULL OR p.payment_date >= ${input.from ?? null}::date)
         AND (${input.to ?? null}::date IS NULL OR p.payment_date <= ${input.to ?? null}::date)
@@ -392,10 +402,10 @@ export class FinanceRepository {
              c.id::text AS class_id,
              c.name AS class_name
       FROM payments p
-      INNER JOIN students s ON s.id = p.student_id
-      LEFT JOIN enrollments e
-        ON e.student_id = s.id AND e.school_year_id = p.school_year_id
-      INNER JOIN classes c ON c.id = COALESCE(e.class_id, s.class_id)
+      INNER JOIN students s ON s.id = p.student_id AND s.is_active = true
+      INNER JOIN enrollments e
+        ON e.student_id = s.id AND e.school_year_id = p.school_year_id AND e.status = 'confirmed'
+      INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = p.school_year_id AND c.is_active = true
       WHERE (${input.schoolYearId ?? null}::uuid IS NULL OR p.school_year_id = ${input.schoolYearId ?? null}::uuid)
         AND (${input.from ?? null}::date IS NULL OR p.payment_date >= ${input.from ?? null}::date)
         AND (${input.to ?? null}::date IS NULL OR p.payment_date <= ${input.to ?? null}::date)
@@ -423,10 +433,10 @@ export class FinanceRepository {
         COALESCE(SUM(CASE WHEN p.status = 'confirmed' AND p.method = 'bank_transfer' THEN p.amount ELSE 0 END), 0) AS bank_transfer_total,
         COALESCE(SUM(CASE WHEN p.status = 'confirmed' THEN p.amount ELSE 0 END), 0) AS grand_total
       FROM payments p
-      INNER JOIN students s ON s.id = p.student_id
-      LEFT JOIN enrollments e
-        ON e.student_id = s.id AND e.school_year_id = p.school_year_id
-      INNER JOIN classes c ON c.id = COALESCE(e.class_id, s.class_id)
+      INNER JOIN students s ON s.id = p.student_id AND s.is_active = true
+      INNER JOIN enrollments e
+        ON e.student_id = s.id AND e.school_year_id = p.school_year_id AND e.status = 'confirmed'
+      INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = p.school_year_id AND c.is_active = true
       WHERE (${input.schoolYearId ?? null}::uuid IS NULL OR p.school_year_id = ${input.schoolYearId ?? null}::uuid)
         AND (${input.from ?? null}::date IS NULL OR p.payment_date >= ${input.from ?? null}::date)
         AND (${input.to ?? null}::date IS NULL OR p.payment_date <= ${input.to ?? null}::date)
@@ -463,9 +473,9 @@ export class FinanceRepository {
              l.id::text AS level_id, l.name AS level_name,
              sfs.status::text AS financial_status
       FROM payments p
-      INNER JOIN students s ON s.id = p.student_id
-      LEFT JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = p.school_year_id
-      INNER JOIN classes c ON c.id = COALESCE(e.class_id, s.class_id)
+      INNER JOIN students s ON s.id = p.student_id AND s.is_active = true
+      INNER JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = p.school_year_id AND e.status = 'confirmed'
+      INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = p.school_year_id AND c.is_active = true
       INNER JOIN levels l ON l.id = c.level_id
       LEFT JOIN student_financial_status sfs
         ON sfs.student_id = p.student_id AND sfs.school_year_id = p.school_year_id
@@ -493,9 +503,9 @@ export class FinanceRepository {
     const result = await this.db.execute<{ total: string | number }>(sql`
       SELECT COUNT(*)::int AS total
       FROM payments p
-      INNER JOIN students s ON s.id = p.student_id
-      LEFT JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = p.school_year_id
-      INNER JOIN classes c ON c.id = COALESCE(e.class_id, s.class_id)
+      INNER JOIN students s ON s.id = p.student_id AND s.is_active = true
+      INNER JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = p.school_year_id AND e.status = 'confirmed'
+      INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = p.school_year_id AND c.is_active = true
       INNER JOIN levels l ON l.id = c.level_id
       LEFT JOIN student_financial_status sfs
         ON sfs.student_id = p.student_id AND sfs.school_year_id = p.school_year_id
@@ -817,10 +827,10 @@ export class FinanceRepository {
              c.name AS class_name, sy.label AS school_year_label,
              COALESCE(tp.currency, 'FCFA') AS currency
       FROM payments p
-      INNER JOIN students s ON s.id = p.student_id
+      INNER JOIN students s ON s.id = p.student_id AND s.is_active = true
       INNER JOIN school_years sy ON sy.id = p.school_year_id
-      LEFT JOIN enrollments e ON e.student_id = p.student_id AND e.school_year_id = p.school_year_id
-      LEFT JOIN classes c ON c.id = COALESCE(e.class_id, s.class_id)
+      INNER JOIN enrollments e ON e.student_id = p.student_id AND e.school_year_id = p.school_year_id AND e.status = 'confirmed'
+      INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = p.school_year_id AND c.is_active = true
       LEFT JOIN tuition_plans tp
         ON tp.level_id = c.level_id
        AND tp.school_year_id = p.school_year_id

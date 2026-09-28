@@ -107,7 +107,15 @@ export class FinancialAlertsRepository {
              r.type::text AS rule_type,
              r.channel::text AS channel
       FROM student_financial_status sfs
-      INNER JOIN students_with_class s ON s.id = sfs.student_id AND s.is_active = true
+      INNER JOIN students s ON s.id = sfs.student_id AND s.is_active = true
+      INNER JOIN enrollments confirmed_enrollment
+        ON confirmed_enrollment.student_id = s.id
+       AND confirmed_enrollment.school_year_id = sfs.school_year_id
+       AND confirmed_enrollment.status = 'confirmed'
+      INNER JOIN classes confirmed_class
+        ON confirmed_class.id = confirmed_enrollment.class_id
+       AND confirmed_class.school_year_id = sfs.school_year_id
+       AND confirmed_class.is_active = true
       INNER JOIN financial_alert_rules r
         ON r.is_active = true
        AND (
@@ -137,9 +145,7 @@ export class FinancialAlertsRepository {
                  SELECT 1
                  FROM tuition_schedule_steps tss
                  INNER JOIN tuition_plans tp ON tp.id = tss.tuition_plan_id
-                 LEFT JOIN enrollments e
-                   ON e.student_id = s.id AND e.school_year_id = sfs.school_year_id
-                 INNER JOIN classes c2 ON c2.level_id = tp.level_id AND c2.id = COALESCE(e.class_id, s.class_id)
+                 INNER JOIN classes c2 ON c2.level_id = tp.level_id AND c2.id = confirmed_enrollment.class_id
                  WHERE tp.school_year_id = sfs.school_year_id
                    AND sfs.total_paid + sfs.waived_amount < LEAST(tss.cumulative_amount_expected, sfs.total_due_year)
                    AND tss.due_date > CURRENT_DATE

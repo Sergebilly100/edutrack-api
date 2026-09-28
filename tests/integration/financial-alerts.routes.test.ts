@@ -42,6 +42,12 @@ describe('financial alerts integration (6b)', () => {
     );
     const lateStudentId = students[0]!.id;
     const cleanStudentId = students[1]!.id;
+    await queryTenant(
+      `INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+       VALUES ($1::uuid, $3::uuid, $4::uuid, 'new_registration', 'confirmed'),
+              ($2::uuid, $3::uuid, $4::uuid, 'new_registration', 'confirmed')`,
+      [lateStudentId, cleanStudentId, classId, yearId]
+    );
     const parents = await queryTenant<IdRow>(
       `INSERT INTO ${tenantTable('parents')} (full_name, phone, password_hash, must_change_password, is_active)
        VALUES ($1, $2, 'not-used-by-this-test', false, true)
@@ -185,6 +191,10 @@ describe('financial alerts integration (6b)', () => {
       INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
       VALUES ($1::uuid, 'Courbe', 'Particulière', $2) RETURNING id::text
     `, [classRow[0]!.id, `CURVE-${Date.now()}`]);
+    await queryTenant(`
+      INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+      VALUES ($1::uuid, $2::uuid, $3::uuid, 'new_registration', 'confirmed')
+    `, [student[0]!.id, classRow[0]!.id, year[0]!.id]);
     const plan = await queryTenant<IdRow>(`
       INSERT INTO ${tenantTable('tuition_plans')} (level_id, school_year_id, total_amount, currency)
       VALUES ($1::uuid, $2::uuid, 100000, 'FCFA') RETURNING id::text

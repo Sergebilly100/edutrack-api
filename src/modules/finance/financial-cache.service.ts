@@ -39,6 +39,7 @@ export class FinancialCacheService {
       yearId,
       snapshots.map((snapshot) => this.toCacheRow(snapshot))
     );
+    await this.repository.pruneOutOfScope(yearId);
     await this.repository.refreshClassSummaries(yearId);
     await this.repository.refreshSchoolSummary(yearId);
 
@@ -49,12 +50,19 @@ export class FinancialCacheService {
   async recalcStudent(studentId: string, schoolYearId: string): Promise<void> {
     const snapshots =
       await this.repository.listStudentFinancialSnapshotSingle(studentId, schoolYearId);
-    if (snapshots.length === 0) return;
+    if (snapshots.length === 0) {
+      await this.repository.deleteStudentStatus(studentId, schoolYearId);
+      await this.repository.pruneOutOfScope(schoolYearId);
+      await this.repository.refreshClassSummaries(schoolYearId);
+      await this.repository.refreshSchoolSummary(schoolYearId);
+      return;
+    }
 
     await this.repository.upsertStudentStatuses(
       schoolYearId,
       snapshots.map((snapshot) => this.toCacheRow(snapshot))
     );
+    await this.repository.pruneOutOfScope(schoolYearId);
     await this.repository.refreshClassSummaries(schoolYearId);
     await this.repository.refreshSchoolSummary(schoolYearId);
   }

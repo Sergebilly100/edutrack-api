@@ -32,6 +32,10 @@ const createImportContext = async () => {
     INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
     VALUES ($1::uuid, 'Aya', 'Import', $2) RETURNING id::text
   `, [classes[0]!.id, matricule]);
+  await queryTenant(`
+    INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+    VALUES ($1::uuid, $2::uuid, $3::uuid, 'new_registration', 'confirmed')
+  `, [students[0]!.id, classes[0]!.id, years[0]!.id]);
   return { headers: await getAuthHeaders('director'), schoolYearId: years[0]!.id, studentId: students[0]!.id, matricule };
 };
 
@@ -104,5 +108,29 @@ describe('payment mapping import integration', () => {
     expect(preview.status).toBe(200);
     expect(preview.body.validRows).toEqual([]);
     expect(preview.body.errors[0].reason).toContain('matricule introuvable : INCONNU');
+  });
+
+  it('écarte un matricule existant sans inscription confirmée', async () => {
+    const context = await createImportContext();
+    await queryTenant(`UPDATE ${tenantTable('enrollments')} SET status = 'pending_cashier'
+      WHERE student_id = $1::uuid AND school_year_id = $2::uuid`, [context.studentId, context.schoolYearId]);
+    await request().put('/api/v1/payment-import/profile').set(context.headers).send(mappingBody);
+    const file = await workbookBuffer(
+      ['Code élève', 'Somme', 'Jour', 'Réf', 'Canal'],
+      [[context.matricule, 25_000, '2090-10-10', 'OM-PENDING', 'Orange Money']]
+    );
+    const preview = await request().post('/api/v1/payment-import/preview').set(context.headers)
+      .attach('file', file, 'en-attente.xlsx');
+    expect(preview.status).toBe(200);
+    expect(preview.body.validRows).toEqual([]);
+    expect(preview.body.errors).toHaveLength(1);
+    const confirm = await request().post('/api/v1/payment-import/confirm').set(context.headers)
+      .attach('file', file, 'en-attente.xlsx');
+    expect(confirm.status).toBe(201);
+    expect(confirm.body.createdCount).toBe(0);
+    const payments = await queryTenant<{ id: string }>(`
+      SELECT id::text FROM ${tenantTable('payments')} WHERE student_id = $1::uuid
+    `, [context.studentId]);
+    expect(payments).toHaveLength(0);
   });
 });

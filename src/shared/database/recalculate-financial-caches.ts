@@ -30,17 +30,40 @@ async function main() {
     if (!allActive && result.rows.length !== 1) throw new Error('Active school not found');
     for (const { schema_name: schema } of result.rows) {
       if (!/^[a-z][a-z0-9_]{0,62}$/.test(schema)) throw new Error('Invalid tenant schema');
-      if (!args.includes('--apply')) {
-        console.log(`Dry run: ${schema}`);
-        continue;
-      }
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
         await client.query(`SET LOCAL search_path TO "${schema}", public`);
-        const result = await buildFinancialCacheService(drizzle(client)).recalcAll();
+        const audit = await client.query<{
+          year_id: string; year: string; profile_without_confirmation: string; out_of_scope_cache: string;
+        }>(`
+          SELECT y.id::text AS year_id, y.label AS year,
+            (SELECT COUNT(DISTINCT s.id)::text FROM students s
+             INNER JOIN classes c ON c.id = s.class_id AND c.school_year_id = y.id
+             WHERE s.is_active = true AND NOT EXISTS (
+               SELECT 1 FROM enrollments e WHERE e.student_id = s.id
+                 AND e.school_year_id = y.id AND e.status = 'confirmed'
+             )) AS profile_without_confirmation,
+            (SELECT COUNT(*)::text FROM student_financial_status sfs
+             WHERE sfs.school_year_id = y.id AND NOT EXISTS (
+               SELECT 1 FROM enrollments e
+               INNER JOIN students s ON s.id = e.student_id AND s.is_active = true
+               INNER JOIN classes c ON c.id = e.class_id AND c.is_active = true AND c.school_year_id = y.id
+               WHERE e.student_id = sfs.student_id AND e.school_year_id = y.id AND e.status = 'confirmed'
+             )) AS out_of_scope_cache
+          FROM school_years y ORDER BY y.start_date
+        `);
+        console.log(JSON.stringify({ schema, mode: args.includes('--apply') ? 'apply' : 'dry-run', years: audit.rows }));
+        if (!args.includes('--apply')) {
+          await client.query('ROLLBACK');
+          continue;
+        }
+        const results = [];
+        for (const year of audit.rows) {
+          results.push(await buildFinancialCacheService(drizzle(client)).recalcAll(year.year_id));
+        }
         await client.query('COMMIT');
-        console.log(`Recalculated: ${schema} (${result.studentCount} students)`);
+        console.log(`Recalculated: ${schema} (${results.length} years, ${results.reduce((sum, row) => sum + row.studentCount, 0)} students)`);
       } catch (error) {
         await client.query('ROLLBACK');
         throw error;

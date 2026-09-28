@@ -422,14 +422,21 @@ export class ParentPortalRepository {
       status: string;
       days_late: number | null;
       total_paid: string;
+      waived_amount: string;
       total_due_year: string;
       last_computed_at: string;
     }>(sql`
-      SELECT status::text, days_late, total_paid::text, total_due_year::text,
-             last_computed_at::text
-      FROM student_financial_status
-      WHERE student_id = ${studentId}::uuid
-        AND school_year_id = (SELECT id FROM school_years WHERE status = 'active' LIMIT 1)
+      SELECT sfs.status::text, sfs.days_late, sfs.total_paid::text,
+             sfs.waived_amount::text, sfs.total_due_year::text,
+             sfs.last_computed_at::text
+      FROM student_financial_status sfs
+      INNER JOIN enrollments e ON e.student_id = sfs.student_id
+        AND e.school_year_id = sfs.school_year_id AND e.status = 'confirmed'
+      INNER JOIN students s ON s.id = e.student_id AND s.is_active = true
+      INNER JOIN classes c ON c.id = e.class_id
+        AND c.school_year_id = e.school_year_id AND c.is_active = true
+      WHERE sfs.student_id = ${studentId}::uuid
+        AND sfs.school_year_id = (SELECT id FROM school_years WHERE status = 'active' LIMIT 1)
       LIMIT 1
     `);
     const financialRow = financialResult.rows?.[0];
@@ -462,7 +469,7 @@ export class ParentPortalRepository {
             daysLate: financialRow.days_late,
             totalPaid: paid,
             totalDueYear: Number(financialRow.total_due_year),
-            remainingDue: Math.max(0, Number(financialRow.total_due_year) - paid),
+            remainingDue: Math.max(0, Number(financialRow.total_due_year) - paid - Number(financialRow.waived_amount)),
             lastComputedAt: financialRow.last_computed_at,
           }
         : null,

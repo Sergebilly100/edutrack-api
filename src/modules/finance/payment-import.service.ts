@@ -139,7 +139,7 @@ export class PaymentImportService {
       if (paymentDate && (paymentDate < activeYear.start_date || paymentDate > activeYear.end_date)) {
         reasons.push('date hors de l’année scolaire active');
       }
-      const student = matricule ? await this.repository.findStudentByMatricule(matricule) : null;
+      const student = matricule ? await this.repository.findStudentByMatricule(matricule, activeYear.id) : null;
       if (matricule && !student) reasons.push(`matricule introuvable : ${matricule}`);
       if (reasons.length > 0 || !student || amount === null || !paymentDate || !translated) {
         errors.push({ rowNumber: row.rowNumber, reason: reasons.join(' ; ') });
@@ -166,6 +166,9 @@ export class PaymentImportService {
     await this.repository.db.transaction(async (tx) => {
       const finance = new FinanceRepository(tx as FinanceDb);
       for (const row of preview.validRows) {
+        if (!(await finance.hasConfirmedEnrollment(row.studentId, preview.schoolYearId))) {
+          throw new PaymentImportError('Inscription confirmée requise pour chaque paiement', 409, 'CONFIRMED_ENROLLMENT_REQUIRED');
+        }
         await finance.insertPayment({
           studentId: row.studentId,
           schoolYearId: preview.schoolYearId,

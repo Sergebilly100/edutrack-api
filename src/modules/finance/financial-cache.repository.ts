@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 
 import type { TenantDb } from '../../shared/database/db.js';
+import { confirmedFinancialStudent } from './finance-scope.js';
 
 type Rows<T> = { rows?: T[] };
 
@@ -54,15 +55,16 @@ export class FinancialCacheRepository {
     }>(sql`
       WITH scope AS (
         SELECT s.id AS student_id,
-               COALESCE(e.class_id, s.class_id) AS class_id,
+               e.class_id AS class_id,
                tp.total_amount AS plan_total,
                sto.override_total_amount,
                sto.discount_amount
         FROM students s
-        LEFT JOIN enrollments e
+        INNER JOIN enrollments e
           ON e.student_id = s.id AND e.school_year_id = ${schoolYearId}::uuid
+         AND e.status = 'confirmed'
         INNER JOIN classes c
-          ON c.id = COALESCE(e.class_id, s.class_id)
+          ON c.id = e.class_id
          AND c.school_year_id = ${schoolYearId}::uuid AND c.is_active = true
         LEFT JOIN tuition_plans tp
           ON tp.level_id = c.level_id AND tp.school_year_id = ${schoolYearId}::uuid
@@ -183,13 +185,34 @@ export class FinancialCacheRepository {
     }
   }
 
+  async pruneOutOfScope(schoolYearId: string): Promise<void> {
+    await this.db.execute(sql`
+      DELETE FROM student_financial_status sfs
+      WHERE sfs.school_year_id = ${schoolYearId}::uuid
+        AND NOT EXISTS (
+          SELECT 1 FROM enrollments e
+          INNER JOIN students s ON s.id = e.student_id AND s.is_active = true
+          INNER JOIN classes c ON c.id = e.class_id AND c.is_active = true
+          WHERE e.student_id = sfs.student_id AND e.school_year_id = sfs.school_year_id
+            AND e.status = 'confirmed' AND c.school_year_id = sfs.school_year_id
+        )
+    `);
+  }
+
+  async deleteStudentStatus(studentId: string, schoolYearId: string): Promise<void> {
+    await this.db.execute(sql`
+      DELETE FROM student_financial_status
+      WHERE student_id = ${studentId}::uuid AND school_year_id = ${schoolYearId}::uuid
+    `);
+  }
+
   async refreshClassSummaries(schoolYearId: string): Promise<void> {
     await this.db.execute(sql`
       INSERT INTO class_financial_summary (
         class_id, school_year_id, total_expected_to_date, total_paid,
         students_up_to_date_count, students_late_count, last_computed_at
       )
-      SELECT COALESCE(e.class_id, s.class_id),
+      SELECT e.class_id,
              sfs.school_year_id,
              SUM(sfs.total_expected_to_date),
              SUM(sfs.total_paid),
@@ -198,16 +221,27 @@ export class FinancialCacheRepository {
              NOW()
       FROM student_financial_status sfs
       INNER JOIN students s ON s.id = sfs.student_id AND s.is_active = true
-      LEFT JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = sfs.school_year_id
-      INNER JOIN classes c ON c.id = COALESCE(e.class_id, s.class_id) AND c.school_year_id = sfs.school_year_id
+      INNER JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = sfs.school_year_id AND e.status = 'confirmed'
+      INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = sfs.school_year_id AND c.is_active = true
       WHERE sfs.school_year_id = ${schoolYearId}::uuid
-      GROUP BY COALESCE(e.class_id, s.class_id), sfs.school_year_id
+      GROUP BY e.class_id, sfs.school_year_id
       ON CONFLICT ("class_id", "school_year_id") DO UPDATE SET
         total_expected_to_date = EXCLUDED.total_expected_to_date,
         total_paid = EXCLUDED.total_paid,
         students_up_to_date_count = EXCLUDED.students_up_to_date_count,
         students_late_count = EXCLUDED.students_late_count,
         last_computed_at = NOW()
+    `);
+    await this.db.execute(sql`
+      DELETE FROM class_financial_summary cfs
+      WHERE cfs.school_year_id = ${schoolYearId}::uuid
+        AND NOT EXISTS (
+          SELECT 1 FROM student_financial_status sfs
+          INNER JOIN enrollments e ON e.student_id = sfs.student_id
+            AND e.school_year_id = sfs.school_year_id AND e.status = 'confirmed'
+          INNER JOIN students s ON s.id = e.student_id AND s.is_active = true
+          WHERE sfs.school_year_id = cfs.school_year_id AND e.class_id = cfs.class_id
+        )
     `);
   }
 
@@ -229,6 +263,7 @@ export class FinancialCacheRepository {
                SELECT SUM(p.amount) FROM payments p
                WHERE p.school_year_id = sfs.school_year_id
                  AND p.status = 'confirmed'
+                 AND ${confirmedFinancialStudent(sql`p.student_id`, sql`p.school_year_id`)}
                  AND p.payment_date >= date_trunc('month', CURRENT_DATE) - INTERVAL '1 month'
                  AND p.payment_date < date_trunc('month', CURRENT_DATE)
              ), 0),
@@ -245,28 +280,60 @@ export class FinancialCacheRepository {
         previous_period_total_paid = EXCLUDED.previous_period_total_paid,
         last_computed_at = NOW()
     `);
+    await this.db.execute(sql`
+      DELETE FROM school_financial_summary
+      WHERE school_year_id = ${schoolYearId}::uuid
+        AND NOT EXISTS (SELECT 1 FROM student_financial_status WHERE school_year_id = ${schoolYearId}::uuid)
+    `);
   }
 
   async getSchoolSummary(schoolYearId: string) {
     const result = await this.db.execute<Record<string, string | number>>(sql`
-      SELECT total_expected_to_date::text, total_paid::text, recovery_rate::text,
-             students_up_to_date_count, students_late_count,
-             previous_period_total_paid::text, last_computed_at::text
-      FROM school_financial_summary WHERE school_year_id = ${schoolYearId}::uuid LIMIT 1
+      SELECT SUM(sfs.total_expected_to_date)::text AS total_expected_to_date,
+             SUM(sfs.total_paid)::text AS total_paid,
+             (CASE WHEN SUM(sfs.total_expected_to_date) > 0
+               THEN LEAST(1, SUM(sfs.total_paid) / SUM(sfs.total_expected_to_date))
+               ELSE 1 END)::numeric(6,4)::text AS recovery_rate,
+             SUM(sfs.waived_amount)::text AS total_waived,
+             SUM(GREATEST(sfs.total_expected_to_date - sfs.total_paid - sfs.waived_amount, 0))::text AS remaining_to_collect,
+             COUNT(*) FILTER (WHERE sfs.status <> 'late')::int AS students_up_to_date_count,
+             COUNT(*) FILTER (WHERE sfs.status = 'late')::int AS students_late_count,
+             COALESCE((SELECT SUM(p.amount) FROM payments p
+               WHERE p.school_year_id = ${schoolYearId}::uuid AND p.status = 'confirmed'
+                 AND ${confirmedFinancialStudent(sql`p.student_id`, sql`p.school_year_id`)}
+                 AND p.payment_date >= date_trunc('month', CURRENT_DATE) - INTERVAL '1 month'
+                 AND p.payment_date < date_trunc('month', CURRENT_DATE)), 0)::text AS previous_period_total_paid,
+             MAX(sfs.last_computed_at)::text AS last_computed_at
+      FROM student_financial_status sfs
+      INNER JOIN enrollments e ON e.student_id = sfs.student_id
+        AND e.school_year_id = sfs.school_year_id AND e.status = 'confirmed'
+      INNER JOIN students s ON s.id = e.student_id AND s.is_active = true
+      INNER JOIN classes c ON c.id = e.class_id AND c.is_active = true AND c.school_year_id = sfs.school_year_id
+      WHERE sfs.school_year_id = ${schoolYearId}::uuid
+      HAVING COUNT(*) > 0
     `);
     return getRows(result)[0] ?? null;
   }
 
   async listClassSummaries(schoolYearId: string) {
     const result = await this.db.execute<Record<string, string | number>>(sql`
-      SELECT cfs.class_id::text, c.name AS class_name,
+      SELECT c.id::text AS class_id, c.name AS class_name,
              c.level_id::text AS level_id, l.name AS level_name,
-             cfs.total_expected_to_date::text, cfs.total_paid::text,
-             cfs.students_up_to_date_count, cfs.students_late_count, cfs.last_computed_at::text
-      FROM class_financial_summary cfs
-      INNER JOIN classes c ON c.id = cfs.class_id
+             SUM(sfs.total_expected_to_date)::text AS total_expected_to_date,
+             SUM(sfs.total_paid)::text AS total_paid,
+             SUM(sfs.waived_amount)::text AS total_waived,
+             SUM(GREATEST(sfs.total_expected_to_date - sfs.total_paid - sfs.waived_amount, 0))::text AS remaining_to_collect,
+             COUNT(*) FILTER (WHERE sfs.status <> 'late')::int AS students_up_to_date_count,
+             COUNT(*) FILTER (WHERE sfs.status = 'late')::int AS students_late_count,
+             MAX(sfs.last_computed_at)::text AS last_computed_at
+      FROM student_financial_status sfs
+      INNER JOIN enrollments e ON e.student_id = sfs.student_id
+        AND e.school_year_id = sfs.school_year_id AND e.status = 'confirmed'
+      INNER JOIN students s ON s.id = e.student_id AND s.is_active = true
+      INNER JOIN classes c ON c.id = e.class_id AND c.is_active = true AND c.school_year_id = sfs.school_year_id
       INNER JOIN levels l ON l.id = c.level_id
-      WHERE cfs.school_year_id = ${schoolYearId}::uuid
+      WHERE sfs.school_year_id = ${schoolYearId}::uuid
+      GROUP BY c.id, c.name, l.id, l.name
       ORDER BY c.name ASC
     `);
     return getRows(result);
@@ -277,15 +344,20 @@ export class FinancialCacheRepository {
     const result = await this.db.execute<Record<string, string | number>>(sql`
       SELECT l.id::text AS level_id,
              l.name AS level_name,
-             SUM(cfs.total_expected_to_date)::text AS total_expected_to_date,
-             SUM(cfs.total_paid)::text AS total_paid,
-             SUM(cfs.students_up_to_date_count)::int AS students_up_to_date_count,
-             SUM(cfs.students_late_count)::int AS students_late_count,
-             MAX(cfs.last_computed_at)::text AS last_computed_at
-      FROM class_financial_summary cfs
-      INNER JOIN classes c ON c.id = cfs.class_id
+             SUM(sfs.total_expected_to_date)::text AS total_expected_to_date,
+             SUM(sfs.total_paid)::text AS total_paid,
+             SUM(sfs.waived_amount)::text AS total_waived,
+             SUM(GREATEST(sfs.total_expected_to_date - sfs.total_paid - sfs.waived_amount, 0))::text AS remaining_to_collect,
+             COUNT(*) FILTER (WHERE sfs.status <> 'late')::int AS students_up_to_date_count,
+             COUNT(*) FILTER (WHERE sfs.status = 'late')::int AS students_late_count,
+             MAX(sfs.last_computed_at)::text AS last_computed_at
+      FROM student_financial_status sfs
+      INNER JOIN enrollments e ON e.student_id = sfs.student_id
+        AND e.school_year_id = sfs.school_year_id AND e.status = 'confirmed'
+      INNER JOIN students s ON s.id = e.student_id AND s.is_active = true
+      INNER JOIN classes c ON c.id = e.class_id AND c.is_active = true AND c.school_year_id = sfs.school_year_id
       INNER JOIN levels l ON l.id = c.level_id
-      WHERE cfs.school_year_id = ${schoolYearId}::uuid
+      WHERE sfs.school_year_id = ${schoolYearId}::uuid
       GROUP BY l.id, l.name, l.order_index
       ORDER BY l.order_index ASC, l.name ASC
     `);
@@ -307,6 +379,7 @@ export class FinancialCacheRepository {
       LEFT JOIN payments p
         ON date_trunc('month', p.payment_date) = months.month_start
        AND p.school_year_id = ${schoolYearId}::uuid
+       AND ${confirmedFinancialStudent(sql`p.student_id`, sql`p.school_year_id`)}
       GROUP BY months.month_start
       ORDER BY months.month_start ASC
     `);
@@ -320,6 +393,7 @@ export class FinancialCacheRepository {
              COUNT(*) FILTER (WHERE status = 'confirmed')::int AS payment_count
       FROM payments
       WHERE school_year_id = ${schoolYearId}::uuid
+        AND ${confirmedFinancialStudent(sql`payments.student_id`, sql`payments.school_year_id`)}
       GROUP BY method
       ORDER BY total_paid DESC, method ASC
     `);
@@ -349,15 +423,17 @@ export class FinancialCacheRepository {
       INNER JOIN tuition_plans tp ON tp.id = sa.tuition_plan_id
       LEFT JOIN LATERAL (
         SELECT COUNT(*)::int AS student_count
-        FROM students_with_class s
-        INNER JOIN classes c ON c.id = s.class_id
-        WHERE s.is_active = true
+        FROM enrollments e
+        INNER JOIN students s ON s.id = e.student_id AND s.is_active = true
+        INNER JOIN classes c ON c.id = e.class_id
+        WHERE e.status = 'confirmed' AND e.school_year_id = ${schoolYearId}::uuid
           AND c.is_active = true
           AND c.school_year_id = ${schoolYearId}::uuid
           AND c.level_id = tp.level_id
       ) enrolled ON true
       WHERE sa.due_date >= CURRENT_DATE
       GROUP BY sa.due_date
+      HAVING SUM(enrolled.student_count) > 0
       ORDER BY sa.due_date ASC
       LIMIT 3
     `);
@@ -374,9 +450,9 @@ export class FinancialCacheRepository {
              p.receipt_number
       FROM payments p
       INNER JOIN students s ON s.id = p.student_id
-      LEFT JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = p.school_year_id
-      LEFT JOIN classes c ON c.id = COALESCE(e.class_id, s.class_id) AND c.school_year_id = p.school_year_id
-      WHERE p.school_year_id = ${schoolYearId}::uuid
+      INNER JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = p.school_year_id AND e.status = 'confirmed'
+      INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = p.school_year_id AND c.is_active = true
+      WHERE p.school_year_id = ${schoolYearId}::uuid AND s.is_active = true
         AND p.status = 'confirmed'
       ORDER BY p.payment_date DESC, p.created_at DESC
       LIMIT 5
@@ -390,6 +466,7 @@ export class FinancialCacheRepository {
              total_due_year::text, status::text, days_late, last_computed_at::text
       FROM student_financial_status
       WHERE student_id = ${studentId}::uuid AND school_year_id = ${schoolYearId}::uuid
+        AND ${confirmedFinancialStudent(sql`student_financial_status.student_id`, sql`student_financial_status.school_year_id`)}
       LIMIT 1
     `);
     return getRows(result)[0] ?? null;
@@ -403,6 +480,7 @@ export class FinancialCacheRepository {
       matricule: string | null;
       total_expected_to_date: string;
       total_paid: string;
+      waived_amount: string;
       total_due_year: string;
       status: string;
       days_late: number | null;
@@ -412,14 +490,16 @@ export class FinancialCacheRepository {
              s.matricule,
              sfs.total_expected_to_date::text,
              sfs.total_paid::text,
+             sfs.waived_amount::text,
              sfs.total_due_year::text,
              sfs.status::text,
              sfs.days_late
       FROM students s
       INNER JOIN student_financial_status sfs ON sfs.student_id = s.id
         AND sfs.school_year_id = ${schoolYearId}::uuid
-      LEFT JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = sfs.school_year_id
-      WHERE COALESCE(e.class_id, s.class_id) = ${classId}::uuid AND s.is_active = true
+      INNER JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = sfs.school_year_id AND e.status = 'confirmed'
+      INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = sfs.school_year_id AND c.is_active = true
+      WHERE e.class_id = ${classId}::uuid AND s.is_active = true
       ORDER BY CASE sfs.status WHEN 'late' THEN 0 ELSE 1 END,
                sfs.days_late DESC NULLS LAST,
                s.last_name ASC

@@ -13,6 +13,8 @@ import type { PermissionKey } from '../../shared/types/index.js';
 import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
 import { buildFinanceService, FinanceModuleError } from './finance.service.js';
 import { buildPaymentImportService, PaymentImportError } from './payment-import.service.js';
+import { RecoveryRepository } from './recovery.repository.js';
+import { RecoveryService, RecoveryError } from './recovery.service.js';
 import {
   cancelPaymentBodySchema,
   createSubscriptionPlanBodySchema,
@@ -22,6 +24,8 @@ import {
   recordPaymentBodySchema,
   schoolYearQuerySchema,
   financialSummaryQuerySchema,
+  recoveryQuerySchema,
+  recoveryStudentsQuerySchema,
   classFinancialStatusQuerySchema,
   upsertFinancialAlertRuleBodySchema,
   financialAlertRuleTypeParamsSchema,
@@ -56,6 +60,9 @@ const handleError = (request: FastifyRequest, reply: FastifyReply, error: unknow
     return reply.code(error.statusCode).send({
       error: error.message, code: error.code, statusCode: error.statusCode,
     });
+  }
+  if (error instanceof RecoveryError) {
+    return reply.code(error.statusCode).send({ error: error.message, code: error.code, statusCode: error.statusCode });
   }
   if (error instanceof ParentAccessError) {
     return reply.code(error.statusCode).send({
@@ -302,6 +309,33 @@ export default async function financeController(
   );
 
   // ── Cache financier (Tâche 6a) ─────────────────────────────────────────────
+  app.get('/api/v1/finance/recovery/years', { preHandler: requirePermission('payments.view') }, async (request, reply) => {
+    try {
+      const result = await withTenantSchema(request.claims!.schemaName, (db) =>
+        new RecoveryService(new RecoveryRepository(db)).getYears());
+      return reply.send(result);
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.get('/api/v1/finance/recovery', { preHandler: requirePermission('payments.view') }, async (request, reply) => {
+    try {
+      const query = recoveryQuerySchema.parse(request.query ?? {});
+      const result = await withTenantSchema(request.claims!.schemaName, (db) =>
+        new RecoveryService(new RecoveryRepository(db)).getSummary(query.school_year_id, query.level_id, query.class_id));
+      return reply.send(result);
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.get('/api/v1/finance/recovery/class-students', { preHandler: requirePermission('payments.view') }, async (request, reply) => {
+    try {
+      const query = recoveryStudentsQuerySchema.parse(request.query ?? {});
+      const result = await withTenantSchema(request.claims!.schemaName, (db) =>
+        new RecoveryService(new RecoveryRepository(db)).getClassStudents(
+          query.school_year_id, query.class_id, query.level_id, query.page, query.limit));
+      return reply.send(result);
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
   app.get(
     '/api/v1/finance/financial-summary',
     { preHandler: requirePermission('payments.view') },

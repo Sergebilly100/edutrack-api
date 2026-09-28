@@ -249,6 +249,12 @@ describe('enrollments integration', () => {
       .get(`/api/v1/students/${studentId}/financial-status?school_year_id=${academic.targetYearId}`)
       .set(headers);
     expect(financialStatus.body.financialStatus.remainingDue).toBe(90000);
+    const cached = await queryTenant<{ total_paid: string }>(`
+      SELECT total_paid::text FROM ${tenantTable('student_financial_status')}
+      WHERE student_id = $1::uuid AND school_year_id = $2::uuid
+    `, [studentId, academic.targetYearId]);
+    expect(cached).toHaveLength(1);
+    expect(Number(cached[0]!.total_paid)).toBe(30000);
   });
 
   it('confirme une réinscription malgré un dossier incomplet', async () => {
@@ -260,6 +266,8 @@ describe('enrollments integration', () => {
       VALUES ($1::uuid, 'Mariam', 'Kouassi', 'ENR-RENEW-001', '2250700000009') RETURNING id
     `, [academic.currentClassId]);
     const studentId = students[0]!.id;
+    await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+      VALUES ($1, $2, $3, 'new_registration', 'confirmed')`, [studentId, academic.currentClassId, academic.previousYearId]);
     const previousTuitionPlan = await request()
       .put(`/api/v1/tuition-plans/levels/${academic.currentLevelId}`)
       .set(headers)
@@ -342,6 +350,8 @@ describe('enrollments integration', () => {
       VALUES ($1::uuid, 'Jean', 'Nguessan', 'ENR-UNPAID-001') RETURNING id
     `, [academic.currentClassId]);
     const studentId = students[0]!.id;
+    await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+      VALUES ($1, $2, $3, 'new_registration', 'confirmed')`, [studentId, academic.currentClassId, academic.previousYearId]);
 
     await request().put(`/api/v1/tuition-plans/levels/${academic.currentLevelId}`).set(headers).send({
       schoolYearId: academic.previousYearId, totalAmount: 50000, currency: 'FCFA', scheduleSteps: [],
@@ -407,6 +417,8 @@ describe('enrollments integration', () => {
       VALUES ($1::uuid, 'Aya', 'Remise', 'ENR-WAIVED-001') RETURNING id
     `, [academic.currentClassId]);
     const studentId = students[0]!.id;
+    await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+      VALUES ($1, $2, $3, 'new_registration', 'confirmed')`, [studentId, academic.currentClassId, academic.previousYearId]);
 
     await request().put(`/api/v1/tuition-plans/levels/${academic.currentLevelId}`).set(headers).send({
       schoolYearId: academic.previousYearId, totalAmount: 50_000, currency: 'FCFA', scheduleSteps: [],

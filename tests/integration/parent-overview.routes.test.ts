@@ -37,6 +37,12 @@ describe('parent overview integration (17b)', () => {
     );
     const lateStudentId = students[0]!.id;
     const cleanStudentId = students[1]!.id;
+    await queryTenant(
+      `INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+       VALUES ($1::uuid, $3::uuid, $4::uuid, 'new_registration', 'confirmed'),
+              ($2::uuid, $3::uuid, $4::uuid, 'new_registration', 'confirmed')`,
+      [lateStudentId, cleanStudentId, classes[0]!.id, yearId]
+    );
 
     // Cache financier : un en retard, un à jour (responsabilité 6a)
     await queryTenant(
@@ -109,6 +115,16 @@ describe('parent overview integration (17b)', () => {
       rank: 3,
       classHeadcount: 24,
     });
+
+    await queryTenant(
+      `UPDATE ${tenantTable('enrollments')} SET status = 'pending_cashier' WHERE student_id = $1::uuid AND school_year_id = $2::uuid`,
+      [lateStudentId, yearId]
+    );
+    const pendingOverview = await request()
+      .get(`/api/v1/parent/students/${lateStudentId}/overview`)
+      .set(headers);
+    expect(pendingOverview.status).toBe(200);
+    expect(pendingOverview.body.financial).toBeNull();
   });
 
   it("refuse l'accès à un enfant hors du compte parent", async () => {

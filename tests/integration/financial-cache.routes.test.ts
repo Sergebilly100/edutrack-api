@@ -52,6 +52,8 @@ describe('financial cache integration (6a)', () => {
       [classes[0]!.id, `FC-${suffix}`]
     );
     const studentId = students[0]!.id;
+    await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+      VALUES ($1, $2, $3, 'new_registration', 'confirmed')`, [studentId, classes[0]!.id, yearId]);
 
     // Avant paiement : pas de cache (ou à jour à zéro attendu ? on purge pour être déterministe)
     await queryTenant(`DELETE FROM ${tenantTable('student_financial_status')} WHERE student_id = $1::uuid`, [studentId]);
@@ -131,6 +133,8 @@ describe('financial cache integration (6a)', () => {
       [classes[0]!.id, `FC-WAIVED-${suffix}`]
     );
     const studentId = students[0]!.id;
+    await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+      VALUES ($1, $2, $3, 'new_registration', 'confirmed')`, [studentId, classes[0]!.id, yearId]);
 
     await queryTenant(
       `INSERT INTO ${tenantTable('payments')}
@@ -181,6 +185,7 @@ describe('financial cache integration (6a)', () => {
     const [year] = await queryTenant<IdRow>('SELECT id FROM school_years WHERE label=$1', [`fc-${suffix}`]);
     const [schoolClass] = await queryTenant<IdRow>("SELECT id FROM classes WHERE name LIKE 'FC class %' LIMIT 1");
     const [student] = await queryTenant<IdRow>("INSERT INTO students (class_id, first_name, last_name) VALUES ($1,'Revue','Remise') RETURNING id", [schoolClass!.id]);
+    await queryTenant("INSERT INTO enrollments (student_id, class_id, school_year_id, type, status) VALUES ($1,$2,$3,'new_registration','confirmed')", [student!.id, schoolClass!.id, year!.id]);
     await queryTenant('INSERT INTO student_tuition_overrides (student_id, school_year_id, discount_amount, override_total_amount, reason, granted_by_user_id) VALUES ($1,$2,$3,$4,$5,$6)',
       [student!.id, year!.id, discount, override, 'Revue du cache', getSeedContext().directorUserId]);
     if (step !== null) await queryTenant('INSERT INTO student_tuition_schedule_steps (student_id,school_year_id,due_date,cumulative_amount_expected) VALUES ($1,$2,CURRENT_DATE-5,$3)', [student!.id, year!.id, step]);

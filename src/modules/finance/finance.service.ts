@@ -59,15 +59,18 @@ const mapPayment = (row: PaymentRow) => ({
 export class FinanceService {
   constructor(private readonly repository: FinanceRepository) {}
 
-  private async amountDueWith(repository: FinanceRepository, studentId: string, schoolYearId: string) {
-    const context = await repository.getAmountDueContext(studentId, schoolYearId);
+  private async amountDueWith(repository: FinanceRepository, studentId: string, schoolYearId: string, allowPending = false) {
+    const context = await repository.getAmountDueContext(studentId, schoolYearId, allowPending);
     const subscriptionPlans = await repository.listMandatorySubscriptionPlans();
     if (!context) {
+      if (!allowPending && !(await repository.hasConfirmedEnrollment(studentId, schoolYearId))) {
+        throw new FinanceModuleError('A confirmed enrollment is required for this school year', 409, 'CONFIRMED_ENROLLMENT_REQUIRED');
+      }
       throw new FinanceModuleError(
         'A tuition plan is required for the student level and school year',
         409,
         'TUITION_PLAN_REQUIRED',
-        await repository.getTuitionPlanRequiredContext(studentId, schoolYearId) ?? undefined
+        await repository.getTuitionPlanRequiredContext(studentId, schoolYearId, allowPending) ?? undefined
       );
     }
     const subscriptionLines = subscriptionPlans.map((plan) => ({
@@ -109,6 +112,19 @@ export class FinanceService {
 
   async getAmountDue(studentId: string, schoolYearId: string) {
     return this.amountDueWith(this.repository, studentId, schoolYearId);
+  }
+
+  /** Preview for the enrollment confirmation screen; never contributes to aggregate finance. */
+  async getEnrollmentPaymentPreview(studentId: string, schoolYearId: string) {
+    const due = await this.amountDueWith(this.repository, studentId, schoolYearId, true);
+    const { confirmedPaid, waivedAmount } = await this.repository.getPaymentCoverage(studentId, schoolYearId);
+    const status = resolveIndividualFinancialStatus({
+      totalDue: due.totalDue,
+      cumulativeExpectedAtDate: 0,
+      confirmedPaid,
+      waivedAmount,
+    });
+    return { remainingDue: status.remainingDue, totalDue: due.totalDue, confirmedPaid, currency: due.currency };
   }
 
   async getSchoolFinancialSummary(schoolYearId?: string) {
@@ -456,7 +472,7 @@ export class FinanceService {
           'PAYMENT_CONFIRMATION_BLOCKED'
         );
       }
-      const due = await this.amountDueWith(repository, enrollment.student_id, enrollment.school_year_id);
+      const due = await this.amountDueWith(repository, enrollment.student_id, enrollment.school_year_id, true);
       const alreadyPaid = await repository.getConfirmedPaid(enrollment.student_id, enrollment.school_year_id);
       const remainingDue = Math.max(0, Math.round((due.totalDue - alreadyPaid) * 100) / 100);
       if (remainingDue <= 0) {

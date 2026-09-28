@@ -154,6 +154,18 @@ export const financialSummaryQuerySchema = z.object({
   school_year_id: uuidSchema.optional(),
 });
 
+export const recoveryQuerySchema = z.object({
+  school_year_id: uuidSchema,
+  level_id: uuidSchema.optional(),
+  class_id: uuidSchema.optional(),
+}).strict();
+
+export const recoveryStudentsQuerySchema = recoveryQuerySchema.extend({
+  class_id: uuidSchema,
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
 export const upsertFinancialAlertRuleBodySchema = z.object({
   daysOffset: z.number().int().min(0).max(365),
   channel: z.enum(['sms', 'in_app', 'both']),

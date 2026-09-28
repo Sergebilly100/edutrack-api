@@ -29,6 +29,10 @@ describe('F21 — livraison des relances dans la boîte des parents', () => {
     studentId = student!.id;
     const [otherStudent] = await queryTenant<{ id: string }>(
       "INSERT INTO students(class_id, first_name, last_name, matricule) VALUES ($1, 'Autre', 'Famille QA', 'QA-AUTRE') RETURNING id", [klass!.id]);
+    await queryTenant(
+      "INSERT INTO enrollments (student_id, class_id, school_year_id, type, status) VALUES ($1,$3,$4,'new_registration','confirmed'),($2,$3,$4,'new_registration','confirmed')",
+      [studentId, otherStudent!.id, klass!.id, yearId]
+    );
     const hash = await argon2.hash('ParentRelance!2026');
     for (const [phone, linkedStudent] of [['2250700088801', studentId], ['2250700088802', otherStudent!.id]]) {
       const [parent] = await queryTenant<{ id: string }>(

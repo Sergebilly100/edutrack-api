@@ -40,6 +40,8 @@ const createFinanceContext = async (suffix: string, totalAmount = 100_000) => {
     INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
     VALUES ($1::uuid, 'Awa', 'Finance', $2) RETURNING id
   `, [classes[0]!.id, matricule]);
+  await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+    VALUES ($1, $2, $3, 'new_registration', 'confirmed')`, [students[0]!.id, classes[0]!.id, years[0]!.id]);
 
   const headers = await getAuthHeaders('director');
   const plan = await request()
@@ -125,6 +127,8 @@ describe('finance routes integration', () => {
       VALUES ($1::uuid, 'Koffi', 'Même Niveau', $2)
       RETURNING id::text
     `, [secondClass[0]!.id, `LEVEL-${Date.now()}`]);
+    await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+      VALUES ($1, $2, $3, 'new_registration', 'confirmed')`, [secondStudent[0]!.id, secondClass[0]!.id, context.schoolYearId]);
 
     const status = await request()
       .get(`/api/v1/students/${secondStudent[0]!.id}/financial-status?school_year_id=${context.schoolYearId}`)
