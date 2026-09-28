@@ -59,6 +59,40 @@ const { runFinancialAlertsForSchema } = await import('../../src/modules/finance/
 const reminders = await runFinancialAlertsForSchema({ schemaName: TEST_SCHEMA_NAME, smsQueue: undefined });
 if (reminders.sentCount !== 2) throw new Error('QA fixture expected a financial reminder for each child');
 
+// C16: three independent families exercise the real subscription and parent routes.
+for (const [state, phone, firstName, daysRemaining] of [
+  ['active', '2250000008841', 'Actif', 45],
+  ['near', '2250000008842', 'Proche', 5],
+  ['absent', '2250000008843', 'Sansabo', null],
+] as const) {
+  const student = await request().post('/api/v1/students').set(director).send({
+    class_id: klass!.id, first_name: firstName, last_name: 'C16', matricule: `QA-C16-${state}`,
+  });
+  assertOk(student);
+  const [parent] = await queryTenant<{ id: string }>(
+    `INSERT INTO parents (full_name, phone, password_hash, is_active, must_change_password)
+     VALUES ($1, $2, $3, true, false) RETURNING id`,
+    [`Parent C16 ${state}`, phone, await argon2.hash('ParentC16!2026')]
+  );
+  let subscriptionId: string | null = null;
+  if (daysRemaining !== null) {
+    const [subscription] = await queryTenant<{ id: string }>(
+      `INSERT INTO parent_subscriptions
+         (parent_id, unit_price_fcfa, student_count, total_amount_fcfa, duration_months,
+          starts_at, ends_at, status, created_by)
+       VALUES ($1, 1000, 1, 1000, 1, CURRENT_DATE - INTERVAL '1 day',
+               CURRENT_DATE + $2::int, 'active', $3)
+       RETURNING id`,
+      [parent!.id, daysRemaining, context.directorUserId]
+    );
+    subscriptionId = subscription!.id;
+  }
+  await queryTenant(
+    'INSERT INTO parent_student_links (parent_id, student_id, subscription_id) VALUES ($1, $2, $3)',
+    [parent!.id, student.body.data.id, subscriptionId]
+  );
+}
+
 // Readiness is checked after seeding; no fixture writes are exposed over HTTP.
 console.log('QA browser fixture ready');
 process.env.QA_BROWSER_READY = 'true';

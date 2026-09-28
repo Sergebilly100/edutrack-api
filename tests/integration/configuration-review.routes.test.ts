@@ -23,6 +23,9 @@ describe('configuration: adresse et contrats API', () => {
     await queryPublic(migration);
     await queryPublic(migration);
     const headers = await getAuthHeaders('director');
+    const [original] = await queryPublic<{ name: string; city: string; address: string | null; logo_url: string | null }>(
+      'SELECT name, city, address, logo_url FROM public.tenants WHERE id=$1', [tenantId]);
+    expect(original?.address).toBeNull();
     const before = await request().get('/api/v1/school/info').set(headers);
     expect(before.status).toBe(200);
     expect(before.body.address).toBe('');
@@ -32,6 +35,12 @@ describe('configuration: adresse et contrats API', () => {
     expect(update.body.school.address).toBe('');
     expect(update.body).not.toHaveProperty('users');
     expect(update.body).not.toHaveProperty('positions');
+    const logo = await request().patch('/api/v1/permissions/config/school').set(headers)
+      .send({ logoUrl: 'https://example.test/c15-logo.png' });
+    expect(logo.status, JSON.stringify(logo.body)).toBe(200);
+    const [after] = await queryPublic<{ name: string; city: string; address: string | null; logo_url: string | null }>(
+      'SELECT name, city, address, logo_url FROM public.tenants WHERE id=$1', [tenantId]);
+    expect(after).toEqual({ ...original, logo_url: 'https://example.test/c15-logo.png' });
   });
 
   it('enregistre et relit l’adresse depuis onboarding, paramètres et super administration', async () => {
@@ -51,6 +60,11 @@ describe('configuration: adresse et contrats API', () => {
       const [stored] = await queryPublic<{ address: string }>('SELECT address FROM public.tenants WHERE id=$1', [tenantId]);
       expect(stored?.address).toBe(address);
     }
+    const unchanged = await request().patch('/api/v1/permissions/config/school').set(director)
+      .send({ allowTeacherQrSkip: false });
+    expect(unchanged.status, JSON.stringify(unchanged.body)).toBe(200);
+    const [storedAfterPolicy] = await queryPublic<{ address: string }>('SELECT address FROM public.tenants WHERE id=$1', [tenantId]);
+    expect(storedAfterPolicy?.address).toBe('Avenue des écoles, Bouaké');
     const invalid = await request().patch('/api/v1/permissions/config/school').set(director).send({ address: 'a' });
     expect(invalid.status).toBe(400);
   });
@@ -141,6 +155,14 @@ describe('configuration: adresse et contrats API', () => {
       const details = await request().get(`/api/v1/admin/schools/${response.body.tenantId}`).set(headers);
       expect(details.status).toBe(200);
       expect(details.body.metadata.address).toBe('Rue des écoles, Cocody');
+      const login = await request().post('/api/v1/auth/login/teacher').set('x-tenant-schema', schemaName)
+        .send({ identifier: '2250709998888', password: response.body.directorCredentials.password });
+      expect(login.status, JSON.stringify(login.body)).toBe(200);
+      const schoolInfo = await request().get('/api/v1/school/info').set({
+        authorization: `Bearer ${login.body.accessToken}`, 'x-tenant-schema': schemaName,
+      });
+      expect(schoolInfo.status).toBe(200);
+      expect(schoolInfo.body.address).toBe('Rue des écoles, Cocody');
     } finally {
       // Only this additional school in the disposable test database is removed.
       for (const table of ['admin_access_log', 'school_sms_features', 'subscriptions']) {
