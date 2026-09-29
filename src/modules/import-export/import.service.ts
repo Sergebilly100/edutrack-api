@@ -5,6 +5,7 @@ import ExcelJS from 'exceljs';
 import { weeklyPeriodSchema } from '../../shared/utils/schedule-period.js';
 import { emit } from '../../shared/events/event-bus.js';
 import { generateUsername } from '../../shared/utils/username.js';
+import { matriculeKey, trimMatricule } from '../../shared/utils/matricule.js';
 import { createTemporaryParentCredentials } from '../parents/parent-accounts.service.js';
 import {
   canonicalizeSubject,
@@ -405,7 +406,7 @@ const buildStudentIdentityKey = (params: {
   className: string;
 }): string => {
   if (params.matricule) {
-    return `matricule::${normalizeKey(params.matricule)}`;
+    return `matricule::${matriculeKey(params.matricule)}`;
   }
   return `name::${normalizeKey(`${params.className}::${params.firstName}::${params.lastName}`)}`;
 };
@@ -417,7 +418,7 @@ const buildTeacherIdentityKey = (params: {
   lastName: string;
 }): string => {
   if (params.matricule) {
-    return `matricule::${normalizeKey(params.matricule)}`;
+    return `matricule::${matriculeKey(params.matricule)}`;
   }
   return `name::${normalizeHumanKey(`${params.firstName} ${params.lastName}`)}`;
 };
@@ -490,7 +491,7 @@ const validateStudentRow = (
   parentPhone2: string | null;
 } | null => {
   const line = sheetRow.line;
-  const matricule = normalizeCell(sheetRow.values['Matricule']);
+  const matricule = trimMatricule(String(sheetRow.values['Matricule'] ?? '')) ?? '';
   const firstName = normalizeCell(sheetRow.values['Prénom*']);
   const lastName = normalizeCell(sheetRow.values['Nom*']);
   const className = normalizeCell(sheetRow.values['Classe*']) || normalizeCell(sheetRow.sheetName);
@@ -501,7 +502,11 @@ const validateStudentRow = (
   const parentEmailRaw = normalizeCell(sheetRow.values['Email parent']) || null;
   const parentName2 = normalizeCell(sheetRow.values['Nom parent 2']) || null;
   const parentPhone2Raw = normalizeCell(sheetRow.values['Téléphone parent 2']);
-  const normalizedMatricule = matricule ? normalizeKey(matricule) : null;
+  const normalizedMatricule = matriculeKey(matricule);
+  const existingProfile = normalizedMatricule ? existingByMatricule.get(normalizedMatricule) : null;
+  if (existingProfile && (normalizeKey(existingProfile.firstName) !== normalizeKey(firstName) || normalizeKey(existingProfile.lastName) !== normalizeKey(lastName))) {
+    errors.push({ ...makeError({ row: line, column: 'Matricule', message: 'MATRICULE_ALREADY_EXISTS : matricule utilisé par un autre élève', value: matricule }), sheet: sheetRow.sheetName });
+  }
 
   if (normalizedMatricule) {
     const existingInBatch = batchStudentMatricules.get(normalizedMatricule);
@@ -761,7 +766,7 @@ export class ImportService {
     const existingByMatricule = new Map(
       existingStudents
         .filter((item) => item.matricule)
-        .map((item) => [normalizeKey(item.matricule as string), item])
+        .map((item) => [matriculeKey(item.matricule as string)!, item])
     );
 
     const errors: ImportError[] = [];
@@ -785,7 +790,7 @@ export class ImportService {
       parsedIdentitySet.add(identityKey);
       validRows.push(fields);
 
-      const normalizedMatricule = fields.matricule ? normalizeKey(fields.matricule) : null;
+      const normalizedMatricule = matriculeKey(fields.matricule);
       const rowKey = normalizeKey(`${fields.className}::${fields.firstName}::${fields.lastName}`);
       const existing = normalizedMatricule
         ? existingByMatricule.get(normalizedMatricule) ?? existingByKey.get(rowKey)
@@ -877,7 +882,7 @@ export class ImportService {
     const existingByMatricule = new Map(
       existingTeachers
         .filter((item) => item.matricule)
-        .map((item) => [normalizeKey(item.matricule as string), item])
+        .map((item) => [matriculeKey(item.matricule as string)!, item])
     );
     const existingUsernames = directory.map((item) => item.username);
     const byName = new Map<string, string[]>();
@@ -898,7 +903,7 @@ export class ImportService {
 
     parsed.rows.forEach((sheetRow) => {
       const line = sheetRow.line;
-      const matricule = normalizeCell(sheetRow.values['Matricule']);
+      const matricule = trimMatricule(String(sheetRow.values['Matricule'] ?? '')) ?? '';
       const lastName = normalizeCell(sheetRow.values['Nom*']);
       const firstName = normalizeCell(sheetRow.values['Prénom*']);
       const phone = normalizeCell(sheetRow.values['Téléphone'] ?? sheetRow.values['Téléphone*']);
@@ -906,7 +911,7 @@ export class ImportService {
       const type = normalizeKey(sheetRow.values['Type*']);
       const hourlyRateRaw = normalizeCell(sheetRow.values['Taux horaire FCFA']);
       const monthlySalaryRaw = normalizeCell(sheetRow.values['Salaire mensuel FCFA']);
-      const normalizedMatricule = matricule ? normalizeKey(matricule) : null;
+      const normalizedMatricule = matriculeKey(matricule);
 
       if (normalizedMatricule) {
         const existingInBatch = batchTeacherMatricules.get(normalizedMatricule);
@@ -1038,6 +1043,9 @@ export class ImportService {
       const existingByMatriculeMatch = normalizedMatricule
         ? existingByMatricule.get(normalizedMatricule)
         : null;
+      if (existingByMatriculeMatch && normalizeHumanKey(existingByMatriculeMatch.name) !== normalizeHumanKey(fullName)) {
+        errors.push(makeError({ row: line, column: 'Matricule', message: 'MATRICULE_ALREADY_EXISTS : matricule utilisé par un autre professeur', value: matricule }));
+      }
       const username =
         existingByMatriculeMatch?.username ??
         resolveTeacherUsername({ firstName, lastName, fullName }, byName, existingUsernames);
@@ -1415,6 +1423,9 @@ export class ImportService {
       return;
     }
 
+    if (report.errors.some((issue) => issue.column === 'Matricule' && /dupliqué|MATRICULE_ALREADY_EXISTS/i.test(issue.message))) {
+      throw new ImportModuleError('Un matricule est déjà utilisé', 409, 'MATRICULE_ALREADY_EXISTS', report);
+    }
     throw new ImportModuleError('Validation import échouée', 400, 'IMPORT_VALIDATION_FAILED', report);
   }
 

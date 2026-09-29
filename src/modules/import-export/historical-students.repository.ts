@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { TenantDb } from '../../shared/database/db.js';
 import { MappingRepository } from '../../shared/import-mapping/mapping.repository.js';
 import { historicalStudentKey } from './historical-students.identity.js';
+import { isMatriculeUniqueViolation } from '../../shared/utils/matricule.js';
 import type { HistoricalStudentError, HistoricalStudentRow } from './historical-students.types.js';
 
 type ExistingProfile = { id: string; first_name: string; last_name: string };
@@ -85,9 +86,9 @@ export class HistoricalStudentsRepository extends MappingRepository {
           if (outcome === 'created') createdCount += 1;
           else if (outcome === 'reused') reusedCount += 1;
           else errors.push({ rowNumber: row.rowNumber, ...(row.sheetName ? { sheetName: row.sheetName } : {}), field: 'matricule',
-            reason: outcome === 'ambiguous' ? 'Renseignez un matricule pour distinguer ce profil d’un élève déjà présent' : 'Matricule déjà utilisé par un autre profil' });
-        } catch {
-          errors.push({ rowNumber: row.rowNumber, ...(row.sheetName ? { sheetName: row.sheetName } : {}), field: 'profil', reason: 'Enregistrement impossible, corrigez la ligne puis réessayez' });
+            reason: outcome === 'ambiguous' ? 'Renseignez un matricule pour distinguer ce profil d’un élève déjà présent' : 'Matricule déjà utilisé par un autre profil', ...(outcome === 'conflict' ? { code: 'MATRICULE_ALREADY_EXISTS' } : {}) });
+        } catch (error) {
+          errors.push({ rowNumber: row.rowNumber, ...(row.sheetName ? { sheetName: row.sheetName } : {}), field: isMatriculeUniqueViolation(error) ? 'matricule' : 'profil', reason: isMatriculeUniqueViolation(error) ? 'Matricule déjà utilisé par un autre profil' : 'Enregistrement impossible, corrigez la ligne puis réessayez', ...(isMatriculeUniqueViolation(error) ? { code: 'MATRICULE_ALREADY_EXISTS' } : {}) });
         }
       }
       await tx.execute(sql`UPDATE import_history SET imported_count = ${createdCount} WHERE id = ${historyId}::uuid`);

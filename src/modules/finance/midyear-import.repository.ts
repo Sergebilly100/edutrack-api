@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import type { TenantDb } from '../../shared/database/db.js';
 import { MappingRepository } from '../../shared/import-mapping/mapping.repository.js';
 import { normalizeMappingLabel } from '../../shared/import-mapping/engine.js';
+import { trimMatricule } from '../../shared/utils/matricule.js';
 import { MidyearImportError, type RecoveryImpact, type RecoveryRow } from '../../shared/import-mapping/midyear.types.js';
 import { FinanceRepository } from './finance.repository.js';
 import { FinancialCacheRepository } from './financial-cache.repository.js';
@@ -128,7 +129,7 @@ export class MidyearImportRepository extends MappingRepository {
         if (!studentId) {
           const result = await this.db.execute<{ id: string }>(sql`
             INSERT INTO students (matricule, first_name, last_name, parent_phone)
-            VALUES (${v.matricule}, ${v.prenom}, ${v.nom}, ${v.parent_phone || null}) RETURNING id::text
+            VALUES (${trimMatricule(v.matricule)}, ${v.prenom}, ${v.nom}, ${v.parent_phone || null}) RETURNING id::text
           `);
           studentId = result.rows[0]!.id;
         }

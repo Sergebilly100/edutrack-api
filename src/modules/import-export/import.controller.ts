@@ -13,6 +13,7 @@ import {
 
 import { SENSITIVE_ACTION_RATE_LIMIT } from '../../shared/utils/rate-limit.js';
 import { ImportModuleError, buildImportService } from './import.service.js';
+import { isMatriculeUniqueViolation } from '../../shared/utils/matricule.js';
 import { HistoricalStudentsRepository } from './historical-students.repository.js';
 import { HistoricalStudentsService } from './historical-students.service.js';
 import { historicalImportRequestSchema, historicalProfileBodySchema } from './historical-students.types.js';
@@ -34,6 +35,10 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
       statusCode: error.statusCode,
       details: error.details ?? null,
     });
+  }
+
+  if (isMatriculeUniqueViolation(error)) {
+    return reply.code(409).send({ error: 'Ce matricule est déjà utilisé', code: 'MATRICULE_ALREADY_EXISTS', statusCode: 409 });
   }
 
   return reply.code(500).send({

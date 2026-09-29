@@ -10,6 +10,7 @@ import { getMaxUsersBySchemaName } from '../../shared/utils/users-limit.js';
 import { canonicalizeSubject, canonicalizeSubjectList } from '../../shared/utils/subject-normalization.js';
 import { defaultEmailSender } from '../notifications/notifications.service.js';
 import { logger } from '../../shared/observability/logger.js';
+import { isMatriculeUniqueViolation, trimMatricule } from '../../shared/utils/matricule.js';
 
 export { TeachersModuleError } from './teachers.types.js';
 import { TeachersModuleError } from './teachers.types.js';
@@ -38,12 +39,6 @@ const extractDbError = (error: unknown): { code: string; constraint: string; det
 
   const cause = typeof error === 'object' && error !== null ? (error as { cause?: unknown }).cause : null;
   return fromObject(cause) ?? direct ?? { code: '', constraint: '', detail: '' };
-};
-
-// Détecte une violation d'unicité PostgreSQL (code 23505) sur le matricule.
-const isMatriculeUniqueViolation = (error: unknown): boolean => {
-  const { code, constraint, detail } = extractDbError(error);
-  return code === '23505' && (constraint.includes('matricule') || detail.includes('(matricule)'));
 };
 
 // Traduit une collision phone/email (users_*_unique) en TeachersModuleError 409.
@@ -229,6 +224,7 @@ export class TeachersService {
       const subjectCatalog = await this.repository.listSubjectCatalog();
       const created = await this.repository.createTeacher({
         ...input,
+        matricule: trimMatricule(input.matricule),
         subjects: canonicalizeSubjectList(input.subjects, subjectCatalog),
       }, (repository) => this.assertTeachingAssignments(input.teaching_assignments, repository));
       return { ...toDTO(created), classes_without_homeroom_teacher: input.teaching_assignments === undefined ? [] : await this.getHomeroomReminder() };
@@ -317,6 +313,7 @@ export class TeachersService {
         teacherId,
         {
           ...input,
+          ...(input.matricule !== undefined ? { matricule: trimMatricule(input.matricule) } : {}),
           ...(input.subjects ? { subjects: canonicalizeSubjectList(input.subjects, subjectCatalog) } : {}),
           hourly_rate: nextHourlyRate,
           monthly_salary: nextMonthlySalary,

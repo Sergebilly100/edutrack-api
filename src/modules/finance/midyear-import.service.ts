@@ -6,6 +6,7 @@ import {
 } from '../../shared/import-mapping/engine.js';
 import { parseMappingWorkbook, type ParsedMappingWorkbook } from '../../shared/import-mapping/workbook.js';
 import type { TenantDb } from '../../shared/database/db.js';
+import { isMatriculeUniqueViolation, matriculeKey } from '../../shared/utils/matricule.js';
 import {
   MidyearImportError, type RecoveryImpact, type RecoveryPreview, type RecoveryRow,
 } from '../../shared/import-mapping/midyear.types.js';
@@ -33,6 +34,8 @@ const text = (value: unknown) => String(value ?? '').trim();
 const key = normalizeMappingLabel;
 const matches = <T>(rows: T[], label: string, getLabel: (row: T) => string | null) =>
   rows.filter((row) => key(getLabel(row) ?? '') === key(label));
+const matchesMatricule = <T>(rows: T[], value: string, getValue: (row: T) => string | null) =>
+  rows.filter((row) => matriculeKey(value) !== null && matriculeKey(getValue(row)) === matriculeKey(value));
 
 export const parseRecoveryAmount = (value: string): string | null => {
   const compact = value.replace(/[\s\u00a0]/g, '').replace(',', '.');
@@ -74,7 +77,7 @@ export function validateRecoveryRows(importType: string, rows: RecoveryRow[], sn
   const classLevels = new Map<string, Set<string>>();
   for (const row of rows) {
     const v = row.values;
-    const identity = key(importType === 'payments' ? v.reference : importType === 'students' ? v.matricule : importType === 'subjects' ? `${v.niveau}/${v.matiere}` : v.nom);
+    const identity = importType === 'students' ? matriculeKey(v.matricule) ?? '' : key(importType === 'payments' ? v.reference : importType === 'subjects' ? `${v.niveau}/${v.matiere}` : v.nom);
     identities.set(identity, (identities.get(identity) ?? 0) + 1);
     if (importType === 'students') {
       const levels = classLevels.get(key(v.classe)) ?? new Set<string>();
@@ -85,7 +88,7 @@ export function validateRecoveryRows(importType: string, rows: RecoveryRow[], sn
     const row: RecoveryRow = { rowNumber: input.rowNumber, values: { ...input.values } };
     const v = row.values;
     const reasons: string[] = [];
-    const identity = key(importType === 'payments' ? v.reference : importType === 'students' ? v.matricule : importType === 'subjects' ? `${v.niveau}/${v.matiere}` : v.nom);
+    const identity = importType === 'students' ? matriculeKey(v.matricule) ?? '' : key(importType === 'payments' ? v.reference : importType === 'subjects' ? `${v.niveau}/${v.matiere}` : v.nom);
     if ((identities.get(identity) ?? 0) > 1) reasons.push('Doublon dans le fichier, corrigez toutes les lignes concernées');
     for (const target of MIDYEAR_IMPORTS[importType].targets) {
       if (target.required && !v[target.key]?.trim()) reasons.push(`${target.key} manquant`);
@@ -109,7 +112,7 @@ export function validateRecoveryRows(importType: string, rows: RecoveryRow[], sn
     }
     if (importType === 'students') {
       if ((classLevels.get(key(v.classe))?.size ?? 0) > 1) reasons.push('La même classe est associée à plusieurs niveaux dans le fichier');
-      const profiles = matches(snapshot.students, v.matricule, (student) => student.matricule);
+      const profiles = matchesMatricule(snapshot.students, v.matricule, (student) => student.matricule);
       if (profiles.length > 1) reasons.push('Matricule ambigu');
       else if (profiles[0]) {
         const student = profiles[0];
@@ -132,7 +135,7 @@ export function validateRecoveryRows(importType: string, rows: RecoveryRow[], sn
       if (!date) reasons.push('Date de paiement invalide');
       else { v.date = date; if (date < snapshot.year.startDate || date > snapshot.year.endDate) reasons.push('Date hors de l’année sélectionnée'); }
       if (!PAYMENT_METHODS.has(v.method)) reasons.push('Moyen de paiement inconnu, renseignez une traduction explicite');
-      const profiles = matches(snapshot.students, v.matricule, (student) => student.matricule);
+      const profiles = matchesMatricule(snapshot.students, v.matricule, (student) => student.matricule);
       if (profiles.length !== 1) reasons.push(profiles.length ? 'Matricule ambigu' : 'Matricule introuvable');
       else {
         const student = profiles[0];
@@ -169,7 +172,11 @@ export function validateRecoveryRows(importType: string, rows: RecoveryRow[], sn
       if (subjects.length > 1) reasons.push('Matière ambiguë');
       else row.reused = subjects.length === 1;
     }
-    if (reasons.length) { errors.push({ rowNumber: row.rowNumber, reason: reasons.join(' ; ') }); continue; }
+    if (reasons.length) {
+      const matriculeCollision = importType === 'students' && reasons.some((reason) => reason.includes('Matricule déjà utilisé') || reason.includes('Matricule ambigu') || reason.includes('Doublon dans le fichier'));
+      errors.push({ rowNumber: row.rowNumber, reason: reasons.join(' ; '), ...(matriculeCollision ? { code: 'MATRICULE_ALREADY_EXISTS' } : {}) });
+      continue;
+    }
     if (importType === 'students') {
       impact[row.studentId ? 'profilesReused' : 'profilesCreated'] += 1;
       impact[row.enrollmentId ? 'enrollmentsReused' : 'enrollmentsCreated'] += 1;
@@ -276,6 +283,7 @@ export class MidyearImportService {
     } catch (error) {
       if (error instanceof MidyearImportError) throw error;
       // PostgreSQL error messages can contain personal data. No raw errors in HTTP/logs.
+      if (isMatriculeUniqueViolation(error)) throw new MidyearImportError('Ce matricule est déjà utilisé', 409, 'MATRICULE_ALREADY_EXISTS');
       throw new MidyearImportError('La reprise a été annulée intégralement. Corrigez le fichier puis prévisualisez de nouveau.', 409, 'RECOVERY_WRITE_FAILED');
     }
   }

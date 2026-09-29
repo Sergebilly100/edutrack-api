@@ -89,7 +89,7 @@ export const validateHistoricalRows = (workbook: ParsedMappingWorkbook, fields: 
     const profile = { ...parsed.data, ...location };
     const key = historicalStudentKey(profile);
     if (identities.has(key)) {
-      errors.push({ ...location, field: profile.matricule ? 'matricule' : 'profil', reason: 'Profil dupliqué dans le fichier' });
+      errors.push({ ...location, field: profile.matricule ? 'matricule' : 'profil', reason: 'Profil dupliqué dans le fichier', ...(profile.matricule ? { code: 'MATRICULE_ALREADY_EXISTS' } : {}) });
       continue;
     }
     identities.add(key);

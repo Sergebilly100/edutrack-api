@@ -45,12 +45,6 @@ beforeEach(() => {
 // ─── listStudents ─────────────────────────────────────────────────────────────
 
 describe('listStudents()', () => {
-  it('prépare une inscription avec les profils sans les traiter comme des élèves inscrits', async () => {
-    repository.listStudents.mockResolvedValue({ rows: [], total: 0 });
-    const query = { page: 1, limit: 10, search: 'Kone' };
-    expect(await buildService().listStudentProfiles(query)).toEqual({ data: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 0 } });
-    expect(repository.listStudents).toHaveBeenCalledWith(query, 'profiles');
-  });
   it('retourne une pagination correcte', async () => {
     repository.listStudents.mockResolvedValue({
       rows: [
@@ -155,11 +149,27 @@ describe('createStudent()', () => {
       code: 'CLASS_NOT_FOUND',
     });
   });
+  it('normalise le matricule renseigné et conserve le matricule optionnel', async () => {
+    repository.createStudent.mockResolvedValue({ student: { id: 'student-1' } });
+    await buildService().createStudent({ matricule: ' E-001 ' } as never);
+    expect(repository.createStudent).toHaveBeenCalledWith(expect.objectContaining({ matricule: 'E-001' }), expect.any(Function));
+    await buildService().createStudent({ matricule: null } as never);
+    expect(repository.createStudent).toHaveBeenLastCalledWith(expect.objectContaining({ matricule: null }), expect.any(Function));
+  });
+  it('retourne 409 si la contrainte normalisée refuse une création', async () => {
+    repository.createStudent.mockRejectedValue({ cause: { code: '23505', constraint: 'students_matricule_normalized_unique' } });
+    await expect(buildService().createStudent({ matricule: ' e-001 ' } as never)).rejects.toMatchObject({ code: 'MATRICULE_ALREADY_EXISTS', statusCode: 409 });
+  });
 });
 
 // ─── updateStudent ────────────────────────────────────────────────────────────
 
 describe('updateStudent()', () => {
+  it('retourne 409 si la contrainte normalisée refuse une modification', async () => {
+    repository.updateStudent.mockRejectedValue({ cause: { code: '23505', constraint: 'students_matricule_normalized_unique' } });
+    await expect(buildService().updateStudent('s-1', { matricule: ' E-001 ' })).rejects.toMatchObject({ code: 'MATRICULE_ALREADY_EXISTS', statusCode: 409 });
+    expect(repository.updateStudent).toHaveBeenCalledWith('s-1', { matricule: 'E-001' }, expect.any(Function));
+  });
   it('refuse de déplacer la classe depuis le profil d’un élève inscrit', async () => {
     repository.updateStudent.mockRejectedValue(new Error('Enrollment owns class'));
     await expect(buildService().updateStudent('s-1', {})).rejects.toMatchObject({

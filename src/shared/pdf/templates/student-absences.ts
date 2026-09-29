@@ -21,6 +21,7 @@ export type StudentAbsenceRow = {
 export type StudentAbsencesPayload = {
   /** Libellé de l'entité élève (« Élève » / « Apprenant »…) - multi-tenant. */
   studentLabel: string;
+  levelName?: string | null;
   /** Bornes de période au format ISO date (YYYY-MM-DD). */
   from: string;
   to: string;
@@ -73,7 +74,7 @@ export const renderStudentAbsencesReport = async (
   );
   const builder = await PdfBuilder.create(branding, {
     title: 'Bilan des absences',
-    subtitle: `${payload.studentLabel}s · ${coverage}`,
+    subtitle: `${payload.studentLabel}s · ${payload.levelName ? `Niveau ${payload.levelName} · ` : ''}${coverage}`,
   });
   const t = builder.t;
 

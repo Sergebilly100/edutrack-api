@@ -245,6 +245,7 @@ export const teachers = tenant.table(
     teachersUsernameIdx: index('idx_teachers_username').on(table.username),
     teachersUserIdx: index('idx_teachers_user').on(table.userId),
     teachersUpdatedAtIdx: index('idx_teachers_updated_at').on(table.updatedAt),
+    teachersMatriculeNormalizedUnique: uniqueIndex('teachers_matricule_normalized_unique').on(sql`lower(btrim(${table.matricule}))`),
   })
 );
 
@@ -364,6 +365,7 @@ export const students = tenant.table(
   },
   (table) => ({
     studentsClassIdx: index('idx_students_class').on(table.classId),
+    studentsMatriculeNormalizedUnique: uniqueIndex('students_matricule_normalized_unique').on(sql`lower(btrim(${table.matricule}))`),
   })
 );
 

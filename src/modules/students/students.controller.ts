@@ -155,23 +155,6 @@ export default async function studentsController(
     }
   );
 
-  // Profils réutilisables, réservés au parcours de préparation d'inscription.
-  app.get(
-    '/api/v1/students/profiles',
-    { preHandler: [requirePermission('enrollments.create'), requirePermission('students.view')] },
-    async (request, reply) => {
-      try {
-        const query = studentsListQuerySchema.parse(request.query ?? {});
-        const result = await withTenantSchema(request.claims!.schemaName, async (tenantDb) =>
-          buildStudentsService(tenantDb).listStudentProfiles(query)
-        );
-        return reply.send(result);
-      } catch (error) {
-        return handleError(reply, error);
-      }
-    }
-  );
-
   app.get(
     '/api/v1/students/financial-profiles',
     { preHandler: requireFinancialProfilesAccess },
@@ -255,6 +238,7 @@ export default async function studentsController(
             schemaName: claims.schemaName,
             studentLabel: query.student_label,
             classId: query.class_id,
+            levelId: query.level_id,
             subject: query.subject,
             from: query.from,
             to: query.to,

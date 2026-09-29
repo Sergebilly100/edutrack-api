@@ -7,6 +7,7 @@ import { Pool } from 'pg';
 
 import { logger } from '../observability/logger.js';
 import { databaseUrl, db } from './db.js';
+import { findMatriculeCollisions } from './matricule-collisions.js';
 
 const DEFAULT_ROOMS = ['Salle A1', 'Salle A2', 'Labo Sciences', 'Salle Langues'] as const;
 
@@ -53,6 +54,13 @@ const runTenantMigrations = async (
       .sort();
 
     for (const migrationFile of migrationFiles) {
+      if (migrationFile === '0079_matricule_normalized_unique.sql') {
+        const collisions = await findMatriculeCollisions(client, schemaName);
+        if (collisions.length > 0) {
+          logger.error({ schemaName, collisions }, '[tenant-init] Matricule collisions require manual resolution');
+          throw new Error(`[tenant-init] Matricule collisions in ${schemaName}; review UUID groups in the migration report before retrying`);
+        }
+      }
       const migrationPath = path.join(migrationsFolder, migrationFile);
       const content = await readFile(migrationPath, 'utf-8');
 

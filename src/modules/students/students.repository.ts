@@ -312,18 +312,15 @@ const toRecentSmsStatus = (
   return 'not_sent';
 };
 
-type StudentListScope = 'enrolled' | 'profiles' | 'financial';
+type StudentListScope = 'enrolled' | 'financial';
 
 const buildStudentsWhere = (query: StudentsListQuery, scope: StudentListScope): SQL[] => {
-  // Les profils restent disponibles pour préparer une inscription. La liste
-  // scolaire exige une inscription confirmée, indépendamment de la classe
+  // La liste scolaire exige une inscription confirmée, indépendamment de la classe
   // conservée sur le profil. Une réinscription en attente ne suffit pas.
   const membership = scope === 'financial' ? sql`(
     EXISTS (SELECT 1 FROM enrollments e WHERE e.student_id = s.id)
     OR EXISTS (SELECT 1 FROM student_financial_status financial WHERE financial.student_id = s.id)
     OR EXISTS (SELECT 1 FROM payments payment WHERE payment.student_id = s.id)
-  )` : scope === 'profiles' ? sql`NOT EXISTS (
-    SELECT 1 FROM enrollments e WHERE e.student_id = s.id
   )` : sql`EXISTS (
     SELECT 1 FROM enrollments e JOIN school_years sy ON sy.id = e.school_year_id
     WHERE e.student_id = s.id AND e.status = 'confirmed'
@@ -334,6 +331,7 @@ const buildStudentsWhere = (query: StudentsListQuery, scope: StudentListScope): 
   )`;
   const where: SQL[] = [membership];
   if (query.class_id) where.push(sql`s.class_id = ${query.class_id}`);
+  if (query.level_id) where.push(sql`c.level_id = ${query.level_id}::uuid`);
   if (typeof query.is_active === 'boolean') where.push(sql`s.is_active = ${query.is_active}`);
   if (query.search) {
     where.push(
@@ -1105,11 +1103,22 @@ export class StudentsRepository {
   async getStudentAbsenceStats(query: AbsenceStatsQuery): Promise<StudentAbsenceStatRecord[]> {
     const filters: SQL[] = [
       sql`st.is_active = true`,
+      sql`EXISTS (
+        SELECT 1 FROM enrollments e JOIN school_years sy ON sy.id = e.school_year_id
+        WHERE e.student_id = st.id AND e.status = 'confirmed'
+          AND e.class_id = st.class_id
+          AND (sy.status = 'active' OR NOT EXISTS (
+            SELECT 1 FROM school_years active_year WHERE active_year.status = 'active'
+          ))
+      )`,
       sql`(sa.absence_count + sa.excused_count) >= ${query.min_absences}`,
     ];
 
     if (query.class_id) {
       filters.push(sql`st.class_id = ${query.class_id}::uuid`);
+    }
+    if (query.level_id) {
+      filters.push(sql`c.level_id = ${query.level_id}::uuid`);
     }
 
     if (query.sms_status === 'sent') {
@@ -1238,6 +1247,11 @@ export class StudentsRepository {
     }));
   }
 
+  async getLevelName(levelId: string): Promise<string | null> {
+    const result = await this.db.execute(sql`SELECT name FROM levels WHERE id = ${levelId}::uuid LIMIT 1`);
+    return getRows<{ name: string }>(result)[0]?.name ?? null;
+  }
+
   async getStudentAbsenceDetails(
     studentId: string,
     query: StudentAbsencesQuery
@@ -1245,6 +1259,8 @@ export class StudentsRepository {
     const subjectFilter = query.subject
       ? sql`AND ${normalizeSubjectSql(sql`s.subject`)} = ${normalizeSubjectSql(sql`${query.subject}`)}`
       : sql``;
+    const classFilter = query.class_id ? sql`AND st.class_id = ${query.class_id}::uuid` : sql``;
+    const levelFilter = query.level_id ? sql`AND student_class.level_id = ${query.level_id}::uuid` : sql``;
 
     const result = await this.db.execute(sql`
       SELECT
@@ -1265,6 +1281,7 @@ export class StudentsRepository {
         nl2.sent_at::text AS sms2_sent_at
       FROM attendances_student ast
       INNER JOIN students_with_class st ON st.id = ast.student_id
+      LEFT JOIN classes student_class ON student_class.id = st.class_id
       -- FIX B1: LEFT JOIN instead of INNER JOIN so absences without schedule_id are included
       LEFT JOIN schedules s ON s.id = ast.schedule_id
       LEFT JOIN classes c ON c.id = s.class_id
@@ -1297,6 +1314,8 @@ export class StudentsRepository {
           WHERE se.schedule_id = s.id AND se.exception_date = ast.date
         )
         ${subjectFilter}
+        ${classFilter}
+        ${levelFilter}
       ORDER BY ast.date DESC
     `);
 

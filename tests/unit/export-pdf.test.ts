@@ -88,6 +88,7 @@ describe('export PDF templates', () => {
   describe('student absences report', () => {
     const base: StudentAbsencesPayload = {
       studentLabel: 'Élève',
+      levelName: '6ème',
       from: '2026-05-01',
       to: '2026-05-31',
       rows: [

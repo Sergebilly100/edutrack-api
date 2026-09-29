@@ -8,6 +8,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { Pool } from 'pg';
+import { findMatriculeCollisions } from './matricule-collisions.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
@@ -39,6 +40,13 @@ const runMigrationsForSchema = async (pool: Pool, schemaName: string): Promise<v
       .sort();
 
     for (const migrationFile of migrationFiles) {
+      if (migrationFile === '0079_matricule_normalized_unique.sql') {
+        const collisions = await findMatriculeCollisions(client, schemaName);
+        if (collisions.length > 0) {
+          // Only UUIDs and population names are emitted, never matricules or names.
+          throw new Error(`Matricule collisions in ${schemaName}: ${JSON.stringify(collisions)}. Resolve each UUID group before retrying.`);
+        }
+      }
       const migrationPath = path.join(migrationsFolder, migrationFile);
       const content = await readFile(migrationPath, 'utf-8');
 

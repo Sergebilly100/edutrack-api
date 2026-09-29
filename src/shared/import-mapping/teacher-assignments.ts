@@ -1,4 +1,5 @@
 import { normalizeMappingLabel } from './engine.js';
+import { matriculeKey } from '../utils/matricule.js';
 import { normalizeSubjectKey } from '../utils/subject-normalization.js';
 
 export type AssignmentPair = { teacherId: string; subjectId: string; classId: string };
@@ -22,7 +23,7 @@ export function validateTeacherAssignmentRows(rows: AssignmentInputRow[], snapsh
     const pairs: AssignmentPair[] = [];
     const issue = (column: string, value: string, reason: string) => errors.push({ rowNumber: row.rowNumber, column, value, reason });
     const { matricule = '', matiere = '', classes = '' } = row.values;
-    const teachers = snapshot.teachers.filter((teacher) => matricule.trim() && normalizeMappingLabel(teacher.matricule ?? '') === normalizeMappingLabel(matricule));
+    const teachers = snapshot.teachers.filter((teacher) => matriculeKey(matricule) && matriculeKey(teacher.matricule) === matriculeKey(matricule));
     if (teachers.length !== 1) issue('Matricule', matricule, teachers.length ? `Matricule ambigu : ${matricule}` : `Professeur introuvable : ${matricule}`);
     else if (!teachers[0].isActive || teachers[0].isBlocked) issue('Matricule', matricule, `Professeur bloqué ou inactif : ${matricule}`);
     if (!matiere.trim() || !snapshot.subjects.some((subject) => normalizeSubjectKey(subject.name) === normalizeSubjectKey(matiere))) {

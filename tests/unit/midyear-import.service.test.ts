@@ -67,6 +67,13 @@ describe('C8 recovery validation', () => {
     const data = enrolled(); data.enrollments = [];
     expect(validateRecoveryRows('students', [student()], data).impact).toMatchObject({ profilesReused: 1, classesReused: 1, enrollmentsCreated: 1 });
   });
+  it('matches only case and surrounding spaces in a recovery matricule', () => {
+    const data = enrolled(); data.enrollments = [];
+    expect(validateRecoveryRows('students', [student({ matricule: ' m-1 ' })], data).impact.profilesReused).toBe(1);
+    const collision = validateRecoveryRows('students', [student({ matricule: ' m-1 ', prenom: 'Ali' })], data);
+    expect(collision.errors[0]).toMatchObject({ code: 'MATRICULE_ALREADY_EXISTS' });
+    expect(validateRecoveryRows('students', [student({ matricule: 'M- 1' })], data).impact.profilesCreated).toBe(1);
+  });
   it('reuses an already confirmed enrollment', () => {
     expect(validateRecoveryRows('students', [student()], enrolled()).impact.enrollmentsReused).toBe(1);
   });

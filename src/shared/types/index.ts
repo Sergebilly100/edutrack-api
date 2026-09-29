@@ -123,6 +123,7 @@ export type PermissionKey =
   | 'classes.edit'
   | 'classes.delete'
   | 'report_cards.view'
+  | 'evaluations.view'
   | 'report_cards.publish'
   | 'import.students'
   | 'import.teachers'

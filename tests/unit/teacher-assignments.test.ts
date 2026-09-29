@@ -22,6 +22,12 @@ describe('C10 teacher assignment groups', () => {
       { teacherId: 'p1', subjectId: 'chim3', classId: '3b' },
     ]);
   });
+  it('matches a professor matricule regardless of case and surrounding spaces', () => {
+    const input = row(); input.values.matricule = ' p-001 ';
+    expect(validateTeacherAssignmentRows([input], snapshot()).validRows).toHaveLength(1);
+    input.values.matricule = 'P- 001';
+    expect(validateTeacherAssignmentRows([input], snapshot()).validRows).toHaveLength(0);
+  });
   it('rejects every row containing a duplicate pair, including overlaps between groups', () => {
     const result = validateTeacherAssignmentRows([row(), row('4E   A', 'Maths', 3)], snapshot());
     expect(result.validRows).toEqual([]);

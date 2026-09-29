@@ -29,7 +29,7 @@ export type RecoveryRow = {
 export type RecoveryPreview = {
   schoolYearId: string;
   validRows: RecoveryRow[];
-  errors: Array<{ rowNumber: number; reason: string; column?: string; value?: string }>;
+  errors: Array<{ rowNumber: number; reason: string; code?: string; column?: string; value?: string }>;
   totalRows: number;
   impact: RecoveryImpact;
   classesWithoutTeacherAssignments: number;

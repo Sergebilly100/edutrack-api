@@ -45,4 +45,4 @@ export const historicalStudentRowSchema = z.object({
   parent_phone_2: optionalPhone,
 }).strict();
 export type HistoricalStudentRow = z.infer<typeof historicalStudentRowSchema> & { rowNumber: number; sheetName?: string };
-export type HistoricalStudentError = { rowNumber: number; field: string; reason: string; sheetName?: string };
+export type HistoricalStudentError = { rowNumber: number; field: string; reason: string; code?: string; sheetName?: string };

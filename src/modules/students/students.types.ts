@@ -24,6 +24,7 @@ export const studentsListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   class_id: z.uuid().optional(),
+  level_id: z.uuid().optional(),
   is_active: z
     .enum(['true', 'false'])
     .optional()
@@ -110,6 +111,7 @@ export const absenceStatsQuerySchema = z.object({
   from: z.string().regex(ISO_DATE_REGEX),
   to: z.string().regex(ISO_DATE_REGEX),
   class_id: z.string().uuid().optional(),
+  level_id: z.string().uuid().optional(),
   subject: z.string().trim().min(1).optional(),
   sms_status: z.enum(['sent', 'not_sent', 'failed']).optional(),
   min_absences: z.coerce.number().int().min(1).default(1),
@@ -123,6 +125,8 @@ export const studentAbsencesQuerySchema = z.object({
   from: z.string().regex(ISO_DATE_REGEX),
   to: z.string().regex(ISO_DATE_REGEX),
   subject: z.string().trim().min(1).optional(),
+  class_id: z.string().uuid().optional(),
+  level_id: z.string().uuid().optional(),
 });
 
 // ─── Domain types ─────────────────────────────────────────────────────────────

@@ -247,6 +247,7 @@ export type BillingPdfJobData =
       schemaName: string;
       studentLabel: string;
       classId: string | undefined;
+      levelId: string | undefined;
       subject: string | undefined;
       from: string;
       to: string;
@@ -390,18 +391,21 @@ export const processBillingPdfJob = async (
     }
 
     if (job.data.type === 'student-absences-export') {
-      const { studentLabel, classId, subject, from, to, minAbsences, smsStatus } = job.data;
-      const rows = await buildStudentsService(tenantDb).getAbsenceStats({
+      const { studentLabel, classId, levelId, subject, from, to, minAbsences, smsStatus } = job.data;
+      const studentsService = buildStudentsService(tenantDb);
+      const rows = await studentsService.getAbsenceStats({
         from,
         to,
         min_absences: minAbsences,
         ...(classId !== undefined ? { class_id: classId } : {}),
+        ...(levelId !== undefined ? { level_id: levelId } : {}),
         ...(subject !== undefined ? { subject } : {}),
         ...(smsStatus !== undefined ? { sms_status: smsStatus } : {}),
       });
       const fileName = `bilan_absences_eleves_${toSafeFilePart(from)}_${toSafeFilePart(to)}.pdf`;
       const bytes = await renderStudentAbsencesReport(branding, {
         studentLabel,
+        levelName: levelId ? (await studentsService.getLevelName(levelId)) ?? 'inconnu' : undefined,
         from,
         to,
         rows: rows.map((row) => ({

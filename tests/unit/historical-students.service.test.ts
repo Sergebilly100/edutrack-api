@@ -50,7 +50,7 @@ describe('historical student profile rules', () => {
     expect(result.errors).toEqual(expect.arrayContaining([
       expect.objectContaining({ rowNumber: 3, field: 'nom' }),
       expect.objectContaining({ rowNumber: 3, field: 'parent_phone' }),
-      expect.objectContaining({ rowNumber: 4, field: 'matricule' }),
+      expect.objectContaining({ rowNumber: 4, field: 'matricule', code: 'MATRICULE_ALREADY_EXISTS' }),
     ]));
     expect(JSON.stringify(result.errors)).not.toContain('bad-phone');
     expect(JSON.stringify(result.errors)).not.toContain('Amadou');

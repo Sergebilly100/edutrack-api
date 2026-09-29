@@ -242,6 +242,13 @@ describe('import.service - students dry-run', () => {
 // ---------------------------------------------------------------------------
 
 describe('import.service - students confirm', () => {
+  it('refuse une variante de matricule portée par un autre élève sans modifier son profil', async () => {
+    repository.listExistingStudents.mockResolvedValue([{ id: 'existing', key: '3ème a::aya::kone', matricule: 'E-001', firstName: 'Aya', lastName: 'Kone', className: '3ème A', birthDate: null, parentName: null, parentPhone: null, parentEmail: null, parentName2: null, parentPhone2: null, isActive: true }]);
+    const service = new ImportService(repository);
+    const file = await toWorkbookBuffer([{ 'Matricule': ' e-001 ', 'Prénom*': 'Ali', 'Nom*': 'Kone', 'Classe*': '3ème A' }]);
+    await expect(service.confirm('students', file, db)).rejects.toMatchObject({ code: 'MATRICULE_ALREADY_EXISTS', statusCode: 409 });
+    expect(repository.upsertStudent).not.toHaveBeenCalled();
+  });
   it('fournit des identifiants temporaires au repository sans déclencher de SMS', async () => {
     const createParentCredentials = vi.fn().mockResolvedValue({
       plainPassword: 'ABCD234567',
@@ -481,6 +488,13 @@ describe('import.service - teachers dry-run', () => {
 // ---------------------------------------------------------------------------
 
 describe('import.service - teachers confirm', () => {
+  it('refuse une variante de matricule portée par un autre professeur sans modifier son profil', async () => {
+    repository.listExistingTeachers.mockResolvedValue([{ id: 'existing', userId: 'user-1', key: 'aya kone', name: 'Aya Kone', username: 'kone.aya', matricule: 'P-001', phone: null, email: null, type: 'vacataire', subjects: [], hourlyRate: 5000, monthlySalary: null, isActive: true }]);
+    const service = new ImportService(repository);
+    const file = await toWorkbookBuffer([{ 'Matricule': ' p-001 ', 'Nom*': 'Diallo', 'Prénom*': 'Ibrahim', 'Type*': 'vacataire', 'Taux horaire FCFA': '5000', 'Téléphone': '2250700000001' }]);
+    await expect(service.confirm('teachers', file, db)).rejects.toMatchObject({ code: 'MATRICULE_ALREADY_EXISTS', statusCode: 409 });
+    expect(repository.upsertTeacher).not.toHaveBeenCalled();
+  });
   it('collision username → upsertTeacher appelé 2 fois avec usernames distincts', async () => {
     repository.listTeacherDirectory.mockResolvedValue([]);
     const service = new ImportService(repository);

@@ -12,6 +12,7 @@ const DOMAINS = {
   risk_alerts: 'Alertes de risque', financial_alerts: 'Alertes financières',
   subscription_plans: 'Plans d’abonnement', classes: 'Classes et niveaux',
   report_cards: 'Bulletins', import: 'Imports', positions: 'Postes et utilisateurs',
+  evaluations: 'Évaluations et notes',
   school: 'Paramètres école', sms_templates: 'Modèles SMS', subscriptions: 'Abonnements parents',
 } as const;
 
@@ -72,6 +73,7 @@ const DEFINITIONS = {
   'classes.edit': { domain: 'classes', label: 'Modifier les classes' },
   'classes.delete': { domain: 'classes', label: 'Supprimer une classe' },
   'report_cards.view': { domain: 'report_cards', label: 'Voir les bulletins' },
+  'evaluations.view': { domain: 'evaluations', label: 'Consulter les évaluations et notes' },
   'report_cards.publish': { domain: 'report_cards', label: 'Publier les bulletins' },
   'import.students': { domain: 'import', label: 'Importer les élèves' },
   'import.teachers': { domain: 'import', label: 'Importer les professeurs' },

@@ -1,6 +1,7 @@
 import { db as defaultGlobalDb } from '../../shared/database/db.js';
 import { emit } from '../../shared/events/event-bus.js';
 import type { StudentAbsentPayload } from '../../shared/events/events.types.js';
+import { isMatriculeUniqueViolation, trimMatricule } from '../../shared/utils/matricule.js';
 
 import { ParentAccountsRepository } from '../parents/parent-accounts.repository.js';
 import {
@@ -73,12 +74,6 @@ const isDbConstraintError = (error: unknown, code: string): boolean => {
   return (error as { code?: string }).code === code;
 };
 
-const isMatriculeUniqueViolation = (error: unknown): boolean => {
-  if (typeof error !== 'object' || error === null) return false;
-  const { code, constraint } = error as { code?: unknown; constraint?: unknown };
-  return code === '23505' && typeof constraint === 'string' && constraint.includes('matricule');
-};
-
 const deduplicateAbsences = (ids: string[]): string[] => Array.from(new Set(ids));
 
 export class StudentsService {
@@ -96,14 +91,6 @@ export class StudentsService {
     pagination: PaginationMeta;
   }> {
     const { rows, total } = await this.repository.listStudents(query);
-    return { data: rows, pagination: toPaginationMeta(query.page, query.limit, total) };
-  }
-
-  async listStudentProfiles(query: StudentsListQuery): Promise<{
-    data: StudentRecord[];
-    pagination: PaginationMeta;
-  }> {
-    const { rows, total } = await this.repository.listStudents(query, 'profiles');
     return { data: rows, pagination: toPaginationMeta(query.page, query.limit, total) };
   }
 
@@ -128,7 +115,7 @@ export class StudentsService {
     }
     try {
       const result = await this.repository.createStudent(
-        input,
+        { ...input, matricule: trimMatricule(input.matricule) },
         this.deps.createParentCredentials
       );
       const parent = result.parentProvisioning;
@@ -170,7 +157,7 @@ export class StudentsService {
     try {
       const result = await this.repository.updateStudent(
         studentId,
-        input,
+        { ...input, ...(input.matricule !== undefined ? { matricule: trimMatricule(input.matricule) } : {}) },
         this.deps.createParentCredentials
       );
       if (!result) throw new StudentsModuleError('Student not found', 404, 'STUDENT_NOT_FOUND');
@@ -356,6 +343,10 @@ export class StudentsService {
 
   async getAbsenceStats(query: AbsenceStatsQuery): Promise<StudentAbsenceStatRecord[]> {
     return this.repository.getStudentAbsenceStats(query);
+  }
+
+  async getLevelName(levelId: string): Promise<string | null> {
+    return this.repository.getLevelName(levelId);
   }
 
   async getStudentAbsences(

@@ -48,9 +48,9 @@ vi.mock('../../src/modules/students/students.service.js', () => ({
 
 import studentsController from '../../src/modules/students/students.controller.js';
 
-const buildApp = async () => {
+const buildApp = async (options: Parameters<typeof studentsController>[1] = {}) => {
   const app = Fastify();
-  await app.register(studentsController);
+  await app.register(studentsController, options);
   await app.ready();
   return app;
 };
@@ -69,7 +69,9 @@ const attachClaims = (
     const r = request.headers['x-test-role'];
     return typeof r === 'string' && r.length > 0 ? r : 'director';
   })();
-  const claims = { sub: 'user-1', role, schemaName: 'school_test' };
+  const schemaName = typeof request.headers['x-test-schema'] === 'string'
+    ? request.headers['x-test-schema'] : 'school_test';
+  const claims = { sub: 'user-1', role, schemaName };
   request.claims = claims;
   (request as Record<string, unknown>)['auth'] = claims;
   return true;
@@ -145,18 +147,12 @@ beforeEach(() => {
   });
 });
 
-describe('profile search access', () => {
-  it('requires both enrollment creation and profile reading permissions', async () => {
+describe('profile search removal', () => {
+  it('does not expose the former profile reuse endpoint', async () => {
     const app = await buildApp();
-    mocks.service.listStudentProfiles.mockResolvedValue({ data: [], pagination: { total: 0 } });
-    for (const permissions of ['enrollments.create', 'students.view']) {
-      const denied = await app.inject({ method: 'GET', url: '/api/v1/students/profiles?search=Kone',
-        headers: { authorization: 'Bearer token', 'x-test-permissions': permissions } });
-      expect(denied.statusCode).toBe(403);
-    }
-    const allowed = await app.inject({ method: 'GET', url: '/api/v1/students/profiles?search=Kone',
+    const response = await app.inject({ method: 'GET', url: '/api/v1/students/profiles?search=Kone',
       headers: { authorization: 'Bearer token', 'x-test-permissions': 'enrollments.create,students.view' } });
-    expect(allowed.statusCode).toBe(200);
+    expect(response.statusCode).not.toBe(200);
     expect(mocks.service.getStudentDetail).not.toHaveBeenCalled();
     await app.close();
   });
@@ -179,6 +175,31 @@ describe('profile search access', () => {
 // ─── GET /students ────────────────────────────────────────────────────────────
 
 describe('GET /api/v1/students', () => {
+  it('valide le niveau et transmet le couple niveau/classe au service tenant', async () => {
+    const app = await buildApp();
+    const levelId = '66f048d8-d053-48e2-b4a8-7fce3ebc3ed8';
+    const classId = '66f048d8-d053-48e2-b4a8-7fce3ebc3ed9';
+    const response = await app.inject({ method: 'GET', url: `/api/v1/students?level_id=${levelId}&class_id=${classId}`,
+      headers: { authorization: 'Bearer token' } });
+    expect(response.statusCode).toBe(200);
+    expect(mocks.service.listStudents).toHaveBeenCalledWith(expect.objectContaining({ level_id: levelId, class_id: classId }));
+    expect((await app.inject({ method: 'GET', url: '/api/v1/students?level_id=forged',
+      headers: { authorization: 'Bearer token' } })).statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('résout chaque filtre dans le tenant authentifié', async () => {
+    const app = await buildApp();
+    const levelId = '66f048d8-d053-48e2-b4a8-7fce3ebc3ed8';
+    const headers = { authorization: 'Bearer token', 'x-test-schema': 'school_other' };
+    expect((await app.inject({ method: 'GET', url: `/api/v1/students?level_id=${levelId}`, headers })).statusCode).toBe(200);
+    expect(mocks.withTenantSchema).toHaveBeenCalledWith('school_other', expect.any(Function));
+    mocks.withTenantSchema.mockClear();
+    expect((await app.inject({ method: 'GET',
+      url: `/api/v1/students/absence-stats?from=2026-04-01&to=2026-04-30&level_id=${levelId}`, headers })).statusCode).toBe(200);
+    expect(mocks.withTenantSchema).toHaveBeenCalledWith('school_other', expect.any(Function));
+    await app.close();
+  });
   it('retourne 401 sans Authorization', async () => {
     const app = await buildApp();
     const response = await app.inject({ method: 'GET', url: '/api/v1/students' });
@@ -356,6 +377,31 @@ describe('GET /api/v1/students/:id', () => {
 // ─── GET /students/absence-stats ─────────────────────────────────────────────
 
 describe('GET /api/v1/students/absence-stats', () => {
+  it('transmet niveau et classe aux statistiques et valide le niveau', async () => {
+    const app = await buildApp();
+    const levelId = '66f048d8-d053-48e2-b4a8-7fce3ebc3ed8';
+    const classId = '66f048d8-d053-48e2-b4a8-7fce3ebc3ed9';
+    const path = `/api/v1/students/absence-stats?from=2026-04-01&to=2026-04-30&level_id=${levelId}&class_id=${classId}`;
+    expect((await app.inject({ method: 'GET', url: path, headers: { authorization: 'Bearer token' } })).statusCode).toBe(200);
+    expect(mocks.service.getAbsenceStats).toHaveBeenCalledWith(expect.objectContaining({ level_id: levelId, class_id: classId }));
+    expect((await app.inject({ method: 'GET', url: `${path}&level_id=forged`, headers: { authorization: 'Bearer token' } })).statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('place les mêmes filtres dans le job PDF', async () => {
+    const add = vi.fn(async () => ({ id: 'job-1' }));
+    const app = await buildApp({ pdfQueue: { add } as unknown as NonNullable<Parameters<typeof studentsController>[1]>['pdfQueue'] });
+    const levelId = '66f048d8-d053-48e2-b4a8-7fce3ebc3ed8';
+    const classId = '66f048d8-d053-48e2-b4a8-7fce3ebc3ed9';
+    const response = await app.inject({ method: 'GET',
+      url: `/api/v1/students/absence-stats/export?from=2026-04-01&to=2026-04-30&level_id=${levelId}&class_id=${classId}&subject=Math&sms_status=failed&min_absences=2`,
+      headers: { authorization: 'Bearer token' } });
+    expect(response.statusCode).toBe(200);
+    expect(add).toHaveBeenCalledWith('student-absences-export', expect.objectContaining({
+      levelId, classId, subject: 'Math', smsStatus: 'failed', minAbsences: 2,
+    }), expect.any(Object));
+    await app.close();
+  });
   it('appelle le service stats (route statique prioritaire sur /:id)', async () => {
     const app = await buildApp();
     const response = await app.inject({
@@ -386,6 +432,19 @@ describe('GET /api/v1/students/absence-stats', () => {
 // ─── GET /students/:studentId/absences ────────────────────────────────────────
 
 describe('GET /api/v1/students/:studentId/absences', () => {
+  it('transmet niveau et classe au détail', async () => {
+    const app = await buildApp();
+    const studentId = '66f048d8-d053-48e2-b4a8-7fce3ebc3ed8';
+    const levelId = '66f048d8-d053-48e2-b4a8-7fce3ebc3ed9';
+    const classId = '66f048d8-d053-48e2-b4a8-7fce3ebc3ed0';
+    const response = await app.inject({ method: 'GET',
+      url: `/api/v1/students/${studentId}/absences?from=2026-04-01&to=2026-04-30&level_id=${levelId}&class_id=${classId}`,
+      headers: { authorization: 'Bearer token' } });
+    expect(response.statusCode).toBe(200);
+    expect(mocks.service.getStudentAbsences).toHaveBeenCalledWith(studentId,
+      expect.objectContaining({ level_id: levelId, class_id: classId }));
+    await app.close();
+  });
   it('appelle le service détail absences', async () => {
     const app = await buildApp();
     const response = await app.inject({

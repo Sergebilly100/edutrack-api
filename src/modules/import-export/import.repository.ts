@@ -524,7 +524,7 @@ export const defaultImportRepository: ImportRepository = {
       ? await db.execute(sql`
           SELECT id, matricule
           FROM students_with_class
-          WHERE LOWER(matricule) = LOWER(${row.matricule})
+          WHERE LOWER(BTRIM(matricule)) = LOWER(BTRIM(${row.matricule}))
           LIMIT 1
         `)
       : await db.execute(sql`
@@ -552,7 +552,7 @@ export const defaultImportRepository: ImportRepository = {
       await db.execute(sql`
         UPDATE students
         SET
-          matricule = ${row.matricule},
+          matricule = COALESCE(${row.matricule}, matricule),
           birth_date = ${row.birthDate},
           parent_name = ${row.parentName},
           parent_phone = ${row.parentPhone},
@@ -672,7 +672,7 @@ export const defaultImportRepository: ImportRepository = {
       await db.execute(sql`
         UPDATE teachers
         SET
-          matricule = ${row.matricule},
+          matricule = COALESCE(${row.matricule}, matricule),
           type = ${row.type},
           hourly_rate = ${row.hourlyRate},
           monthly_salary = ${row.monthlySalary}

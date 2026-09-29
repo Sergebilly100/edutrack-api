@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
-import { requirePermission, requireTeacher } from '../../shared/middleware/auth.middleware.js';
+import { authenticateRequest, requirePermission, requireTeacher } from '../../shared/middleware/auth.middleware.js';
 import { AcademicGradingError, buildAcademicGradingService } from './academic-grading.service.js';
 import {
   academicIdParamsSchema,
@@ -22,6 +22,8 @@ import {
   spontaneousGradeBodySchema,
 } from './academic-grading.types.js';
 import { AcademicModuleError, buildAcademicService } from './academic.service.js';
+import { EvaluationReviewError, buildEvaluationReviewService } from './evaluation-review.service.js';
+import { evaluationReviewOptionsSchema, evaluationReviewQuerySchema } from './evaluation-review.types.js';
 import {
   classIdParamsSchema,
   createClassBodySchema,
@@ -56,6 +58,10 @@ const handleError = (
     });
   }
 
+  if (error instanceof EvaluationReviewError) {
+    return reply.code(400).send({ error: error.message, code: error.code, statusCode: 400 });
+  }
+
   request.log.error({ err: error }, '[academic] Unexpected error');
   return reply.code(500).send({
     error: 'Internal server error',
@@ -64,7 +70,45 @@ const handleError = (
   });
 };
 
+const requireAcademicFilterAccess = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  await authenticateRequest(request, reply);
+  if (reply.sent) return;
+  const permissions = request.permissions;
+  if (!permissions?.has('classes.view') && !permissions?.has('students.view') && !permissions?.has('attendance.view')) {
+    reply.code(403).send({ error: 'Permission required', code: 'FORBIDDEN', statusCode: 403 });
+  }
+};
+
 export default async function academicController(app: FastifyInstance): Promise<void> {
+  app.get('/api/v1/academic/evaluations/options', { preHandler: requirePermission('evaluations.view') }, async (request, reply) => {
+    try {
+      const query = evaluationReviewOptionsSchema.parse(request.query ?? {});
+      return reply.send(await withTenantSchema(request.claims!.schemaName, (db) =>
+        buildEvaluationReviewService(db).options(query)));
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.get('/api/v1/academic/evaluations', { preHandler: requirePermission('evaluations.view') }, async (request, reply) => {
+    try {
+      const query = evaluationReviewQuerySchema.parse(request.query ?? {});
+      return reply.send(await withTenantSchema(request.claims!.schemaName, (db) =>
+        buildEvaluationReviewService(db).list(query)));
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.get('/api/v1/academic/evaluations/spontaneous', { preHandler: requirePermission('evaluations.view') }, async (request, reply) => {
+    try {
+      const query = evaluationReviewQuerySchema.parse(request.query ?? {});
+      return reply.send(await withTenantSchema(request.claims!.schemaName, (db) =>
+        buildEvaluationReviewService(db).listSpontaneous(query)));
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
   
   // recuperation de la liste des années scolaires
   app.get(
@@ -103,7 +147,7 @@ export default async function academicController(app: FastifyInstance): Promise<
   // recuperation de la liste des niveaux
   app.get(
     '/api/v1/levels',
-    { preHandler: requirePermission('classes.view') },
+    { preHandler: requireAcademicFilterAccess },
     async (request, reply) => {
       try {
         const claims = request.claims!;
@@ -171,7 +215,7 @@ export default async function academicController(app: FastifyInstance): Promise<
 
   app.get(
     '/api/v1/classes',
-    { preHandler: requirePermission('classes.view') },
+    { preHandler: requireAcademicFilterAccess },
     async (request, reply) => {
       try {
         const claims = request.claims!;
@@ -240,7 +284,7 @@ export default async function academicController(app: FastifyInstance): Promise<
 
   app.get(
     '/api/v1/subjects',
-    { preHandler: requirePermission('classes.view') },
+    { preHandler: requireAcademicFilterAccess },
     async (request, reply) => {
       try {
         const query = listSubjectsQuerySchema.parse(request.query ?? {});

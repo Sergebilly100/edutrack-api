@@ -52,8 +52,8 @@ describe('director historical import C7', () => {
     expect(list.body.data).toEqual([]);
     expect(list.body.pagination.total).toBe(0);
     const profiles = await request().get('/api/v1/students/profiles?search=C7-H1').set(headers);
-    expect(profiles.body.data).toEqual([expect.objectContaining({ id: students[0]!.id, classId: null, className: null })]);
-    const studentId = profiles.body.data[0].id;
+    expect(profiles.status).not.toBe(200);
+    const studentId = students[0]!.id;
     const detail = await request().get(`/api/v1/students/${studentId}`).set(headers);
     expect(detail.status).toBe(200);
     expect(detail.body.data.classId).toBeNull();
@@ -76,7 +76,7 @@ describe('director historical import C7', () => {
     expect(pendingRoster.body.data).toEqual([]);
     expect(pendingRoster.body.pagination.total).toBe(0);
     const pendingProfiles = await request().get('/api/v1/students/profiles?search=C7-H1').set(headers);
-    expect(pendingProfiles.body.data).toEqual([]);
+    expect(pendingProfiles.status).not.toBe(200);
     const payment = await request().post(`/api/v1/enrollments/${enrollment.body.enrollment.id}/confirm-payment`).set(headers)
       .send({ amount: 50000, method: 'cash', schoolReceiptReference: 'C7-RC-1' });
     expect(payment.status, JSON.stringify(payment.body)).toBe(200);
@@ -97,7 +97,7 @@ describe('director historical import C7', () => {
     const response = await request().post(`${root}/confirm`).set(headers).field('schoolYearLabel', '2024-2025')
       .attach('file', await file([['C7-H1', 'Different', 'Identity', '']]), 'conflict.xlsx');
     expect(response.body.createdCount).toBe(0);
-    expect(response.body.errors).toEqual([{ rowNumber: 2, sheetName: 'Historique', field: 'matricule', reason: 'Matricule déjà utilisé par un autre profil' }]);
+    expect(response.body.errors).toEqual([{ rowNumber: 2, sheetName: 'Historique', field: 'matricule', reason: 'Matricule déjà utilisé par un autre profil', code: 'MATRICULE_ALREADY_EXISTS' }]);
     expect((await queryTenant('SELECT last_name FROM students WHERE matricule = $1', ['C7-H1']))[0]?.last_name).toBe('Kone');
   });
 
