@@ -1,5 +1,7 @@
 import type { AssignmentSnapshot } from '../../shared/import-mapping/teacher-assignments.js';
 import { sql } from 'drizzle-orm';
+import { confirmedSchoolClassCount } from '../../shared/database/confirmed-school-membership.js';
+import { invalidateSchoolDerivedStudent } from '../../shared/database/invalidate-school-derived-student.js';
 import type { TenantDb } from '../../shared/database/db.js';
 import { MappingRepository } from '../../shared/import-mapping/mapping.repository.js';
 import { normalizeMappingLabel } from '../../shared/import-mapping/engine.js';
@@ -190,9 +192,14 @@ export class MidyearImportRepository extends MappingRepository {
     }
     if (importType === 'students' || importType === 'classes') {
       await this.db.execute(sql`
-        UPDATE classes c SET student_count = (SELECT COUNT(*) FROM enrollments e WHERE e.class_id = c.id AND e.status = 'confirmed')
+        UPDATE classes c SET student_count = ${confirmedSchoolClassCount(sql`c.id`, sql`c.school_year_id`)}
         WHERE c.school_year_id = ${yearId}::uuid
       `);
+    }
+    if (importType === 'students') {
+      for (const studentId of touchedStudents) {
+        await invalidateSchoolDerivedStudent(this.db, studentId, yearId);
+      }
     }
     const cache = new FinancialCacheService(new FinancialCacheRepository(this.db));
     if (touchedStudents.size) await cache.recalcAll(yearId);

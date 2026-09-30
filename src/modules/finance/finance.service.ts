@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs';
+import { invalidateSchoolDerivedStudent } from '../../shared/database/invalidate-school-derived-student.js';
 
 import {
   calculateStudentTotalDue,
@@ -502,6 +503,7 @@ export class FinanceService {
         receiptNumber: await repository.nextReceiptNumber(),
       });
       await repository.confirmEnrollment(input.enrollmentId, input.actorUserId);
+      await invalidateSchoolDerivedStudent(tx as FinanceDb, enrollment.student_id, enrollment.school_year_id);
       await new FinancialCacheService(
         new FinancialCacheRepository(tx as FinanceDb)
       ).recalcStudent(enrollment.student_id, enrollment.school_year_id);

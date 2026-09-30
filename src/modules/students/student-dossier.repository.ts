@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
 
 import type { TenantDb } from '../../shared/database/db.js';
 
@@ -61,11 +62,13 @@ export class StudentDossierRepository {
     const result = await this.db.execute<{ has_access: boolean }>(sql`
       SELECT EXISTS (
         SELECT 1
-        FROM students_with_class st
-        INNER JOIN schedules s ON s.class_id = st.class_id
+        FROM students st
+        INNER JOIN schedules s ON true
+        INNER JOIN classes c ON c.id = s.class_id
         INNER JOIN schedule_periods sp ON sp.id = s.schedule_period_id
         WHERE st.id = ${studentId}::uuid
           AND s.teacher_id = ${teacherId}::uuid
+          AND ${confirmedSchoolStudent(sql`st.id`, sql`c.school_year_id`, sql`c.id`)}
           AND s.is_active = true
           AND (s.start_date IS NULL OR s.start_date <= ${date}::date)
           AND (s.end_date IS NULL OR s.end_date >= ${date}::date)

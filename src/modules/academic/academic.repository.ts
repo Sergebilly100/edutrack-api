@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { confirmedSchoolClassCount } from '../../shared/database/confirmed-school-membership.js';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { QueryResult, QueryResultRow } from 'pg';
 
@@ -280,19 +281,7 @@ export class AcademicRepository {
       SELECT
         c.id,
         c.name,
-        (
-          SELECT COUNT(*)::int
-          FROM students_with_class s
-          WHERE s.class_id = c.id
-            AND s.is_active = true
-            AND NOT EXISTS (
-              SELECT 1 FROM enrollments e
-              WHERE e.student_id = s.id
-                AND e.class_id = c.id
-                AND e.school_year_id = c.school_year_id
-                AND e.status <> 'confirmed'
-            )
-        ) AS student_count,
+        ${confirmedSchoolClassCount(sql`c.id`, sql`c.school_year_id`)} AS student_count,
         c.is_active,
         l.id AS level_id,
         l.name AS level_name,
@@ -334,12 +323,7 @@ export class AcademicRepository {
       SELECT
         c.id,
         c.name,
-        (
-          SELECT COUNT(*)::int
-          FROM students_with_class s
-          WHERE s.class_id = c.id
-            AND s.is_active = true
-        ) AS student_count,
+        ${confirmedSchoolClassCount(sql`c.id`, sql`c.school_year_id`)} AS student_count,
         c.is_active,
         l.id AS level_id,
         l.name AS level_name,
@@ -383,12 +367,7 @@ export class AcademicRepository {
       SELECT
         c.id,
         c.name,
-        (
-          SELECT COUNT(*)::int
-          FROM students_with_class s
-          WHERE s.class_id = c.id
-            AND s.is_active = true
-        ) AS student_count,
+        ${confirmedSchoolClassCount(sql`c.id`, sql`c.school_year_id`)} AS student_count,
         c.is_active,
         l.id AS level_id,
         l.name AS level_name,
@@ -424,12 +403,7 @@ export class AcademicRepository {
       SELECT
         c.id,
         c.name,
-        (
-          SELECT COUNT(*)::int
-          FROM students_with_class s
-          WHERE s.class_id = c.id
-            AND s.is_active = true
-        ) AS student_count,
+        ${confirmedSchoolClassCount(sql`c.id`, sql`c.school_year_id`)} AS student_count,
         c.is_active,
         l.id AS level_id,
         l.name AS level_name,

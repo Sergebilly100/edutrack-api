@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { QueryResult, QueryResultRow } from 'pg';
 
@@ -188,7 +189,7 @@ export class AcademicGradingRepository {
                COUNT(rc.id) FILTER (WHERE rc.status IN ('generated', 'published'))::int AS card_count
         FROM grading_periods gp
         INNER JOIN classes c ON c.school_year_id = gp.school_year_id AND c.is_active = true
-        LEFT JOIN students_with_class s ON s.class_id = c.id AND s.is_active = true
+        LEFT JOIN students s ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
         LEFT JOIN report_cards rc ON rc.student_id = s.id AND rc.grading_period_id = gp.id
         WHERE gp.id = ANY(ARRAY[${sql.join(periodIds.map((id) => sql`${id}::uuid`), sql`, `)}]::uuid[])
         GROUP BY gp.id, c.id
@@ -508,7 +509,8 @@ export class AcademicGradingRepository {
 
   async studentBelongsToClass(studentId: string, classId: string): Promise<boolean> {
     const result = await this.db.execute<{ exists: boolean }>(sql`
-      SELECT EXISTS (SELECT 1 FROM students_with_class WHERE id = ${studentId}::uuid AND class_id = ${classId}::uuid AND is_active = true) AS exists
+      SELECT ${confirmedSchoolStudent(sql`${studentId}::uuid`, sql`c.school_year_id`, sql`c.id`)} AS exists
+      FROM classes c WHERE c.id = ${classId}::uuid
     `);
     return rows(result)[0]?.exists ?? false;
   }
@@ -541,8 +543,11 @@ export class AcademicGradingRepository {
              e.coefficient AS evaluation_coefficient, e.type, e.label
       FROM evaluation_grades eg
       INNER JOIN evaluations e ON e.id = eg.evaluation_id
+      INNER JOIN classes c ON c.id = e.class_id
+      INNER JOIN grading_periods gp ON gp.id = e.grading_period_id AND gp.school_year_id = c.school_year_id
       INNER JOIN subjects s ON s.id = e.subject_id
       WHERE eg.student_id = ${studentId}::uuid AND e.grading_period_id = ${gradingPeriodId}::uuid
+        AND ${confirmedSchoolStudent(sql`eg.student_id`, sql`c.school_year_id`, sql`c.id`)}
       ORDER BY e.subject_id, e.created_at
     `);
     return rows(result).map((row) => ({
@@ -620,7 +625,8 @@ export class AcademicGradingRepository {
     const result = await this.db.execute<{ missing_count: string }>(sql`
       SELECT COUNT(*)::text AS missing_count
       FROM evaluations e
-      CROSS JOIN students_with_class s
+      INNER JOIN classes c ON c.id = e.class_id
+      CROSS JOIN students s
       LEFT JOIN evaluation_grades eg
         ON eg.evaluation_id = e.id AND eg.student_id = s.id
       WHERE e.teacher_id = ${teacherId}::uuid
@@ -628,8 +634,7 @@ export class AcademicGradingRepository {
         AND e.subject_id = ${subjectId}::uuid
         AND e.grading_period_id = ${gradingPeriodId}::uuid
         AND e.type = 'scheduled'
-        AND s.class_id = ${classId}::uuid
-        AND s.is_active = true
+        AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
         AND eg.id IS NULL
     `);
     return Number(rows(result)[0]?.missing_count ?? 0);

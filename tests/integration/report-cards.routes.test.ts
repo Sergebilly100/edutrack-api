@@ -1,6 +1,8 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { signAccessToken } from '../../src/modules/auth/auth.service.js';
+import { ReportCardsRepository } from '../../src/modules/report-cards/report-cards.repository.js';
+import { withTenantSchema } from '../../src/shared/database/db.js';
 import { getAuthHeaders, getSeedContext, queryTenant, request, tenantTable, TEST_SCHEMA_NAME } from './setup.js';
 
 const suffix = String(Date.now());
@@ -86,6 +88,10 @@ describe('report-cards routes (5c)', () => {
     );
     studentAId = students[0]!.id;
     studentBId = students[1]!.id;
+    await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+      VALUES ($1::uuid, $3::uuid, $4::uuid, 'new_registration', 'confirmed'),
+             ($2::uuid, $3::uuid, $4::uuid, 'new_registration', 'confirmed')`,
+      [studentAId, studentBId, classId, yearId]);
 
     // Moyennes sources (module academic) pour T1 et T2
     await seedAverage(studentAId, periodT1, null, 15);
@@ -239,5 +245,20 @@ describe('report-cards routes (5c)', () => {
       .get(`/api/v1/parent/students/${studentBId}/report-cards`)
       .set(parentHeaders);
     expect([403]).toContain(response.status);
+  });
+
+  it('conserve le bulletin publié dans les archives d’une classe confirmée puis désactivée', async () => {
+    const cardId = (await queryTenant<IdRow>(`SELECT id::text FROM ${tenantTable('report_cards')}
+      WHERE student_id=$1::uuid AND grading_period_id=$2::uuid`, [studentAId, periodT1]))[0]!.id;
+    await queryTenant(`UPDATE ${tenantTable('classes')} SET is_active=false WHERE id=$1::uuid`, [classId]);
+    try {
+      await withTenantSchema(TEST_SCHEMA_NAME, async (db) => {
+        const repository = new ReportCardsRepository(db);
+        expect((await repository.listPublishedSummariesForStudent(studentAId)).map((card) => card.id)).toContain(cardId);
+        expect((await repository.findCardDetail(cardId))?.id).toBe(cardId);
+      });
+    } finally {
+      await queryTenant(`UPDATE ${tenantTable('classes')} SET is_active=true WHERE id=$1::uuid`, [classId]);
+    }
   });
 });

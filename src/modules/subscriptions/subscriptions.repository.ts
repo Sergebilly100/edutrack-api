@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import { db as publicDb } from '../../shared/database/db.js';
@@ -297,9 +298,10 @@ export class SubscriptionsRepository {
           NULL::date AS ends_at,
           NULL::varchar(20) AS subscription_status,
           1 AS priority
-        FROM students_with_class
-        WHERE id = ${studentId}::uuid
+        FROM students student
+        WHERE student.id = ${studentId}::uuid
           AND parent_phone IS NOT NULL
+          AND ${confirmedSchoolStudent(sql`student.id`, sql`(SELECT id FROM school_years WHERE status = 'active' LIMIT 1)`)}
         UNION ALL
         SELECT
           NULL::uuid AS parent_id,
@@ -309,9 +311,10 @@ export class SubscriptionsRepository {
           NULL::date AS ends_at,
           NULL::varchar(20) AS subscription_status,
           2 AS priority
-        FROM students_with_class
-        WHERE id = ${studentId}::uuid
+        FROM students student
+        WHERE student.id = ${studentId}::uuid
           AND parent_phone_2 IS NOT NULL
+          AND ${confirmedSchoolStudent(sql`student.id`, sql`(SELECT id FROM school_years WHERE status = 'active' LIMIT 1)`)}
       ),
       linked_contacts AS (
         SELECT
@@ -328,6 +331,7 @@ export class SubscriptionsRepository {
         WHERE psl.student_id = ${studentId}::uuid
           AND p.is_active = true
           AND p.phone IS NOT NULL
+          AND ${confirmedSchoolStudent(sql`psl.student_id`, sql`(SELECT id FROM school_years WHERE status = 'active' LIMIT 1)`)}
       )
       SELECT DISTINCT ON (parent_phone)
         parent_id::text,
@@ -530,8 +534,9 @@ export class SubscriptionsRepository {
           (
             SELECT json_agg(json_build_object('id', s.id::text, 'full_name', CONCAT(s.first_name, ' ', s.last_name)))
             FROM parent_student_links psl
-            INNER JOIN students_with_class s ON s.id = psl.student_id
+            INNER JOIN students s ON s.id = psl.student_id
             WHERE psl.parent_id = p.id
+              AND ${confirmedSchoolStudent(sql`s.id`, sql`(SELECT id FROM school_years WHERE status = 'active' LIMIT 1)`)}
           ),
           '[]'::json
         ) AS students
@@ -606,7 +611,7 @@ export class SubscriptionsRepository {
         c.name,
         COUNT(s.id)::int AS students_count
       FROM classes c
-      LEFT JOIN students_with_class s ON s.class_id = c.id AND s.is_active = true
+      LEFT JOIN students s ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
       WHERE c.is_active = true
         AND (
           c.school_year_id IS NULL
@@ -644,9 +649,9 @@ export class SubscriptionsRepository {
 
     const countResult = await this.tenantDb.execute<{ total: number }>(sql`
       SELECT COUNT(*)::int AS total
-      FROM students_with_class s
-      WHERE s.class_id = ${params.classId}::uuid
-        AND s.is_active = true
+      FROM students s
+      INNER JOIN classes c ON c.id = ${params.classId}::uuid
+      WHERE ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
         AND (
           ${searchLike}::text IS NULL
           OR CONCAT(s.last_name, ' ', s.first_name) ILIKE ${searchLike}
@@ -663,10 +668,9 @@ export class SubscriptionsRepository {
         c.id::text AS class_id,
         c.name AS class_name,
         s.matricule::text AS registration_number
-      FROM students_with_class s
-      INNER JOIN classes c ON c.id = s.class_id
-      WHERE s.class_id = ${params.classId}::uuid
-        AND s.is_active = true
+      FROM students s
+      INNER JOIN classes c ON c.id = ${params.classId}::uuid
+      WHERE ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
         AND (
           ${searchLike}::text IS NULL
           OR CONCAT(s.last_name, ' ', s.first_name) ILIKE ${searchLike}
@@ -722,9 +726,10 @@ export class SubscriptionsRepository {
   async getStudentsByIds(studentIds: string[]): Promise<StudentRow[]> {
     if (studentIds.length === 0) return [];
     const result = await this.tenantDb.execute<StudentRow>(sql`
-      SELECT id::text AS id, CONCAT(first_name, ' ', last_name) AS full_name
-      FROM students_with_class
-      WHERE id IN (${sql.join(studentIds.map((id) => sql`${id}::uuid`), sql`, `)})
+      SELECT s.id::text AS id, CONCAT(s.first_name, ' ', s.last_name) AS full_name
+      FROM students s
+      WHERE s.id IN (${sql.join(studentIds.map((id) => sql`${id}::uuid`), sql`, `)})
+        AND ${confirmedSchoolStudent(sql`s.id`, sql`(SELECT id FROM school_years WHERE status = 'active' LIMIT 1)`)}
     `);
     return result.rows;
   }
@@ -893,8 +898,9 @@ export class SubscriptionsRepository {
         c.name AS class_name,
         s.matricule::text AS registration_number
       FROM parent_student_links psl
-      INNER JOIN students_with_class s ON s.id = psl.student_id
-      LEFT JOIN classes c ON c.id = s.class_id
+      INNER JOIN students s ON s.id = psl.student_id
+      INNER JOIN classes c ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
+      INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
       WHERE psl.subscription_id = ${subscriptionId}::uuid
       ORDER BY s.last_name, s.first_name
     `);
@@ -939,8 +945,9 @@ export class SubscriptionsRepository {
         c.name AS class_name,
         s.matricule::text AS registration_number
       FROM parent_student_links psl
-      INNER JOIN students_with_class s ON s.id = psl.student_id
-      LEFT JOIN classes c ON c.id = s.class_id
+      INNER JOIN students s ON s.id = psl.student_id
+      INNER JOIN classes c ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
+      INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
       WHERE psl.subscription_id IN (${idList})
       ORDER BY s.last_name, s.first_name
     `);

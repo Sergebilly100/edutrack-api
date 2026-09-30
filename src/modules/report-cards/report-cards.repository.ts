@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
 
 import type { TenantDb } from '../../shared/database/db.js';
 
@@ -93,7 +94,7 @@ export class ReportCardsRepository {
                COUNT(rc.id) FILTER (WHERE rc.status IN ('generated', 'published'))::int AS card_count
         FROM grading_periods gp
         INNER JOIN classes c ON c.school_year_id = gp.school_year_id AND c.is_active = true
-        LEFT JOIN students_with_class s ON s.class_id = c.id AND s.is_active = true
+        LEFT JOIN students s ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
         LEFT JOIN report_cards rc ON rc.student_id = s.id AND rc.grading_period_id = gp.id
         WHERE gp.school_year_id = ${schoolYearId}::uuid
         GROUP BY gp.id, c.id
@@ -117,8 +118,9 @@ export class ReportCardsRepository {
   async listClassStudents(classId: string): Promise<Array<{ id: string; fullName: string }>> {
     const result = await this.db.execute<{ id: string; full_name: string }>(sql`
       SELECT s.id::text, concat_ws(' ', s.first_name, s.last_name) AS full_name
-      FROM students_with_class s
-      WHERE s.class_id = ${classId}::uuid AND s.is_active = true
+      FROM students s
+      INNER JOIN classes c ON c.id = ${classId}::uuid
+      WHERE ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
       ORDER BY s.last_name ASC, s.first_name ASC
     `);
     return getRows<{ id: string; full_name: string }>(result).map((row) => ({
@@ -152,8 +154,9 @@ export class ReportCardsRepository {
     const result = await this.db.execute<{ student_id: string; subject_id: string; average: string }>(sql`
       SELECT spa.student_id::text, spa.subject_id::text, spa.average::text
       FROM student_period_averages spa
-      INNER JOIN students_with_class s ON s.id = spa.student_id
-      WHERE s.class_id = ${classId}::uuid
+      INNER JOIN students s ON s.id = spa.student_id
+      INNER JOIN classes c ON c.id = ${classId}::uuid
+      WHERE ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
         AND spa.grading_period_id = ${gradingPeriodId}::uuid
         AND spa.subject_id IS NOT NULL
         AND s.is_active = true
@@ -173,8 +176,9 @@ export class ReportCardsRepository {
     const result = await this.db.execute<{ student_id: string; average: string }>(sql`
       SELECT spa.student_id::text, spa.average::text
       FROM student_period_averages spa
-      INNER JOIN students_with_class s ON s.id = spa.student_id
-      WHERE s.class_id = ${classId}::uuid
+      INNER JOIN students s ON s.id = spa.student_id
+      INNER JOIN classes c ON c.id = ${classId}::uuid
+      WHERE ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
         AND spa.grading_period_id = ${gradingPeriodId}::uuid
         AND spa.subject_id IS NULL
         AND s.is_active = true
@@ -288,18 +292,30 @@ export class ReportCardsRepository {
         cardId = crypto.randomUUID();
       }
 
-      await txDb.execute(sql`
+      const inserted = await txDb.execute(sql`
         INSERT INTO report_cards (
           id, student_id, class_id, grading_period_id,
           general_average, rank, class_average, class_min_average, class_max_average,
           class_headcount, class_decision_id, status, generated_at, created_at, updated_at
-        ) VALUES (
+        ) SELECT
           ${cardId}::uuid, ${input.studentId}::uuid, ${input.classId}::uuid, ${input.gradingPeriodId}::uuid,
           ${input.generalAverage}, ${input.rank}, ${input.classAverage}, ${input.classMinAverage},
           ${input.classMaxAverage}, ${input.classHeadcount}, ${input.classDecisionId ?? null}::uuid,
           'generated', NOW(), NOW(), NOW()
-        )
+        FROM classes c JOIN grading_periods gp ON gp.id = ${input.gradingPeriodId}::uuid
+        WHERE c.id = ${input.classId}::uuid AND c.school_year_id = gp.school_year_id
+          AND ${confirmedSchoolStudent(sql`${input.studentId}::uuid`, sql`c.school_year_id`, sql`c.id`)}
+        RETURNING id
       `);
+      if (getRows(inserted).length !== 1) {
+        const conflict = new Error('Inscription confirmée requise pour générer le bulletin') as Error & {
+          statusCode?: number;
+          code?: string;
+        };
+        conflict.statusCode = 409;
+        conflict.code = 'CONFIRMED_ENROLLMENT_REQUIRED';
+        throw conflict;
+      }
 
       for (const line of input.lines) {
         await txDb.execute(sql`
@@ -321,6 +337,9 @@ export class ReportCardsRepository {
       UPDATE report_cards
       SET status = 'published', published_at = NOW(), published_by_user_id = ${userId}::uuid, updated_at = NOW()
       WHERE id = ${cardId}::uuid AND status = 'generated'
+        AND EXISTS (SELECT 1 FROM classes c JOIN grading_periods gp ON gp.id = report_cards.grading_period_id
+          WHERE c.id = report_cards.class_id AND c.school_year_id = gp.school_year_id
+            AND ${confirmedSchoolStudent(sql`report_cards.student_id`, sql`c.school_year_id`, sql`c.id`)})
       RETURNING id::text
     `);
     if (getRows(result).length === 0) {
@@ -336,8 +355,11 @@ export class ReportCardsRepository {
 
   async listPublishableCardsOfClass(classId: string, gradingPeriodId: string): Promise<string[]> {
     const result = await this.db.execute<{ id: string }>(sql`
-      SELECT id::text FROM report_cards
-      WHERE class_id = ${classId}::uuid AND grading_period_id = ${gradingPeriodId}::uuid AND status = 'generated'
+      SELECT rc.id::text FROM report_cards rc
+      INNER JOIN classes c ON c.id = rc.class_id
+      INNER JOIN grading_periods gp ON gp.id = rc.grading_period_id AND gp.school_year_id = c.school_year_id
+      WHERE rc.class_id = ${classId}::uuid AND rc.grading_period_id = ${gradingPeriodId}::uuid AND rc.status = 'generated'
+        AND ${confirmedSchoolStudent(sql`rc.student_id`, sql`c.school_year_id`, sql`c.id`)}
     `);
     return getRows<{ id: string }>(result).map((row) => row.id);
   }
@@ -356,8 +378,10 @@ export class ReportCardsRepository {
              concat_ws(' ', s.first_name, s.last_name) AS student_name,
              rc.general_average::text, rc.rank, rc.status::text
       FROM report_cards rc
-      INNER JOIN students_with_class s ON s.id = rc.student_id
+      INNER JOIN students s ON s.id = rc.student_id
+      INNER JOIN classes c ON c.id = rc.class_id
       WHERE rc.class_id = ${classId}::uuid AND rc.grading_period_id = ${gradingPeriodId}::uuid
+        AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
       ORDER BY rc.rank ASC
     `);
     return getRows<{
@@ -386,7 +410,7 @@ export class ReportCardsRepository {
              COUNT(DISTINCT s.id)::int AS headcount,
              COUNT(DISTINCT spa.student_id)::int AS with_general
       FROM classes c
-      LEFT JOIN students_with_class s ON s.class_id = c.id AND s.is_active = true
+      LEFT JOIN students s ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
       LEFT JOIN student_period_averages spa
         ON spa.student_id = s.id AND spa.grading_period_id = ${gradingPeriodId}::uuid AND spa.subject_id IS NULL
       WHERE c.school_year_id = ${schoolYearId}::uuid AND c.is_active = true
@@ -443,6 +467,7 @@ export class ReportCardsRepository {
       INNER JOIN grading_periods gp ON gp.id = rc.grading_period_id
       INNER JOIN school_years sy ON sy.id = gp.school_year_id
       WHERE rc.student_id = ${studentId}::uuid AND rc.status = 'published'
+        AND ${confirmedSchoolStudent(sql`rc.student_id`, sql`gp.school_year_id`, sql`rc.class_id`, false)}
       ORDER BY gp.start_date DESC
     `);
     return getRows<{
@@ -493,11 +518,13 @@ export class ReportCardsRepository {
              rc.class_headcount, rc.status::text, rc.generated_at::text, rc.published_at::text,
              cd.final_decision::text AS decision
       FROM report_cards rc
-      INNER JOIN students_with_class s ON s.id = rc.student_id
+      INNER JOIN students s ON s.id = rc.student_id
       INNER JOIN classes c ON c.id = rc.class_id
       INNER JOIN grading_periods gp ON gp.id = rc.grading_period_id
       LEFT JOIN class_decisions cd ON cd.id = rc.class_decision_id
       WHERE rc.id = ${cardId}::uuid
+        AND gp.school_year_id = c.school_year_id
+        AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`, false)}
       LIMIT 1
     `);
     const rows = getRows<{

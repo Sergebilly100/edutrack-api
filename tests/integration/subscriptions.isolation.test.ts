@@ -20,6 +20,11 @@ describe('subscriptions - isolation inter-tenant', () => {
 
   beforeAll(async () => {
     const context = getSeedContext();
+    const yearId = (await queryTenant<{ id: string }>(`
+      INSERT INTO ${tenantTable('school_years')} (label, start_date, end_date, status)
+      VALUES ($1, '2091-09-01', '2092-06-30', 'active') RETURNING id`, [`subs-iso-${Date.now()}`]))[0]!.id;
+    const classId = (await queryTenant<{ class_id: string }>(`SELECT class_id FROM ${tenantTable('schedules')} WHERE id=$1::uuid`, [context.scheduleId]))[0]!.class_id;
+    await queryTenant(`UPDATE ${tenantTable('classes')} SET school_year_id=$1::uuid WHERE id=$2::uuid`, [yearId, classId]);
 
     const tenantRows = await queryPublic<TenantRow>(
       `
@@ -52,6 +57,8 @@ describe('subscriptions - isolation inter-tenant', () => {
       `
     );
     const studentId = studentRows[0]!.id;
+    await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+      VALUES ($1::uuid, $2::uuid, $3::uuid, 'new_registration', 'confirmed')`, [studentId, classId, yearId]);
 
     const parentRows = await queryTenant<{ id: string }>(
       `

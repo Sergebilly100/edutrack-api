@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { QueryResult, QueryResultRow } from 'pg';
 
@@ -92,8 +93,9 @@ export class ClassDecisionsRepository {
         cd.next_level_id,
         next_level.name AS next_level_name,
         cd.validated_at
-      FROM students_with_class s
-      INNER JOIN classes c ON c.id = s.class_id
+      FROM students s
+      INNER JOIN classes c ON c.school_year_id = ${schoolYearId}::uuid
+        AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
       INNER JOIN levels current_level ON current_level.id = c.level_id
       LEFT JOIN class_decisions cd
         ON cd.student_id = s.id
@@ -175,8 +177,9 @@ export class ClassDecisionsRepository {
     const result = await this.db.execute<DecisionRow>(sql`
       WITH eligible_student AS (
         SELECT s.id
-        FROM students_with_class s
-        INNER JOIN classes c ON c.id = s.class_id
+        FROM students s
+        INNER JOIN classes c ON c.school_year_id = ${input.schoolYearId}::uuid
+          AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
         WHERE s.id = ${input.studentId}::uuid
           AND s.is_active = true
           AND c.is_active = true
@@ -223,8 +226,9 @@ export class ClassDecisionsRepository {
         next_level.name AS next_level_name,
         cd.validated_at
       FROM upserted cd
-      INNER JOIN students_with_class s ON s.id = cd.student_id
-      INNER JOIN classes c ON c.id = s.class_id
+      INNER JOIN students s ON s.id = cd.student_id
+      INNER JOIN classes c ON c.school_year_id = cd.school_year_id
+        AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
       INNER JOIN levels current_level ON current_level.id = c.level_id
       LEFT JOIN levels next_level ON next_level.id = cd.next_level_id
       LEFT JOIN LATERAL (
@@ -275,8 +279,9 @@ export class ClassDecisionsRepository {
         const result = await transactionDb.execute<{ student_id: string }>(sql`
           WITH eligible_student AS (
             SELECT s.id
-            FROM students_with_class s
-            INNER JOIN classes c ON c.id = s.class_id
+            FROM students s
+            INNER JOIN classes c ON c.school_year_id = ${input.schoolYearId}::uuid
+              AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
             WHERE s.id = ${input.studentId}::uuid
               AND s.is_active = true
               AND c.is_active = true

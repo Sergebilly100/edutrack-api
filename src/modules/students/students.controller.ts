@@ -171,6 +171,42 @@ export default async function studentsController(
     }
   );
 
+  app.get(
+    '/api/v1/students/cashier-candidates',
+    { preHandler: requirePermission('payments.record') },
+    async (request, reply) => {
+      try {
+        const query = studentsListQuerySchema.parse(request.query ?? {});
+        if (!query.school_year_id) return reply.code(400).send({ error: 'school_year_id is required' });
+        if (!query.search || query.search.length < 2) return reply.code(400).send({ error: 'A search of at least 2 characters is required' });
+        const result = await withTenantSchema(request.claims!.schemaName, async (tenantDb) =>
+          buildStudentsService(tenantDb).listFinancialProfiles({ ...query, limit: Math.min(query.limit, 20), include_blocked_reenrollments: true })
+        );
+        return reply.send({
+          ...result,
+          data: result.data.map((student) => ({
+            id: student.id,
+            classId: student.classId,
+            className: student.className,
+            firstName: student.firstName,
+            lastName: student.lastName,
+            matricule: student.matricule,
+            birthDate: null,
+            parentPhone: null,
+            parentPhone2: null,
+            isActive: student.isActive,
+            createdAt: student.createdAt,
+            paymentSchoolYearId: student.paymentSchoolYearId,
+            paymentSchoolYearLabel: student.paymentSchoolYearLabel,
+            blockedReEnrollment: student.blockedReEnrollment,
+          })),
+        });
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
   app.post(
     '/api/v1/students',
     { preHandler: requirePermission('students.create') },

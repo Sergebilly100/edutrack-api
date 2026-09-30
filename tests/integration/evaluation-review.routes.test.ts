@@ -121,11 +121,12 @@ describe('consultation direction des évaluations', () => {
     expect(futureOptions.body.teachers.map((item: { id: string }) => item.id)).toContain(teacherId);
     const all = await request().get(path).set(director).query(base);
     expect(all.status, JSON.stringify(all.body)).toBe(200);
-    expect(all.body).toMatchObject({ total: 3, summary: { evaluations: 3, grades: 1, missing: 5 } });
+    expect(all.body).toMatchObject({ total: 3, summary: { evaluations: 3, grades: 1, missing: 3 } });
     expect(all.body.items.find((item: { id: string }) => item.id === first)).toMatchObject({
-      notes: expect.arrayContaining([expect.objectContaining({ score: 14, maxScore: 20, comment: 'Bien' }),
-        expect.objectContaining({ studentId: legacyStudent, score: null })]),
+      notes: expect.arrayContaining([expect.objectContaining({ score: 14, maxScore: 20, comment: 'Bien' })]),
     });
+    expect(all.body.items.flatMap((item: { notes: Array<{ studentId: string }> }) => item.notes)
+      .some((note: { studentId: string }) => note.studentId === legacyStudent)).toBe(false);
     expect(all.body.items.some((item: { id: string }) => item.id === second)).toBe(true);
     expect(all.body.items.some((item: { id: string }) => item.id === third)).toBe(true);
     expect(all.body.items.every((item: { type: string }) => item.type === 'scheduled')).toBe(true);
@@ -171,7 +172,9 @@ describe('consultation direction des évaluations', () => {
     expect(futureScheduled.status).toBe(200);
     expect(futureScheduled.body.total).toBe(0);
     expect((await request().get(path).set(director).query({ ...base, classId: otherClass })).status).toBe(400);
-    expect((await request().get(path).set(director).query({ ...base, subjectId: otherYearSubject })).status).toBe(400);
+    const secondarySubject = await request().get(path).set(director).query({ ...base, subjectId: otherYearSubject });
+    expect(secondarySubject.status).toBe(200);
+    expect(secondarySubject.body.items.map((item: { id: string }) => item.id)).toEqual([third]);
     expect((await request().get(path).set(director).query({ ...base, levelId: otherLevel, classId })).status).toBe(400);
     expect((await request().get(path).set(director).query({ ...base, page: 0 })).status).toBe(400);
     expect((await request().get(path).set(director).query({ ...base, pageSize: 51 })).status).toBe(400);

@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
 
 import type { TenantDb } from '../../shared/database/db.js';
 import type {
@@ -145,7 +146,7 @@ export class ConductRepository {
     return getRows(result).length > 0;
   }
 
-  async findStudentContext(studentId: string): Promise<{
+  async findStudentContext(studentId: string, gradingPeriodId: string): Promise<{
     studentId: string;
     fullName: string;
     classId: string;
@@ -164,9 +165,11 @@ export class ConductRepository {
              c.id::text AS class_id,
              c.name AS class_name,
              c.level_id::text AS level_id
-      FROM students_with_class s
-      INNER JOIN classes c ON c.id = s.class_id
+      FROM students s
+      INNER JOIN grading_periods gp ON gp.id = ${gradingPeriodId}::uuid
+      INNER JOIN classes c ON c.school_year_id = gp.school_year_id
       WHERE s.id = ${studentId}::uuid
+        AND ${confirmedSchoolStudent(sql`s.id`, sql`gp.school_year_id`, sql`c.id`)}
       LIMIT 1
     `);
     const row = getRows<{
@@ -278,7 +281,7 @@ export class ConductRepository {
                COUNT(rc.id) FILTER (WHERE rc.status IN ('generated', 'published'))::int AS card_count
         FROM target_period gp
         INNER JOIN classes c ON c.school_year_id = gp.school_year_id AND c.is_active = true
-        LEFT JOIN students_with_class s ON s.class_id = c.id AND s.is_active = true
+        LEFT JOIN students s ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
         LEFT JOIN report_cards rc ON rc.student_id = s.id AND rc.grading_period_id = gp.id
         GROUP BY c.id
       )
@@ -300,7 +303,7 @@ export class ConductRepository {
         FROM grading_periods gp
         INNER JOIN target_period tp ON tp.school_year_id = gp.school_year_id
         INNER JOIN classes c ON c.school_year_id = gp.school_year_id AND c.is_active = true
-        LEFT JOIN students_with_class s ON s.class_id = c.id AND s.is_active = true
+        LEFT JOIN students s ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
         LEFT JOIN report_cards rc ON rc.student_id = s.id AND rc.grading_period_id = gp.id
         GROUP BY gp.id, c.id
       ), period_progress AS (
@@ -336,8 +339,9 @@ export class ConductRepository {
     const ids = sql.join(studentIds.map((studentId) => sql`${studentId}::uuid`), sql`, `);
     const result = await this.db.execute<{ count: string }>(sql`
       SELECT COUNT(*)::text AS count
-      FROM students_with_class
-      WHERE id IN (${ids}) AND class_id = ${classId}::uuid AND is_active = true
+      FROM students s
+      INNER JOIN classes c ON c.id = ${classId}::uuid
+      WHERE s.id IN (${ids}) AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
     `);
     return Number(getRows<{ count: string }>(result)[0]?.count ?? 0) === studentIds.length;
   }
@@ -357,12 +361,13 @@ export class ConductRepository {
              tci.note::text,
              tci.observation,
              tci.created_at::text
-      FROM students_with_class s
+      FROM students s
+      INNER JOIN classes c ON c.id = ${classId}::uuid
       LEFT JOIN teacher_conduct_inputs tci
         ON tci.student_id = s.id
        AND tci.teacher_id = ${teacherId}::uuid
        AND tci.grading_period_id = ${gradingPeriodId}::uuid
-      WHERE s.class_id = ${classId}::uuid AND s.is_active = true
+      WHERE ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
       ORDER BY s.last_name, s.first_name
     `);
     return getRows<{
@@ -395,7 +400,10 @@ export class ConductRepository {
       VALUES (
         ${input.student_id}::uuid,
         ${input.teacherId}::uuid,
-        (SELECT class_id FROM students_with_class WHERE id = ${input.student_id}::uuid),
+        (SELECT c.id FROM classes c INNER JOIN grading_periods gp ON gp.school_year_id = c.school_year_id
+         WHERE gp.id = ${input.grading_period_id}::uuid
+           AND ${confirmedSchoolStudent(sql`${input.student_id}::uuid`, sql`gp.school_year_id`, sql`c.id`)}
+         LIMIT 1),
         ${input.grading_period_id}::uuid,
         ${input.note},
         ${input.observation ?? null}
@@ -416,9 +424,10 @@ export class ConductRepository {
       created_at: string | null;
     }>(sql`
       WITH target_student AS (
-        SELECT class_id
-        FROM students_with_class
-        WHERE id = ${studentId}::uuid
+        SELECT c.id AS class_id
+        FROM classes c INNER JOIN grading_periods gp ON gp.school_year_id = c.school_year_id
+        WHERE gp.id = ${gradingPeriodId}::uuid
+          AND ${confirmedSchoolStudent(sql`${studentId}::uuid`, sql`gp.school_year_id`, sql`c.id`)}
       ), expected_teachers AS (
         SELECT DISTINCT tsa.teacher_id, tsa.class_id
         FROM teacher_subject_assignments tsa
@@ -572,27 +581,31 @@ export class ConductRepository {
   }
 
   // L'éducateur décideur doit être assigné à la classe de l'élève OU à son niveau.
-  async isAssignedEducatorForStudent(userId: string, studentId: string): Promise<boolean> {
+  async isAssignedEducatorForStudent(userId: string, studentId: string, gradingPeriodId: string): Promise<boolean> {
     const result = await this.db.execute(sql`
       SELECT 1
       FROM educator_assignments ea
-      INNER JOIN students_with_class s ON s.id = ${studentId}::uuid
-      INNER JOIN classes c ON c.id = s.class_id
+      INNER JOIN students s ON s.id = ${studentId}::uuid
+      INNER JOIN classes c ON ea.class_id = c.id OR ea.level_id = c.level_id
+      INNER JOIN grading_periods gp ON gp.id = ${gradingPeriodId}::uuid AND gp.school_year_id = c.school_year_id
       WHERE ea.user_id = ${userId}::uuid
         AND (ea.class_id = c.id OR ea.level_id = c.level_id)
+        AND ${confirmedSchoolStudent(sql`s.id`, sql`gp.school_year_id`, sql`c.id`)}
       LIMIT 1
     `);
     return getRows(result).length > 0;
   }
 
-  async isHomeroomTeacherForStudent(userId: string, studentId: string): Promise<boolean> {
+  async isHomeroomTeacherForStudent(userId: string, studentId: string, gradingPeriodId: string): Promise<boolean> {
     const result = await this.db.execute(sql`
       SELECT 1
-      FROM students_with_class s
-      INNER JOIN classes c ON c.id = s.class_id
+      FROM students s
+      INNER JOIN grading_periods gp ON gp.id = ${gradingPeriodId}::uuid
+      INNER JOIN classes c ON c.school_year_id = gp.school_year_id
       INNER JOIN teachers t ON t.id = c.homeroom_teacher_id
       WHERE s.id = ${studentId}::uuid
         AND t.user_id = ${userId}::uuid
+        AND ${confirmedSchoolStudent(sql`s.id`, sql`gp.school_year_id`, sql`c.id`)}
       LIMIT 1
     `);
     return getRows(result).length > 0;

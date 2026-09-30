@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { QueryResult, QueryResultRow } from 'pg';
 import type { EvaluationReviewOptions, EvaluationReviewOptionsQuery, EvaluationReviewQuery } from './evaluation-review.types.js';
@@ -100,14 +101,11 @@ export class EvaluationReviewRepository {
         SELECT e.id, e.class_id FROM evaluations e JOIN classes c ON c.id = e.class_id
         JOIN subjects s ON s.id = e.subject_id WHERE ${filter}
       ), eligible AS (
-        SELECT en.class_id, en.student_id FROM enrollments en
+        SELECT DISTINCT en.class_id, en.student_id FROM enrollments en
+        JOIN students st ON st.id = en.student_id AND st.is_active = true
+        JOIN classes c ON c.id = en.class_id AND c.is_active = true AND c.school_year_id = en.school_year_id
         JOIN (SELECT DISTINCT class_id FROM scoped) classes_in_scope ON classes_in_scope.class_id = en.class_id
         WHERE en.school_year_id = ${schoolYearId}::uuid AND en.status = 'confirmed'
-        UNION ALL
-        SELECT st.class_id, st.id FROM students st
-        JOIN (SELECT DISTINCT class_id FROM scoped) classes_in_scope ON classes_in_scope.class_id = st.class_id
-        WHERE st.is_active = true AND NOT EXISTS (
-          SELECT 1 FROM enrollments en WHERE en.student_id = st.id AND en.school_year_id = ${schoolYearId}::uuid)
       ), enrolled AS (
         SELECT class_id, COUNT(*) AS student_count FROM eligible GROUP BY class_id
       ), graded AS (
@@ -142,14 +140,11 @@ export class EvaluationReviewRepository {
     }>(sql`
       WITH selected AS (SELECT id, class_id FROM evaluations WHERE id = ANY(ARRAY[${sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)}]::uuid[])),
       eligible AS (
-        SELECT en.class_id, en.student_id FROM enrollments en
+        SELECT DISTINCT en.class_id, en.student_id FROM enrollments en
+        JOIN students st ON st.id = en.student_id AND st.is_active = true
+        JOIN classes c ON c.id = en.class_id AND c.is_active = true AND c.school_year_id = en.school_year_id
         JOIN (SELECT DISTINCT class_id FROM selected) classes_in_scope ON classes_in_scope.class_id = en.class_id
         WHERE en.school_year_id = ${schoolYearId}::uuid AND en.status = 'confirmed'
-        UNION ALL
-        SELECT st.class_id, st.id FROM students st
-        JOIN (SELECT DISTINCT class_id FROM selected) classes_in_scope ON classes_in_scope.class_id = st.class_id
-        WHERE st.is_active = true AND NOT EXISTS (
-          SELECT 1 FROM enrollments en WHERE en.student_id = st.id AND en.school_year_id = ${schoolYearId}::uuid)
       )
       SELECT e.id::text AS evaluation_id, st.id::text AS student_id, st.first_name, st.last_name,
         eg.score::text, eg.max_score::text, eg.comment
@@ -188,7 +183,8 @@ export class EvaluationReviewRepository {
       JOIN subjects s ON s.id = e.subject_id
       JOIN evaluation_grades eg ON eg.evaluation_id = e.id
       JOIN students st ON st.id = eg.student_id
-      WHERE ${filter} AND e.type = 'spontaneous' AND ${studentFilter}`))[0]!;
+      WHERE ${filter} AND e.type = 'spontaneous' AND ${studentFilter}
+        AND ${confirmedSchoolStudent(sql`st.id`, sql`c.school_year_id`, sql`c.id`)}`))[0]!;
     const students = rows(await this.db.execute<{ id: string; first_name: string; last_name: string; matricule: string | null }>(sql`
       SELECT DISTINCT st.id::text, st.first_name, st.last_name, st.matricule
       FROM evaluations e JOIN classes c ON c.id = e.class_id
@@ -196,6 +192,7 @@ export class EvaluationReviewRepository {
       JOIN evaluation_grades eg ON eg.evaluation_id = e.id
       JOIN students st ON st.id = eg.student_id
       WHERE ${filter} AND e.type = 'spontaneous' AND ${studentFilter}
+        AND ${confirmedSchoolStudent(sql`st.id`, sql`c.school_year_id`, sql`c.id`)}
       ORDER BY st.last_name, st.first_name, st.id::text
       LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`));
     if (!students.length) {
@@ -217,6 +214,7 @@ export class EvaluationReviewRepository {
       JOIN teachers t ON t.id = e.teacher_id JOIN users u ON u.id = t.user_id
       JOIN evaluation_grades eg ON eg.evaluation_id = e.id
       WHERE ${filter} AND e.type = 'spontaneous'
+        AND ${confirmedSchoolStudent(sql`eg.student_id`, sql`c.school_year_id`, sql`c.id`)}
         AND eg.student_id = ANY(ARRAY[${sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)}]::uuid[])
       ORDER BY s.name, e.evaluation_date DESC NULLS LAST, e.created_at DESC, e.id DESC`));
     const grouped = students.map((student) => ({

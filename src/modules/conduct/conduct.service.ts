@@ -78,7 +78,7 @@ export class ConductService {
       throw new ConductModuleError('Profil professeur introuvable', 403, 'TEACHER_PROFILE_NOT_FOUND');
     }
 
-    const student = await this.repository.findStudentContext(input.student_id);
+    const student = await this.repository.findStudentContext(input.student_id, input.grading_period_id);
     if (!student) {
       throw new ConductModuleError('Élève introuvable', 404, 'STUDENT_NOT_FOUND');
     }
@@ -193,13 +193,14 @@ export class ConductService {
 
   private async assertCanManageFinalConduct(
     studentId: string,
+    gradingPeriodId: string,
     context: { userId: string; canFinalize: boolean }
   ): Promise<void> {
-    const isHomeroomTeacher = await this.repository.isHomeroomTeacherForStudent(context.userId, studentId);
+    const isHomeroomTeacher = await this.repository.isHomeroomTeacherForStudent(context.userId, studentId, gradingPeriodId);
     if (isHomeroomTeacher) return;
 
     const isAssignedEducator = context.canFinalize
-      && await this.repository.isAssignedEducatorForStudent(context.userId, studentId);
+      && await this.repository.isAssignedEducatorForStudent(context.userId, studentId, gradingPeriodId);
     if (isAssignedEducator) return;
 
     throw new ConductModuleError(
@@ -214,7 +215,7 @@ export class ConductService {
     gradingPeriodId: string,
     context: { userId: string; canFinalize: boolean }
   ): Promise<ConductOverview> {
-    const student = await this.repository.findStudentContext(studentId);
+    const student = await this.repository.findStudentContext(studentId, gradingPeriodId);
     if (!student) {
       throw new ConductModuleError('Élève introuvable', 404, 'STUDENT_NOT_FOUND');
     }
@@ -223,7 +224,7 @@ export class ConductService {
     if (!periodRow) {
       throw new ConductModuleError('Période d\u2019évaluation introuvable', 404, 'GRADING_PERIOD_NOT_FOUND');
     }
-    await this.assertCanManageFinalConduct(studentId, context);
+    await this.assertCanManageFinalConduct(studentId, gradingPeriodId, context);
 
     const [teacherInputs, spontaneousEvaluations, finalGrade] = await Promise.all([
       this.repository.listConductInputsForStudent(studentId, gradingPeriodId),
@@ -258,7 +259,7 @@ export class ConductService {
     input: ConductGradeBody,
     context: { userId: string; canFinalize: boolean }
   ): Promise<void> {
-    const student = await this.repository.findStudentContext(input.student_id);
+    const student = await this.repository.findStudentContext(input.student_id, input.grading_period_id);
     if (!student) {
       throw new ConductModuleError('Élève introuvable', 404, 'STUDENT_NOT_FOUND');
     }
@@ -273,7 +274,7 @@ export class ConductService {
       throw new ConductModuleError('Cette période n’est pas encore ouverte à la saisie', 409, 'GRADING_PERIOD_NOT_CURRENT');
     }
 
-    await this.assertCanManageFinalConduct(input.student_id, context);
+    await this.assertCanManageFinalConduct(input.student_id, input.grading_period_id, context);
 
     const teacherInputs = await this.repository.listConductInputsForStudent(
       input.student_id,

@@ -51,6 +51,9 @@ describe('C16 — statut abonnement parent sur API et base réelles', () => {
 
     const context = getSeedContext();
     const klass = await queryTenant<IdRow>(`SELECT id::text FROM ${tenantTable('classes')} LIMIT 1`);
+    const yearId = (await queryTenant<IdRow>(`INSERT INTO ${tenantTable('school_years')}
+      (label,start_date,end_date,status) VALUES ('C16 parent','2026-09-01','2027-06-30','active') RETURNING id::text`))[0]!.id;
+    await queryTenant(`UPDATE ${tenantTable('classes')} SET school_year_id=$1::uuid WHERE id=$2::uuid`, [yearId, klass[0]!.id]);
     const hash = await argon2.hash(password);
     for (const [state, parent] of Object.entries(parents) as Array<[keyof typeof parents, ParentCase]>) {
       const student = await queryTenant<IdRow>(
@@ -59,6 +62,8 @@ describe('C16 — statut abonnement parent sur API et base réelles', () => {
         [klass[0]!.id, state]
       );
       parent.studentId = student[0]!.id;
+      await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id,class_id,school_year_id,type,status)
+        VALUES ($1::uuid,$2::uuid,$3::uuid,'new_registration','confirmed')`, [parent.studentId, klass[0]!.id, yearId]);
       const parentRows = await queryTenant<IdRow>(
         `INSERT INTO ${tenantTable('parents')}
            (full_name, phone, password_hash, must_change_password, is_active)

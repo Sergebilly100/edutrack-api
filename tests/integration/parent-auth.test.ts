@@ -60,6 +60,9 @@ describe('parent auth + parent routes integration', () => {
 
     const classIdRows = await queryTenant<IdRow>(`SELECT id::text AS id FROM ${tenantTable('classes')} LIMIT 1`);
     const classId = classIdRows[0]!.id;
+    const yearId = (await queryTenant<IdRow>(`INSERT INTO ${tenantTable('school_years')}
+      (label,start_date,end_date,status) VALUES ('Parent auth','2026-09-01','2027-06-30','active') RETURNING id::text`))[0]!.id;
+    await queryTenant(`UPDATE ${tenantTable('classes')} SET school_year_id=$1::uuid WHERE id=$2::uuid`, [yearId, classId]);
 
     const studentRows = await queryTenant<IdRow>(
       `
@@ -73,6 +76,10 @@ describe('parent auth + parent routes integration', () => {
     );
     linkedStudentId = studentRows[0]!.id;
     otherStudentId = studentRows[1]!.id;
+    await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id,class_id,school_year_id,type,status)
+      VALUES ($1::uuid,$3::uuid,$4::uuid,'new_registration','confirmed'),
+             ($2::uuid,$3::uuid,$4::uuid,'new_registration','confirmed')`,
+    [linkedStudentId, otherStudentId, classId, yearId]);
 
     const parentHash = await argon2.hash(parentPassword);
     const parentRows = await queryTenant<IdRow>(

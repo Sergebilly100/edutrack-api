@@ -123,8 +123,8 @@ describe('parent overview integration (17b)', () => {
     const pendingOverview = await request()
       .get(`/api/v1/parent/students/${lateStudentId}/overview`)
       .set(headers);
-    expect(pendingOverview.status).toBe(200);
-    expect(pendingOverview.body.financial).toBeNull();
+    expect(pendingOverview.status).toBe(403);
+    expect(pendingOverview.body.code).toBe('STUDENT_ACCESS_DENIED');
   });
 
   it("refuse l'accès à un enfant hors du compte parent", async () => {

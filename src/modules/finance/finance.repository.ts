@@ -9,6 +9,7 @@ import type {
 } from './finance.types.js';
 import type { CumulativeScheduleStep, PaymentStatus, SubscriptionPeriod } from './finance.calculations.js';
 import { confirmedFinancialStudent } from './finance-scope.js';
+import { confirmedSchoolClassCount } from '../../shared/database/confirmed-school-membership.js';
 
 export type FinanceDb = NodePgDatabase<Record<string, unknown>>;
 
@@ -566,8 +567,7 @@ export class FinanceRepository {
     `);
     await this.db.execute(sql`
       UPDATE classes class
-      SET student_count = (SELECT COUNT(*)::int FROM students_with_class student
-        WHERE student.is_active AND student.class_id = class.id)
+      SET student_count = ${confirmedSchoolClassCount(sql`class.id`, sql`class.school_year_id`)}
       WHERE class.id IN (${membership.previous_class_id}::uuid, ${membership.class_id}::uuid)
     `);
   }

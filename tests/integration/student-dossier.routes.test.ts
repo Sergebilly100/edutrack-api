@@ -33,6 +33,8 @@ describe('student dossier integration (7c)', () => {
       [classes[0]!.id, `DS-${suffix}`]
     );
     const studentId = students[0]!.id;
+    await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id,class_id,school_year_id,type,status)
+      VALUES ($1::uuid,$2::uuid,$3::uuid,'new_registration','confirmed')`, [studentId, classes[0]!.id, years[0]!.id]);
 
     await queryTenant(
       `INSERT INTO ${tenantTable('documents')} (entity_type, entity_id, type, name, r2_key, uploaded_by)

@@ -16,7 +16,7 @@ describe('academic grading integration', () => {
 
     const years = await queryTenant<{ id: string }>(`
       INSERT INTO school_years (label, start_date, end_date, end_of_year_review_start_date, status)
-      VALUES ('09/2088 - 06/2089', '2088-09-01', '2089-06-30', '2089-05-31', 'draft')
+      VALUES ('09/2088 - 06/2089', '2088-09-01', '2089-06-30', '2089-05-31', 'active')
       RETURNING id
     `);
     const levels = await queryTenant<{ id: string }>(`
@@ -37,6 +37,11 @@ describe('academic grading integration', () => {
     const studentId = students[0]!.id;
     await queryTenant(`INSERT INTO enrollments (student_id, class_id, school_year_id, type, status)
       VALUES ($1, $2, $3, 'new_registration', 'confirmed')`, [studentId, classId, years[0]!.id]);
+    const pendingStudentId = (await queryTenant<{ id: string }>(`INSERT INTO students
+      (class_id,matricule,first_name,last_name,is_active)
+      VALUES ($1,$2,'Non confirmé','Notes',true) RETURNING id`, [classId, `NOTE-PENDING-${suffix}`]))[0]!.id;
+    await queryTenant(`INSERT INTO enrollments (student_id,class_id,school_year_id,type,status)
+      VALUES ($1,$2,$3,'new_registration','pending_dossier')`, [pendingStudentId, classId, years[0]!.id]);
 
     const mathResponse = await request().post('/api/v1/subjects').set(directorHeaders).send({
       levelId: levels[0]!.id,
@@ -146,6 +151,10 @@ describe('academic grading integration', () => {
     };
 
     const math1 = await createEvaluation(context.scheduleId, mathResponse.body.subject.id, 'Devoir 1', 1, '2088-10-15');
+    const refusedGrade = await request().put(`/api/v1/evaluations/${math1}/grades`).set(teacherHeaders)
+      .send({ studentId: pendingStudentId, score: 10, maxScore: 20 });
+    expect(refusedGrade.status).toBe(400);
+    expect(refusedGrade.body.code).toBe('STUDENT_CLASS_MISMATCH');
     const math2 = await createEvaluation(context.scheduleId, mathResponse.body.subject.id, 'Devoir 2', 3, '2088-11-12');
     const french = await createEvaluation(frenchSchedules[0]!.id, frenchResponse.body.subject.id, 'Dictée', 1, '2088-11-19');
 

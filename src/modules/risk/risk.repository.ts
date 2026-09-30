@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
 
 import type { TenantDb } from '../../shared/database/db.js';
 import {
@@ -157,9 +158,12 @@ export class RiskRepository {
       absence_counts AS (
         SELECT ast.student_id, COUNT(*)::int AS cnt
         FROM attendances_student ast
+        INNER JOIN schedules sch ON sch.id = ast.schedule_id
+        INNER JOIN classes absence_class ON absence_class.id = sch.class_id
         CROSS JOIN window_bounds wb
         WHERE ast.status = 'absent'
           AND ast.date >= wb.window_start
+          AND ${confirmedSchoolStudent(sql`ast.student_id`, sql`absence_class.school_year_id`, sql`absence_class.id`)}
         GROUP BY ast.student_id
       ),
       ranked_averages AS (
@@ -179,7 +183,7 @@ export class RiskRepository {
              latest.average::text AS avg_latest,
              previous.average::text AS avg_previous,
              COALESCE((sfs.status = 'late'), false) AS payment_late
-      FROM students_with_class s
+      FROM students s
       LEFT JOIN absence_counts ac ON ac.student_id = s.id
       LEFT JOIN LATERAL (
         SELECT ra.average FROM ranked_averages ra WHERE ra.student_id = s.id AND ra.rn = 1
@@ -190,7 +194,7 @@ export class RiskRepository {
       LEFT JOIN student_financial_status sfs
         ON sfs.student_id = s.id
        AND sfs.school_year_id = (SELECT id FROM school_years WHERE status = 'active' LIMIT 1)
-      WHERE s.is_active = true AND s.class_id IS NOT NULL
+      WHERE ${confirmedSchoolStudent(sql`s.id`, sql`(SELECT id FROM school_years WHERE status = 'active' LIMIT 1)`)}
     `);
 
     const map = new Map<string, {
@@ -261,7 +265,8 @@ export class RiskRepository {
 
   async listStudentIds(): Promise<string[]> {
     const result = await this.db.execute<{ id: string }>(sql`
-      SELECT id::text FROM students_with_class WHERE is_active = true AND class_id IS NOT NULL
+      SELECT s.id::text FROM students s
+      WHERE ${confirmedSchoolStudent(sql`s.id`, sql`(SELECT id FROM school_years WHERE status = 'active' LIMIT 1)`)}
     `);
     return getRows<{ id: string }>(result).map((row) => row.id);
   }
@@ -347,6 +352,7 @@ export class RiskRepository {
       : sql`TRUE`;
     const conditions = sql`
       s.is_active = true
+      AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
       AND (${input.schoolLevelId ?? null}::uuid IS NULL OR c.level_id = ${input.schoolLevelId ?? null}::uuid)
       AND (${input.classId ?? null}::uuid IS NULL OR c.id = ${input.classId ?? null}::uuid)
       AND ${studentScope}
@@ -369,8 +375,9 @@ export class RiskRepository {
                ${riskLevel}::text AS level,
                srs.computed_at::text
         FROM student_risk_status srs
-        INNER JOIN students_with_class s ON s.id = srs.student_id
-        LEFT JOIN classes c ON c.id = s.class_id
+        INNER JOIN students s ON s.id = srs.student_id
+        INNER JOIN classes c ON c.is_active = true AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
+        INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
         LEFT JOIN levels l ON l.id = c.level_id
         WHERE ${conditions}
         ORDER BY ${score} DESC, student_name ASC
@@ -380,8 +387,9 @@ export class RiskRepository {
       this.db.execute<{ total: string | number }>(sql`
         SELECT COUNT(*) AS total
         FROM student_risk_status srs
-        INNER JOIN students_with_class s ON s.id = srs.student_id
-        LEFT JOIN classes c ON c.id = s.class_id
+        INNER JOIN students s ON s.id = srs.student_id
+        INNER JOIN classes c ON c.is_active = true AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
+        INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
         LEFT JOIN levels l ON l.id = c.level_id
         WHERE ${conditions}
       `),
@@ -470,8 +478,9 @@ export class RiskRepository {
       SELECT COUNT(DISTINCT s.id)::int AS count
       FROM classes c
       INNER JOIN teachers t ON t.id = c.homeroom_teacher_id
-      LEFT JOIN students_with_class s ON s.class_id = c.id AND s.is_active = true
-      WHERE t.user_id = ${userId}::uuid
+      INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
+      LEFT JOIN students s ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
+      WHERE t.user_id = ${userId}::uuid AND c.is_active = true
     `);
     const count = getRows<{ count: number }>(result)[0]?.count ?? 0;
     if (count === 0) return null;
@@ -479,8 +488,9 @@ export class RiskRepository {
       SELECT DISTINCT s.id::text AS student_id
       FROM classes c
       INNER JOIN teachers t ON t.id = c.homeroom_teacher_id
-      INNER JOIN students_with_class s ON s.class_id = c.id AND s.is_active = true
-      WHERE t.user_id = ${userId}::uuid
+      INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
+      INNER JOIN students s ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
+      WHERE t.user_id = ${userId}::uuid AND c.is_active = true
     `);
     return getRows<{ student_id: string }>(rows).map((row) => row.student_id);
   }

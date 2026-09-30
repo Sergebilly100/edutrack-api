@@ -65,6 +65,10 @@ describe('dashboard action items integration (7b)', () => {
        VALUES ($1::uuid, 'Awa', 'Test', $2), ($1::uuid, 'Koffi', 'Test', $3) RETURNING id::text`,
       [schoolClass[0]!.id, `DASH-A-${suffix}`, `DASH-K-${suffix}`]
     );
+    await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id,class_id,school_year_id,type,status)
+      VALUES ($1::uuid,$3::uuid,$4::uuid,'new_registration','confirmed'),
+             ($2::uuid,$3::uuid,$4::uuid,'new_registration','confirmed')`,
+    [students[0]!.id, students[1]!.id, schoolClass[0]!.id, year[0]!.id]);
     const evaluation = await queryTenant<IdRow>(
       `INSERT INTO ${tenantTable('evaluations')}
          (lesson_slot_id, subject_id, class_id, grading_period_id, teacher_id, type, coefficient, label, evaluation_date)

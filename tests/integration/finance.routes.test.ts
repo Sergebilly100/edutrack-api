@@ -65,6 +65,9 @@ const createFinanceContext = async (suffix: string, totalAmount = 100_000) => {
 };
 
 const createParentHeaders = async (studentId: string, suffix: string) => {
+  await queryTenant(`UPDATE ${tenantTable('school_years')} SET status='closed' WHERE status='active'`);
+  await queryTenant(`UPDATE ${tenantTable('school_years')} SET status='active'
+    WHERE id=(SELECT school_year_id FROM ${tenantTable('enrollments')} WHERE student_id=$1::uuid AND status='confirmed')`, [studentId]);
   const password = 'FinanceParent!2026';
   const phone = `22505${suffix.replace(/\D/g, '').slice(-8).padStart(8, '0')}`;
   const hash = await argon2.hash(password);

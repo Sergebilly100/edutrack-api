@@ -44,6 +44,15 @@ describe('risk alerts integration (7a)', () => {
     );
     const riskyStudentId = students[0]!.id;
     const safeStudentId = students[1]!.id;
+    const riskScheduleId = (await queryTenant<IdRow>(`INSERT INTO ${tenantTable('schedules')}
+      (schedule_period_id,teacher_id,class_id,room_id,time_slot_id,day_of_week,subject,is_active)
+      SELECT schedule_period_id,teacher_id,$1::uuid,room_id,time_slot_id,day_of_week,subject,false
+      FROM ${tenantTable('schedules')} WHERE id=$2::uuid RETURNING id::text`,
+    [classId, getSeedContext().scheduleId]))[0]!.id;
+    await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+      VALUES ($1::uuid, $3::uuid, $4::uuid, 'new_registration', 'confirmed'),
+             ($2::uuid, $3::uuid, $4::uuid, 'new_registration', 'confirmed')`,
+      [riskyStudentId, safeStudentId, classId, yearId]);
 
     // Cache financier : risky en retard
     await queryTenant(
@@ -102,11 +111,9 @@ describe('risk alerts integration (7a)', () => {
     // Trois absences récentes ne franchissent pas un seuil configuré à 4.
     await queryTenant(
       `INSERT INTO ${tenantTable('attendances_student')} (student_id, schedule_id, date, status)
-       SELECT $1::uuid, id, CURRENT_DATE - offsets.day, 'absent'
-       FROM ${tenantTable('schedules')}
-       CROSS JOIN (VALUES (0), (1), (2)) AS offsets(day)
-       LIMIT 3`,
-      [riskyStudentId]
+       SELECT $1::uuid, $2::uuid, CURRENT_DATE - offsets.day, 'absent'
+       FROM (VALUES (0), (1), (2)) AS offsets(day)`,
+      [riskyStudentId, riskScheduleId]
     );
     await withTenantSchema(TEST_SCHEMA_NAME, async (tenantDb) =>
       buildRiskService(tenantDb).recalculateStudents()

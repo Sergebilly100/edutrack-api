@@ -117,6 +117,12 @@ describe('multi-tenant isolation hardening', () => {
 
       const classA = await queryTenant<IdRow>(`SELECT id::text AS id FROM ${tenantTable('classes')} LIMIT 1`);
       const classAId = classA[0]!.id;
+      const yearA = (await queryTenant<IdRow>(`INSERT INTO ${tenantTable('school_years')}
+        (label,start_date,end_date,status) VALUES ('D6 A','2026-09-01','2027-06-30','active') RETURNING id::text`))[0]!.id;
+      await queryTenant(`UPDATE ${tenantTable('classes')} SET school_year_id=$1::uuid WHERE id=$2::uuid`, [yearA, classAId]);
+      const yearB = (await queryPublic<IdRow>(`INSERT INTO ${tenantTableForSchema(tenantBSchema, 'school_years')}
+        (label,start_date,end_date,status) VALUES ('D6 B','2026-09-01','2027-06-30','active') RETURNING id::text`))[0]!.id;
+      await queryPublic(`UPDATE ${tenantTableForSchema(tenantBSchema, 'classes')} SET school_year_id=$1::uuid WHERE id=$2::uuid`, [yearB, tenantBClass[0]!.id]);
 
       const studentA = await queryTenant<IdRow>(
         `
@@ -127,6 +133,8 @@ describe('multi-tenant isolation hardening', () => {
         [classAId]
       );
       parentAStudentId = studentA[0]!.id;
+      await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id,class_id,school_year_id,type,status)
+        VALUES ($1::uuid,$2::uuid,$3::uuid,'new_registration','confirmed')`, [parentAStudentId, classAId, yearA]);
 
       const parentAPassword = '1111';
       const parentAHash = await argon2.hash(parentAPassword);
@@ -172,6 +180,8 @@ describe('multi-tenant isolation hardening', () => {
         [tenantBClass[0]!.id]
       );
       parentBStudentId = studentBRows[0]!.id;
+      await queryPublic(`INSERT INTO ${tenantTableForSchema(tenantBSchema, 'enrollments')} (student_id,class_id,school_year_id,type,status)
+        VALUES ($1::uuid,$2::uuid,$3::uuid,'new_registration','confirmed')`, [parentBStudentId, tenantBClass[0]!.id, yearB]);
 
       const parentBHash = await argon2.hash('2222');
       const parentBRows = await queryPublic<IdRow>(

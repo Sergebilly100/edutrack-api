@@ -61,10 +61,10 @@ describe('StudentsRepository.getStudentAbsenceStats()', () => {
       class_id: '66f048d8-d053-48e2-b4a8-7fce3ebc3ed9',
     });
     expect(getCapturedSql()).toContain('c.level_id = ');
-    expect(getCapturedSql()).toContain('st.class_id = ');
-    expect(getCapturedSql()).toContain('INNER JOIN classes c ON c.id = st.class_id');
-    expect(getCapturedSql()).toContain("e.status = 'confirmed'");
-    expect(getCapturedSql()).toContain('e.class_id = st.class_id');
+    expect(getCapturedSql()).toContain('c.id = ');
+    expect(getCapturedSql()).toContain('INNER JOIN classes c ON c.id = sa.class_id');
+    expect(getCapturedSql()).toContain("membership_enrollment.status = 'confirmed'");
+    expect(getCapturedSql()).toContain('membership_enrollment.class_id = c.id');
   });
 });
 
@@ -77,7 +77,7 @@ describe('StudentsRepository.getStudentAbsenceDetails()', () => {
       class_id: '66f048d8-d053-48e2-b4a8-7fce3ebc3ed0',
     });
     expect(getCapturedSql()).toContain('student_class.level_id = ');
-    expect(getCapturedSql()).toContain('st.class_id = ');
+    expect(getCapturedSql()).toContain('COALESCE(c.id, student_class.id) = ');
   });
 });
 
@@ -91,9 +91,9 @@ describe('StudentsRepository.listStudents()', () => {
     await new StudentsRepository(db).listStudents({ page: 1, limit: 20 });
     expect(queries).toHaveLength(2);
     for (const query of queries) {
-      expect(query).toContain("e.status = 'confirmed'");
-      expect(query).toContain('e.student_id = s.id');
-      expect(query).toContain("sy.status = 'active'");
+      expect(query).toContain("membership_enrollment.status = 'confirmed'");
+      expect(query).toContain('membership_enrollment.student_id = s.id');
+      expect(query).toContain("status = 'active'");
       expect(query).not.toContain("e.status IN ('pending_cashier', 'pending_dossier')");
     }
   });
@@ -112,7 +112,7 @@ describe('StudentsRepository.listStudents()', () => {
     for (const query of queries) {
       expect(query).toContain('c.level_id = ');
       expect(query).toContain('s.class_id = ');
-      expect(query).toContain("e.status = 'confirmed'");
+      expect(query).toContain("membership_enrollment.status = 'confirmed'");
     }
   });
 

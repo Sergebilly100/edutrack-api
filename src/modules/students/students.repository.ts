@@ -1,4 +1,5 @@
 import { sql, type SQL } from 'drizzle-orm';
+import { confirmedSchoolClassCount, confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
 
 import {
   ensureParentAccountForStudent,
@@ -59,6 +60,9 @@ type StudentRow = {
   is_assigned: boolean | null;
   lifecycle_status: 'active' | 'expelled' | 'transferred';
   created_at: Date;
+  payment_school_year_id?: string;
+  payment_school_year_label?: string;
+  blocked_re_enrollment?: boolean;
 };
 
 type TotalRow = { total: string | number };
@@ -246,6 +250,11 @@ const mapStudent = (row: StudentRow): StudentRecord => ({
   isAssigned: row.is_assigned,
   lifecycleStatus: row.lifecycle_status,
   createdAt: toIsoDateTime(row.created_at),
+  ...(row.payment_school_year_id ? {
+    paymentSchoolYearId: row.payment_school_year_id,
+    paymentSchoolYearLabel: row.payment_school_year_label,
+    blockedReEnrollment: row.blocked_re_enrollment === true,
+  } : {}),
 });
 
 const mapAttendance = (row: AttendanceRow): AttendanceStudentRecord => ({
@@ -321,21 +330,21 @@ const buildStudentsWhere = (query: StudentsListQuery, scope: StudentListScope): 
     EXISTS (SELECT 1 FROM enrollments e WHERE e.student_id = s.id)
     OR EXISTS (SELECT 1 FROM student_financial_status financial WHERE financial.student_id = s.id)
     OR EXISTS (SELECT 1 FROM payments payment WHERE payment.student_id = s.id)
-  )` : sql`EXISTS (
-    SELECT 1 FROM enrollments e JOIN school_years sy ON sy.id = e.school_year_id
-    WHERE e.student_id = s.id AND e.status = 'confirmed'
-      AND e.class_id = s.class_id
-      AND (sy.status = 'active' OR NOT EXISTS (
-        SELECT 1 FROM school_years active_year WHERE active_year.status = 'active'
-      ))
-  )`;
+  )` : confirmedSchoolStudent(
+    sql`s.id`,
+    sql`(SELECT id FROM school_years WHERE status = 'active' ORDER BY start_date DESC LIMIT 1)`,
+    sql`s.class_id`
+  );
   const where: SQL[] = [membership];
   if (query.class_id) where.push(sql`s.class_id = ${query.class_id}`);
   if (query.level_id) where.push(sql`c.level_id = ${query.level_id}::uuid`);
   if (typeof query.is_active === 'boolean') where.push(sql`s.is_active = ${query.is_active}`);
   if (query.search) {
     where.push(
-      sql`(s.first_name ILIKE ${`%${query.search}%`} OR s.last_name ILIKE ${`%${query.search}%`} OR s.matricule ILIKE ${`%${query.search}%`})`
+      sql`(s.first_name ILIKE ${`%${query.search}%`} OR s.last_name ILIKE ${`%${query.search}%`}
+        OR s.matricule ILIKE ${`%${query.search}%`}
+        OR concat_ws(' ', s.last_name, s.first_name) ILIKE ${`%${query.search}%`}
+        OR concat_ws(' ', s.first_name, s.last_name) ILIKE ${`%${query.search}%`})`
     );
   }
   return where;
@@ -394,6 +403,7 @@ export class StudentsRepository {
   }
 
   async listStudents(query: StudentsListQuery, scope: StudentListScope = 'enrolled'): Promise<{ rows: StudentRecord[]; total: number }> {
+    if (scope === 'financial' && query.school_year_id) return this.listFinancialProfilesForYear(query);
     const offset = (query.page - 1) * query.limit;
     const where = makeWhereClause(buildStudentsWhere(query, scope));
 
@@ -436,6 +446,80 @@ export class StudentsRepository {
       rows: getRows<StudentRow>(items).map(mapStudent),
       total: toTotal(getRows<TotalRow>(total)[0]),
     };
+  }
+
+  private async listFinancialProfilesForYear(query: StudentsListQuery): Promise<{ rows: StudentRecord[]; total: number }> {
+    const schoolYearId = query.school_year_id!;
+    const search = query.search ? `%${query.search}%` : null;
+    const classId = query.class_id ?? null;
+    const levelId = query.level_id ?? null;
+    const filters = sql`
+      ${confirmedSchoolStudent(sql`s.id`, sql`eligible.payment_school_year_id`, sql`c.id`)}
+      AND (${classId}::uuid IS NULL OR c.id = ${classId}::uuid)
+      AND (${levelId}::uuid IS NULL OR c.level_id = ${levelId}::uuid)
+      AND (${search}::text IS NULL OR s.first_name ILIKE ${search} OR s.last_name ILIKE ${search}
+        OR s.matricule ILIKE ${search}
+        OR concat_ws(' ', s.last_name, s.first_name) ILIKE ${search}
+        OR concat_ws(' ', s.first_name, s.last_name) ILIKE ${search})
+      ${query.is_active === false ? sql`AND false` : sql``}
+    `;
+    const membership = sql`
+      FROM (
+        SELECT s.id AS student_id, enrollment.class_id, ${schoolYearId}::uuid AS payment_school_year_id,
+          false AS blocked_re_enrollment
+        FROM students s
+        INNER JOIN LATERAL (
+          SELECT e.class_id FROM enrollments e
+          INNER JOIN classes enrolled_class ON enrolled_class.id = e.class_id
+            AND enrolled_class.school_year_id = e.school_year_id AND enrolled_class.is_active = true
+          WHERE e.student_id = s.id AND e.school_year_id = ${schoolYearId}::uuid AND e.status = 'confirmed'
+          ORDER BY e.enrolled_at DESC, e.id DESC LIMIT 1
+        ) enrollment ON true
+        ${query.include_blocked_reenrollments ? sql`
+          UNION ALL
+          SELECT blocked.student_id, previous.class_id, previous.school_year_id, true
+          FROM enrollments blocked
+          INNER JOIN school_years target_year ON target_year.id = blocked.school_year_id
+          INNER JOIN LATERAL (
+            SELECT prior.class_id, prior.school_year_id
+            FROM enrollments prior
+            INNER JOIN school_years prior_year ON prior_year.id = prior.school_year_id
+              AND prior_year.end_date < target_year.start_date
+            INNER JOIN classes prior_class ON prior_class.id = prior.class_id
+              AND prior_class.school_year_id = prior.school_year_id AND prior_class.is_active = true
+            WHERE prior.student_id = blocked.student_id AND prior.status = 'confirmed'
+            ORDER BY prior_year.end_date DESC, prior.enrolled_at DESC, prior.id DESC LIMIT 1
+          ) previous ON true
+          WHERE blocked.school_year_id = ${schoolYearId}::uuid
+            AND blocked.type = 're_registration' AND blocked.status = 'blocked_unpaid'
+            AND NOT EXISTS (
+              SELECT 1 FROM enrollments current_enrollment
+              WHERE current_enrollment.student_id = blocked.student_id
+                AND current_enrollment.school_year_id = ${schoolYearId}::uuid
+                AND current_enrollment.status = 'confirmed'
+            )
+        ` : sql``}
+      ) eligible
+      INNER JOIN students s ON s.id = eligible.student_id AND s.is_active = true
+      INNER JOIN classes c ON c.id = eligible.class_id AND c.is_active = true
+        AND c.school_year_id = eligible.payment_school_year_id
+      INNER JOIN school_years payment_year ON payment_year.id = eligible.payment_school_year_id
+      WHERE ${filters}
+    `;
+    const [items, total] = await Promise.all([
+      this.db.execute(sql`
+        SELECT s.id, c.id AS class_id, c.name AS class_name, s.first_name, s.last_name,
+          s.matricule, s.birth_date::text AS birth_date, s.parent_name, s.parent_phone,
+          s.parent_email, s.parent_name_2, s.parent_phone_2, s.notes, s.is_active,
+          s.is_assigned, s.lifecycle_status, s.created_at,
+          eligible.payment_school_year_id::text, payment_year.label AS payment_school_year_label,
+          eligible.blocked_re_enrollment
+        ${membership}
+        ORDER BY s.created_at DESC LIMIT ${query.limit} OFFSET ${(query.page - 1) * query.limit}
+      `),
+      this.db.execute(sql`SELECT COUNT(*) AS total ${membership}`),
+    ]);
+    return { rows: getRows<StudentRow>(items).map(mapStudent), total: toTotal(getRows<TotalRow>(total)[0]) };
   }
 
   async teacherHasClassAccess(input: {
@@ -491,7 +575,7 @@ export class StudentsRepository {
       if (input.class_id && !created.class_name) throw new Error('Class not found');
 
       if (created.is_active && created.class_id) {
-        await this.adjustClassStudentCount(created.class_id, 1, executor);
+        await this.adjustClassStudentCount(created.class_id, executor);
       }
 
       const parentProvisioning =
@@ -606,10 +690,10 @@ export class StudentsRepository {
     if (!getRows<{ id: string }>(updateResult)[0]) return null;
 
     if (previousClassId !== nextMembershipClassId) {
-      if (current.is_active) await this.adjustClassStudentCount(previousClassId, -1, executor);
-      if (nextIsActive) await this.adjustClassStudentCount(nextMembershipClassId, 1, executor);
+      if (current.is_active) await this.adjustClassStudentCount(previousClassId, executor);
+      if (nextIsActive) await this.adjustClassStudentCount(nextMembershipClassId, executor);
     } else if (current.is_active !== nextIsActive) {
-      await this.adjustClassStudentCount(nextMembershipClassId, nextIsActive ? 1 : -1, executor);
+      await this.adjustClassStudentCount(nextMembershipClassId, executor);
     }
 
     const student = await this.findStudentByIdWithExecutor(studentId, executor);
@@ -652,7 +736,7 @@ export class StudentsRepository {
     const row = getRows<StudentRow>(result)[0];
     if (!row) return null;
 
-    await this.adjustClassStudentCount(row.class_id, -1);
+    await this.adjustClassStudentCount(row.class_id);
     return mapStudent(row);
   }
 
@@ -851,7 +935,8 @@ export class StudentsRepository {
         st.first_name,
         st.parent_phone,
         parent_contact.email AS parent_email
-      FROM students_with_class st
+      FROM students st
+      INNER JOIN classes c ON c.id = ${classId}::uuid
       LEFT JOIN LATERAL (
         SELECT p.email
         FROM parent_student_links psl
@@ -863,8 +948,7 @@ export class StudentsRepository {
         ORDER BY ps.ends_at DESC
         LIMIT 1
       ) parent_contact ON true
-      WHERE st.class_id = ${classId}
-        AND st.is_active = true
+      WHERE ${confirmedSchoolStudent(sql`st.id`, sql`c.school_year_id`, sql`c.id`)}
         AND st.id IN (${placeholders})
     `);
 
@@ -955,6 +1039,11 @@ export class StudentsRepository {
         excused_at = NOW()
       WHERE id = ${attendanceId}
         AND status = 'absent'
+        AND EXISTS (
+          SELECT 1 FROM schedules sch JOIN classes c ON c.id = sch.class_id
+          WHERE sch.id = attendances_student.schedule_id
+            AND ${confirmedSchoolStudent(sql`attendances_student.student_id`, sql`c.school_year_id`, sql`c.id`)}
+        )
       RETURNING
         id,
         student_id,
@@ -1014,8 +1103,9 @@ export class StudentsRepository {
           sms_log.status::text AS sms_status,
           a.created_at
         FROM attendances_student a
-        INNER JOIN students_with_class s ON s.id = a.student_id
-        INNER JOIN classes c ON c.id = s.class_id
+        INNER JOIN students s ON s.id = a.student_id
+        INNER JOIN schedules sch ON sch.id = a.schedule_id
+        INNER JOIN classes c ON c.id = sch.class_id
         LEFT JOIN LATERAL (
           SELECT n.status
           FROM notifications_log n
@@ -1031,6 +1121,7 @@ export class StudentsRepository {
           LIMIT 1
         ) sms_log ON true
         ${where}
+        AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
         ORDER BY a.date DESC, a.created_at DESC
         LIMIT ${query.limit}
         OFFSET ${offset}
@@ -1038,9 +1129,11 @@ export class StudentsRepository {
       this.db.execute(sql`
         SELECT COUNT(*) AS total
         FROM attendances_student a
-        INNER JOIN students_with_class s ON s.id = a.student_id
-        INNER JOIN classes c ON c.id = s.class_id
+        INNER JOIN students s ON s.id = a.student_id
+        INNER JOIN schedules sch ON sch.id = a.schedule_id
+        INNER JOIN classes c ON c.id = sch.class_id
         ${where}
+        AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
       `),
     ]);
 
@@ -1064,8 +1157,9 @@ export class StudentsRepository {
         a.status::text AS status,
         sms_log.status::text AS sms_status
       FROM attendances_student a
-      INNER JOIN students_with_class s ON s.id = a.student_id
-      INNER JOIN classes c ON c.id = s.class_id
+      INNER JOIN students s ON s.id = a.student_id
+      INNER JOIN schedules sch ON sch.id = a.schedule_id
+      INNER JOIN classes c ON c.id = sch.class_id
       LEFT JOIN LATERAL (
         SELECT n.status
         FROM notifications_log n
@@ -1082,6 +1176,7 @@ export class StudentsRepository {
       ) sms_log ON true
       WHERE a.status IN ('absent', 'excused')
         AND a.date = COALESCE(${date ?? null}::date, CURRENT_DATE)
+        AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
       ORDER BY a.created_at DESC, s.last_name ASC, s.first_name ASC
     `);
 
@@ -1103,19 +1198,13 @@ export class StudentsRepository {
   async getStudentAbsenceStats(query: AbsenceStatsQuery): Promise<StudentAbsenceStatRecord[]> {
     const filters: SQL[] = [
       sql`st.is_active = true`,
-      sql`EXISTS (
-        SELECT 1 FROM enrollments e JOIN school_years sy ON sy.id = e.school_year_id
-        WHERE e.student_id = st.id AND e.status = 'confirmed'
-          AND e.class_id = st.class_id
-          AND (sy.status = 'active' OR NOT EXISTS (
-            SELECT 1 FROM school_years active_year WHERE active_year.status = 'active'
-          ))
-      )`,
+      confirmedSchoolStudent(sql`st.id`, sql`c.school_year_id`, sql`c.id`),
+      sql`EXISTS (SELECT 1 FROM school_years sy WHERE sy.id = c.school_year_id AND sy.status = 'active')`,
       sql`(sa.absence_count + sa.excused_count) >= ${query.min_absences}`,
     ];
 
     if (query.class_id) {
-      filters.push(sql`st.class_id = ${query.class_id}::uuid`);
+      filters.push(sql`c.id = ${query.class_id}::uuid`);
     }
     if (query.level_id) {
       filters.push(sql`c.level_id = ${query.level_id}::uuid`);
@@ -1172,12 +1261,14 @@ export class StudentsRepository {
       absence_rows AS (
         SELECT
           ast.student_id,
+          s.class_id,
           ast.status,
           CASE WHEN COALESCE(nl.sent_count, 0) > 0 THEN 1 ELSE 0 END AS has_sent,
           CASE WHEN COALESCE(nl.failed_count, 0) > 0 THEN 1 ELSE 0 END AS has_failed
         FROM attendances_student ast
         INNER JOIN schedules s ON s.id = ast.schedule_id
-        INNER JOIN students_with_class st ON st.id = ast.student_id
+        INNER JOIN students st ON st.id = ast.student_id
+        INNER JOIN classes scheduled_class ON scheduled_class.id = s.class_id
         LEFT JOIN LATERAL (
           SELECT
             COUNT(*) FILTER (WHERE n.status IN ('sent', 'delivered'))::int AS sent_count,
@@ -1189,6 +1280,7 @@ export class StudentsRepository {
         ) nl ON true
         WHERE ast.status IN ('absent', 'excused')
           AND ast.date BETWEEN ${query.from}::date AND ${query.to}::date
+          AND ${confirmedSchoolStudent(sql`st.id`, sql`scheduled_class.school_year_id`, sql`scheduled_class.id`)}
           AND NOT EXISTS (
             SELECT 1 FROM schedule_exceptions se
             WHERE se.schedule_id = s.id AND se.exception_date = ast.date
@@ -1198,12 +1290,13 @@ export class StudentsRepository {
       student_absences AS (
         SELECT
           student_id,
+          class_id,
           COUNT(*) FILTER (WHERE status = 'absent')::int AS absence_count,
           COUNT(*) FILTER (WHERE status = 'excused')::int AS excused_count,
           COUNT(*) FILTER (WHERE has_sent = 1)::int AS sms_sent_count,
           BOOL_OR(has_failed = 1) AS has_failed
         FROM absence_rows
-        GROUP BY student_id
+        GROUP BY student_id, class_id
       )
       SELECT
         st.id::text AS student_id,
@@ -1225,9 +1318,9 @@ export class StudentsRepository {
           ELSE 'none'
         END AS sms_summary
       FROM student_absences sa
-      INNER JOIN students_with_class st ON st.id = sa.student_id
-      INNER JOIN classes c ON c.id = st.class_id
-      LEFT JOIN class_scheduled cs ON cs.class_id = st.class_id
+      INNER JOIN students st ON st.id = sa.student_id
+      INNER JOIN classes c ON c.id = sa.class_id
+      LEFT JOIN class_scheduled cs ON cs.class_id = c.id
       WHERE ${sql.join(filters, sql` AND `)}
       ORDER BY (sa.absence_count + sa.excused_count) DESC, student_name ASC
     `);
@@ -1259,7 +1352,7 @@ export class StudentsRepository {
     const subjectFilter = query.subject
       ? sql`AND ${normalizeSubjectSql(sql`s.subject`)} = ${normalizeSubjectSql(sql`${query.subject}`)}`
       : sql``;
-    const classFilter = query.class_id ? sql`AND st.class_id = ${query.class_id}::uuid` : sql``;
+    const classFilter = query.class_id ? sql`AND COALESCE(c.id, student_class.id) = ${query.class_id}::uuid` : sql``;
     const levelFilter = query.level_id ? sql`AND student_class.level_id = ${query.level_id}::uuid` : sql``;
 
     const result = await this.db.execute(sql`
@@ -1280,8 +1373,9 @@ export class StudentsRepository {
         nl2.status::text AS sms2_status,
         nl2.sent_at::text AS sms2_sent_at
       FROM attendances_student ast
-      INNER JOIN students_with_class st ON st.id = ast.student_id
-      LEFT JOIN classes student_class ON student_class.id = st.class_id
+      INNER JOIN students st ON st.id = ast.student_id
+      LEFT JOIN classes student_class ON ${confirmedSchoolStudent(sql`st.id`, sql`student_class.school_year_id`, sql`student_class.id`)}
+        AND EXISTS (SELECT 1 FROM school_years sy WHERE sy.id = student_class.school_year_id AND sy.status = 'active')
       -- FIX B1: LEFT JOIN instead of INNER JOIN so absences without schedule_id are included
       LEFT JOIN schedules s ON s.id = ast.schedule_id
       LEFT JOIN classes c ON c.id = s.class_id
@@ -1307,6 +1401,8 @@ export class StudentsRepository {
         LIMIT 1
       ) nl2 ON true
       WHERE ast.student_id = ${studentId}::uuid
+        AND ((c.id IS NOT NULL AND ${confirmedSchoolStudent(sql`st.id`, sql`c.school_year_id`, sql`c.id`)})
+          OR (c.id IS NULL AND student_class.id IS NOT NULL))
         AND ast.status IN ('absent', 'excused')
         AND ast.date BETWEEN ${query.from}::date AND ${query.to}::date
         AND NOT EXISTS (
@@ -1365,14 +1461,13 @@ export class StudentsRepository {
 
   private async adjustClassStudentCount(
     classId: string | null,
-    delta: number,
     executor: QueryExecutor = this.db
   ): Promise<void> {
     if (!classId) return;
     await executor.execute(sql`
-      UPDATE classes
-      SET student_count = GREATEST(student_count + ${delta}, 0)
-      WHERE id = ${classId}
+      UPDATE classes class
+      SET student_count = ${confirmedSchoolClassCount(sql`class.id`, sql`class.school_year_id`)}
+      WHERE class.id = ${classId}::uuid
     `);
   }
 }

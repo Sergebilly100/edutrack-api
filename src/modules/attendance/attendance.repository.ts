@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { QueryResult, QueryResultRow } from 'pg';
 
@@ -1088,8 +1089,9 @@ export class AttendanceRepository {
         s.subject,
         sp.school_phone
       FROM attendances_student ast
-      INNER JOIN students_with_class st ON st.id = ast.student_id
+      INNER JOIN students st ON st.id = ast.student_id
       INNER JOIN schedules s ON s.id = ast.schedule_id
+      INNER JOIN classes c ON c.id = s.class_id
       CROSS JOIN tenant_ctx tc
       LEFT JOIN school_phone_ctx sp ON true
       LEFT JOIN LATERAL (
@@ -1107,6 +1109,7 @@ export class AttendanceRepository {
         AND ast.date = ${params.date}::date
         AND ast.status = 'absent'
         AND ast.student_id IN (${placeholders})
+        AND ${confirmedSchoolStudent(sql`st.id`, sql`c.school_year_id`, sql`c.id`)}
         AND st.parent_phone IS NOT NULL
         AND NOT EXISTS (
           SELECT 1
@@ -1134,10 +1137,10 @@ export class AttendanceRepository {
   // ── NOUVEAU - liste des IDs élèves d'une classe ───────────────────────────
   async listStudentsByClass(classId: string): Promise<StudentIdRow[]> {
     const result = await this.db.execute<StudentIdRow>(sql`
-      SELECT id::text AS id
-      FROM students_with_class
-      WHERE class_id = ${classId}
-        AND is_active = true
+      SELECT st.id::text AS id
+      FROM students st
+      INNER JOIN classes c ON c.id = ${classId}::uuid
+      WHERE ${confirmedSchoolStudent(sql`st.id`, sql`c.school_year_id`, sql`c.id`)}
     `);
 
     return getRows(result);
@@ -1160,13 +1163,13 @@ export class AttendanceRepository {
       SELECT
         st.id::text AS student_id,
         COALESCE(ast.status::text, 'unmarked') AS status
-      FROM students_with_class st
+      FROM students st
+      INNER JOIN classes c ON c.id = ${params.classId}::uuid
       LEFT JOIN attendances_student ast
         ON ast.student_id = st.id
        AND ast.schedule_id = ${params.scheduleId}::uuid
        AND ast.date = ${params.date}::date
-      WHERE st.class_id = ${params.classId}
-        AND st.is_active = true
+      WHERE ${confirmedSchoolStudent(sql`st.id`, sql`c.school_year_id`, sql`c.id`)}
       ORDER BY st.last_name ASC, st.first_name ASC
     `);
 

@@ -442,6 +442,21 @@ describe('attendance.service', () => {
     });
   });
 
+  it('refuse une absence demandée pour un élève sans inscription confirmée dans la classe', async () => {
+    vi.setSystemTime(new Date('2026-04-14T08:30:00.000Z'));
+    repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1' });
+    repository.findScheduleContextForTeacher.mockResolvedValue({
+      scheduleId: 'schedule-1', classId: 'class-1', slotEndTime: '09:00:00', subject: 'Maths',
+    });
+    repository.listStudentsByClass.mockResolvedValue([{ id: 'confirmed-student' }]);
+    const service = new AttendanceService(repository as never);
+    await expect(service.submitStudentAttendance({
+      scheduleId: 'schedule-1', date: '2026-04-14', absentStudentIds: ['pending-student'],
+    }, { schemaName: 'school_sainte_marie', userId: 'user-1' }))
+      .rejects.toMatchObject({ code: 'STUDENT_CLASS_MISMATCH', statusCode: 400 });
+    expect(repository.bulkUpsertStudentAttendance).not.toHaveBeenCalled();
+  });
+
   it('submitStudentAttendance() lève ROLLCALL_WINDOW_CLOSED si délai dépassé', async () => {
     // Temps fixé APRÈS la grâce offline de 7 jours suivant la fin du créneau.
     vi.setSystemTime(new Date('2026-04-21T09:01:00.000Z'));

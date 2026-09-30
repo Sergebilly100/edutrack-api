@@ -103,6 +103,9 @@ describe('academic structure integration', () => {
       [classId]
     );
     const studentId = studentRows[0]!.id;
+    await queryTenant(`INSERT INTO ${tenantTable('enrollments')}
+      (student_id,class_id,school_year_id,type,status)
+      VALUES ($1::uuid,$2::uuid,$3::uuid,'new_registration','confirmed')`, [studentId, classId, schoolYearId]);
 
     const reviewStatusResponse = await request()
       .get('/api/v1/class-decisions/review-status')
@@ -180,7 +183,7 @@ describe('academic structure integration', () => {
         expect.objectContaining({
           id: legacyClassId,
           name: '5ème Héritée',
-          studentCount: 1,
+          studentCount: 0,
           level: expect.objectContaining({ name: '5ème' }),
           schoolYear: expect.objectContaining({ id: schoolYearId }),
         }),

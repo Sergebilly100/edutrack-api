@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { todayInBusinessTimezone } from '../../shared/utils/business-time.js';
 
@@ -189,10 +190,11 @@ export class ParentPortalRepository {
     const result = await this.db.execute<{ student_id: string }>(sql`
       SELECT DISTINCT psl.student_id::text AS student_id
       FROM parent_student_links psl
-      INNER JOIN students_with_class s ON s.id = psl.student_id
+      INNER JOIN students s ON s.id = psl.student_id
       WHERE psl.parent_id = ${parentId}::uuid
         AND s.is_active = true
         AND s.lifecycle_status = 'active'
+        AND ${confirmedSchoolStudent(sql`s.id`, sql`(SELECT id FROM school_years WHERE status = 'active' LIMIT 1)`)}
     `);
 
     return result.rows.map((row) => row.student_id);
@@ -206,8 +208,9 @@ export class ParentPortalRepository {
         s.last_name,
         c.name AS class_name
       FROM parent_student_links psl
-      INNER JOIN students_with_class s ON s.id = psl.student_id
-      INNER JOIN classes c ON c.id = s.class_id
+      INNER JOIN students s ON s.id = psl.student_id
+      INNER JOIN classes c ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
+      INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
       WHERE psl.parent_id = ${parentId}::uuid
         AND s.is_active = true
         AND s.lifecycle_status = 'active'
@@ -222,11 +225,12 @@ export class ParentPortalRepository {
       SELECT EXISTS (
         SELECT 1
         FROM parent_student_links psl
-        INNER JOIN students_with_class s ON s.id = psl.student_id
+        INNER JOIN students s ON s.id = psl.student_id
         WHERE psl.parent_id = ${parentId}::uuid
           AND psl.student_id = ${studentId}::uuid
           AND s.is_active = true
           AND s.lifecycle_status = 'active'
+          AND ${confirmedSchoolStudent(sql`s.id`, sql`(SELECT id FROM school_years WHERE status = 'active' LIMIT 1)`)}
       ) AS allowed
     `);
     return result.rows[0]?.allowed ?? false;
@@ -234,9 +238,9 @@ export class ParentPortalRepository {
 
   async getStudentClassId(studentId: string): Promise<string | null> {
     const result = await this.db.execute<{ class_id: string }>(sql`
-      SELECT class_id::text AS class_id
-      FROM students_with_class
-      WHERE id = ${studentId}::uuid
+      SELECT c.id::text AS class_id
+      FROM classes c INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
+      WHERE ${confirmedSchoolStudent(sql`${studentId}::uuid`, sql`c.school_year_id`, sql`c.id`)}
       LIMIT 1
     `);
 

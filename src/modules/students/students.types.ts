@@ -23,6 +23,8 @@ const parentPhone2Schema = z
 export const studentsListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
+  school_year_id: z.uuid().optional(),
+  include_blocked_reenrollments: z.enum(['true', 'false']).optional().transform((value) => value === 'true'),
   class_id: z.uuid().optional(),
   level_id: z.uuid().optional(),
   is_active: z
@@ -158,6 +160,9 @@ export type StudentRecord = {
   isAssigned: boolean | null;
   lifecycleStatus: z.infer<typeof studentLifecycleStatusSchema>;
   createdAt: string;
+  paymentSchoolYearId?: string;
+  paymentSchoolYearLabel?: string;
+  blockedReEnrollment?: boolean;
 };
 
 export type StudentRecentAbsence = {

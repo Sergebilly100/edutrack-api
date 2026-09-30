@@ -46,6 +46,11 @@ describe('F01–F07/F30/F34/F35 — parcours école avec persistance', () => {
     const student = await request().post('/api/v1/students').set(director).send({ class_id: schedule!.class_id, first_name: 'Aya', last_name: 'Appel', parent_phone: '2250700001111' });
     expect(student.status).toBe(201);
     const studentId = student.body.data.id as string;
+    const yearId = (await queryTenant<{ id: string }>(`INSERT INTO ${tenantTable('school_years')}
+      (label,start_date,end_date,status) VALUES ('QA appel','2026-09-01','2027-06-30','active') RETURNING id`))[0]!.id;
+    await queryTenant(`UPDATE ${tenantTable('classes')} SET school_year_id=$1::uuid WHERE id=$2::uuid`, [yearId, schedule!.class_id]);
+    await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id,class_id,school_year_id,type,status)
+      VALUES ($1::uuid,$2::uuid,$3::uuid,'new_registration','confirmed')`, [studentId, schedule!.class_id, yearId]);
     expect((await request().post('/api/v1/attendance/check-in').set(teacher).send({ schedule_id: context.scheduleId, date: today })).status).toBe(200);
     const qr = await request().post('/api/v1/attendance/qr-scan').set(teacher)
       .send({ schedule_id: context.scheduleId, qr_token: context.validRoomToken, scan_type: 'start', date: today });
@@ -58,6 +63,13 @@ describe('F01–F07/F30/F34/F35 — parcours école avec persistance', () => {
         .send({ schedule_id: context.scheduleId, date: today, absent_student_ids: ids });
       const first = await mark([studentId]);
       expect(first.status, JSON.stringify(first.body)).toBe(200);
+      const pendingId = (await queryTenant<{ id: string }>(`INSERT INTO ${tenantTable('students')}
+        (class_id,first_name,last_name,is_active) VALUES ($1::uuid,'Dossier','En attente',true) RETURNING id`, [schedule!.class_id]))[0]!.id;
+      await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id,class_id,school_year_id,type,status)
+        VALUES ($1::uuid,$2::uuid,$3::uuid,'new_registration','pending_cashier')`, [pendingId, schedule!.class_id, yearId]);
+      const refusedAbsence = await mark([pendingId]);
+      expect(refusedAbsence.status).toBe(400);
+      expect(refusedAbsence.body.code).toBe('STUDENT_CLASS_MISMATCH');
       expect(absent).toHaveBeenCalledWith(expect.objectContaining({ studentId, scheduleId: context.scheduleId, date: today }));
       const initial = await request().get(`/api/v1/attendance/students/roll-call?schedule_id=${context.scheduleId}&date=${today}`).set(teacher);
       expect(initial.status).toBe(200);
@@ -78,6 +90,7 @@ describe('F01–F07/F30/F34/F35 — parcours école avec persistance', () => {
       expect((await request().patch(excusePath).set(director).send({ reason: 'Deuxième justification' })).status).toBe(409);
     } finally {
       eventBus.off('student.absent', absent);
+      await queryTenant(`UPDATE ${tenantTable('school_years')} SET status='closed' WHERE id=$1::uuid`, [yearId]);
     }
   });
 

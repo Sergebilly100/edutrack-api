@@ -142,6 +142,18 @@ describe('enrollments integration', () => {
     expect(creation.body.enrollment).toMatchObject({ studentFirstName: 'Aya', studentLastName: 'Yao' });
     expect(creation.body.enrollment).toMatchObject({ documentStatus: 'incomplete', missingMandatoryDocumentCount: 1 });
     expect(creation.body.missingMandatoryDocuments).toHaveLength(1);
+    const beforePopulation = await request().get(`/api/v1/classes?schoolYearId=${academic.targetYearId}`).set(headers);
+    expect(beforePopulation.status).toBe(200);
+    expect(beforePopulation.body.classes.find((item: { id: string }) => item.id === academic.targetClassId)?.studentCount).toBe(0);
+    const legacyPeriod = await queryTenant<{ id: string }>(`INSERT INTO ${tenantTable('grading_periods')}
+      (school_year_id, type, order_index, label, start_date, end_date)
+      VALUES ($1::uuid, 'trimester', 1, 'C24 pending snapshot', '2081-09-01', '2081-12-31') RETURNING id`,
+      [academic.targetYearId]);
+    await queryTenant(`INSERT INTO ${tenantTable('student_period_averages')}
+      (student_id, grading_period_id, subject_id, average) VALUES ($1::uuid, $2::uuid, NULL, 18)`,
+      [studentId, legacyPeriod[0]!.id]);
+    await queryTenant(`INSERT INTO ${tenantTable('student_risk_status')} (student_id, grades_signal, risk_score, level)
+      VALUES ($1::uuid, true, 1, 'attention')`, [studentId]);
 
     const enrollmentList = await request()
       .get(`/api/v1/enrollments?school_year_id=${academic.targetYearId}&level_id=${academic.targetLevelId}&class_id=${academic.targetClassId}&page=1&limit=10`)
@@ -239,6 +251,11 @@ describe('enrollments integration', () => {
     expect(confirmation.body.enrollment).toMatchObject({ status: 'confirmed', confirmedByUserId: context.directorUserId });
     expect(confirmation.body.missingMandatoryDocuments).toHaveLength(0);
     expect(confirmation.body.payment).toMatchObject({ amount: 30000, source: 'cashier_manual' });
+    const afterPopulation = await request().get(`/api/v1/classes?schoolYearId=${academic.targetYearId}`).set(headers);
+    expect(afterPopulation.status).toBe(200);
+    expect(afterPopulation.body.classes.find((item: { id: string }) => item.id === academic.targetClassId)?.studentCount).toBe(1);
+    expect(await queryTenant(`SELECT id FROM ${tenantTable('student_period_averages')} WHERE student_id=$1`, [studentId])).toHaveLength(0);
+    expect(await queryTenant(`SELECT id FROM ${tenantTable('student_risk_status')} WHERE student_id=$1`, [studentId])).toHaveLength(0);
     const immutableEnrollment = await request()
       .patch(`/api/v1/enrollments/${creation.body.enrollment.id}`)
       .set(headers)
@@ -375,6 +392,13 @@ describe('enrollments integration', () => {
     expect(creation.status).toBe(201);
     expect(creation.body.enrollment.status).toBe('blocked_unpaid');
 
+    await queryTenant(`WITH position AS (
+      INSERT INTO admin_positions (name,permissions,created_by)
+      VALUES ('Cashier blocked debt','["payments.record"]'::jsonb,$1::uuid) RETURNING id
+    ) INSERT INTO position_assignments (user_id,position_id,assigned_by)
+      SELECT $2::uuid,id,$1::uuid FROM position`, [getSeedContext().directorUserId, getSeedContext().staffUserId]);
+    const cashier = await getAuthHeaders('staff');
+
     // Un élève bloqué doit rester trouvable par la saisie rapide afin que la
     // caisse puisse solder l’impayé, même s’il est déjà rattaché à la classe cible.
     await queryTenant(`UPDATE ${tenantTable('students')} SET class_id = $1::uuid WHERE id = $2::uuid`, [academic.targetClassId, studentId]);
@@ -385,6 +409,31 @@ describe('enrollments integration', () => {
     expect(cashierSearch.body.data).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: studentId }),
     ]));
+    const currentYearCashierSearch = await request()
+      .get(`/api/v1/students/cashier-candidates?search=ENR-UNPAID-001&school_year_id=${academic.targetYearId}`)
+      .set(cashier);
+    expect(currentYearCashierSearch.status, JSON.stringify(currentYearCashierSearch.body)).toBe(200);
+    expect(currentYearCashierSearch.body.data).toEqual([expect.objectContaining({
+      id: studentId,
+      classId: academic.currentClassId,
+      paymentSchoolYearId: academic.previousYearId,
+      blockedReEnrollment: true,
+    })]);
+    expect(currentYearCashierSearch.body.data[0]).not.toHaveProperty('parentName');
+    expect(currentYearCashierSearch.body.data[0]).not.toHaveProperty('note');
+    const fullNameSearch = await request()
+      .get(`/api/v1/students/cashier-candidates?search=Nguessan%20Jean&school_year_id=${academic.targetYearId}`)
+      .set(cashier);
+    expect(fullNameSearch.body.data).toEqual([expect.objectContaining({ id: studentId })]);
+    const debtStatus = await request()
+      .get(`/api/v1/students/${studentId}/financial-status?school_year_id=${academic.previousYearId}`)
+      .set(cashier);
+    expect(debtStatus.status).toBe(200);
+    expect(debtStatus.body.financialStatus.remainingDue).toBe(50000);
+    const settingsSearch = await request()
+      .get(`/api/v1/students/financial-profiles?search=ENR-UNPAID-001&school_year_id=${academic.targetYearId}`)
+      .set(headers);
+    expect(settingsSearch.body.data).toEqual([]);
     const schoolRoster = await request().get('/api/v1/students?search=ENR-UNPAID-001').set(headers);
     expect(schoolRoster.body.data).toEqual([]);
 
@@ -392,7 +441,7 @@ describe('enrollments integration', () => {
     // rattachement d'origine après avoir vérifié la recherche de caisse.
     await queryTenant(`UPDATE ${tenantTable('students')} SET class_id = $1::uuid WHERE id = $2::uuid`, [academic.currentClassId, studentId]);
 
-    const settlement = await request().post('/api/v1/payments').set(headers).send({
+    const settlement = await request().post('/api/v1/payments').set(cashier).send({
       studentId,
       schoolYearId: academic.previousYearId,
       amount: 50000,
@@ -406,6 +455,10 @@ describe('enrollments integration', () => {
       .set(headers);
     expect(enrollment.status).toBe(200);
     expect(enrollment.body.enrollment.status).toBe('pending_cashier');
+    const afterSettlement = await request()
+      .get(`/api/v1/students/cashier-candidates?search=ENR-UNPAID-001&school_year_id=${academic.targetYearId}`)
+      .set(cashier);
+    expect(afterSettlement.body.data).toEqual([]);
   });
 
   it('ne bloque pas une réinscription quand une remise couvre la dette antérieure', async () => {

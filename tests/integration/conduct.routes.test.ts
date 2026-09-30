@@ -101,6 +101,10 @@ describe('conduct routes (5b)', () => {
       [classId, `CON-BULK-${suffix}`]
     );
     secondStudentId = secondStudents[0]!.id;
+    await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+      VALUES ($1::uuid, $3::uuid, $4::uuid, 'new_registration', 'confirmed'),
+             ($2::uuid, $3::uuid, $4::uuid, 'new_registration', 'confirmed')`,
+      [studentId, secondStudentId, classId, years[0]!.id]);
 
     // Salle dédiée aux EDT de test + créneau par défaut existant
     await queryTenant(
@@ -260,6 +264,19 @@ describe('conduct routes (5b)', () => {
       .send({ student_id: studentId, grading_period_id: gradingPeriodId, note: 10 });
     expect(response.status).toBe(403);
     expect(response.body.code).toBe('STUDENT_NOT_IN_TEACHER_CLASSES');
+  });
+
+  it('refuse une note de conduite pour un dossier non confirmé', async () => {
+    const pendingId = (await queryTenant<IdRow>(`INSERT INTO ${tenantTable('students')}
+      (class_id,first_name,last_name,matricule,is_active)
+      VALUES ($1::uuid,'Dossier','En attente',$2,true) RETURNING id::text`, [classId, `CON-PENDING-${suffix}`]))[0]!.id;
+    await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id,class_id,school_year_id,type,status)
+      SELECT $1::uuid,c.id,c.school_year_id,'new_registration','pending_dossier'
+      FROM ${tenantTable('classes')} c WHERE c.id=$2::uuid`, [pendingId, classId]);
+    const response = await request().post('/api/v1/conduct/inputs').set(teacherAHeaders)
+      .send({ student_id: pendingId, grading_period_id: gradingPeriodId, note: 10 });
+    expect(response.status).toBe(404);
+    expect(response.body.code).toBe('STUDENT_NOT_FOUND');
   });
 
   it('refuse toute saisie de conduite dans une période future', async () => {

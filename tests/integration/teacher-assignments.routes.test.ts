@@ -123,19 +123,14 @@ describe('C10 profiles, enrollments, assignments and first timetable', () => {
     expect(await queryTenant('SELECT id FROM teacher_subject_assignments WHERE subject_id=$1',[subject])).toEqual([]);
     await queryTenant('UPDATE teachers SET is_blocked=false WHERE id=$1',[teacherId]);
   });
-  it('rejects normalized matricule ambiguity and every duplicated group before any insert', async () => {
+  it('rejects normalized matricule duplicates in the database and duplicated groups before any insert', async () => {
     const [otherUser] = await queryTenant<Id>("INSERT INTO users (role,name,password_hash) VALUES ('teacher','Autre C10','not-used') RETURNING id::text");
-    await queryTenant("INSERT INTO teachers (user_id,username,matricule,type,hourly_rate) VALUES ($1,'c10.ambigu','p-001','vacataire',5000)",[otherUser.id]);
+    await expect(queryTenant("INSERT INTO teachers (user_id,username,matricule,type,hourly_rate) VALUES ($1,'c10.ambigu','p-001','vacataire',5000)",[otherUser.id]))
+      .rejects.toMatchObject({ code: '23505', constraint: 'teachers_matricule_normalized_unique' });
+    await queryTenant('DELETE FROM users WHERE id=$1',[otherUser.id]);
     const file = await xlsx(assignmentHeaders,[['P-001','Français','4e A']]);
-    try {
-      const checked = await preview(file);
-      expect(checked.body.validRows).toEqual([]);
-      expect(checked.body.errors[0]).toMatchObject({ column: 'Matricule', reason: 'Matricule ambigu : P-001' });
-      expect((await confirm(file,checked.body.previewToken)).body.createdCount).toBe(0);
-    } finally {
-      await queryTenant('DELETE FROM teachers WHERE user_id=$1',[otherUser.id]);
-      await queryTenant('DELETE FROM users WHERE id=$1',[otherUser.id]);
-    }
+    const checked = await preview(file);
+    expect(checked.body.errors).toEqual([]);
     const duplicated = await preview(await xlsx(assignmentHeaders,[['P-001','Français','4e A'],['P-001','Français','4E   A']]));
     expect(duplicated.body.validRows).toEqual([]);
     expect(duplicated.body.errors.map((e: { rowNumber: number }) => e.rowNumber)).toEqual([2,3]);

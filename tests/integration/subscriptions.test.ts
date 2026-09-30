@@ -23,6 +23,11 @@ describe('subscriptions integration (real db)', () => {
 
   beforeAll(async () => {
     const context = getSeedContext();
+    const yearId = (await queryTenant<{ id: string }>(`
+      INSERT INTO ${tenantTable('school_years')} (label, start_date, end_date, status)
+      VALUES ($1, '2091-09-01', '2092-06-30', 'active') RETURNING id`, [`subs-${Date.now()}`]))[0]!.id;
+    const classId = (await queryTenant<{ class_id: string }>(`SELECT class_id FROM ${tenantTable('schedules')} WHERE id=$1::uuid`, [context.scheduleId]))[0]!.class_id;
+    await queryTenant(`UPDATE ${tenantTable('classes')} SET school_year_id=$1::uuid WHERE id=$2::uuid`, [yearId, classId]);
 
     const tenantRows = await queryPublic<TenantRow>(
       `
@@ -59,6 +64,9 @@ describe('subscriptions integration (real db)', () => {
       `
     );
     studentIds = studentRows.map((item) => item.id);
+    await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+      SELECT id, $1::uuid, $2::uuid, 'new_registration', 'confirmed' FROM ${tenantTable('students')}
+      WHERE id IN ($3::uuid, $4::uuid)`, [classId, yearId, studentIds[0], studentIds[1]]);
 
     const assignmentRows = await queryTenant<AssignmentRow>(
       `

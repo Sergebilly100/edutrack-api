@@ -741,12 +741,20 @@ export class AttendanceService {
     // Récupérer la liste complète des élèves de la classe
     const allStudents = await this.repository.listStudentsByClass(schedule.classId ?? '');
 
+    const allStudentIds = allStudents.map((student) => student.id);
+    if (input.absentStudentIds.some((studentId) => !allStudentIds.includes(studentId))) {
+      throw new AttendanceModuleError(
+        'One or more students do not have a confirmed enrollment in this class',
+        400,
+        'STUDENT_CLASS_MISMATCH'
+      );
+    }
+
     if (allStudents.length === 0) {
       return { upsertedCount: 0, notifSendAfter, isLocked: false };
     }
 
-    const allStudentIds = allStudents.map((s) => s.id);
-    const validatedAbsentIds = input.absentStudentIds.filter((id) => allStudentIds.includes(id));
+    const validatedAbsentIds = input.absentStudentIds;
     const validatedPresentIds = allStudentIds.filter((id) => !validatedAbsentIds.includes(id));
 
     const result = await this.repository.bulkUpsertStudentAttendance({

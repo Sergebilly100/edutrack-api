@@ -412,7 +412,7 @@ export default async function financeController(
   );
 
   app.get('/api/v1/students/:studentId/financial-status', {
-    preHandler: requireAnyPermission(['tuition.view', 'payments.view']),
+    preHandler: requireAnyPermission(['tuition.view', 'payments.view', 'payments.record']),
   }, async (request, reply) => {
     try {
       const { studentId } = studentFinancialParamsSchema.parse(request.params);

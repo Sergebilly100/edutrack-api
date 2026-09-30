@@ -1,5 +1,6 @@
 import type { TenantDb } from '../../shared/database/db.js';
 import { sql } from 'drizzle-orm';
+import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
 
 const monthToBounds = (month: string): { monthStart: string; monthEnd: string } => {
   const [yearRaw, monthRaw] = month.split('-');
@@ -20,26 +21,15 @@ const maxIsoDate = (a: string, b: string): string => (a >= b ? a : b);
 
 export function buildDashboardRepository(db: TenantDb) {
   async function getPilotageOverview(schoolYearId?: string, gradingPeriodId?: string) {
+    const selectedYear = sql`COALESCE(${schoolYearId ?? null}::uuid, (SELECT id FROM school_years WHERE status = 'active' ORDER BY start_date DESC LIMIT 1))`;
     const [populationResult, academicResult, risksResult] = await Promise.all([
       db.execute<{ active_students: number; active_teachers: number; active_classes: number }>(sql`
         SELECT
           (SELECT COUNT(*)::int
-           FROM students_with_class s
-           WHERE s.is_active = true
-             AND s.class_id IS NOT NULL
-             AND EXISTS (SELECT 1 FROM classes current_class WHERE current_class.id = s.class_id
-               AND (${schoolYearId ?? null}::uuid IS NULL OR current_class.school_year_id = ${schoolYearId ?? null}::uuid))
-             AND NOT EXISTS (
-               SELECT 1
-               FROM enrollments e
-               JOIN classes c ON c.id = s.class_id
-               WHERE e.student_id = s.id
-                 AND e.class_id = s.class_id
-                 AND e.school_year_id = c.school_year_id
-                 AND e.status <> 'confirmed'
-             )) AS active_students,
+           FROM students s
+           WHERE ${confirmedSchoolStudent(sql`s.id`, selectedYear)}) AS active_students,
           (SELECT COUNT(*)::int FROM teachers t INNER JOIN users u ON u.id = t.user_id WHERE u.is_active = true) AS active_teachers,
-          (SELECT COUNT(*)::int FROM classes c WHERE c.is_active = true AND (${schoolYearId ?? null}::uuid IS NULL OR c.school_year_id = ${schoolYearId ?? null}::uuid)) AS active_classes
+          (SELECT COUNT(*)::int FROM classes c WHERE c.is_active = true AND c.school_year_id = ${selectedYear}) AS active_classes
       `),
       db.execute<{ level_id: string; level_name: string; order_index: number; class_count: number; expected_subjects: number; completed_subjects: number; students_with_average: number; average_score: number | null; performing_students: number; attention_students: number; critical_students: number; grade_count: number; grades_at_least_ten: number }>(sql`
         WITH selected_year AS (
@@ -56,17 +46,8 @@ export function buildDashboardRepository(db: TenantDb) {
                    COUNT(s.id)::int AS student_count,
                    COUNT(rc.id) FILTER (WHERE rc.status IN ('generated', 'published'))::int AS card_count
             FROM classes c
-            LEFT JOIN students_with_class s ON s.class_id = c.id
-              AND s.is_active = true
-              AND NOT EXISTS (
-                SELECT 1
-                FROM enrollments e
-                WHERE e.student_id = s.id
-                  AND e.class_id = s.class_id
-                  AND e.school_year_id = c.school_year_id
-                  AND e.status <> 'confirmed'
-              )
-            LEFT JOIN report_cards rc ON rc.student_id = s.id AND rc.grading_period_id = gp.id
+            LEFT JOIN students s ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
+            LEFT JOIN report_cards rc ON rc.student_id = s.id AND rc.class_id = c.id AND rc.grading_period_id = gp.id
             WHERE c.school_year_id = gp.school_year_id AND c.is_active = true
             GROUP BY c.id
           ) class_state ON true
@@ -101,10 +82,16 @@ export function buildDashboardRepository(db: TenantDb) {
         ), level_completions AS (
           SELECT l.id AS level_id, l.name AS level_name, l.order_index,
             COUNT(DISTINCT c.id)::int AS class_count,
-            COUNT(DISTINCT (c.id, s.id))::int AS expected_subjects,
-            COUNT(DISTINCT (csc.class_id, csc.subject_id)) FILTER (WHERE csc.status = 'completed')::int AS completed_subjects
+            COUNT(DISTINCT (c.id, s.id)) FILTER (WHERE class_population.has_students)::int AS expected_subjects,
+            COUNT(DISTINCT (csc.class_id, csc.subject_id)) FILTER (WHERE csc.status = 'completed' AND class_population.has_students)::int AS completed_subjects
           FROM classes c
           INNER JOIN levels l ON l.id = c.level_id
+          LEFT JOIN LATERAL (
+            SELECT EXISTS (
+              SELECT 1 FROM students member
+              WHERE ${confirmedSchoolStudent(sql`member.id`, sql`c.school_year_id`, sql`c.id`)}
+            ) AS has_students
+          ) class_population ON true
           LEFT JOIN subjects s ON s.level_id = l.id
           LEFT JOIN selected_period sp ON true
           LEFT JOIN class_subject_completion csc ON csc.class_id = c.id AND csc.subject_id = s.id AND csc.grading_period_id = sp.id
@@ -127,17 +114,10 @@ export function buildDashboardRepository(db: TenantDb) {
           INNER JOIN subjects s ON s.id = e.subject_id
           INNER JOIN classes c ON c.id = e.class_id
           INNER JOIN levels l ON l.id = c.level_id
-          INNER JOIN students_with_class st ON st.id = eg.student_id AND st.class_id = c.id AND st.is_active = true
+          INNER JOIN students st ON st.id = eg.student_id
           WHERE c.is_active = true AND c.school_year_id = (SELECT id FROM selected_year)
             AND e.class_id = c.id
-            AND NOT EXISTS (
-              SELECT 1
-              FROM enrollments en
-              WHERE en.student_id = st.id
-                AND en.class_id = st.class_id
-                AND en.school_year_id = c.school_year_id
-                AND en.status <> 'confirmed'
-            )
+            AND ${confirmedSchoolStudent(sql`st.id`, sql`c.school_year_id`, sql`c.id`)}
         ), subject_averages AS (
           SELECT
             level_id,
@@ -202,9 +182,9 @@ export function buildDashboardRepository(db: TenantDb) {
           INNER JOIN users u ON u.id = t.user_id AND u.is_active = true
         )
         SELECT
-          (SELECT COUNT(*)::int FROM student_risk_status WHERE absences_signal = true) AS student_absences,
-          (SELECT COUNT(*)::int FROM student_risk_status WHERE grades_signal = true) AS student_grades,
-          (SELECT COUNT(*)::int FROM student_risk_status WHERE payment_signal = true) AS student_payments,
+          (SELECT COUNT(*)::int FROM student_risk_status srs WHERE absences_signal = true AND ${confirmedSchoolStudent(sql`srs.student_id`, selectedYear)}) AS student_absences,
+          (SELECT COUNT(*)::int FROM student_risk_status srs WHERE grades_signal = true AND ${confirmedSchoolStudent(sql`srs.student_id`, selectedYear)}) AS student_grades,
+          (SELECT COUNT(*)::int FROM student_risk_status srs WHERE payment_signal = true AND ${confirmedSchoolStudent(sql`srs.student_id`, selectedYear)}) AS student_payments,
           (SELECT COUNT(*)::int FROM eligible_teacher_risks WHERE absences_signal = true) AS teacher_absences,
           (SELECT COUNT(*)::int FROM eligible_teacher_risks WHERE lateness_signal = true) AS teacher_lateness,
           (SELECT COUNT(*)::int FROM eligible_teacher_risks WHERE absences_signal OR lateness_signal) AS teachers_at_risk
@@ -421,7 +401,8 @@ export function buildDashboardRepository(db: TenantDb) {
         SELECT st.id AS student_id, s.id AS schedule_id
         FROM schedules s
         INNER JOIN active_period ap ON ap.id = s.schedule_period_id
-        INNER JOIN students_with_class st ON st.class_id = s.class_id
+        INNER JOIN classes c ON c.id = s.class_id
+        INNER JOIN students st ON ${confirmedSchoolStudent(sql`st.id`, sql`c.school_year_id`, sql`s.class_id`)}
         WHERE s.is_active = true
           AND st.is_active = true
           AND s.day_of_week = EXTRACT(ISODOW FROM ${date}::date)::int

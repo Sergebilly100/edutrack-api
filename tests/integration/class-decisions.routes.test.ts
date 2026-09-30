@@ -48,6 +48,9 @@ describe('class decisions integration', () => {
       [classes[0]!.id]
     );
     const studentId = students[0]!.id;
+    await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+      VALUES ($1::uuid, $2::uuid, $3::uuid, 'new_registration', 'confirmed')`,
+      [studentId, classes[0]!.id, schoolYearId]);
     const periods = await queryTenant<{ id: string }>(`
       INSERT INTO ${tenantTable('grading_periods')} (school_year_id, type, order_index, label, start_date, end_date)
       VALUES ($1::uuid, 'trimester', 1, 'T3 revue', '2099-01-01', '2099-06-30')
@@ -82,6 +85,17 @@ describe('class decisions integration', () => {
       .set(headers)
       .send({ endOfYearReviewStartDate: '2000-01-01' });
     expect(updateDate.status).toBe(200);
+
+    const pendingStudentId = (await queryTenant<{ id: string }>(`INSERT INTO ${tenantTable('students')}
+      (class_id,first_name,last_name,matricule,is_active)
+      VALUES ($1::uuid,'Non confirmée','Décision','MAT-REVUE-PENDING',true) RETURNING id`, [classes[0]!.id]))[0]!.id;
+    await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id,class_id,school_year_id,type,status)
+      VALUES ($1::uuid,$2::uuid,$3::uuid,'new_registration','pending_dossier')`,
+    [pendingStudentId, classes[0]!.id, schoolYearId]);
+    const refusedDecision = await request().patch(`/api/v1/class-decisions/${pendingStudentId}`).set(headers)
+      .send({ finalDecision: 'promoted', nextLevelId: levelId });
+    expect(refusedDecision.status).toBe(404);
+    expect(refusedDecision.body.code).toBe('STUDENT_NOT_FOUND');
 
     const pendingList = await request().get('/api/v1/class-decisions').set(headers);
     expect(pendingList.status).toBe(200);
