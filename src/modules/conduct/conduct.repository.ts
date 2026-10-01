@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
+import { authorizedConductClass } from '../../shared/database/conduct-decision-scope.js';
 
 import type { TenantDb } from '../../shared/database/db.js';
 import type {
@@ -123,34 +124,26 @@ export class ConductRepository {
     });
   }
 
-  async isActiveDirector(userId: string): Promise<boolean> {
-    const result = await this.db.execute(sql`
-      SELECT 1 FROM users WHERE id = ${userId}::uuid AND role = 'director' AND is_active = true LIMIT 1
-    `);
-    return getRows(result).length > 0;
-  }
-
-  async listDecisionClasses(userId: string, mode: ConductPolicyMode): Promise<Array<{ id: string; name: string; schoolYearId: string }>> {
+  async listDecisionClasses(userId: string, canFinalize: boolean): Promise<Array<{ id: string; name: string; schoolYearId: string }>> {
     const result = await this.db.execute<{ id: string; name: string; school_year_id: string }>(sql`
       SELECT c.id::text, c.name, c.school_year_id::text
       FROM classes c
-      INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.conduct_decision_mode = ${mode}
-      WHERE c.is_active = true AND (
-        (${mode} = 'homeroom' AND EXISTS (
-          SELECT 1 FROM teachers t INNER JOIN users u ON u.id = t.user_id AND u.is_active = true
-          WHERE t.id = c.homeroom_teacher_id AND t.user_id = ${userId}::uuid
-        )) OR (${mode} = 'direction' AND EXISTS (
-          SELECT 1 FROM users u WHERE u.id = ${userId}::uuid AND u.role = 'director' AND u.is_active = true
-        )) OR (${mode} = 'delegated' AND EXISTS (
-          SELECT 1 FROM educator_assignments ea INNER JOIN users u ON u.id = ea.user_id AND u.is_active = true AND u.role = 'staff'
-          INNER JOIN position_assignments pa ON pa.user_id = u.id
-          INNER JOIN admin_positions ap ON ap.id = pa.position_id AND ap.permissions @> '["conduct.finalize"]'::jsonb
-          WHERE ea.user_id = ${userId}::uuid
-            AND (ea.class_id = c.id OR ea.level_id = c.level_id)
-        ))
-      ) ORDER BY c.name
+      INNER JOIN school_years sy ON sy.id = c.school_year_id
+      WHERE ${authorizedConductClass(userId, canFinalize)} ORDER BY c.name
     `);
     return getRows<{ id: string; name: string; school_year_id: string }>(result).map(row => ({ id: row.id, name: row.name, schoolYearId: row.school_year_id }));
+  }
+
+  async canDecideClass(userId: string, canFinalize: boolean, classId: string, gradingPeriodId: string): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      SELECT 1 FROM classes c
+      INNER JOIN school_years sy ON sy.id = c.school_year_id
+      INNER JOIN grading_periods gp ON gp.school_year_id = sy.id
+      WHERE c.id = ${classId}::uuid AND gp.id = ${gradingPeriodId}::uuid
+        AND ${authorizedConductClass(userId, canFinalize)}
+      LIMIT 1
+    `);
+    return getRows(result).length > 0;
   }
 
   async listDecisionPeriods(classIds: string[]): Promise<Array<{ id: string; label: string; schoolYearId: string; conductReviewOpen: boolean; closedClassIds: string[] }>> {
@@ -729,18 +722,10 @@ export class ConductRepository {
     await this.db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${input.student_id}), hashtext(${input.grading_period_id}))`);
       const coefficientResult = await tx.execute<{ coefficient: string; allowed: boolean }>(sql`
-        SELECT sy.conduct_coefficient::text AS coefficient, (
-          (sy.conduct_decision_mode = 'homeroom' AND EXISTS (
-            SELECT 1 FROM teachers t WHERE t.id = c.homeroom_teacher_id AND t.user_id = u.id
-          )) OR (sy.conduct_decision_mode = 'direction' AND u.role = 'director') OR
-          (sy.conduct_decision_mode = 'delegated' AND ${input.canFinalize} AND u.role = 'staff'
-            AND EXISTS (SELECT 1 FROM position_assignments pa INNER JOIN admin_positions ap ON ap.id = pa.position_id
-              WHERE pa.user_id = u.id AND ap.permissions @> '["conduct.finalize"]'::jsonb)
-            AND EXISTS (SELECT 1 FROM educator_assignments ea WHERE ea.user_id = u.id AND (ea.class_id = c.id OR ea.level_id = c.level_id)))
-        ) AS allowed
+        SELECT sy.conduct_coefficient::text AS coefficient,
+          ${authorizedConductClass(input.decidedByUserId, input.canFinalize)} AS allowed
         FROM grading_periods gp INNER JOIN school_years sy ON sy.id = gp.school_year_id
         INNER JOIN classes c ON c.school_year_id = sy.id
-        INNER JOIN users u ON u.id = ${input.decidedByUserId}::uuid AND u.is_active = true
         WHERE gp.id = ${input.grading_period_id}::uuid
           AND ${confirmedSchoolStudent(sql`${input.student_id}::uuid`, sql`gp.school_year_id`, sql`c.id`)}
         LIMIT 1 FOR SHARE OF sy
@@ -829,34 +814,5 @@ export class ConductRepository {
     });
   }
 
-  // L'éducateur décideur doit être assigné à la classe de l'élève OU à son niveau.
-  async isAssignedEducatorForStudent(userId: string, studentId: string, gradingPeriodId: string): Promise<boolean> {
-    const result = await this.db.execute(sql`
-      SELECT 1
-      FROM educator_assignments ea
-      INNER JOIN students s ON s.id = ${studentId}::uuid
-      INNER JOIN classes c ON ea.class_id = c.id OR ea.level_id = c.level_id
-      INNER JOIN grading_periods gp ON gp.id = ${gradingPeriodId}::uuid AND gp.school_year_id = c.school_year_id
-      WHERE ea.user_id = ${userId}::uuid
-        AND (ea.class_id = c.id OR ea.level_id = c.level_id)
-        AND ${confirmedSchoolStudent(sql`s.id`, sql`gp.school_year_id`, sql`c.id`)}
-      LIMIT 1
-    `);
-    return getRows(result).length > 0;
-  }
 
-  async isHomeroomTeacherForStudent(userId: string, studentId: string, gradingPeriodId: string): Promise<boolean> {
-    const result = await this.db.execute(sql`
-      SELECT 1
-      FROM students s
-      INNER JOIN grading_periods gp ON gp.id = ${gradingPeriodId}::uuid
-      INNER JOIN classes c ON c.school_year_id = gp.school_year_id
-      INNER JOIN teachers t ON t.id = c.homeroom_teacher_id
-      WHERE s.id = ${studentId}::uuid
-        AND t.user_id = ${userId}::uuid
-        AND ${confirmedSchoolStudent(sql`s.id`, sql`gp.school_year_id`, sql`c.id`)}
-      LIMIT 1
-    `);
-    return getRows(result).length > 0;
-  }
 }

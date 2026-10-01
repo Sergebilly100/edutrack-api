@@ -4,7 +4,7 @@ import type { ConductReviewRepository, DecisionScope } from '../../src/modules/c
 
 const scope = (overrides: Partial<DecisionScope> = {}): DecisionScope => ({
   classId: 'class-1', className: '6e A', levelId: 'level-1', levelName: '6e',
-  schoolYearId: 'year-1', schoolYearLabel: '2026-2027',
+  schoolYearId: 'year-1', schoolYearLabel: '2026-2027', schoolYearStatus: 'active',
   gradingPeriodId: 'period-1', gradingPeriodLabel: 'T1',
   studentCount: 18, pendingCount: 12, reviewOpen: true, isClosed: false,
   ...overrides,
@@ -24,10 +24,21 @@ describe('ConductReviewService', () => {
     } as unknown as ConductReviewRepository;
     const service = new ConductReviewService(repository);
 
-    const result = await service.getWorkspace({ userId: 'user-1', canFinalize: true });
+    const result = await service.getDecisionWorkspace({ userId: 'user-1', canFinalize: true });
 
     expect(result.decisionActions).toEqual([scope()]);
     expect(result.decisionScopes).toHaveLength(5);
     expect(repository.listDecisionScopes).toHaveBeenCalledWith('user-1', true);
+    expect(repository.listTeacherActions).not.toHaveBeenCalled();
+  });
+
+  it('lit les avis professeur sans requête de décision', async () => {
+    const repository = {
+      listTeacherActions: vi.fn().mockResolvedValue([{ classId: 'class-1', pendingCount: 2 }]),
+      listDecisionScopes: vi.fn().mockRejectedValue(new Error('policy unavailable')),
+    } as unknown as ConductReviewRepository;
+    const service = new ConductReviewService(repository);
+    expect(await service.getTeacherActions('user-1')).toEqual({ teacherActions: [{ classId: 'class-1', pendingCount: 2 }] });
+    expect(repository.listDecisionScopes).not.toHaveBeenCalled();
   });
 });

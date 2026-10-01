@@ -56,6 +56,34 @@ export class DemoRepository {
     await this.db.execute(sql.raw(`SET LOCAL search_path TO "${schema}", public`));
   }
 
+  async verifyConductMigration(): Promise<void> {
+    const result = await this.db.execute<{ columns_ready: boolean; tables_ready: boolean; constraints_ready: boolean }>(sql`
+      SELECT
+        (SELECT COUNT(*) = 2 FROM information_schema.columns
+         WHERE table_schema = current_schema() AND table_name = 'school_years'
+           AND column_name IN ('conduct_decision_mode', 'conduct_coefficient')
+           AND is_nullable = 'NO' AND column_default IS NOT NULL) AS columns_ready,
+        (SELECT COUNT(*) = 2 FROM information_schema.tables
+         WHERE table_schema = current_schema()
+           AND table_name IN ('conduct_grade_audit', 'conduct_policy_audit')) AS tables_ready,
+        (SELECT COUNT(*) = 6 FROM pg_constraint con
+         INNER JOIN pg_namespace ns ON ns.oid = con.connamespace
+         WHERE ns.nspname = current_schema()
+           AND con.conname IN (
+             'conduct_grade_audit_conduct_grade_id_conduct_grades_id_fk',
+             'conduct_grade_audit_changed_by_user_id_users_id_fk',
+             'conduct_policy_audit_school_year_id_school_years_id_fk',
+             'conduct_policy_audit_changed_by_user_id_users_id_fk',
+             'school_years_conduct_mode',
+             'school_years_conduct_coefficient_positive'
+           )) AS constraints_ready
+    `);
+    const status = result.rows[0];
+    if (!status?.columns_ready || !status.tables_ready || !status.constraints_ready) {
+      throw new Error('DEMO_CONDUCT_MIGRATION_CONTRACT_FAILED');
+    }
+  }
+
   async configureTenant(tenantId: string, seeded: boolean, yearLabel?: string): Promise<void> {
     await this.db.execute(sql`
       INSERT INTO public.school_sms_features (tenant_id, is_enabled, monetize_parent_alerts, commission_pct, sms_cap_per_student)

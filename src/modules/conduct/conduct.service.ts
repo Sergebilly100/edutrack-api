@@ -38,11 +38,7 @@ export class ConductService {
   async listEligibleEducators() { return { users: await this.repository.listEligibleEducators() }; }
 
   async listDecisionClasses(context: { userId: string; canFinalize: boolean }) {
-    const modes: ConductPolicyMode[] = ['homeroom', 'direction', 'delegated'];
-    const groups = await Promise.all(modes.map(async mode =>
-      mode === 'delegated' && !context.canFinalize ? [] : this.repository.listDecisionClasses(context.userId, mode)
-    ));
-    const classes = groups.flat();
+    const classes = await this.repository.listDecisionClasses(context.userId, context.canFinalize);
     return { classes, gradingPeriods: await this.repository.listDecisionPeriods(classes.map(klass => klass.id)) };
   }
 
@@ -208,16 +204,11 @@ export class ConductService {
   }
 
   private async assertCanManageFinalConduct(
-    studentId: string,
+    classId: string,
     gradingPeriodId: string,
     context: { userId: string; canFinalize: boolean }
   ): Promise<void> {
-    const policy = await this.repository.findPolicyForPeriod(gradingPeriodId);
-    if (!policy) throw new ConductModuleError('Période introuvable', 404, 'GRADING_PERIOD_NOT_FOUND');
-    if (policy.mode === 'homeroom' && await this.repository.isHomeroomTeacherForStudent(context.userId, studentId, gradingPeriodId)) return;
-    if (policy.mode === 'direction' && await this.repository.isActiveDirector(context.userId)) return;
-    if (policy.mode === 'delegated' && context.canFinalize
-      && await this.repository.isAssignedEducatorForStudent(context.userId, studentId, gradingPeriodId)) return;
+    if (await this.repository.canDecideClass(context.userId, context.canFinalize, classId, gradingPeriodId)) return;
 
     throw new ConductModuleError(
       'Vous ne pouvez pas décider la conduite de cette classe selon la politique de l’année',
@@ -240,7 +231,7 @@ export class ConductService {
     if (!periodRow) {
       throw new ConductModuleError('Période d\u2019évaluation introuvable', 404, 'GRADING_PERIOD_NOT_FOUND');
     }
-    await this.assertCanManageFinalConduct(studentId, gradingPeriodId, context);
+    await this.assertCanManageFinalConduct(student.classId, gradingPeriodId, context);
 
     const [teacherInputs, spontaneousEvaluations, finalGrade] = await Promise.all([
       this.repository.listConductInputsForStudent(studentId, gradingPeriodId),
@@ -290,7 +281,7 @@ export class ConductService {
       throw new ConductModuleError('La revue de conduite de cette période n’est pas encore ouverte', 409, 'CONDUCT_REVIEW_NOT_OPEN');
     }
 
-    await this.assertCanManageFinalConduct(input.student_id, input.grading_period_id, context);
+    await this.assertCanManageFinalConduct(student.classId, input.grading_period_id, context);
 
     const policy = await this.repository.findPolicyForPeriod(input.grading_period_id);
     if (!policy) throw new ConductModuleError('Période introuvable', 404, 'GRADING_PERIOD_NOT_FOUND');

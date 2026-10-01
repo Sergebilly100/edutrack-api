@@ -9,9 +9,12 @@ import path from 'node:path';
 
 import { Pool } from 'pg';
 import { findMatriculeCollisions } from './matricule-collisions.js';
+import { verifyConductMigrationContract } from './conduct-migration-contract.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
+const fromMigration = process.argv.find((argument) => argument.startsWith('--from='))?.slice('--from='.length);
+if (fromMigration && !/^\d{4}$/.test(fromMigration)) throw new Error('INVALID_MIGRATION_FROM');
 
 const EXCLUDED_SCHEMAS = new Set([
   'public',
@@ -37,6 +40,7 @@ const runMigrationsForSchema = async (pool: Pool, schemaName: string): Promise<v
     const migrationsFolder = path.resolve(process.cwd(), 'src/shared/database/migrations');
     const migrationFiles = (await readdir(migrationsFolder))
       .filter((file) => /^(000[1-9]\d*|00[1-9]\d*|0[1-9]\d*|[1-9]\d*)_.*\.sql$/.test(file))
+      .filter((file) => !fromMigration || file.slice(0, 4) >= fromMigration)
       .sort();
 
     for (const migrationFile of migrationFiles) {
@@ -71,6 +75,8 @@ const runMigrationsForSchema = async (pool: Pool, schemaName: string): Promise<v
         }
       }
     }
+    await verifyConductMigrationContract(client, schemaName);
+    console.log(`Conduct migration contract verified: ${schemaName}`);
   } finally {
     client.release();
   }

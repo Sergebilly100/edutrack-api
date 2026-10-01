@@ -42,5 +42,8 @@ describe('isolated demo guards', () => {
     expect(source).not.toContain('"tenant"');
     expect(source).toContain("table_schema = 'school_demo_guard'");
     expect(source).toContain("nspname = 'school_demo_guard'");
+    expect(source).toContain('"school_demo_guard"."conduct_policy_audit"');
+    expect(source).toContain('"school_demo_guard"."conduct_grade_audit"');
+    expect(source).toContain('"conduct_decision_mode"');
   });
 });

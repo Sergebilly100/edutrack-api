@@ -83,5 +83,6 @@
   "0078_teacher_lateness.sql": "c69487e86e8e63e95bcb57a72a0657e5c85e5464a169f41535064d9022a3a8b9",
   "0079_matricule_normalized_unique.sql": "48f5d7afcb9ab53572e5e28a65a8347c0f9e4293ca19316f2cdf38542391ef64",
   "0080_grading_period_review.sql": "de1be1c9718b2cbdd095137acd2e65d455ece71bd12bd12aac582fcf027eb818",
-  "0081_grading_period_class_closures.sql": "282df66742ce08d86d71f7c4475c44e938a31e0ea607c094cb8fba8d9cf9cd85"
+  "0081_grading_period_class_closures.sql": "282df66742ce08d86d71f7c4475c44e938a31e0ea607c094cb8fba8d9cf9cd85",
+  "0082_conduct_policy_and_audit.sql": "e671f761cb0ceb02896d5378c15d52007ce17f87645e14d750b7a3c30b0b6717"
 }

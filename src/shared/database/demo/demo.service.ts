@@ -21,6 +21,7 @@ export async function provisionDemo(input: DemoOptions, databaseUrl: string, pas
       const repo = new DemoRepository(tx as unknown as TenantDb);
       const tenantId = await repo.reserve(options);
       await repo.migrate(schemaName, migrations);
+      await repo.verifyConductMigration();
       const directorId = await repo.insert('users', { role: 'director', name: 'Direction Démo',
         email: 'direction@demo.example', phone: '2250700000999', password_hash: passwordHash,
         ...(options.type === 'seeded' ? { created_at: calendar.start } : {}) });

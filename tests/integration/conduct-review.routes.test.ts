@@ -79,8 +79,8 @@ describe('actions de revue de conduite C28', () => {
   });
 
   it('déduit une seule action pour la revue ouverte et ignore la période future et le dossier non confirmé', async () => {
-    const first = await request().get('/api/v1/conduct/review-workspace').set(teacherHeaders);
-    const second = await request().get('/api/v1/conduct/review-workspace').set(teacherHeaders);
+    const first = await request().get('/api/v1/conduct/teacher-actions').set(teacherHeaders);
+    const second = await request().get('/api/v1/conduct/teacher-actions').set(teacherHeaders);
     expect(first.status, JSON.stringify(first.body)).toBe(200);
     expect(first.body.teacherActions).toEqual([expect.objectContaining({
       classId, gradingPeriodId: periodId, pendingCount: 1,
@@ -103,7 +103,7 @@ describe('actions de revue de conduite C28', () => {
       INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
       VALUES ($1::uuid, $2::uuid, $3::uuid, 'new_registration', 'confirmed')`,
     [secondStudent[0]!.id, secondClassId, schoolYearId]);
-    const separated = await request().get('/api/v1/conduct/review-workspace').set(teacherHeaders);
+    const separated = await request().get('/api/v1/conduct/teacher-actions').set(teacherHeaders);
     expect(separated.body.teacherActions).toHaveLength(2);
     expect(separated.body.teacherActions).toEqual(expect.arrayContaining([
       expect.objectContaining({ classId, gradingPeriodId: periodId, pendingCount: 1 }),
@@ -112,7 +112,7 @@ describe('actions de revue de conduite C28', () => {
     await queryTenant(`
       INSERT INTO ${tenantTable('grading_period_class_closures')} (class_id, grading_period_id)
       VALUES ($1::uuid, $2::uuid)`, [secondClassId, periodId]);
-    const closed = await request().get('/api/v1/conduct/review-workspace').set(teacherHeaders);
+    const closed = await request().get('/api/v1/conduct/teacher-actions').set(teacherHeaders);
     expect(closed.body.teacherActions).toEqual(first.body.teacherActions);
     await queryTenant(`
       DELETE FROM ${tenantTable('grading_period_class_closures')}
@@ -123,23 +123,23 @@ describe('actions de revue de conduite C28', () => {
          class_average, class_min_average, class_max_average, class_headcount, status)
       VALUES ($1::uuid, $2::uuid, $3::uuid, 12, 1, 12, 12, 12, 1, 'generated')`,
     [secondStudent[0]!.id, secondClassId, periodId]);
-    const generated = await request().get('/api/v1/conduct/review-workspace').set(teacherHeaders);
+    const generated = await request().get('/api/v1/conduct/teacher-actions').set(teacherHeaders);
     expect(generated.body.teacherActions).toEqual(first.body.teacherActions);
   });
 
   it('reflète exactement le mode Direction et retire les actions après avis et décision', async () => {
-    const before = await request().get('/api/v1/conduct/review-workspace').set(directorHeaders);
+    const before = await request().get('/api/v1/conduct/decision-workspace').set(directorHeaders);
     expect(before.body.decisionScopes).toEqual([]);
     const configured = await request().put(`/api/v1/conduct/policy/${schoolYearId}`).set(directorHeaders)
       .send({ mode: 'direction', coefficient: 1 });
     expect(configured.status, JSON.stringify(configured.body)).toBe(200);
-    const opened = await request().get('/api/v1/conduct/review-workspace').set(directorHeaders);
+    const opened = await request().get('/api/v1/conduct/decision-workspace').set(directorHeaders);
     expect(opened.body.decisionActions).toEqual(expect.arrayContaining([expect.objectContaining({
-      classId, gradingPeriodId: periodId, pendingCount: 1, studentCount: 1,
+      classId, gradingPeriodId: periodId, pendingCount: 1, studentCount: 1, schoolYearStatus: 'draft',
     })]));
     expect(opened.body.decisionActions.filter((action: { classId: string; gradingPeriodId: string }) =>
       action.classId === classId && action.gradingPeriodId === periodId)).toHaveLength(1);
-    const teacherAfterPolicy = await request().get('/api/v1/conduct/review-workspace').set(teacherHeaders);
+    const teacherAfterPolicy = await request().get('/api/v1/conduct/decision-workspace').set(teacherHeaders);
     expect(teacherAfterPolicy.body.decisionScopes).toEqual([]);
     const roster = await request().get('/api/v1/conduct/decision-students').set(directorHeaders)
       .query({ class_id: classId, grading_period_id: periodId });
@@ -148,12 +148,82 @@ describe('actions de revue de conduite C28', () => {
     const opinion = await request().post('/api/v1/conduct/inputs').set(teacherHeaders)
       .send({ student_id: studentId, grading_period_id: periodId, note: 15 });
     expect(opinion.status, JSON.stringify(opinion.body)).toBe(201);
-    const teacherResolved = await request().get('/api/v1/conduct/review-workspace').set(teacherHeaders);
+    const teacherResolved = await request().get('/api/v1/conduct/teacher-actions').set(teacherHeaders);
     expect(teacherResolved.body.teacherActions).toEqual([]);
     const decision = await request().put('/api/v1/conduct/grades').set(directorHeaders)
       .send({ student_id: studentId, grading_period_id: periodId, note: 16 });
     expect(decision.status, JSON.stringify(decision.body)).toBe(200);
-    const decisionResolved = await request().get('/api/v1/conduct/review-workspace').set(directorHeaders);
+    const decisionResolved = await request().get('/api/v1/conduct/decision-workspace').set(directorHeaders);
     expect(decisionResolved.body.decisionActions).toEqual([]);
+  });
+
+  it('garde exactement l’union des affectations et créneaux actifs, sans doublon', async () => {
+    const user = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('users')} (role, name, phone, password_hash, is_active)
+      VALUES ('teacher', 'Scope C29', $1, 'not-used', true) RETURNING id::text`, [`22506${suffix.slice(-8)}`]);
+    const teacher = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('teachers')} (user_id, username, type, subjects, hourly_rate)
+      VALUES ($1::uuid, $2, 'vacataire', '{SVT}', 4500) RETURNING id::text`, [user[0]!.id, `c29.${suffix}`]);
+    const headers = { authorization: `Bearer ${await signAccessToken({ sub: user[0]!.id, role: 'teacher', schemaName: TEST_SCHEMA_NAME })}` };
+    const unrelated = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('users')} (role, name, phone, password_hash, is_active)
+      VALUES ('teacher', 'Scope Empty C29', $1, 'not-used', true) RETURNING id::text`, [`22505${suffix.slice(-8)}`]);
+    await queryTenant(`INSERT INTO ${tenantTable('teachers')} (user_id, username, type, subjects, hourly_rate)
+      VALUES ($1::uuid, $2, 'vacataire', '{SVT}', 4500)`, [unrelated[0]!.id, `c29.empty.${suffix}`]);
+    const unrelatedHeaders = { authorization: `Bearer ${await signAccessToken({ sub: unrelated[0]!.id, role: 'teacher', schemaName: TEST_SCHEMA_NAME })}` };
+
+    const createClass = async (label: string): Promise<string> => {
+      const result = await queryTenant<IdRow>(`
+        INSERT INTO ${tenantTable('classes')} (name, level_id, school_year_id, is_active)
+        VALUES ($1, $2::uuid, $3::uuid, true) RETURNING id::text`, [`C29 ${label} ${suffix}`, levelId, schoolYearId]);
+      const id = result[0]!.id;
+      const student = await queryTenant<IdRow>(`
+        INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
+        VALUES ($1::uuid, 'Scope', 'C29', $2) RETURNING id::text`, [id, `C29-${label}-${suffix}`]);
+      await queryTenant(`INSERT INTO ${tenantTable('enrollments')}
+        (student_id, class_id, school_year_id, type, status)
+        VALUES ($1::uuid, $2::uuid, $3::uuid, 'new_registration', 'confirmed')`,
+      [student[0]!.id, id, schoolYearId]);
+      return id;
+    };
+    const assignmentClass = await createClass('one');
+    const secondClass = await createClass('two');
+    const scheduleClass = await createClass('schedule');
+    const classes = async () => {
+      const context = await request().get('/api/v1/academic/teacher-context').set(headers);
+      const actions = await request().get('/api/v1/conduct/teacher-actions').set(headers);
+      expect(context.status, JSON.stringify(context.body)).toBe(200);
+      expect(actions.status, JSON.stringify(actions.body)).toBe(200);
+      const contextIds = context.body.classes.map((item: { id: string }) => item.id).sort();
+      const actionIds = actions.body.teacherActions.map((item: { classId: string }) => item.classId).sort();
+      expect(actionIds).toEqual(contextIds);
+      return contextIds;
+    };
+
+    const empty = await request().get('/api/v1/academic/teacher-context').set(unrelatedHeaders);
+    const emptyActions = await request().get('/api/v1/conduct/teacher-actions').set(unrelatedHeaders);
+    expect(empty.body.classes).toEqual([]);
+    expect(emptyActions.body.teacherActions).toEqual([]);
+
+    await queryTenant(`INSERT INTO ${tenantTable('teacher_subject_assignments')} (teacher_id, subject_id, class_id)
+      VALUES ($1::uuid, $2::uuid, $3::uuid)`, [teacher[0]!.id, subjectId, assignmentClass]);
+    expect(await classes()).toEqual([assignmentClass]);
+
+    const secondSubject = await queryTenant<IdRow>(`INSERT INTO ${tenantTable('subjects')}
+      (level_id, name, coefficient) VALUES ($1::uuid, $2, 1) RETURNING id::text`, [levelId, `C29 sujet ${suffix}`]);
+    await queryTenant(`INSERT INTO ${tenantTable('teacher_subject_assignments')} (teacher_id, subject_id, class_id)
+      VALUES ($1::uuid, $2::uuid, $3::uuid)`, [teacher[0]!.id, secondSubject[0]!.id, assignmentClass]);
+    expect(await classes()).toEqual([assignmentClass]);
+
+    await queryTenant(`INSERT INTO ${tenantTable('teacher_subject_assignments')} (teacher_id, subject_id, class_id)
+      VALUES ($1::uuid, $2::uuid, $3::uuid)`, [teacher[0]!.id, subjectId, secondClass]);
+    expect(await classes()).toEqual([assignmentClass, secondClass].sort());
+
+    await queryTenant(`INSERT INTO ${tenantTable('schedules')}
+      (schedule_period_id, teacher_id, class_id, room_id, time_slot_id, day_of_week, subject, is_active)
+      SELECT schedule_period_id, $1::uuid, $2::uuid, room_id, time_slot_id, day_of_week, subject, true
+      FROM ${tenantTable('schedules')} WHERE id = $3::uuid`, [teacher[0]!.id, scheduleClass, (await queryTenant<IdRow>(
+      `SELECT id::text FROM ${tenantTable('schedules')} LIMIT 1`))[0]!.id]);
+    expect(await classes()).toEqual([assignmentClass, secondClass, scheduleClass].sort());
   });
 });

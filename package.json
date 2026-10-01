@@ -26,7 +26,8 @@
     "demo:create": "node --import tsx src/shared/database/demo/demo-create.ts",
     "finance:recalculate-caches": "node --import tsx src/shared/database/recalculate-financial-caches.ts",
     "population:diagnose": "node --import tsx src/shared/database/diagnose-school-population.ts",
-    "calendar:diagnose": "node --import tsx src/shared/database/diagnose-grading-period-calendar.ts"
+    "calendar:diagnose": "node --import tsx src/shared/database/diagnose-grading-period-calendar.ts",
+    "teacher-classes:diagnose": "node --import tsx src/shared/database/diagnose-teacher-classes.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1030.0",
