@@ -125,3 +125,16 @@ describe('StudentsRepository.listStudents()', () => {
     expect(getCapturedSql()).not.toContain("sy.status = 'active'");
   });
 });
+
+describe('StudentsRepository.findCurrentConfirmedSchoolYear()', () => {
+  it('réutilise la portée C24, y compris l’activité de l’élève et de sa classe', async () => {
+    const { repository, getCapturedSql } = buildRepository();
+    await repository.findCurrentConfirmedSchoolYear('66f048d8-d053-48e2-b4a8-7fce3ebc3ed8');
+    const query = getCapturedSql();
+    expect(query).toContain("school_year.status = 'active'");
+    expect(query).toContain("membership_enrollment.status = 'confirmed'");
+    expect(query).toContain('membership_student.is_active = true');
+    expect(query).toContain('membership_class.is_active = true');
+    expect(query).toContain('membership_enrollment.school_year_id = school_year.id');
+  });
+});

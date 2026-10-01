@@ -98,13 +98,13 @@ describe('F15/F20 — frontières des calculs financiers', () => {
 describe('F28 — conduite verrouillée', () => {
   it.each([
     { completed: true, current: true, code: 'GRADING_PERIOD_COMPLETED' },
-    { completed: false, current: false, code: 'GRADING_PERIOD_NOT_CURRENT' },
+    { completed: false, current: false, code: 'CONDUCT_REVIEW_NOT_OPEN' },
   ])('refuse la décision finale : $code même pour le professeur principal', async ({ completed, current, code }) => {
     const repository = {
-      findStudentContext: vi.fn().mockResolvedValue({ studentId: 'student' }),
+      findStudentContext: vi.fn().mockResolvedValue({ studentId: 'student', classId: 'class' }),
       gradingPeriodExists: vi.fn().mockResolvedValue(true),
       isGradingPeriodCompleted: vi.fn().mockResolvedValue(completed),
-      isCurrentGradingPeriod: vi.fn().mockResolvedValue(current),
+      isConductReviewOpen: vi.fn().mockResolvedValue(current),
       isHomeroomTeacherForStudent: vi.fn().mockResolvedValue(true),
       upsertConductGrade: vi.fn(),
     };

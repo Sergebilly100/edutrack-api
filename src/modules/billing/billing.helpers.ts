@@ -1,4 +1,14 @@
 import { z } from 'zod';
+import type { PermissionKey } from '../../shared/types/index.js';
+
+export const canReadReportCardJob = (
+  job: { schemaName: string; parentId?: string },
+  viewer: { schemaName?: string; role?: string; userId?: string; permissions?: ReadonlySet<PermissionKey> }
+): boolean => {
+  if (job.schemaName !== viewer.schemaName) return false;
+  if (viewer.role === 'parent') return Boolean(job.parentId && job.parentId === viewer.userId);
+  return viewer.permissions?.has('report_cards.view') === true || viewer.permissions?.has('enrollments.view') === true;
+};
 
 /**
  * Helpers métier pour le module billing.

@@ -34,13 +34,14 @@ describe('C13 — suivi enseignant et régénération du job dashboard', () => {
       date.setUTCDate(date.getUTCDate() - days);
       return date.toISOString().slice(0, 10);
     };
-    for (const days of [0, 1, 2]) {
+    // Dates passées : un pointage à 06:06 aujourd'hui serait futur avant 06:01.
+    for (const days of [1, 2, 3]) {
       const date = dateBefore(days);
       const result = await request().post('/api/v1/attendance/check-in').set(teacherHeaders).send({
-        schedule_id: scheduleId, date, client_timestamp: `${date}T06:0${days === 2 ? 5 : 6}:00.000Z`,
+        schedule_id: scheduleId, date, client_timestamp: `${date}T06:0${days === 3 ? 5 : 6}:00.000Z`,
       });
       expect(result.status).toBe(200);
-      expect(result.body.data.status).toBe(days === 2 ? 'present' : 'late');
+      expect(result.body.data.status).toBe(days === 3 ? 'present' : 'late');
     }
     // La fenêtre inclut J-29, exclut J-30 ainsi que les données futures.
     await queryTenant(
@@ -64,7 +65,7 @@ describe('C13 — suivi enseignant et régénération du job dashboard', () => {
     await queryTenant(
       `INSERT INTO ${tenantTable('attendances_teacher')} (teacher_id, schedule_id, date, status)
        SELECT $1::uuid, $2::uuid, CURRENT_DATE - offsets.day, 'absent'
-       FROM (VALUES (3), (4), (5)) AS offsets(day)`, [teacherId, scheduleId]
+       FROM (VALUES (4), (5), (6)) AS offsets(day)`, [teacherId, scheduleId]
     );
     await recalculate();
     expect(await readRisk()).toMatchObject({ absences_signal: true, lateness_signal: true, risk_score: 2, level: 'warning' });

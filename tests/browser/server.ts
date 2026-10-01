@@ -31,8 +31,8 @@ const [registrationClass] = await queryTenant<{ id: string }>(
   [level!.id, schoolYear!.id]);
 const [klass] = await queryTenant<{ id: string }>("SELECT id FROM classes WHERE name='Classe QA'");
 const [subject] = await queryTenant<{ id: string }>("INSERT INTO subjects (level_id, name, coefficient) VALUES ($1, 'Mathematiques', 4) RETURNING id", [level!.id]);
-const [period] = await queryTenant<{ id: string }>(`INSERT INTO grading_periods (school_year_id, type, order_index, label, start_date, end_date)
- VALUES ($1, 'trimester', 1, 'Période QA', $2, $3) RETURNING id`, [schoolYear!.id, `${year}-01-01`, `${year}-12-31`]);
+const [period] = await queryTenant<{ id: string }>(`INSERT INTO grading_periods (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+ VALUES ($1, 'trimester', 1, 'Période QA', $2, $3, $3) RETURNING id`, [schoolYear!.id, `${year}-01-01`, `${year}-12-31`]);
 const director = await getAuthHeaders('director');
 const teacher = await getAuthHeaders('teacher');
 const assertOk = (response: { status: number; body: unknown }) => {

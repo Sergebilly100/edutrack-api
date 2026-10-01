@@ -25,6 +25,7 @@ import adminController from './modules/admin/admin.controller.js';
 import academicController from './modules/academic/academic.controller.js';
 import classDecisionsController from './modules/class-decisions/class-decisions.controller.js';
 import conductController from './modules/conduct/conduct.controller.js';
+import conductReviewController from './modules/conduct-review/conduct-review.controller.js';
 import riskController from './modules/risk/risk.controller.js';
 import dashboardActionsController from './modules/dashboard-actions/dashboard-actions.controller.js';
 import reportCardsController from './modules/report-cards/report-cards.controller.js';
@@ -302,6 +303,7 @@ app.register(adminController, { deadLetterQueue, midyearImportFactory: buildMidy
 app.register(academicController);
 app.register(classDecisionsController);
 app.register(conductController);
+app.register(conductReviewController);
 app.register(riskController);
 app.register(dashboardActionsController);
 app.register(reportCardsController, { pdfQueue: billingPdfQueue });

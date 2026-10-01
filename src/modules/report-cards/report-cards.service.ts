@@ -64,7 +64,12 @@ export const computeWeightedGeneralAverage = (
 export class ReportCardsService {
   constructor(private readonly repository: ReportCardsRepository) {}
 
-  async generateForClass(classId: string, gradingPeriodId: string): Promise<{ generatedCount: number; periodCompleted: boolean }> {
+  async listConductAmbiguities() {
+    return { periods: await this.repository.listConductAmbiguities() };
+  }
+
+  // periodCompleted remains a compatibility alias for the class-level result.
+  async generateForClass(classId: string, gradingPeriodId: string): Promise<{ generatedCount: number; classClosed: boolean; periodCompleted: boolean }> {
     const klass = await this.repository.findClassContext(classId);
     if (!klass) {
       throw new ReportCardsModuleError('Classe introuvable', 404, 'CLASS_NOT_FOUND');
@@ -74,19 +79,18 @@ export class ReportCardsService {
     if (!period || period.schoolYearId !== klass.schoolYearId) {
       throw new ReportCardsModuleError('Période introuvable pour cette classe', 404, 'GRADING_PERIOD_NOT_FOUND');
     }
-    const periodIsCurrent = await this.repository.isCurrentGradingPeriod(klass.schoolYearId, gradingPeriodId);
-    if (!periodIsCurrent) {
-      const roster = await this.repository.listClassStudents(classId);
-      const existingCards = await Promise.all(roster.map((student) => this.repository.findExistingCard(student.id, gradingPeriodId)));
-      if (roster.length > 0 && existingCards.every((card) => card !== null)) {
-        // Rejouer une génération déjà complète reste idempotent et ne modifie
-        // jamais la période courante.
-        return { generatedCount: 0, periodCompleted: true };
-      }
+    const wasClosed = await this.repository.isClassReviewClosed(gradingPeriodId, classId);
+    const roster = await this.repository.listClassStudents(classId);
+    const existingCards = await Promise.all(roster.map((student) => this.repository.findExistingCard(student.id, gradingPeriodId)));
+    if (wasClosed && (existingCards.some(card => card === null) || existingCards.every(card => card?.status === 'published'))) {
+      return { generatedCount: 0, classClosed: true, periodCompleted: true };
+    }
+    const reviewOpen = await this.repository.isBulletinGenerationAvailable(klass.schoolYearId, gradingPeriodId);
+    if (!reviewOpen) {
       throw new ReportCardsModuleError(
-        'Les bulletins ne peuvent être générés que pour la période scolaire en cours',
+        'Les bulletins peuvent être générés dès le début de revue de cette période',
         409,
-        'GRADING_PERIOD_NOT_CURRENT'
+        'BULLETIN_REVIEW_NOT_OPEN'
       );
     }
 
@@ -99,10 +103,7 @@ export class ReportCardsService {
       );
     }
 
-    const roster = await this.repository.listClassStudents(classId);
-
     const subjectAverages = await this.repository.listSubjectAverages(classId, gradingPeriodId);
-    const cachedGeneralAverages = await this.repository.listGeneralAverages(classId, gradingPeriodId);
     const levelSubjects = await this.repository.listLevelSubjects(klass.levelId);
     const isLastPeriod = await this.repository.isLastPeriodOfYear(klass.schoolYearId, gradingPeriodId);
 
@@ -112,6 +113,14 @@ export class ReportCardsService {
         await this.repository.findConductGrade(student.id, gradingPeriodId),
       ] as const))
     );
+    const missingConduct = roster.filter(student => !conducts.get(student.id)).map(student => student.fullName);
+    if (missingConduct.length > 0) {
+      throw new ReportCardsModuleError(
+        `Note finale de conduite manquante pour : ${missingConduct.join(', ')}`,
+        409,
+        'CONDUCT_GRADES_PENDING'
+      );
+    }
     const generalAverages = roster.flatMap((student) => {
       const entries = subjectAverages
         .filter((row) => row.studentId === student.id)
@@ -121,9 +130,7 @@ export class ReportCardsService {
         });
       const conduct = conducts.get(student.id);
       if (conduct) entries.push({ average: conduct.note, coefficient: conduct.coefficient });
-      const average = computeWeightedGeneralAverage(entries)
-        ?? cachedGeneralAverages.find((row) => row.studentId === student.id)?.average
-        ?? null;
+      const average = computeWeightedGeneralAverage(entries);
       return average === null ? [] : [{ studentId: student.id, average }];
     });
     const stats = computeClassStats(generalAverages.map((row) => row.average));
@@ -150,6 +157,7 @@ export class ReportCardsService {
 
     const headcount = Math.max(stats.headcount, roster.length);
     let generatedCount = 0;
+    let newlyCreatedCount = 0;
     let skippedPublished = 0;
 
     for (const student of roster) {
@@ -213,6 +221,8 @@ export class ReportCardsService {
         classDecisionId: decisionId,
         lines,
       });
+      await this.repository.upsertGeneralAverage(student.id, gradingPeriodId, studentGeneral.average, generalRanks.get(student.id) ?? headcount);
+      if (!existingCard) newlyCreatedCount += 1;
       generatedCount += 1;
     }
 
@@ -224,10 +234,10 @@ export class ReportCardsService {
       );
     }
 
-    return {
-      generatedCount,
-      periodCompleted: !(await this.repository.isCurrentGradingPeriod(klass.schoolYearId, gradingPeriodId)),
-    };
+    const classClosed = roster.length > 0
+      && existingCards.filter((card) => card !== null).length + newlyCreatedCount >= roster.length;
+    if (classClosed) await this.repository.closeClassReview(gradingPeriodId, classId);
+    return { generatedCount, classClosed, periodCompleted: classClosed };
   }
 
   async publish(cardId: string, userId: string): Promise<void> {
@@ -266,8 +276,9 @@ export class ReportCardsService {
         className: row.class_name,
         headcount: row.headcount,
         studentsWithGeneralAverage: row.with_general,
+        studentsWithFinalConduct: row.with_conduct,
         subjects,
-        readyToGenerate: row.headcount > 0 && row.with_general >= row.headcount,
+        readyToGenerate: row.headcount > 0 && row.with_general >= row.headcount && row.with_conduct >= row.headcount,
       };
     });
   }
@@ -296,7 +307,7 @@ export class ReportCardsService {
       studentName: card.studentName,
       className: card.className,
       periodLabel: card.periodLabel,
-      schoolYearLabel: '',
+      schoolYearLabel: card.schoolYearLabel,
       generalAverage: card.generalAverage,
       generalRank: card.rank,
       classHeadcount: card.classHeadcount,
@@ -347,6 +358,7 @@ export class ReportCardsService {
       className: card.class_name,
       gradingPeriodId: card.grading_period_id,
       periodLabel: card.period_label,
+      schoolYearLabel: card.school_year_label,
       generalAverage: Number(card.general_average),
       rank: card.rank,
       classAverage: Number(card.class_average),

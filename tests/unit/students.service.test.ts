@@ -17,6 +17,10 @@ const repository = {
   listStudents: vi.fn(),
   createStudent: vi.fn(),
   findStudentDetailById: vi.fn(),
+  findCurrentConfirmedSchoolYear: vi.fn(),
+  findLatestHistoricalConfirmedSchoolYear: vi.fn(),
+  findActiveSchoolYear: vi.fn(),
+  hasConfirmedEnrollmentInActiveSchoolYear: vi.fn(),
   updateStudent: vi.fn(),
   softDeleteStudent: vi.fn(),
   findScheduleById: vi.fn(),
@@ -40,6 +44,53 @@ const buildService = (dependencies: Record<string, unknown> = {}) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe('getCurrentStudentProfile()', () => {
+  it('refuse le dossier sans inscription confirmée dans l’année active', async () => {
+    repository.findCurrentConfirmedSchoolYear.mockResolvedValue(null);
+    await expect(buildService().getCurrentStudentProfile('student-1'))
+      .rejects.toMatchObject({ statusCode: 404, code: 'STUDENT_NOT_CURRENTLY_ENROLLED' });
+    expect(repository.findStudentDetailById).not.toHaveBeenCalled();
+  });
+
+  it('renvoie la fiche et l’année active après confirmation', async () => {
+    const activeSchoolYear = { id: 'year-1', label: '2026-2027' };
+    repository.findCurrentConfirmedSchoolYear.mockResolvedValue(activeSchoolYear);
+    repository.findStudentDetailById.mockResolvedValue({ id: 'student-1', firstName: 'Awa' });
+    await expect(buildService().getCurrentStudentProfile('student-1'))
+      .resolves.toMatchObject({ id: 'student-1', activeSchoolYear });
+  });
+});
+
+describe('getHistoricalStudentProfile()', () => {
+  it('refuse un profil sans inscription antérieure confirmée', async () => {
+    repository.findLatestHistoricalConfirmedSchoolYear.mockResolvedValue(null);
+    await expect(buildService().getHistoricalStudentProfile('student-1'))
+      .rejects.toMatchObject({ statusCode: 404, code: 'HISTORICAL_STUDENT_PROFILE_NOT_FOUND' });
+    expect(repository.findStudentDetailById).not.toHaveBeenCalled();
+  });
+
+  it('ouvre le dossier passé même si une réinscription en cours reste non confirmée', async () => {
+    repository.findLatestHistoricalConfirmedSchoolYear.mockResolvedValue({ id: 'old-year', label: '2024-2025', className: '6e A' });
+    repository.findActiveSchoolYear.mockResolvedValue({ id: 'active-year', label: '2026-2027' });
+    repository.hasConfirmedEnrollmentInActiveSchoolYear.mockResolvedValue(false);
+    repository.findStudentDetailById.mockResolvedValue({ id: 'student-1', documents: [{ id: 'document-1' }] });
+    await expect(buildService().getHistoricalStudentProfile('student-1')).resolves.toMatchObject({
+      id: 'student-1', activeSchoolYear: { label: '2026-2027' },
+      latestConfirmedSchoolYear: { label: '2024-2025' }, confirmedInActiveYear: false,
+      documents: [{ id: 'document-1' }],
+    });
+  });
+
+  it('indique une inscription confirmée actuelle même si le profil est inactif', async () => {
+    repository.findLatestHistoricalConfirmedSchoolYear.mockResolvedValue({ id: 'old-year', label: '2024-2025', className: '6e A' });
+    repository.findActiveSchoolYear.mockResolvedValue({ id: 'active-year', label: '2026-2027' });
+    repository.hasConfirmedEnrollmentInActiveSchoolYear.mockResolvedValue(true);
+    repository.findStudentDetailById.mockResolvedValue({ id: 'student-1', isActive: false });
+    await expect(buildService().getHistoricalStudentProfile('student-1'))
+      .resolves.toMatchObject({ confirmedInActiveYear: true, isActive: false });
+  });
 });
 
 // ─── listStudents ─────────────────────────────────────────────────────────────

@@ -11,7 +11,9 @@ import {
 const repository = {
   findClassContext: vi.fn(),
   findGradingPeriod: vi.fn(),
-  isCurrentGradingPeriod: vi.fn(),
+  isBulletinGenerationAvailable: vi.fn(),
+  isClassReviewClosed: vi.fn(),
+  closeClassReview: vi.fn(),
   isLastPeriodOfYear: vi.fn(),
   listIncompleteSubjects: vi.fn(),
   listClassStudents: vi.fn(),
@@ -22,6 +24,7 @@ const repository = {
   findValidatedDecision: vi.fn(),
   findExistingCard: vi.fn(),
   replaceGeneratedCard: vi.fn(),
+  upsertGeneralAverage: vi.fn(),
   publishCard: vi.fn(),
   listPublishableCardsOfClass: vi.fn(),
   listPublishedSummariesForStudent: vi.fn(),
@@ -63,6 +66,14 @@ describe('computeWeightedGeneralAverage (matières + conduite)', () => {
       { average: 17, coefficient: 1 },
     ])).toBe(15.286);
   });
+  it('fait évoluer la moyenne et le rang avec le coefficient annuel', () => {
+    const a = computeWeightedGeneralAverage([{ average: 12, coefficient: 2 }, { average: 20, coefficient: 2 }])!;
+    const b = computeWeightedGeneralAverage([{ average: 15, coefficient: 2 }, { average: 10, coefficient: 2 }])!;
+    expect(a).toBe(16);
+    expect(b).toBe(12.5);
+    expect(computeClassStats([a, b])).toEqual({ average: 14.25, min: 12.5, max: 16, headcount: 2 });
+    expect(computeRankMap([{ key: 'a', value: a }, { key: 'b', value: b }]).get('a')).toBe(1);
+  });
 });
 
 describe('ReportCardsService.generateForClass', () => {
@@ -72,7 +83,9 @@ describe('ReportCardsService.generateForClass', () => {
   const baseRepo = (): void => {
     repository.findClassContext.mockResolvedValue(classContext);
     repository.findGradingPeriod.mockResolvedValue(period);
-    repository.isCurrentGradingPeriod.mockResolvedValue(true);
+    repository.isBulletinGenerationAvailable.mockResolvedValue(true);
+    repository.isClassReviewClosed.mockResolvedValue(false);
+    repository.closeClassReview.mockResolvedValue(undefined);
     repository.isLastPeriodOfYear.mockResolvedValue(false);
     repository.listIncompleteSubjects.mockResolvedValue([]);
     repository.listLevelSubjects.mockResolvedValue([
@@ -80,6 +93,7 @@ describe('ReportCardsService.generateForClass', () => {
       { id: 'subject-2', name: 'Français', coefficient: 2 },
     ]);
     repository.findConductGrade.mockResolvedValue(null);
+    repository.findExistingCard.mockResolvedValue(null);
     repository.findValidatedDecision.mockResolvedValue(null);
     repository.replaceGeneratedCard.mockImplementation(async () =>
       crypto.randomUUID()
@@ -107,20 +121,21 @@ describe('ReportCardsService.generateForClass', () => {
       { studentId: 'student-b', subjectId: 'subject-2', average: 8 },
     ]);
     repository.findExistingCard.mockResolvedValue(null);
-    // Conduite uniquement pour student-a
+    // La conduite finale est obligatoire pour chaque élève confirmé.
     repository.findConductGrade.mockImplementation(async (studentId: string) =>
-      studentId === 'student-a' ? { note: 17, coefficient: 1 } : null
+      studentId === 'student-a' ? { note: 17, coefficient: 1 } : { note: 12, coefficient: 1 }
     );
 
     const service = new ReportCardsService(repository);
     const result = await service.generateForClass('class-1', 'period-1');
     expect(result.generatedCount).toBe(2);
+    expect(repository.closeClassReview).toHaveBeenCalledWith('period-1', 'class-1');
 
     const firstCall = repository.replaceGeneratedCard.mock.calls[0]![0] as Record<string, unknown>;
     expect(firstCall.studentId).toBe('student-a');
     // Stats de classe snapshotées
-    expect(firstCall.classAverage).toBe(12.643);
-    expect(firstCall.classMinAverage).toBe(10);
+    expect(firstCall.classAverage).toBe(12.786);
+    expect(firstCall.classMinAverage).toBe(10.286);
     expect(firstCall.classMaxAverage).toBe(15.286);
     expect(firstCall.classHeadcount).toBe(2);
     // Rang général
@@ -135,7 +150,8 @@ describe('ReportCardsService.generateForClass', () => {
 
     const secondCall = repository.replaceGeneratedCard.mock.calls[1]![0] as Record<string, unknown>;
     expect(secondCall.rank).toBe(2);
-    expect((secondCall.lines as unknown[])).toHaveLength(2); // pas de conduite pour student-b
+    expect((secondCall.lines as unknown[])).toHaveLength(3);
+    expect(repository.upsertGeneralAverage).toHaveBeenCalledWith('student-a', 'period-1', 15.286, 1);
   });
 
   it("n'attache la décision de fin d'année que sur la dernière période", async () => {
@@ -144,6 +160,7 @@ describe('ReportCardsService.generateForClass', () => {
     repository.listGeneralAverages.mockResolvedValue([{ studentId: 'student-a', average: 15 }]);
     repository.listSubjectAverages.mockResolvedValue([]);
     repository.findExistingCard.mockResolvedValue(null);
+    repository.findConductGrade.mockResolvedValue({ note: 15, coefficient: 1 });
 
     // Période NON finale
     repository.isLastPeriodOfYear.mockResolvedValue(false);
@@ -158,6 +175,7 @@ describe('ReportCardsService.generateForClass', () => {
     repository.listGeneralAverages.mockResolvedValue([{ studentId: 'student-a', average: 15 }]);
     repository.listSubjectAverages.mockResolvedValue([]);
     repository.findExistingCard.mockResolvedValue(null);
+    repository.findConductGrade.mockResolvedValue({ note: 15, coefficient: 1 });
     repository.findValidatedDecision.mockResolvedValue({ id: 'decision-1', decision: 'promoted' });
 
     await service.generateForClass('class-1', 'period-1');
@@ -166,7 +184,7 @@ describe('ReportCardsService.generateForClass', () => {
     });
   });
 
-  it("saute les bulletins publiés sans faire échouer la génération de masse", async () => {
+  it("recalcule le bulletin non publié et préserve le bulletin publié", async () => {
     baseRepo();
     repository.listClassStudents.mockResolvedValue([
       { id: 'student-published', fullName: 'Publié' },
@@ -183,19 +201,33 @@ describe('ReportCardsService.generateForClass', () => {
         : { id: 'card-draft', status: 'generated' as const }
     );
     repository.replaceGeneratedCard.mockResolvedValue('regen-id');
+    repository.findConductGrade.mockResolvedValue({ note: 15, coefficient: 1 });
 
     const service = new ReportCardsService(repository);
     const result = await service.generateForClass('class-1', 'period-1');
 
-    expect(result.generatedCount).toBe(1);
+    expect(result).toEqual({ generatedCount: 1, classClosed: true, periodCompleted: true });
     expect(repository.replaceGeneratedCard).toHaveBeenCalledTimes(1);
-    expect((repository.replaceGeneratedCard.mock.calls[0]![0] as Record<string, unknown>).studentId).toBe(
-      'student-draft'
-    );
+    expect(repository.closeClassReview).toHaveBeenCalledWith('period-1', 'class-1');
+  });
+
+  it('garde la revue clôturée même après une nouvelle inscription confirmée', async () => {
+    baseRepo();
+    repository.isClassReviewClosed.mockResolvedValue(true);
+    const service = new ReportCardsService(repository);
+
+    expect(await service.generateForClass('class-1', 'period-1')).toEqual({
+      generatedCount: 0,
+      classClosed: true,
+      periodCompleted: true,
+    });
+    expect(repository.listClassStudents).toHaveBeenCalled();
+    expect(repository.replaceGeneratedCard).not.toHaveBeenCalled();
   });
 
   it("échoue clairement quand aucune moyenne n'est calculée", async () => {
     baseRepo();
+    repository.listClassStudents.mockResolvedValue([]);
     repository.listGeneralAverages.mockResolvedValue([]);
 
     const service = new ReportCardsService(repository);
@@ -203,6 +235,15 @@ describe('ReportCardsService.generateForClass', () => {
       code: 'NO_AVERAGES_COMPUTED',
       statusCode: 409,
     });
+  });
+
+  it('refuse la génération si un élève confirmé est sans conduite finale', async () => {
+    baseRepo();
+    repository.listClassStudents.mockResolvedValue([{ id: 'student-a', fullName: 'Awa Koné' }]);
+    repository.listSubjectAverages.mockResolvedValue([{ studentId: 'student-a', subjectId: 'subject-1', average: 14 }]);
+    await expect(new ReportCardsService(repository).generateForClass('class-1', 'period-1'))
+      .rejects.toMatchObject({ code: 'CONDUCT_GRADES_PENDING', statusCode: 409 });
+    expect(repository.replaceGeneratedCard).not.toHaveBeenCalled();
   });
 
   it('refuse la génération tant qu’une matière de la classe n’est pas validée', async () => {
@@ -214,7 +255,7 @@ describe('ReportCardsService.generateForClass', () => {
       code: 'SUBJECT_AVERAGES_PENDING',
       statusCode: 409,
     });
-    expect(repository.listClassStudents).not.toHaveBeenCalled();
+    expect(repository.listClassStudents).toHaveBeenCalledWith('class-1');
   });
 });
 

@@ -1481,6 +1481,7 @@ type GradingPeriodTemplate = {
   label: string;
   orderIndex: number;
   startDate: string;
+  reviewStartDate: string;
   endDate: string;
 };
 
@@ -1494,18 +1495,29 @@ const buildGradingPeriodTemplates = (
   const end = new Date(`${endDate}T00:00:00.000Z`);
   const totalDays = Math.floor((end.getTime() - start.getTime()) / 86_400_000) + 1;
 
-  return Array.from({ length: count }, (_, index) => {
+  const ends = Array.from({ length: count }, (_, index) => {
     const periodEnd = new Date(start);
     const periodEndOffset = index === count - 1
       ? totalDays - 1
       : Math.floor(((index + 1) * totalDays) / count) - 1;
     periodEnd.setUTCDate(periodEnd.getUTCDate() + periodEndOffset);
+    return periodEnd.toISOString().slice(0, 10);
+  });
+  const reviewStarts: string[] = [];
+  ends.forEach((periodEnd, index) => {
+    const review = new Date(`${periodEnd}T00:00:00.000Z`);
+    review.setUTCDate(review.getUTCDate() - 30);
+    const periodStart = index === 0 ? startDate : reviewStarts[index - 1]!;
+    reviewStarts.push(review.toISOString().slice(0, 10) < periodStart ? periodStart : review.toISOString().slice(0, 10));
+  });
+  return ends.map((periodEnd, index) => {
     const ordinal = index + 1;
     return {
       label: type === 'trimester' ? `${ordinal}${ordinal === 1 ? 'er' : 'e'} trimestre` : `${ordinal}${ordinal === 1 ? 'er' : 'e'} semestre`,
       orderIndex: ordinal,
-      startDate: new Date(start.getTime() + Math.floor((index * totalDays) / count) * 86_400_000).toISOString().slice(0, 10),
-      endDate: periodEnd.toISOString().slice(0, 10),
+      startDate: index === 0 ? startDate : reviewStarts[index - 1]!,
+      reviewStartDate: reviewStarts[index]!,
+      endDate: periodEnd,
     };
   });
 };
@@ -1614,8 +1626,8 @@ export const openSchoolYear = async (
 
       for (const period of buildGradingPeriodTemplates(payload.start_date, payload.end_date, payload.period_type)) {
         await txDb.execute(sql`
-          INSERT INTO grading_periods (school_year_id, type, order_index, label, start_date, end_date)
-          VALUES (${year.id}::uuid, ${payload.period_type}::grading_period_type, ${period.orderIndex}, ${period.label}, ${period.startDate}::date, ${period.endDate}::date)
+          INSERT INTO grading_periods (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+          VALUES (${year.id}::uuid, ${payload.period_type}::grading_period_type, ${period.orderIndex}, ${period.label}, ${period.startDate}::date, ${period.reviewStartDate}::date, ${period.endDate}::date)
         `);
       }
 

@@ -84,14 +84,18 @@ describe('admin school-year routes (super admin)', () => {
     expect(statuses).toContainEqual({ label: previousLabel, status: 'closed' });
     expect(statuses).toContainEqual({ label: `open-${suffix}`, status: 'active' });
 
-    const periods = await queryTenant<{ label: string; type: string; order_index: number }>(
-      `SELECT label, type::text, order_index FROM ${tenantTable('grading_periods')} WHERE school_year_id = (SELECT id FROM ${tenantTable('school_years')} WHERE label = $1) ORDER BY order_index`,
+    const periods = await queryTenant<{ label: string; type: string; order_index: number; start_date: string; review_start_date: string; end_date: string }>(
+      `SELECT label, type::text, order_index, start_date::text, review_start_date::text, end_date::text FROM ${tenantTable('grading_periods')} WHERE school_year_id = (SELECT id FROM ${tenantTable('school_years')} WHERE label = $1) ORDER BY order_index`,
       [`open-${suffix}`]
     );
-    expect(periods).toEqual([
+    expect(periods).toMatchObject([
       { label: '1er semestre', type: 'semester', order_index: 1 },
       { label: '2e semestre', type: 'semester', order_index: 2 },
     ]);
+    expect(periods[1]!.start_date).toBe(periods[0]!.review_start_date);
+    expect(periods[0]!.start_date < periods[0]!.review_start_date).toBe(true);
+    expect(periods[0]!.review_start_date < periods[0]!.end_date).toBe(true);
+    expect(periods[1]!.review_start_date < periods[1]!.end_date).toBe(true);
 
     // L'affichage "année scolaire active" du tenant est synchronisé.
     const tenantRow = await queryPublic<{ active_school_year: string }>(
@@ -99,6 +103,30 @@ describe('admin school-year routes (super admin)', () => {
       [tenantId]
     );
     expect(tenantRow[0]?.active_school_year).toBe('09/2091 - 06/2092');
+  });
+
+  it('prépare trois trimestres avec une transition au début de chaque revue', async () => {
+    await resetActiveYears();
+    const label = `trimesters-${suffix}`;
+    const response = await request()
+      .post(`/api/v1/admin/schools/${tenantId}/school-year/open`)
+      .set(adminHeaders)
+      .send({ label, start_date: '2092-09-01', end_date: '2093-06-30', period_type: 'trimester' });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
+    const periods = await queryTenant<{ type: string; order_index: number; start_date: string; review_start_date: string; end_date: string }>(
+      `SELECT type::text, order_index, start_date::text, review_start_date::text, end_date::text FROM ${tenantTable('grading_periods')} WHERE school_year_id = (SELECT id FROM ${tenantTable('school_years')} WHERE label = $1) ORDER BY order_index`,
+      [label]
+    );
+    expect(periods).toHaveLength(3);
+    expect(periods.map((period) => [period.type, period.order_index])).toEqual([
+      ['trimester', 1], ['trimester', 2], ['trimester', 3],
+    ]);
+    for (const [index, period] of periods.entries()) {
+      expect(period.start_date < period.review_start_date).toBe(true);
+      expect(period.review_start_date < period.end_date).toBe(true);
+      if (index > 0) expect(period.start_date).toBe(periods[index - 1]!.review_start_date);
+    }
   });
 
   it('renvoie le statut de l\u2019année active et de la fenêtre de fin d\u2019année', async () => {

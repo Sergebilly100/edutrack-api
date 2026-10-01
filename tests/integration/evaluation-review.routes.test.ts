@@ -45,14 +45,14 @@ describe('consultation direction des évaluations', () => {
       VALUES ($1, $2, $3), ($4, $5, $6), ($7, $8, $9)`,
     [teacherId, subject, classId, secondaryTeacher, otherYearSubject, secondaryClass, teacherId, subject, futureClass]);
     const period = (await queryTenant<{ id: string }>(`
-      INSERT INTO grading_periods (school_year_id, type, order_index, label, start_date, end_date)
-      VALUES ($1, 'trimester', 1, 'Premier trimestre', '2020-09-01', '2020-12-20') RETURNING id`, [year]))[0]!.id;
+      INSERT INTO grading_periods (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+      VALUES ($1, 'trimester', 1, 'Premier trimestre', '2020-09-01', '2020-12-20', '2020-12-20') RETURNING id`, [year]))[0]!.id;
     const otherPeriod = (await queryTenant<{ id: string }>(`
-      INSERT INTO grading_periods (school_year_id, type, order_index, label, start_date, end_date)
-      VALUES ($1, 'trimester', 1, 'Premier trimestre', '2021-09-01', '2021-12-20') RETURNING id`, [otherYear]))[0]!.id;
+      INSERT INTO grading_periods (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+      VALUES ($1, 'trimester', 1, 'Premier trimestre', '2021-09-01', '2021-12-20', '2021-12-20') RETURNING id`, [otherYear]))[0]!.id;
     const futurePeriod = (await queryTenant<{ id: string }>(`
-      INSERT INTO grading_periods (school_year_id, type, order_index, label, start_date, end_date)
-      VALUES ($1, 'trimester', 1, 'Période future', CURRENT_DATE + 30, CURRENT_DATE + 90) RETURNING id`, [futureYear]))[0]!.id;
+      INSERT INTO grading_periods (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+      VALUES ($1, 'trimester', 1, 'Période future', CURRENT_DATE + 30, CURRENT_DATE + 90, CURRENT_DATE + 90) RETURNING id`, [futureYear]))[0]!.id;
     const studentIds: string[] = [];
     for (const number of [1, 2]) {
       const studentId = (await queryTenant<{ id: string }>(`
@@ -185,8 +185,8 @@ describe('consultation direction des évaluations', () => {
       INSERT INTO "${foreignSchema}".school_years (label, start_date, end_date, end_of_year_review_start_date, status)
       VALUES ($1, '2023-09-01', '2024-06-30', '2024-05-31', 'draft') RETURNING id`, [`2023-${suffix}`]))[0]!.id;
     const foreignPeriod = (await queryPublic<{ id: string }>(`
-      INSERT INTO "${foreignSchema}".grading_periods (school_year_id, type, order_index, label, start_date, end_date)
-      VALUES ($1, 'trimester', 1, 'T1 étranger', '2023-09-01', '2023-12-20') RETURNING id`, [foreignYear]))[0]!.id;
+      INSERT INTO "${foreignSchema}".grading_periods (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+      VALUES ($1, 'trimester', 1, 'T1 étranger', '2023-09-01', '2023-12-20', '2023-12-20') RETURNING id`, [foreignYear]))[0]!.id;
     const ownOptions = await request().get(`${path}/options`).set(director);
     expect(ownOptions.body.schoolYears.some((item: { id: string }) => item.id === futureYear)).toBe(true);
     expect(ownOptions.body.schoolYears.some((item: { id: string }) => item.id === foreignYear)).toBe(false);

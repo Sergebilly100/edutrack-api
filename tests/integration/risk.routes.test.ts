@@ -185,7 +185,8 @@ describe('risk alerts integration (7a)', () => {
     const teacherInMonth = (monthlyTeachers.body.teachers as Array<{
       teacher_id: string; absence_count: number;
     }>).find((row) => row.teacher_id === teacherId);
-    expect(teacherInMonth?.absence_count).toBeGreaterThanOrEqual(3);
+    // J-1 et J-2 appartiennent au mois précédent les deux premiers jours du mois.
+    expect(teacherInMonth?.absence_count).toBeGreaterThanOrEqual(Math.min(3, new Date().getUTCDate()));
 
     // Désactiver le risque financier retire effectivement ce signal au prochain recalcul.
     const disablePaymentRisk = await request()

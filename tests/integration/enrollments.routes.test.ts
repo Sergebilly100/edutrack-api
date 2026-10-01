@@ -146,8 +146,8 @@ describe('enrollments integration', () => {
     expect(beforePopulation.status).toBe(200);
     expect(beforePopulation.body.classes.find((item: { id: string }) => item.id === academic.targetClassId)?.studentCount).toBe(0);
     const legacyPeriod = await queryTenant<{ id: string }>(`INSERT INTO ${tenantTable('grading_periods')}
-      (school_year_id, type, order_index, label, start_date, end_date)
-      VALUES ($1::uuid, 'trimester', 1, 'C24 pending snapshot', '2081-09-01', '2081-12-31') RETURNING id`,
+      (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+      VALUES ($1::uuid, 'trimester', 1, 'C24 pending snapshot', '2081-09-01', '2081-12-31', '2081-12-31') RETURNING id`,
       [academic.targetYearId]);
     await queryTenant(`INSERT INTO ${tenantTable('student_period_averages')}
       (student_id, grading_period_id, subject_id, average) VALUES ($1::uuid, $2::uuid, NULL, 18)`,
@@ -331,8 +331,8 @@ describe('enrollments integration', () => {
       .set(headers);
     expect(summary.status).toBe(200);
     expect(summary.body.years).toEqual(expect.arrayContaining([
-      expect.objectContaining({ schoolYearId: academic.previousYearId, className: 'enrollment-renew-current-class' }),
-      expect.objectContaining({ schoolYearId: academic.targetYearId, className: 'enrollment-renew-target-class' }),
+      expect.objectContaining({ schoolYearId: academic.previousYearId, className: 'enrollment-renew-current-class', enrollmentStatus: 'confirmed' }),
+      expect.objectContaining({ schoolYearId: academic.targetYearId, className: 'enrollment-renew-target-class', enrollmentStatus: 'pending_cashier' }),
     ]));
 
     const verification = await request()
@@ -356,6 +356,17 @@ describe('enrollments integration', () => {
     expect(movedStudent[0]?.class_id).toBe(academic.currentClassId);
     const enrolledProfile = await request().get(`/api/v1/students/${studentId}`).set(headers);
     expect(enrolledProfile.body.data.classId).toBe(academic.targetClassId);
+    await queryTenant(`UPDATE ${tenantTable('students')} SET is_active = false WHERE id = $1::uuid`, [studentId]);
+    await queryTenant(`UPDATE ${tenantTable('classes')} SET is_active = false WHERE id = $1::uuid`, [academic.currentClassId]);
+    const archived = await request().get(`/api/v1/students/${studentId}/historical-profile`).set(headers);
+    expect(archived.status).toBe(200);
+    expect(archived.body.data.latestConfirmedSchoolYear).toMatchObject({ id: academic.previousYearId });
+    const archivedSummary = await request()
+      .get(`/api/v1/enrollments/re-enrollment/students/${studentId}/summary`).set(headers);
+    expect(archivedSummary.status).toBe(200);
+    expect(archivedSummary.body.years).toEqual(expect.arrayContaining([
+      expect.objectContaining({ schoolYearId: academic.previousYearId, enrollmentStatus: 'confirmed', confirmedPaid: 80000 }),
+    ]));
   });
 
   it('calcule l’impayé antérieur côté serveur puis débloque après règlement', async () => {

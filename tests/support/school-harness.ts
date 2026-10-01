@@ -431,6 +431,7 @@ const initApp = async (): Promise<FastifyInstance> => {
     { default: academicController },
     { default: classDecisionsController },
     { default: conductController },
+    { default: conductReviewController },
     { default: riskController },
     { default: dashboardController },
     { default: dashboardActionsController },
@@ -455,6 +456,7 @@ const initApp = async (): Promise<FastifyInstance> => {
     import('../../src/modules/academic/academic.controller.js'),
     import('../../src/modules/class-decisions/class-decisions.controller.js'),
     import('../../src/modules/conduct/conduct.controller.js'),
+    import('../../src/modules/conduct-review/conduct-review.controller.js'),
     import('../../src/modules/risk/risk.controller.js'),
     import('../../src/modules/dashboard/dashboard.controller.js'),
     import('../../src/modules/dashboard-actions/dashboard-actions.controller.js'),
@@ -492,8 +494,15 @@ const initApp = async (): Promise<FastifyInstance> => {
   const smsQueue = {
     add: async () => ({ id: 'integration-notification-job' }),
   };
+  const pdfJobs = new Map<string, { id: string; data: Record<string, unknown>; getState: () => Promise<string> }>();
+  let nextPdfJobId = 0;
   const reportCardPdfQueue = {
-    add: async () => ({ id: 'integration-report-card-pdf-job' }),
+    add: async (_name: string, data: Record<string, unknown>) => {
+      const job = { id: `integration-report-card-pdf-job-${++nextPdfJobId}`, data, getState: async () => 'waiting' };
+      pdfJobs.set(job.id, job);
+      return job;
+    },
+    getJob: async (id: string) => pdfJobs.get(id) ?? null,
   };
 
   testApp.register(authController);
@@ -501,6 +510,7 @@ const initApp = async (): Promise<FastifyInstance> => {
   testApp.register(classDecisionsController);
   testApp.register(reportCardsController, { pdfQueue: reportCardPdfQueue });
   testApp.register(conductController);
+  testApp.register(conductReviewController);
   testApp.register(riskController);
   testApp.register(dashboardController);
   testApp.register(dashboardActionsController);
@@ -509,7 +519,7 @@ const initApp = async (): Promise<FastifyInstance> => {
   const { buildMidyearImportService } = await import('../../src/modules/finance/midyear-import.service.js');
   testApp.register(adminController, { midyearImportFactory: buildMidyearImportService });
   testApp.register(attendanceController);
-  testApp.register(billingController);
+  testApp.register(billingController, { billingPdfQueue: reportCardPdfQueue as never });
   testApp.register(scheduleController);
   testApp.register(importExportController);
   testApp.register(permissionsController);

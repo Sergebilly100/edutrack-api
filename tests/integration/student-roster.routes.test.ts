@@ -63,6 +63,20 @@ describe('school roster and reusable profiles', () => {
     expect(secondPage.body.pagination.total).toBe(1);
   });
 
+  it('reserves the school profile for a confirmed enrollment in the active year', async () => {
+    const confirmed = await request().get(`/api/v1/students/${students.get('confirmed')}/school-profile`).set(headers);
+    expect(confirmed.status).toBe(200);
+    expect(confirmed.body.data).toMatchObject({
+      id: students.get('confirmed'),
+      activeSchoolYear: { id: yearId, label: 'Roster active' },
+    });
+    for (const status of ['pending_cashier', 'pending_dossier', 'blocked_unpaid', 'historical', 'legacy']) {
+      const profile = await request().get(`/api/v1/students/${students.get(status)}/school-profile`).set(headers);
+      expect(profile.status, status).toBe(404);
+      expect(profile.body.code).toBe('STUDENT_NOT_CURRENTLY_ENROLLED');
+    }
+  });
+
   it('ne propose en encaissement que les inscriptions confirmées de l’année choisie', async () => {
     const broad = await request().get('/api/v1/students/financial-profiles?search=ROSTER-&limit=20').set(headers);
     expect(broad.status).toBe(200);
@@ -80,8 +94,8 @@ describe('school roster and reusable profiles', () => {
 
   it('shares the confirmed population across classes, dashboard, risk, subscriptions and bulletin readiness', async () => {
     const periodId = (await queryTenant<{ id: string }>(`INSERT INTO grading_periods
-      (school_year_id,type,order_index,label,start_date,end_date)
-      VALUES ($1,'trimester',1,'Roster C24','2093-09-01','2093-12-31') RETURNING id`, [yearId]))[0]!.id;
+      (school_year_id,type,order_index,label,start_date,review_start_date,end_date)
+      VALUES ($1,'trimester',1,'Roster C24','2093-09-01','2093-12-31','2093-12-31') RETURNING id`, [yearId]))[0]!.id;
     const emptyClassId = (await queryTenant<{ id: string }>(`INSERT INTO classes (name,level_id,school_year_id)
       VALUES ('Roster empty class',$1,$2) RETURNING id`, [levelId, yearId]))[0]!.id;
     const subjectId = (await queryTenant<{ id: string }>(`INSERT INTO subjects (name,level_id,coefficient)
@@ -199,6 +213,18 @@ describe('school roster and reusable profiles', () => {
     const result = await request().get('/api/v1/students?search=ROSTER-pending_cashier').set(headers);
     expect(result.body.data).toEqual([]);
     expect(result.body.pagination.total).toBe(0);
+    const schoolProfile = await request().get(`/api/v1/students/${studentId}/school-profile`).set(headers);
+    expect(schoolProfile.status).toBe(404);
+    const historicalProfile = await request().get(`/api/v1/students/${studentId}/historical-profile`).set(headers);
+    expect(historicalProfile.status).toBe(200);
+    expect(historicalProfile.body.data).toMatchObject({
+      id: studentId,
+      activeSchoolYear: { id: yearId },
+      latestConfirmedSchoolYear: { id: previousYear, className: 'Roster previous class' },
+      confirmedInActiveYear: false,
+    });
+    const noHistoricalProfile = await request().get(`/api/v1/students/${students.get('confirmed')}/historical-profile`).set(headers);
+    expect(noHistoricalProfile.status).toBe(404);
     const oldClassList = await request().get(`/api/v1/students?class_id=${previousClass}`).set(headers);
     expect(oldClassList.body.data).toEqual([]);
     const former = (await queryTenant<{ id: string }>(`INSERT INTO students (first_name,last_name,matricule)
@@ -215,6 +241,16 @@ describe('school roster and reusable profiles', () => {
       VALUES ($1,$2,$3,'new_registration','confirmed')`, [otherStudentId, previousClass, previousYear]);
     const olderClass = await request().get(`/api/v1/students/financial-profiles?search=ROSTER-OTHER&school_year_id=${previousYear}`).set(headers);
     expect(olderClass.body.data).toEqual([expect.objectContaining({ id: otherStudentId, classId: previousClass })]);
+    await queryTenant('UPDATE students SET is_active = false WHERE id = $1', [former]);
+    await queryTenant('UPDATE classes SET is_active = false WHERE id = $1', [previousClass]);
+    const archivedProfile = await request().get(`/api/v1/students/${former}/historical-profile`).set(headers);
+    expect(archivedProfile.status, JSON.stringify(archivedProfile.body)).toBe(200);
+    expect(archivedProfile.body.data).toMatchObject({
+      id: former, isActive: false, latestConfirmedSchoolYear: { id: previousYear },
+    });
+    const candidates = await request().get('/api/v1/enrollments/re-enrollment/candidates?search=ROSTER-former').set(headers);
+    expect(candidates.status).toBe(200);
+    expect(candidates.body.candidates).toEqual(expect.arrayContaining([expect.objectContaining({ studentId: former })]));
   });
 
   it('does not expose profile reuse search to teachers or anonymous visitors', async () => {

@@ -12,6 +12,11 @@ import {
 } from './setup.js';
 
 type IdRow = { id: string };
+const shiftDays = (days: number): string => {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+};
 
 describe('critical path E2E integration', () => {
   it('enchaîne inscription, caisse, paiement, notes, bulletin et dashboard sur le même élève', async () => {
@@ -24,9 +29,9 @@ describe('critical path E2E integration', () => {
     const schoolYears = await queryTenant<IdRow>(`
       INSERT INTO ${tenantTable('school_years')}
         (label, start_date, end_date, end_of_year_review_start_date, status)
-      VALUES ($1, '2088-09-01', '2089-06-30', '2089-05-31', 'active')
+      VALUES ($1, $2::date, $3::date, $4::date, 'active')
       RETURNING id::text
-    `, [`critical-path-${suffix}`]);
+    `, [`critical-path-${suffix}`, shiftDays(-60), shiftDays(300), shiftDays(270)]);
     const schoolYearId = schoolYears[0]!.id;
 
     const levels = await queryTenant<IdRow>(`
@@ -49,7 +54,7 @@ describe('critical path E2E integration', () => {
         schoolYearId,
         totalAmount: 120_000,
         currency: 'FCFA',
-        scheduleSteps: [{ dueDate: '2088-09-15', cumulativeAmountExpected: 120_000 }],
+        scheduleSteps: [{ dueDate: shiftDays(-30), cumulativeAmountExpected: 120_000 }],
       });
     expect(tuitionPlan.status, JSON.stringify(tuitionPlan.body)).toBe(200);
 
@@ -149,8 +154,9 @@ describe('critical path E2E integration', () => {
         type: 'trimester',
         orderIndex: 1,
         label: 'Trimestre E2E',
-        startDate: '2088-09-01',
-        endDate: '2088-12-20',
+        startDate: shiftDays(-30),
+        reviewStartDate: shiftDays(1),
+        endDate: shiftDays(45),
       });
     expect(gradingPeriod.status, JSON.stringify(gradingPeriod.body)).toBe(201);
     const gradingPeriodId = gradingPeriod.body.gradingPeriod.id as string;
@@ -196,7 +202,7 @@ describe('critical path E2E integration', () => {
         classId,
         gradingPeriodId,
         type: 'scheduled',
-        evaluationDate: '2088-10-01',
+        evaluationDate: shiftDays(-10),
         coefficient: 1,
         label: 'Devoir E2E',
       });
@@ -241,6 +247,12 @@ describe('critical path E2E integration', () => {
     expect(academicCompletion.body.subjects).toEqual(expect.arrayContaining([
       expect.objectContaining({ subjectId, status: 'completed' }),
     ]));
+
+    const beginReview = await request()
+      .patch(`/api/v1/grading-periods/${gradingPeriodId}`)
+      .set(directorHeaders)
+      .send({ reviewStartDate: shiftDays(0) });
+    expect(beginReview.status, JSON.stringify(beginReview.body)).toBe(200);
 
     const generated = await request()
       .post('/api/v1/report-cards/generate')

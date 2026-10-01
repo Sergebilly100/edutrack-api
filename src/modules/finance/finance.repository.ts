@@ -116,14 +116,22 @@ export class FinanceRepository {
     return receiptNumber;
   }
 
-  async hasConfirmedEnrollment(studentId: string, schoolYearId: string): Promise<boolean> {
+  async hasConfirmedEnrollment(studentId: string, schoolYearId: string, allowHistorical = false): Promise<boolean> {
     const result = await this.db.execute<{ eligible: boolean }>(sql`
-      SELECT ${confirmedFinancialStudent(sql`${studentId}::uuid`, sql`${schoolYearId}::uuid`)} AS eligible
+      SELECT ${allowHistorical ? sql`EXISTS (
+        SELECT 1 FROM enrollments e
+        JOIN classes c ON c.id = e.class_id AND c.school_year_id = e.school_year_id
+        JOIN school_years sy ON sy.id = e.school_year_id
+        WHERE e.student_id = ${studentId}::uuid
+          AND e.school_year_id = ${schoolYearId}::uuid
+          AND e.status = 'confirmed'
+          AND sy.status = 'closed'
+      )` : confirmedFinancialStudent(sql`${studentId}::uuid`, sql`${schoolYearId}::uuid`)} AS eligible
     `);
     return rows<{ eligible: boolean }>(result)[0]?.eligible === true;
   }
 
-  async getAmountDueContext(studentId: string, schoolYearId: string, allowPending = false): Promise<AmountDueContext | null> {
+  async getAmountDueContext(studentId: string, schoolYearId: string, allowPending = false, allowHistorical = false): Promise<AmountDueContext | null> {
     const result = await this.db.execute<AmountDueContext>(sql`
       SELECT
         s.id::text AS student_id,
@@ -144,14 +152,14 @@ export class FinanceRepository {
        AND ${allowPending ? sql`e.status IN ('pending_cashier', 'pending_dossier')` : sql`e.status = 'confirmed'`}
       INNER JOIN classes c
         ON c.id = e.class_id
-       AND c.school_year_id = ${schoolYearId}::uuid AND c.is_active = true
+       AND c.school_year_id = ${schoolYearId}::uuid ${allowHistorical ? sql`` : sql`AND c.is_active = true`}
       INNER JOIN tuition_plans tp
         ON tp.level_id = c.level_id
        AND tp.school_year_id = ${schoolYearId}::uuid
       LEFT JOIN student_tuition_overrides sto
         ON sto.student_id = s.id
        AND sto.school_year_id = ${schoolYearId}::uuid
-      WHERE s.id = ${studentId}::uuid AND s.is_active = true
+      WHERE s.id = ${studentId}::uuid ${allowHistorical ? sql`` : sql`AND s.is_active = true`}
       ORDER BY e.enrolled_at DESC
       LIMIT 1
     `);
@@ -169,17 +177,17 @@ export class FinanceRepository {
     return rows<MandatorySubscriptionPlanRow>(result);
   }
 
-  async getTuitionPlanRequiredContext(studentId: string, schoolYearId: string, allowPending = false): Promise<TuitionPlanRequiredContext | null> {
+  async getTuitionPlanRequiredContext(studentId: string, schoolYearId: string, allowPending = false, allowHistorical = false): Promise<TuitionPlanRequiredContext | null> {
     const result = await this.db.execute<TuitionPlanRequiredContext>(sql`
       SELECT y.id::text AS "schoolYearId", y.label AS "schoolYearLabel",
              l.id::text AS "levelId", l.name AS "levelName"
       FROM students s
       INNER JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = ${schoolYearId}::uuid
         AND ${allowPending ? sql`e.status IN ('pending_cashier', 'pending_dossier')` : sql`e.status = 'confirmed'`}
-      INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = ${schoolYearId}::uuid AND c.is_active = true
+      INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = ${schoolYearId}::uuid ${allowHistorical ? sql`` : sql`AND c.is_active = true`}
       INNER JOIN school_years y ON y.id = c.school_year_id
       INNER JOIN levels l ON l.id = c.level_id
-      WHERE s.id = ${studentId}::uuid AND s.is_active = true
+      WHERE s.id = ${studentId}::uuid ${allowHistorical ? sql`` : sql`AND s.is_active = true`}
       ORDER BY e.enrolled_at DESC NULLS LAST
       LIMIT 1
     `);
@@ -251,7 +259,7 @@ export class FinanceRepository {
     return rows<{ id: string }>(result).length;
   }
 
-  async getExpectedAtDate(studentId: string, schoolYearId: string, asOfDate: string): Promise<number> {
+  async getExpectedAtDate(studentId: string, schoolYearId: string, asOfDate: string, allowHistorical = false): Promise<number> {
     const result = await this.db.execute<{ expected: string | number }>(sql`
       SELECT CASE
         WHEN custom_steps.step_count > 0 THEN COALESCE(custom_steps.expected, 0)
@@ -264,7 +272,7 @@ export class FinanceRepository {
        AND e.status = 'confirmed'
       INNER JOIN classes c
         ON c.id = e.class_id
-       AND c.school_year_id = ${schoolYearId}::uuid AND c.is_active = true
+       AND c.school_year_id = ${schoolYearId}::uuid ${allowHistorical ? sql`` : sql`AND c.is_active = true`}
       INNER JOIN tuition_plans tp
         ON tp.level_id = c.level_id
        AND tp.school_year_id = ${schoolYearId}::uuid
@@ -281,7 +289,7 @@ export class FinanceRepository {
         WHERE tuition_plan_id = tp.id
           AND due_date <= ${asOfDate}::date
       ) plan_steps ON true
-      WHERE s.id = ${studentId}::uuid AND s.is_active = true
+      WHERE s.id = ${studentId}::uuid ${allowHistorical ? sql`` : sql`AND s.is_active = true`}
       ORDER BY e.enrolled_at DESC NULLS LAST
       LIMIT 1
     `);

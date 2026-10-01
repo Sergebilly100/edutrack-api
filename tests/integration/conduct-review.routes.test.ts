@@ -1,0 +1,159 @@
+import { beforeAll, describe, expect, it } from 'vitest';
+import { signAccessToken } from '../../src/modules/auth/auth.service.js';
+import { getAuthHeaders, queryTenant, request, tenantTable, TEST_SCHEMA_NAME } from './setup.js';
+
+type IdRow = { id: string };
+const suffix = String(Date.now());
+
+describe('actions de revue de conduite C28', () => {
+  let directorHeaders: Record<string, string>;
+  let teacherHeaders: Record<string, string>;
+  let schoolYearId = '';
+  let classId = '';
+  let studentId = '';
+  let teacherId = '';
+  let levelId = '';
+  let subjectId = '';
+  let periodId = '';
+  let futurePeriodId = '';
+
+  beforeAll(async () => {
+    directorHeaders = await getAuthHeaders('director');
+    const year = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('school_years')}
+        (label, start_date, end_date, end_of_year_review_start_date, status)
+      VALUES ($1, CURRENT_DATE - 40, CURRENT_DATE + 100, CURRENT_DATE + 90, 'draft')
+      RETURNING id::text`, [`c28-${suffix}`]);
+    schoolYearId = year[0]!.id;
+    const periods = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('grading_periods')}
+        (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+      VALUES ($1::uuid, 'trimester', 1, 'C28 T1', CURRENT_DATE - 30, CURRENT_DATE, CURRENT_DATE + 30)
+      RETURNING id::text`, [schoolYearId]);
+    periodId = periods[0]!.id;
+    const future = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('grading_periods')}
+        (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+      VALUES ($1::uuid, 'trimester', 2, 'C28 T2', CURRENT_DATE + 31, CURRENT_DATE + 50, CURRENT_DATE + 80)
+      RETURNING id::text`, [schoolYearId]);
+    futurePeriodId = future[0]!.id;
+    const level = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('levels')} (name, order_index, is_exam_class)
+      VALUES ($1, 89999, false) RETURNING id::text`, [`C28 niveau ${suffix}`]);
+    levelId = level[0]!.id;
+    const user = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('users')} (role, name, phone, password_hash, is_active)
+      VALUES ('teacher', 'Prof C28', $1, 'not-used', true) RETURNING id::text`, [`22507${suffix.slice(-8)}`]);
+    const teacher = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('teachers')} (user_id, username, type, subjects, hourly_rate)
+      VALUES ($1::uuid, $2, 'vacataire', '{SVT}', 4500) RETURNING id::text`, [user[0]!.id, `c28.${suffix}`]);
+    teacherId = teacher[0]!.id;
+    teacherHeaders = {
+      authorization: `Bearer ${await signAccessToken({ sub: user[0]!.id, role: 'teacher', schemaName: TEST_SCHEMA_NAME })}`,
+    };
+    const classes = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('classes')} (name, level_id, school_year_id, homeroom_teacher_id, is_active)
+      VALUES ($1, $2::uuid, $3::uuid, $4::uuid, true) RETURNING id::text`,
+    [`C28 classe ${suffix}`, level[0]!.id, schoolYearId, teacher[0]!.id]);
+    classId = classes[0]!.id;
+    const subject = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('subjects')} (level_id, name, coefficient)
+      VALUES ($1::uuid, 'SVT C28', 2) RETURNING id::text`, [level[0]!.id]);
+    subjectId = subject[0]!.id;
+    await queryTenant(`
+      INSERT INTO ${tenantTable('teacher_subject_assignments')} (teacher_id, subject_id, class_id)
+      VALUES ($1::uuid, $2::uuid, $3::uuid)`, [teacher[0]!.id, subject[0]!.id, classId]);
+    const student = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
+      VALUES ($1::uuid, 'Aya', 'C28', $2) RETURNING id::text`, [classId, `C28-${suffix}`]);
+    studentId = student[0]!.id;
+    await queryTenant(`
+      INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+      VALUES ($1::uuid, $2::uuid, $3::uuid, 'new_registration', 'confirmed')`, [studentId, classId, schoolYearId]);
+    const pending = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
+      VALUES ($1::uuid, 'Dossier', 'En attente', $2) RETURNING id::text`, [classId, `C28-P-${suffix}`]);
+    await queryTenant(`
+      INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+      VALUES ($1::uuid, $2::uuid, $3::uuid, 'new_registration', 'pending_dossier')`, [pending[0]!.id, classId, schoolYearId]);
+  });
+
+  it('déduit une seule action pour la revue ouverte et ignore la période future et le dossier non confirmé', async () => {
+    const first = await request().get('/api/v1/conduct/review-workspace').set(teacherHeaders);
+    const second = await request().get('/api/v1/conduct/review-workspace').set(teacherHeaders);
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    expect(first.body.teacherActions).toEqual([expect.objectContaining({
+      classId, gradingPeriodId: periodId, pendingCount: 1,
+    })]);
+    expect(second.body.teacherActions).toEqual(first.body.teacherActions);
+    expect(first.body.teacherActions.some((action: { gradingPeriodId: string }) => action.gradingPeriodId === futurePeriodId)).toBe(false);
+
+    const secondClass = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('classes')} (name, level_id, school_year_id, is_active)
+      VALUES ($1, $2::uuid, $3::uuid, true) RETURNING id::text`, [`C28 autre classe ${suffix}`, levelId, schoolYearId]);
+    const secondClassId = secondClass[0]!.id;
+    await queryTenant(`
+      INSERT INTO ${tenantTable('teacher_subject_assignments')} (teacher_id, subject_id, class_id)
+      VALUES ($1::uuid, $2::uuid, $3::uuid)`, [teacherId, subjectId, secondClassId]);
+    const secondStudent = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
+      VALUES ($1::uuid, 'Deuxième', 'Classe', $2) RETURNING id::text`,
+    [secondClassId, `C28-B-${suffix}`]);
+    await queryTenant(`
+      INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+      VALUES ($1::uuid, $2::uuid, $3::uuid, 'new_registration', 'confirmed')`,
+    [secondStudent[0]!.id, secondClassId, schoolYearId]);
+    const separated = await request().get('/api/v1/conduct/review-workspace').set(teacherHeaders);
+    expect(separated.body.teacherActions).toHaveLength(2);
+    expect(separated.body.teacherActions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ classId, gradingPeriodId: periodId, pendingCount: 1 }),
+      expect.objectContaining({ classId: secondClassId, gradingPeriodId: periodId, pendingCount: 1 }),
+    ]));
+    await queryTenant(`
+      INSERT INTO ${tenantTable('grading_period_class_closures')} (class_id, grading_period_id)
+      VALUES ($1::uuid, $2::uuid)`, [secondClassId, periodId]);
+    const closed = await request().get('/api/v1/conduct/review-workspace').set(teacherHeaders);
+    expect(closed.body.teacherActions).toEqual(first.body.teacherActions);
+    await queryTenant(`
+      DELETE FROM ${tenantTable('grading_period_class_closures')}
+      WHERE class_id = $1::uuid AND grading_period_id = $2::uuid`, [secondClassId, periodId]);
+    await queryTenant(`
+      INSERT INTO ${tenantTable('report_cards')}
+        (student_id, class_id, grading_period_id, general_average, rank,
+         class_average, class_min_average, class_max_average, class_headcount, status)
+      VALUES ($1::uuid, $2::uuid, $3::uuid, 12, 1, 12, 12, 12, 1, 'generated')`,
+    [secondStudent[0]!.id, secondClassId, periodId]);
+    const generated = await request().get('/api/v1/conduct/review-workspace').set(teacherHeaders);
+    expect(generated.body.teacherActions).toEqual(first.body.teacherActions);
+  });
+
+  it('reflète exactement le mode Direction et retire les actions après avis et décision', async () => {
+    const before = await request().get('/api/v1/conduct/review-workspace').set(directorHeaders);
+    expect(before.body.decisionScopes).toEqual([]);
+    const configured = await request().put(`/api/v1/conduct/policy/${schoolYearId}`).set(directorHeaders)
+      .send({ mode: 'direction', coefficient: 1 });
+    expect(configured.status, JSON.stringify(configured.body)).toBe(200);
+    const opened = await request().get('/api/v1/conduct/review-workspace').set(directorHeaders);
+    expect(opened.body.decisionActions).toEqual(expect.arrayContaining([expect.objectContaining({
+      classId, gradingPeriodId: periodId, pendingCount: 1, studentCount: 1,
+    })]));
+    expect(opened.body.decisionActions.filter((action: { classId: string; gradingPeriodId: string }) =>
+      action.classId === classId && action.gradingPeriodId === periodId)).toHaveLength(1);
+    const teacherAfterPolicy = await request().get('/api/v1/conduct/review-workspace').set(teacherHeaders);
+    expect(teacherAfterPolicy.body.decisionScopes).toEqual([]);
+    const roster = await request().get('/api/v1/conduct/decision-students').set(directorHeaders)
+      .query({ class_id: classId, grading_period_id: periodId });
+    expect(roster.body.students).toEqual([expect.objectContaining({ id: studentId })]);
+
+    const opinion = await request().post('/api/v1/conduct/inputs').set(teacherHeaders)
+      .send({ student_id: studentId, grading_period_id: periodId, note: 15 });
+    expect(opinion.status, JSON.stringify(opinion.body)).toBe(201);
+    const teacherResolved = await request().get('/api/v1/conduct/review-workspace').set(teacherHeaders);
+    expect(teacherResolved.body.teacherActions).toEqual([]);
+    const decision = await request().put('/api/v1/conduct/grades').set(directorHeaders)
+      .send({ student_id: studentId, grading_period_id: periodId, note: 16 });
+    expect(decision.status, JSON.stringify(decision.body)).toBe(200);
+    const decisionResolved = await request().get('/api/v1/conduct/review-workspace').set(directorHeaders);
+    expect(decisionResolved.body.decisionActions).toEqual([]);
+  });
+});

@@ -48,18 +48,18 @@ const upsertYear = async (): Promise<string> => {
 
 const seedGradingPeriods = async (yearId: string): Promise<Array<{ id: string; label: string }>> => {
   const defs = [
-    { label: 'Trimestre 1', order: 1, start: '2025-09-01', end: '2025-12-15' },
-    { label: 'Trimestre 2', order: 2, start: '2026-01-05', end: '2026-03-31' },
-    { label: 'Trimestre 3', order: 3, start: '2026-04-01', end: '2026-06-30' },
+    { label: 'Trimestre 1', order: 1, start: '2025-09-01', review: '2025-12-01', end: '2025-12-15' },
+    { label: 'Trimestre 2', order: 2, start: '2025-12-01', review: '2026-03-15', end: '2026-03-31' },
+    { label: 'Trimestre 3', order: 3, start: '2026-03-15', review: '2026-05-31', end: '2026-06-30' },
   ];
   const periods: Array<{ id: string; label: string }> = [];
   for (const def of defs) {
     const rows = await tq<IdRow>(
-      `INSERT INTO grading_periods (school_year_id, type, order_index, label, start_date, end_date)
-       VALUES ($1::uuid, 'trimester', $2, $3, $4, $5)
+      `INSERT INTO grading_periods (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+       VALUES ($1::uuid, 'trimester', $2, $3, $4, $5, $6)
        ON CONFLICT (school_year_id, label) DO NOTHING
        RETURNING id::text`,
-      [yearId, def.order, def.label, def.start, def.end],
+      [yearId, def.order, def.label, def.start, def.review, def.end],
     );
     if (rows[0]) periods.push({ id: rows[0].id, label: def.label });
   }

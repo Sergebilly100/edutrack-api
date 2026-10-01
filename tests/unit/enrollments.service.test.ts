@@ -10,6 +10,26 @@ import {
 } from '../../src/modules/enrollments/enrollments.service.js';
 
 describe('enrollment workflow rules', () => {
+  it('distingue l’année confirmée du dossier courant dans la fiche de réinscription', async () => {
+    const repository = {
+      getStudentSummaryProfile: vi.fn().mockResolvedValue({ id: 'student', first_name: 'Awa', last_name: 'Koné', matricule: 'MAT-1' }),
+      listStudentAcademicSummary: vi.fn().mockResolvedValue([
+        { school_year_id: 'year-active', school_year_label: '2026-2027', school_year_start_date: '2026-09-01', class_name: '5e A', final_decision: null, enrollment_status: 'pending_cashier' },
+        { school_year_id: 'year-prior', school_year_label: '2025-2026', school_year_start_date: '2025-09-01', school_year_status: 'closed', class_name: '6e A', final_decision: 'promoted', enrollment_status: 'confirmed' },
+      ]),
+    };
+    const finance = {
+      getFinancialStatus: vi.fn().mockRejectedValue({ code: 'CONFIRMED_ENROLLMENT_REQUIRED' }),
+      getHistoricalFinancialStatus: vi.fn().mockResolvedValue({ remainingDue: 25000, totalDue: 100000, confirmedPaid: 65000, waivedAmount: 10000, currency: 'FCFA' }),
+    };
+    const summary = await new EnrollmentsService(repository as never, finance as never).getStudentAcademicSummary('student');
+    expect(summary.years).toEqual([
+      expect.objectContaining({ schoolYearId: 'year-active', enrollmentStatus: 'pending_cashier', financialStatus: 'unavailable', remainingDue: null }),
+      expect.objectContaining({ schoolYearId: 'year-prior', enrollmentStatus: 'confirmed', financialStatus: 'remaining_due', remainingDue: 25000, totalDue: 100000, confirmedPaid: 65000, waivedAmount: 10000 }),
+    ]);
+    expect(finance.getHistoricalFinancialStatus).toHaveBeenCalledWith('student', 'year-prior');
+  });
+
   it.each([
     [{ levelId: 'other-level' }, 'CLASS_LEVEL_MISMATCH'],
     [{ expectedActiveSchoolYearId: 'year' }, 'ACTIVE_SCHOOL_YEAR_CHANGED'],

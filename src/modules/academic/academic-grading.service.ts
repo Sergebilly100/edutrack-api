@@ -4,6 +4,7 @@ import {
   calculateSubjectAverage,
 } from './academic-grading.calculations.js';
 import { AcademicGradingRepository } from './academic-grading.repository.js';
+import { validatePeriodChange, validatePeriodSequence } from './grading-period-capabilities.js';
 import type {
   CompletionInput,
   CreateEvaluationInput,
@@ -269,6 +270,9 @@ export class AcademicGradingService {
     if (schoolYear.gradingPeriodType !== input.type) {
       throw new AcademicGradingError('The grading period must match the school year cycle', 409, 'GRADING_PERIOD_TYPE_CONFLICT');
     }
+    const existing = await this.repository.listGradingPeriods(input.schoolYearId);
+    const error = validatePeriodSequence([...existing.filter((period) => period.orderIndex !== input.orderIndex), input]);
+    if (error) throw new AcademicGradingError(error, 409, 'GRADING_PERIOD_SEQUENCE_INVALID');
   }
 
   async createGradingPeriod(input: CreateGradingPeriodInput) {
@@ -286,18 +290,29 @@ export class AcademicGradingService {
   async updateGradingPeriod(id: string, input: UpdateGradingPeriodInput) {
     const current = await this.repository.findGradingPeriod(id);
     if (!current) throw new AcademicGradingError('Grading period not found', 404, 'GRADING_PERIOD_NOT_FOUND');
+    if (await this.repository.hasGeneratedCards(id)) {
+      throw new AcademicGradingError('Le calendrier est figé depuis la génération des bulletins', 409, 'GRADING_PERIOD_CARDS_EXIST');
+    }
     const merged = {
       schoolYearId: current.schoolYearId,
       type: current.type,
       orderIndex: input.orderIndex ?? current.orderIndex,
       label: input.label ?? current.label,
       startDate: input.startDate ?? current.startDate,
+      reviewStartDate: input.reviewStartDate ?? current.reviewStartDate,
       endDate: input.endDate ?? current.endDate,
     };
     if (merged.startDate > merged.endDate) {
       throw new AcademicGradingError('Period start date must be before or equal to end date', 400, 'INVALID_GRADING_PERIOD_DATES');
     }
-    await this.assertPeriod(merged);
+    assertPeriodOrder(merged.type, merged.orderIndex);
+    const schoolYear = await this.repository.getSchoolYear(merged.schoolYearId);
+    if (!schoolYear || merged.startDate < schoolYear.startDate || merged.endDate > schoolYear.endDate) {
+      throw new AcademicGradingError('Grading period must be within its school year', 400, 'GRADING_PERIOD_OUTSIDE_SCHOOL_YEAR');
+    }
+    const periods = await this.repository.listGradingPeriods(merged.schoolYearId);
+    const error = validatePeriodChange([...periods.filter((period) => period.id !== id), merged], merged.orderIndex);
+    if (error) throw new AcademicGradingError(error, 409, 'GRADING_PERIOD_SEQUENCE_INVALID');
     try {
       return await this.repository.updateGradingPeriod(id, input);
     } catch (error) {
@@ -332,24 +347,23 @@ export class AcademicGradingService {
     classId: string,
     subjectId: string,
     gradingPeriodId: string,
-    options: { allowFuturePeriod?: boolean } = {}
   ): Promise<void> {
     const period = await this.repository.findGradingPeriod(gradingPeriodId);
     if (!period) {
       throw new AcademicGradingError('Grading period not found', 400, 'GRADING_PERIOD_NOT_FOUND');
     }
-    if (period.isCompleted) {
+    if (period.isCompleted || period.closedClassIds.includes(classId)) {
       throw new AcademicGradingError(
         'Cette période est finalisée : ses bulletins ont déjà été générés',
         409,
         'GRADING_PERIOD_COMPLETED'
       );
     }
-    if (!period.isCurrent && !options.allowFuturePeriod) {
+    if (!period.notesEntryOpen) {
       throw new AcademicGradingError(
-        'Cette période n’est pas encore la période scolaire en cours',
+        'La saisie des notes de cette période est fermée depuis le début de sa revue, ou n’est pas encore ouverte',
         409,
-        'GRADING_PERIOD_NOT_CURRENT'
+        'GRADING_PERIOD_NOTES_CLOSED'
       );
     }
     const completion = await this.repository.getSubjectCompletion(classId, subjectId, gradingPeriodId);
@@ -411,7 +425,6 @@ export class AcademicGradingService {
   private async assertEvaluationScope(
     input: CreateEvaluationInput,
     teacherId: string,
-    options: { allowFuturePeriod?: boolean } = {}
   ): Promise<void> {
     const [slot, subject, period, schoolClass] = await Promise.all([
       input.lessonSlotId ? this.repository.getLessonSlotScope(input.lessonSlotId) : Promise.resolve(null),
@@ -449,41 +462,15 @@ export class AcademicGradingService {
       throw new AcademicGradingError('Subject does not match the lesson slot', 400, 'EVALUATION_SUBJECT_MISMATCH');
     }
 
-    await this.assertSubjectOpen(
-      input.classId,
-      input.subjectId,
-      input.gradingPeriodId,
-      options
-    );
+    await this.assertSubjectOpen(input.classId, input.subjectId, input.gradingPeriodId);
 
   }
 
   async createEvaluation(input: CreateEvaluationInput, userId: string) {
     const teacherId = await this.teacherIdForUser(userId);
-    const completion = await this.repository.getSubjectCompletion(
-      input.classId,
-      input.subjectId,
-      input.gradingPeriodId
-    );
-    let targetInput = input;
-    let routedToPeriod: { id: string; label: string } | null = null;
-    if (completion) {
-      const nextPeriod = await this.repository.findNextGradingPeriod(input.gradingPeriodId);
-      if (!nextPeriod) {
-        throw new AcademicGradingError(
-          'Le calcul des moyennes a commencé et aucune période suivante n’est configurée pour cette évaluation',
-          409,
-          'NEXT_GRADING_PERIOD_NOT_CONFIGURED'
-        );
-      }
-      targetInput = { ...input, gradingPeriodId: nextPeriod.id };
-      routedToPeriod = { id: nextPeriod.id, label: nextPeriod.label };
-    }
-    await this.assertEvaluationScope(targetInput, teacherId, {
-      allowFuturePeriod: routedToPeriod !== null,
-    });
-    const evaluation = await this.repository.createEvaluation(targetInput, teacherId);
-    return { evaluation, routedToPeriod };
+    await this.assertEvaluationScope(input, teacherId);
+    const evaluation = await this.repository.createEvaluation(input, teacherId);
+    return { evaluation, routedToPeriod: null };
   }
 
   async upsertGrade(evaluationId: string, input: UpsertEvaluationGradeInput, userId: string) {
@@ -578,7 +565,10 @@ export class AcademicGradingService {
       await this.repository.upsertAverage(studentId, gradingPeriodId, subjectId, average);
       subjects.push({ subjectId, average, coefficient: group.subjectCoefficient });
     }
-    const generalAverage = calculateGeneralAverage(subjects);
+    const conduct = await this.repository.findConductForAverage(studentId, gradingPeriodId);
+    const generalAverage = calculateGeneralAverage(conduct
+      ? [...subjects, { average: conduct.note, coefficient: conduct.coefficient }]
+      : subjects);
     if (generalAverage !== null) {
       await this.repository.upsertAverage(studentId, gradingPeriodId, null, generalAverage);
     }
@@ -595,13 +585,14 @@ export class AcademicGradingService {
     if (!subject || !period || !schoolClass || subject.levelId !== schoolClass.levelId || period.schoolYearId !== schoolClass.schoolYearId) {
       throw new AcademicGradingError('Completion scope is invalid', 400, 'COMPLETION_SCOPE_MISMATCH');
     }
-    if (period.isCompleted || !period.isCurrent) {
+    const classClosed = period.isCompleted || period.closedClassIds.includes(input.classId);
+    if (classClosed || !period.notesEntryOpen) {
       throw new AcademicGradingError(
-        period.isCompleted
+        classClosed
           ? 'Cette période est finalisée : ses bulletins ont déjà été générés'
-          : 'Cette période n’est pas encore la période scolaire en cours',
+          : 'La saisie des notes de cette période est fermée depuis le début de sa revue, ou n’est pas encore ouverte',
         409,
-        period.isCompleted ? 'GRADING_PERIOD_COMPLETED' : 'GRADING_PERIOD_NOT_CURRENT'
+        classClosed ? 'GRADING_PERIOD_COMPLETED' : 'GRADING_PERIOD_NOTES_CLOSED'
       );
     }
     let assigned = await this.repository.hasTeacherSubjectAssignment(teacherId, input.subjectId, input.classId);

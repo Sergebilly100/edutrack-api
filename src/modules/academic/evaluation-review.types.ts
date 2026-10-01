@@ -26,7 +26,7 @@ export type EvaluationReviewOptionsQuery = z.infer<typeof evaluationReviewOption
 export type ReviewOption = { id: string; label: string };
 export type EvaluationReviewOptions = {
   schoolYears: Array<ReviewOption & { active: boolean }>;
-  gradingPeriods: Array<ReviewOption & { schoolYearId: string; isCurrent: boolean; isFuture: boolean; hasEvaluations: boolean }>;
+  gradingPeriods: Array<ReviewOption & { schoolYearId: string; isCurrent: boolean; notesEntryOpen: boolean; isFuture: boolean; hasEvaluations: boolean }>;
   levels: ReviewOption[];
   classes: Array<ReviewOption & { levelId: string }>;
   subjects: Array<ReviewOption & { levelId: string }>;

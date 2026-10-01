@@ -23,6 +23,8 @@ import type {
   StudentAbsenceDetailRecord,
   StudentAbsenceStatRecord,
   StudentDetailRecord,
+  CurrentStudentProfile,
+  HistoricalStudentProfile,
   StudentRecord,
   StudentAbsencesQuery,
   StudentsListQuery,
@@ -203,6 +205,30 @@ export class StudentsService {
     const student = await this.repository.findStudentDetailById(studentId);
     if (!student) throw new StudentsModuleError('Student not found', 404, 'STUDENT_NOT_FOUND');
     return student;
+  }
+
+  async getCurrentStudentProfile(studentId: string): Promise<CurrentStudentProfile> {
+    const activeSchoolYear = await this.repository.findCurrentConfirmedSchoolYear(studentId);
+    if (!activeSchoolYear) {
+      throw new StudentsModuleError('Student is not enrolled in the active school year', 404, 'STUDENT_NOT_CURRENTLY_ENROLLED');
+    }
+    const student = await this.repository.findStudentDetailById(studentId);
+    if (!student) throw new StudentsModuleError('Student not found', 404, 'STUDENT_NOT_FOUND');
+    return { ...student, activeSchoolYear };
+  }
+
+  async getHistoricalStudentProfile(studentId: string): Promise<HistoricalStudentProfile> {
+    const latestConfirmedSchoolYear = await this.repository.findLatestHistoricalConfirmedSchoolYear(studentId);
+    if (!latestConfirmedSchoolYear) {
+      throw new StudentsModuleError('No previous confirmed enrollment', 404, 'HISTORICAL_STUDENT_PROFILE_NOT_FOUND');
+    }
+    const [student, activeSchoolYear, confirmedInActiveYear] = await Promise.all([
+      this.repository.findStudentDetailById(studentId),
+      this.repository.findActiveSchoolYear(),
+      this.repository.hasConfirmedEnrollmentInActiveSchoolYear(studentId),
+    ]);
+    if (!student) throw new StudentsModuleError('Student not found', 404, 'STUDENT_NOT_FOUND');
+    return { ...student, activeSchoolYear, latestConfirmedSchoolYear, confirmedInActiveYear };
   }
 
   async excuseAbsence(

@@ -55,8 +55,8 @@ describe('parent overview integration (17b)', () => {
 
     // Bulletin publié pour l'élève à jour uniquement
     const periods = await queryTenant<IdRow>(
-      `INSERT INTO ${tenantTable('grading_periods')} (school_year_id, type, order_index, label, start_date, end_date)
-       VALUES ($1::uuid, 'trimester', 1, 'T1 po', '2101-09-01', '2101-12-15') RETURNING id::text`,
+      `INSERT INTO ${tenantTable('grading_periods')} (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+       VALUES ($1::uuid, 'trimester', 1, 'T1 po', '2101-09-01', '2101-12-15', '2101-12-15') RETURNING id::text`,
       [yearId]
     );
     await queryTenant(

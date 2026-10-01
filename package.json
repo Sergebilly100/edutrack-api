@@ -25,7 +25,8 @@
     "db:seed:v2": "tsx src/shared/database/seed-v2.ts",
     "demo:create": "node --import tsx src/shared/database/demo/demo-create.ts",
     "finance:recalculate-caches": "node --import tsx src/shared/database/recalculate-financial-caches.ts",
-    "population:diagnose": "node --import tsx src/shared/database/diagnose-school-population.ts"
+    "population:diagnose": "node --import tsx src/shared/database/diagnose-school-population.ts",
+    "calendar:diagnose": "node --import tsx src/shared/database/diagnose-grading-period-calendar.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1030.0",

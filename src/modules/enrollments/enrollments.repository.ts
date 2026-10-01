@@ -48,8 +48,11 @@ export type StudentAcademicSummaryRow = {
   school_year_id: string;
   school_year_label: string;
   school_year_start_date: string;
+  school_year_end_date: string;
+  school_year_status: 'draft' | 'active' | 'closed';
   class_name: string;
   final_decision: 'promoted' | 'repeat' | 'expelled' | null;
+  enrollment_status: EnrollmentStatus | null;
 };
 
 export type StudentSummaryProfile = {
@@ -129,8 +132,18 @@ export class EnrollmentsRepository {
         enrollment.id::text AS enrollment_id,
         enrollment.status::text AS enrollment_status,
         enrollment_class.name AS enrollment_class_name
-      FROM students_with_class s
-      INNER JOIN classes current_class ON current_class.id = s.class_id
+      FROM students s
+      INNER JOIN LATERAL (
+        SELECT confirmed.class_id
+        FROM enrollments confirmed
+        INNER JOIN school_years confirmed_year ON confirmed_year.id = confirmed.school_year_id
+        WHERE confirmed.student_id = s.id
+          AND confirmed.status = 'confirmed'
+          AND confirmed_year.status = 'closed'
+        ORDER BY confirmed_year.start_date DESC, confirmed.enrolled_at DESC
+        LIMIT 1
+      ) latest_confirmed ON true
+      INNER JOIN classes current_class ON current_class.id = latest_confirmed.class_id
       INNER JOIN school_years source_year ON source_year.id = current_class.school_year_id
       LEFT JOIN school_years target_year ON target_year.id = ${input.schoolYearId ?? null}::uuid
       LEFT JOIN class_decisions decision
@@ -183,8 +196,11 @@ export class EnrollmentsRepository {
           school_year.id::text AS school_year_id,
           school_year.label AS school_year_label,
           school_year.start_date::text AS school_year_start_date,
+          school_year.end_date::text AS school_year_end_date,
+          school_year.status::text AS school_year_status,
           class.name AS class_name,
-          decision.final_decision::text AS final_decision
+          decision.final_decision::text AS final_decision,
+          enrollment.status::text AS enrollment_status
         FROM enrollments enrollment
         INNER JOIN classes class ON class.id = enrollment.class_id
         INNER JOIN school_years school_year ON school_year.id = enrollment.school_year_id
@@ -199,8 +215,11 @@ export class EnrollmentsRepository {
           school_year.id::text AS school_year_id,
           school_year.label AS school_year_label,
           school_year.start_date::text AS school_year_start_date,
+          school_year.end_date::text AS school_year_end_date,
+          school_year.status::text AS school_year_status,
           class.name AS class_name,
-          decision.final_decision::text AS final_decision
+          decision.final_decision::text AS final_decision,
+          NULL::text AS enrollment_status
         FROM students student
         INNER JOIN classes class ON class.id = student.class_id
         INNER JOIN school_years school_year ON school_year.id = class.school_year_id
@@ -215,7 +234,7 @@ export class EnrollmentsRepository {
               AND enrollment.school_year_id = school_year.id
           )
       )
-      SELECT school_year_id, school_year_label, school_year_start_date, class_name, final_decision
+      SELECT school_year_id, school_year_label, school_year_start_date, school_year_end_date, school_year_status, class_name, final_decision, enrollment_status
       FROM academic_history
       ORDER BY school_year_start_date DESC
     `);

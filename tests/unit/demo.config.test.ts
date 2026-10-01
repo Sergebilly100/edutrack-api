@@ -25,8 +25,10 @@ describe('isolated demo guards', () => {
   it.each(['2026-09-24', '2027-01-02', '2028-03-01'])('keeps a coherent early T3 calendar across boundaries: %s', (today) => {
     const calendar = demoCalendar(today);
     expect(calendar.start < today && calendar.end > today).toBe(true);
-    expect(calendar.periods[0]!.end < calendar.periods[1]!.start).toBe(true);
-    expect(calendar.periods[1]!.end < calendar.periods[2]!.start).toBe(true);
+    expect(calendar.periods[0]!.reviewStart).toBe(calendar.periods[1]!.start);
+    expect(calendar.periods[1]!.reviewStart).toBe(calendar.periods[2]!.start);
+    expect(calendar.periods[0]!.end > calendar.periods[1]!.start).toBe(true);
+    expect(calendar.periods[1]!.end > calendar.periods[2]!.start).toBe(true);
     expect(calendar.periods[2]!.start < today && calendar.review > today).toBe(true);
   });
   it('fails closed when migration content has changed', () => {

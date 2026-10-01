@@ -107,26 +107,35 @@ async function seedAcademicHistory(repo: DemoRepository, classes: DemoClass[], t
         if (periodIndex < 2) {
           const scope = { classId: klass.id, subjectId, gradingPeriodId: periodId };
           await academic.updateCompletion({ ...scope, status: 'in_progress' }, teacher.userId);
+          await academic.updateCompletion({ ...scope, status: 'completed' }, teacher.userId);
+        }
+      }
+    }
+    if (periodIndex < 2) {
+      // Historical demo data is built through the real services: first enter
+      // all notes, then open review for every class before generating cards.
+      await repo.setPeriodReviewStart(periodId, shiftDate(calendar.today, -1));
+      for (const [classIndex, klass] of classes.entries()) {
+        for (const [subjectIndex] of klass.subjectIds.entries()) {
+          const teacher = teachers[subjectIndex]!;
           for (const [index, studentId] of klass.students.entries()) {
             await conduct.submitTeacherConductInput({ student_id: studentId, grading_period_id: periodId,
               note: index === 0 ? 11 : 14 + index % 5,
               observation: index === 0 ? 'Assiduité et participation à améliorer.' : 'Attitude sérieuse, efforts réguliers.',
             }, { userId: teacher.userId });
           }
-          await academic.updateCompletion({ ...scope, status: 'completed' }, teacher.userId);
         }
-      }
-      if (periodIndex < 2) {
         for (const [index, studentId] of klass.students.entries()) {
           await conduct.decideConductGrade({ student_id: studentId, grading_period_id: periodId,
-            note: index === 0 ? 12 : 15 + index % 4, coefficient: 1,
+            note: index === 0 ? 12 : 15 + index % 4,
           }, { userId: teachers[classIndex]!.userId, canFinalize: false });
         }
         await cards.generateForClass(klass.id, periodId);
         await cards.publishBulk(klass.id, periodId, directorId);
       }
+      await repo.finalizePeriodCalendar(periodId, calendar.periods[periodIndex]!.reviewStart, calendar.periods[periodIndex]!.end);
+      await repo.dateAcademicHistory(periodId, calendar.periods[periodIndex]!.end);
     }
-    if (periodIndex < 2) await repo.dateAcademicHistory(periodId, calendar.periods[periodIndex]!.end);
   }
 }
 
@@ -182,7 +191,10 @@ export async function seedDemo(repo: DemoRepository, directorId: string, passwor
   const periodIds: string[] = [];
   for (const [index, period] of calendar.periods.entries()) periodIds.push(await repo.insert('grading_periods', {
     school_year_id: yearId, type: 'trimester', order_index: index + 1, label: period.label,
-    start_date: period.start, end_date: period.end, created_at: calendar.start,
+    start_date: period.start,
+    review_start_date: index < 2 ? shiftDate(calendar.today, index + 1) : period.reviewStart,
+    end_date: index < 2 ? calendar.end : period.end,
+    created_at: calendar.start,
   }));
   const teachers: DemoTeacher[] = [];
   for (const [index, name] of teacherNames.entries()) {

@@ -51,8 +51,8 @@ describe('dashboard action items integration (7b)', () => {
       [`Dashboard classe ${suffix}`, level[0]!.id, year[0]!.id]
     );
     const period = await queryTenant<IdRow>(
-      `INSERT INTO ${tenantTable('grading_periods')} (school_year_id, type, order_index, label, start_date, end_date)
-       VALUES ($1::uuid, 'trimester', 1, $2, '2110-09-01', '2110-12-15') RETURNING id::text`,
+      `INSERT INTO ${tenantTable('grading_periods')} (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+       VALUES ($1::uuid, 'trimester', 1, $2, '2110-09-01', '2110-12-15', '2110-12-15') RETURNING id::text`,
       [year[0]!.id, `Trimestre ${suffix}`]
     );
     const subject = await queryTenant<IdRow>(

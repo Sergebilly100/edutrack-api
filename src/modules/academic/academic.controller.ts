@@ -74,7 +74,16 @@ const requireAcademicFilterAccess = async (request: FastifyRequest, reply: Fasti
   await authenticateRequest(request, reply);
   if (reply.sent) return;
   const permissions = request.permissions;
-  if (!permissions?.has('classes.view') && !permissions?.has('students.view') && !permissions?.has('attendance.view')) {
+  if (!permissions?.has('classes.view') && !permissions?.has('students.view') && !permissions?.has('attendance.view') && !permissions?.has('settings.positions')) {
+    reply.code(403).send({ error: 'Permission required', code: 'FORBIDDEN', statusCode: 403 });
+  }
+};
+
+const requireSchoolYearListAccess = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  await authenticateRequest(request, reply);
+  if (reply.sent) return;
+  const permissions = request.permissions;
+  if (!permissions?.has('school_years.view') && !permissions?.has('school_years.edit') && !permissions?.has('settings.positions')) {
     reply.code(403).send({ error: 'Permission required', code: 'FORBIDDEN', statusCode: 403 });
   }
 };
@@ -113,7 +122,7 @@ export default async function academicController(app: FastifyInstance): Promise<
   // recuperation de la liste des années scolaires
   app.get(
     '/api/v1/school-years',
-    { preHandler: requirePermission('school_years.view') },
+    { preHandler: requireSchoolYearListAccess },
     async (request, reply) => {
       try {
         const claims = request.claims!;

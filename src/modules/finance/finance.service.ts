@@ -60,18 +60,18 @@ const mapPayment = (row: PaymentRow) => ({
 export class FinanceService {
   constructor(private readonly repository: FinanceRepository) {}
 
-  private async amountDueWith(repository: FinanceRepository, studentId: string, schoolYearId: string, allowPending = false) {
-    const context = await repository.getAmountDueContext(studentId, schoolYearId, allowPending);
+  private async amountDueWith(repository: FinanceRepository, studentId: string, schoolYearId: string, allowPending = false, allowHistorical = false) {
+    const context = await repository.getAmountDueContext(studentId, schoolYearId, allowPending, allowHistorical);
     const subscriptionPlans = await repository.listMandatorySubscriptionPlans();
     if (!context) {
-      if (!allowPending && !(await repository.hasConfirmedEnrollment(studentId, schoolYearId))) {
+      if (!allowPending && !(await repository.hasConfirmedEnrollment(studentId, schoolYearId, allowHistorical))) {
         throw new FinanceModuleError('A confirmed enrollment is required for this school year', 409, 'CONFIRMED_ENROLLMENT_REQUIRED');
       }
       throw new FinanceModuleError(
         'A tuition plan is required for the student level and school year',
         409,
         'TUITION_PLAN_REQUIRED',
-        await repository.getTuitionPlanRequiredContext(studentId, schoolYearId, allowPending) ?? undefined
+        await repository.getTuitionPlanRequiredContext(studentId, schoolYearId, allowPending, allowHistorical) ?? undefined
       );
     }
     const subscriptionLines = subscriptionPlans.map((plan) => ({
@@ -217,12 +217,26 @@ export class FinanceService {
   }
 
   async getFinancialStatus(studentId: string, schoolYearId: string, asOfDate = todayIso()) {
-    const due = await this.getAmountDue(studentId, schoolYearId);
+    return this.financialStatusWith(studentId, schoolYearId, asOfDate, false);
+  }
+
+  async getHistoricalFinancialStatus(studentId: string, schoolYearId: string, asOfDate = todayIso()) {
+    if (!(await this.repository.hasConfirmedEnrollment(studentId, schoolYearId, true))) {
+      throw new FinanceModuleError('A confirmed historical enrollment is required', 409, 'CONFIRMED_ENROLLMENT_REQUIRED');
+    }
+    return this.financialStatusWith(studentId, schoolYearId, asOfDate, true);
+  }
+
+  private async financialStatusWith(studentId: string, schoolYearId: string, asOfDate: string, allowHistorical: boolean) {
+    const due = allowHistorical
+      ? await this.amountDueWith(this.repository, studentId, schoolYearId, false, true)
+      : await this.getAmountDue(studentId, schoolYearId);
     const { confirmedPaid, waivedAmount } = await this.repository.getPaymentCoverage(studentId, schoolYearId);
     const scheduledExpectedAtDate = await this.repository.getExpectedAtDate(
       studentId,
       schoolYearId,
-      asOfDate
+      asOfDate,
+      allowHistorical
     );
     const cumulativeExpectedAtDate = Math.max(0, Math.min(due.tuitionDue, scheduledExpectedAtDate));
     const individualStatus = resolveIndividualFinancialStatus({

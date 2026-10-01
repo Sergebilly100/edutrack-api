@@ -78,6 +78,21 @@ export class DemoRepository {
     return result.rows[0]!.id;
   }
 
+  async setPeriodReviewStart(periodId: string, reviewStartDate: string): Promise<void> {
+    await this.db.execute(sql`
+      UPDATE grading_periods SET review_start_date = ${reviewStartDate}::date
+      WHERE id = ${periodId}::uuid
+    `);
+  }
+
+  async finalizePeriodCalendar(periodId: string, reviewStartDate: string, endDate: string): Promise<void> {
+    await this.db.execute(sql`
+      UPDATE grading_periods
+      SET review_start_date = ${reviewStartDate}::date, end_date = ${endDate}::date
+      WHERE id = ${periodId}::uuid
+    `);
+  }
+
   async dateAcademicHistory(periodId: string, end: string): Promise<void> {
     // Reconstruct historical timestamps after the real business transitions.
     await this.db.execute(sql`UPDATE evaluations SET created_at = evaluation_date::timestamp, updated_at = evaluation_date::timestamp WHERE grading_period_id = ${periodId}::uuid`);

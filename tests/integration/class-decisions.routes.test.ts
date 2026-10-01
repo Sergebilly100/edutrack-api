@@ -52,8 +52,8 @@ describe('class decisions integration', () => {
       VALUES ($1::uuid, $2::uuid, $3::uuid, 'new_registration', 'confirmed')`,
       [studentId, classes[0]!.id, schoolYearId]);
     const periods = await queryTenant<{ id: string }>(`
-      INSERT INTO ${tenantTable('grading_periods')} (school_year_id, type, order_index, label, start_date, end_date)
-      VALUES ($1::uuid, 'trimester', 1, 'T3 revue', '2099-01-01', '2099-06-30')
+      INSERT INTO ${tenantTable('grading_periods')} (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+      VALUES ($1::uuid, 'trimester', 1, 'T3 revue', '2099-01-01', '2099-06-30', '2099-06-30')
       RETURNING id::text
     `, [schoolYearId]);
     await queryTenant(`

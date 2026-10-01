@@ -80,39 +80,33 @@ export class ReportCardsRepository {
     return row !== undefined && row.current_order !== null && row.current_order === row.max_order;
   }
 
-  /**
-   * La période courante est la première période dont les bulletins ne sont pas
-   * encore générés pour tous les élèves de toutes les classes actives.
-   * Les dates de période sont des repères de calendrier, jamais un verrou métier.
-   */
-  async isCurrentGradingPeriod(schoolYearId: string, gradingPeriodId: string): Promise<boolean> {
-    const result = await this.db.execute<{ id: string }>(sql`
-      WITH class_progress AS (
-        SELECT gp.id AS grading_period_id,
-               c.id AS class_id,
-               COUNT(s.id)::int AS student_count,
-               COUNT(rc.id) FILTER (WHERE rc.status IN ('generated', 'published'))::int AS card_count
-        FROM grading_periods gp
-        INNER JOIN classes c ON c.school_year_id = gp.school_year_id AND c.is_active = true
-        LEFT JOIN students s ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
-        LEFT JOIN report_cards rc ON rc.student_id = s.id AND rc.grading_period_id = gp.id
-        WHERE gp.school_year_id = ${schoolYearId}::uuid
-        GROUP BY gp.id, c.id
-      ), period_progress AS (
-        SELECT grading_period_id,
-               COALESCE(BOOL_AND(student_count > 0 AND card_count >= student_count), false) AS is_completed
-        FROM class_progress
-        GROUP BY grading_period_id
-      )
-      SELECT gp.id::text
-      FROM grading_periods gp
-      LEFT JOIN period_progress pp ON pp.grading_period_id = gp.id
-      WHERE gp.school_year_id = ${schoolYearId}::uuid
-        AND COALESCE(pp.is_completed, false) = false
-      ORDER BY gp.order_index
+  /** La génération est disponible dès le début de revue de la période. */
+  async isBulletinGenerationAvailable(schoolYearId: string, gradingPeriodId: string): Promise<boolean> {
+    const result = await this.db.execute<{ open: boolean }>(sql`
+      SELECT review_start_date <= CURRENT_DATE AS open
+      FROM grading_periods
+      WHERE school_year_id = ${schoolYearId}::uuid AND id = ${gradingPeriodId}::uuid
       LIMIT 1
     `);
-    return getRows<{ id: string }>(result)[0]?.id === gradingPeriodId;
+    return getRows<{ open: boolean }>(result)[0]?.open ?? false;
+  }
+
+  async isClassReviewClosed(gradingPeriodId: string, classId: string): Promise<boolean> {
+    const result = await this.db.execute<{ closed: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1 FROM grading_period_class_closures
+        WHERE grading_period_id = ${gradingPeriodId}::uuid AND class_id = ${classId}::uuid
+      ) AS closed
+    `);
+    return getRows<{ closed: boolean }>(result)[0]?.closed ?? false;
+  }
+
+  async closeClassReview(gradingPeriodId: string, classId: string): Promise<void> {
+    await this.db.execute(sql`
+      INSERT INTO grading_period_class_closures (grading_period_id, class_id)
+      VALUES (${gradingPeriodId}::uuid, ${classId}::uuid)
+      ON CONFLICT (grading_period_id, class_id) DO NOTHING
+    `);
   }
 
   async listClassStudents(classId: string): Promise<Array<{ id: string; fullName: string }>> {
@@ -205,9 +199,11 @@ export class ReportCardsRepository {
     coefficient: number;
   } | null> {
     const result = await this.db.execute<{ note: string; coefficient: string }>(sql`
-      SELECT note::text, coefficient::text
-      FROM conduct_grades
-      WHERE student_id = ${studentId}::uuid AND grading_period_id = ${gradingPeriodId}::uuid
+      SELECT cg.note::text, sy.conduct_coefficient::text AS coefficient
+      FROM conduct_grades cg
+      INNER JOIN grading_periods gp ON gp.id = cg.grading_period_id
+      INNER JOIN school_years sy ON sy.id = gp.school_year_id
+      WHERE cg.student_id = ${studentId}::uuid AND cg.grading_period_id = ${gradingPeriodId}::uuid
       LIMIT 1
     `);
     const row = getRows<{ note: string; coefficient: string }>(result)[0];
@@ -405,14 +401,17 @@ export class ReportCardsRepository {
       class_name: string;
       headcount: number;
       with_general: number;
+      with_conduct: number;
     }>(sql`
       SELECT c.id::text AS class_id, c.name AS class_name,
              COUNT(DISTINCT s.id)::int AS headcount,
              COUNT(DISTINCT spa.student_id)::int AS with_general
+             ,COUNT(DISTINCT cg.student_id)::int AS with_conduct
       FROM classes c
       LEFT JOIN students s ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
       LEFT JOIN student_period_averages spa
         ON spa.student_id = s.id AND spa.grading_period_id = ${gradingPeriodId}::uuid AND spa.subject_id IS NULL
+      LEFT JOIN conduct_grades cg ON cg.student_id = s.id AND cg.grading_period_id = ${gradingPeriodId}::uuid
       WHERE c.school_year_id = ${schoolYearId}::uuid AND c.is_active = true
       GROUP BY c.id, c.name
       ORDER BY c.name ASC
@@ -422,7 +421,47 @@ export class ReportCardsRepository {
       class_name: string;
       headcount: number;
       with_general: number;
+      with_conduct: number;
     }>(result);
+  }
+
+  async upsertGeneralAverage(studentId: string, gradingPeriodId: string, average: number, rank: number): Promise<void> {
+    await this.db.execute(sql`
+      INSERT INTO student_period_averages (student_id, subject_id, grading_period_id, average, rank, computed_at)
+      VALUES (${studentId}::uuid, NULL, ${gradingPeriodId}::uuid, ${average}, ${rank}, now())
+      ON CONFLICT (student_id, grading_period_id) WHERE subject_id IS NULL
+      DO UPDATE SET average = EXCLUDED.average, rank = EXCLUDED.rank, computed_at = now()
+    `);
+  }
+
+  async listConductAmbiguities(): Promise<Array<{ gradingPeriodId: string; periodLabel: string; generatedCount: number; publishedCount: number }>> {
+    const result = await this.db.execute<{
+      grading_period_id: string; period_label: string; generated_count: number; published_count: number;
+    }>(sql`
+      WITH cards AS (
+        SELECT rc.id, rc.grading_period_id, rc.status,
+          cg.id IS NULL AS no_grade,
+          COALESCE(lines.conduct_count, 0) <> 1 AS invalid_line,
+          lines.computed_average IS NULL OR ABS(lines.computed_average - rc.general_average) > 0.002 AS invalid_average
+        FROM report_cards rc
+        LEFT JOIN conduct_grades cg ON cg.student_id = rc.student_id AND cg.grading_period_id = rc.grading_period_id
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*) FILTER (WHERE line_type = 'conduct')::int AS conduct_count,
+            SUM(subject_average * subject_coefficient) / NULLIF(SUM(subject_coefficient), 0) AS computed_average
+          FROM report_card_lines WHERE report_card_id = rc.id
+        ) lines ON true
+      )
+      SELECT gp.id::text AS grading_period_id, gp.label AS period_label,
+        COUNT(*) FILTER (WHERE cards.status = 'generated')::int AS generated_count,
+        COUNT(*) FILTER (WHERE cards.status = 'published')::int AS published_count
+      FROM cards INNER JOIN grading_periods gp ON gp.id = cards.grading_period_id
+      WHERE cards.no_grade OR cards.invalid_line OR cards.invalid_average
+      GROUP BY gp.id, gp.label ORDER BY gp.start_date
+    `);
+    return getRows<{
+      grading_period_id: string; period_label: string; generated_count: number; published_count: number;
+    }>(result).map(row => ({ gradingPeriodId: row.grading_period_id, periodLabel: row.period_label,
+      generatedCount: row.generated_count, publishedCount: row.published_count }));
   }
 
   async listCompletionForYear(schoolYearId: string) {
@@ -445,7 +484,9 @@ export class ReportCardsRepository {
     Array<{
       id: string;
       periodLabel: string;
+      schoolYearId: string;
       schoolYearLabel: string;
+      className: string;
       generalAverage: number;
       rank: number;
       classHeadcount: number;
@@ -455,25 +496,35 @@ export class ReportCardsRepository {
     const result = await this.db.execute<{
       id: string;
       period_label: string;
+      school_year_id: string;
       school_year_label: string;
+      class_name: string;
       general_average: string;
       rank: number;
       class_headcount: number;
       published_at: string;
     }>(sql`
-      SELECT rc.id::text, gp.label AS period_label, sy.label AS school_year_label,
+      SELECT rc.id::text, gp.label AS period_label, sy.id::text AS school_year_id,
+             sy.label AS school_year_label, c.name AS class_name,
              rc.general_average::text, rc.rank, rc.class_headcount, rc.published_at::text
       FROM report_cards rc
       INNER JOIN grading_periods gp ON gp.id = rc.grading_period_id
       INNER JOIN school_years sy ON sy.id = gp.school_year_id
+      INNER JOIN classes c ON c.id = rc.class_id AND c.school_year_id = sy.id
       WHERE rc.student_id = ${studentId}::uuid AND rc.status = 'published'
-        AND ${confirmedSchoolStudent(sql`rc.student_id`, sql`gp.school_year_id`, sql`rc.class_id`, false)}
+        AND EXISTS (
+          SELECT 1 FROM enrollments e
+          WHERE e.student_id = rc.student_id AND e.class_id = rc.class_id
+            AND e.school_year_id = sy.id AND e.status = 'confirmed'
+        )
       ORDER BY gp.start_date DESC
     `);
     return getRows<{
       id: string;
       period_label: string;
+      school_year_id: string;
       school_year_label: string;
+      class_name: string;
       general_average: string;
       rank: number;
       class_headcount: number;
@@ -481,7 +532,9 @@ export class ReportCardsRepository {
     }>(result).map((row) => ({
       id: row.id,
       periodLabel: row.period_label,
+      schoolYearId: row.school_year_id,
       schoolYearLabel: row.school_year_label,
+      className: row.class_name,
       generalAverage: Number(row.general_average),
       rank: row.rank,
       classHeadcount: row.class_headcount,
@@ -498,6 +551,7 @@ export class ReportCardsRepository {
       class_name: string;
       grading_period_id: string;
       period_label: string;
+      school_year_label: string;
       general_average: string;
       rank: number;
       class_average: string;
@@ -512,7 +566,7 @@ export class ReportCardsRepository {
       SELECT rc.id::text, rc.student_id::text,
              concat_ws(' ', s.first_name, s.last_name) AS student_name,
              rc.class_id::text, c.name AS class_name,
-             rc.grading_period_id::text, gp.label AS period_label,
+             rc.grading_period_id::text, gp.label AS period_label, sy.label AS school_year_label,
              rc.general_average::text, rc.rank,
              rc.class_average::text, rc.class_min_average::text, rc.class_max_average::text,
              rc.class_headcount, rc.status::text, rc.generated_at::text, rc.published_at::text,
@@ -521,10 +575,15 @@ export class ReportCardsRepository {
       INNER JOIN students s ON s.id = rc.student_id
       INNER JOIN classes c ON c.id = rc.class_id
       INNER JOIN grading_periods gp ON gp.id = rc.grading_period_id
+      INNER JOIN school_years sy ON sy.id = gp.school_year_id
       LEFT JOIN class_decisions cd ON cd.id = rc.class_decision_id
       WHERE rc.id = ${cardId}::uuid
         AND gp.school_year_id = c.school_year_id
-        AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`, false)}
+        AND EXISTS (
+          SELECT 1 FROM enrollments e
+          WHERE e.student_id = rc.student_id AND e.class_id = rc.class_id
+            AND e.school_year_id = gp.school_year_id AND e.status = 'confirmed'
+        )
       LIMIT 1
     `);
     const rows = getRows<{
@@ -535,6 +594,7 @@ export class ReportCardsRepository {
       class_name: string;
       grading_period_id: string;
       period_label: string;
+      school_year_label: string;
       general_average: string;
       rank: number;
       class_average: string;

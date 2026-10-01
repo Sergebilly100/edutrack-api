@@ -13,7 +13,7 @@ describe('missing tuition context', () => {
     };
     const service = new FinanceService(repository as unknown as FinanceRepository);
     await expect(service.getAmountDue('student', 'year')).rejects.toMatchObject({ statusCode: 409, code: 'TUITION_PLAN_REQUIRED', context });
-    expect(repository.getTuitionPlanRequiredContext).toHaveBeenCalledWith('student', 'year', false);
+    expect(repository.getTuitionPlanRequiredContext).toHaveBeenCalledWith('student', 'year', false, false);
   });
 
   it('rejects a student without a confirmed enrollment before exposing tuition data', async () => {
@@ -44,6 +44,26 @@ describe('missing tuition context', () => {
     await expect(service.getEnrollmentPaymentPreview('student', 'year')).resolves.toMatchObject({
       totalDue: 100000, confirmedPaid: 25000, remainingDue: 65000,
     });
-    expect(repository.getAmountDueContext).toHaveBeenCalledWith('student', 'year', true);
+    expect(repository.getAmountDueContext).toHaveBeenCalledWith('student', 'year', true, false);
+  });
+
+  it('calculates a former student’s balance from the confirmed historical enrollment', async () => {
+    const repository = {
+      hasConfirmedEnrollment: vi.fn().mockResolvedValue(true),
+      getAmountDueContext: vi.fn().mockResolvedValue({
+        student_id: 'student', student_name: 'Awa', student_matricule: null,
+        class_id: 'old-class', class_name: '6e', school_year_id: 'old-year', plan_id: 'old-plan',
+        plan_total_amount: '100000', currency: 'FCFA', override_total_amount: null, discount_amount: null,
+      }),
+      listMandatorySubscriptionPlans: vi.fn().mockResolvedValue([]),
+      getPaymentCoverage: vi.fn().mockResolvedValue({ confirmedPaid: 65000, waivedAmount: 10000 }),
+      getExpectedAtDate: vi.fn().mockResolvedValue(100000),
+    };
+    const service = new FinanceService(repository as unknown as FinanceRepository);
+    await expect(service.getHistoricalFinancialStatus('student', 'old-year')).resolves.toMatchObject({
+      totalDue: 100000, confirmedPaid: 65000, waivedAmount: 10000, remainingDue: 25000,
+    });
+    expect(repository.getAmountDueContext).toHaveBeenCalledWith('student', 'old-year', false, true);
+    expect(repository.getExpectedAtDate).toHaveBeenCalledWith('student', 'old-year', expect.any(String), true);
   });
 })

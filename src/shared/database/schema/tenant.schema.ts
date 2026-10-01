@@ -260,6 +260,8 @@ export const schoolYears = tenant.table(
     // Le cycle est choisi à l'ouverture de l'année par le super administrateur.
     // Il est la source de vérité pour les périodes (et non leurs dates repères).
     gradingPeriodType: gradingPeriodTypeEnum('grading_period_type').notNull().default('trimester'),
+    conductDecisionMode: varchar('conduct_decision_mode', { length: 24 }).notNull().default('homeroom'),
+    conductCoefficient: numeric('conduct_coefficient', { precision: 8, scale: 3 }).notNull().default(sql`'1'`),
     status: schoolYearStatusEnum('status').notNull().default('draft'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' })
       .notNull()
@@ -282,6 +284,8 @@ export const schoolYears = tenant.table(
       'school_years_review_before_end',
       sql`${table.endOfYearReviewStartDate} < ${table.endDate}`
     ),
+    schoolYearsConductMode: check('school_years_conduct_mode', sql`${table.conductDecisionMode} IN ('homeroom', 'direction', 'delegated')`),
+    schoolYearsConductCoefficient: check('school_years_conduct_coefficient_positive', sql`${table.conductCoefficient} > 0`),
   })
 );
 
@@ -824,6 +828,7 @@ export const gradingPeriods = tenant.table(
     orderIndex: integer('order_index').notNull(),
     label: varchar('label', { length: 100 }).notNull(),
     startDate: date('start_date', { mode: 'string' }).notNull(),
+    reviewStartDate: date('review_start_date', { mode: 'string' }).notNull(),
     endDate: date('end_date', { mode: 'string' }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
@@ -832,8 +837,21 @@ export const gradingPeriods = tenant.table(
     gradingPeriodsYearOrderUnique: unique('grading_periods_year_order_unique').on(table.schoolYearId, table.orderIndex),
     gradingPeriodsYearLabelUnique: unique('grading_periods_year_label_unique').on(table.schoolYearId, table.label),
     gradingPeriodsYearIdx: index('idx_grading_periods_year').on(table.schoolYearId, table.orderIndex),
-    gradingPeriodsValidDates: check('grading_periods_valid_dates', sql`${table.startDate} <= ${table.endDate}`),
+    gradingPeriodsValidDates: check('grading_periods_valid_dates', sql`${table.startDate} <= ${table.reviewStartDate} AND ${table.reviewStartDate} <= ${table.endDate}`),
     gradingPeriodsOrderPositive: check('grading_periods_order_positive', sql`${table.orderIndex} > 0`),
+  })
+);
+
+export const gradingPeriodClassClosures = tenant.table(
+  'grading_period_class_closures',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    gradingPeriodId: uuid('grading_period_id').notNull().references(() => gradingPeriods.id, { onDelete: 'cascade' }),
+    classId: uuid('class_id').notNull().references(() => classes.id, { onDelete: 'cascade' }),
+    closedAt: timestamp('closed_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    gradingPeriodClassClosureUnique: unique('grading_period_class_closure_unique').on(table.gradingPeriodId, table.classId),
   })
 );
 
@@ -972,6 +990,26 @@ export const conductGrades = tenant.table(
     conductGradesCoefficientPositive: check('conduct_grades_coefficient_positive', sql`${table.coefficient} > 0`),
   })
 );
+
+export const conductPolicyAudit = tenant.table('conduct_policy_audit', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  schoolYearId: uuid('school_year_id').notNull().references(() => schoolYears.id),
+  changedByUserId: uuid('changed_by_user_id').notNull().references(() => users.id),
+  oldMode: varchar('old_mode', { length: 24 }).notNull(),
+  newMode: varchar('new_mode', { length: 24 }).notNull(),
+  oldCoefficient: numeric('old_coefficient', { precision: 8, scale: 3 }).notNull(),
+  newCoefficient: numeric('new_coefficient', { precision: 8, scale: 3 }).notNull(),
+  changedAt: timestamp('changed_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+});
+
+export const conductGradeAudit = tenant.table('conduct_grade_audit', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  conductGradeId: uuid('conduct_grade_id').notNull().references(() => conductGrades.id),
+  changedByUserId: uuid('changed_by_user_id').notNull().references(() => users.id),
+  oldNote: numeric('old_note', { precision: 5, scale: 2 }),
+  newNote: numeric('new_note', { precision: 5, scale: 2 }).notNull(),
+  changedAt: timestamp('changed_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+});
 
 export const classSubjectCompletion = tenant.table(
   'class_subject_completion',

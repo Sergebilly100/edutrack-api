@@ -11,14 +11,22 @@ describe('academic grading integration', () => {
   it('saisit plusieurs évaluations puis recalcule les moyennes matière et générale', async () => {
     const context = getSeedContext();
     const suffix = Date.now().toString(36);
+    const shiftDays = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+    const today = shiftDays(0);
+    const yearStart = shiftDays(-60);
+    const yearEnd = shiftDays(300);
+    const firstReview = shiftDays(1);
+    const firstEnd = shiftDays(90);
+    const secondReview = shiftDays(180);
+    const evaluationDates = [shiftDays(-35), shiftDays(-20), shiftDays(-10)];
     const directorHeaders = await getAuthHeaders('director');
     const teacherHeaders = await getAuthHeaders('teacher');
 
     const years = await queryTenant<{ id: string }>(`
       INSERT INTO school_years (label, start_date, end_date, end_of_year_review_start_date, status)
-      VALUES ('09/2088 - 06/2089', '2088-09-01', '2089-06-30', '2089-05-31', 'active')
+      VALUES ($1, $2::date, $3::date, $4::date, 'active')
       RETURNING id
-    `);
+    `, [`review-${suffix}`, yearStart, yearEnd, shiftDays(270)]);
     const levels = await queryTenant<{ id: string }>(`
       INSERT INTO levels (name, order_index, is_exam_class)
       VALUES ($1, 880, false)
@@ -61,8 +69,9 @@ describe('academic grading integration', () => {
       type: 'trimester',
       orderIndex: 1,
       label: 'Premier trimestre',
-      startDate: '2088-09-01',
-      endDate: '2088-12-20',
+      startDate: yearStart,
+      reviewStartDate: firstReview,
+      endDate: firstEnd,
     });
     expect(periodResponse.status).toBe(201);
     const gradingPeriodId = periodResponse.body.gradingPeriod.id as string;
@@ -71,8 +80,9 @@ describe('academic grading integration', () => {
       type: 'trimester',
       orderIndex: 2,
       label: 'Deuxième trimestre',
-      startDate: '2089-01-01',
-      endDate: '2089-03-31',
+      startDate: today,
+      reviewStartDate: secondReview,
+      endDate: yearEnd,
     });
     expect(nextPeriodResponse.status).toBe(201);
     const nextGradingPeriodId = nextPeriodResponse.body.gradingPeriod.id as string;
@@ -150,13 +160,13 @@ describe('academic grading integration', () => {
       return response.body.evaluation.id as string;
     };
 
-    const math1 = await createEvaluation(context.scheduleId, mathResponse.body.subject.id, 'Devoir 1', 1, '2088-10-15');
+    const math1 = await createEvaluation(context.scheduleId, mathResponse.body.subject.id, 'Devoir 1', 1, evaluationDates[0]!);
     const refusedGrade = await request().put(`/api/v1/evaluations/${math1}/grades`).set(teacherHeaders)
       .send({ studentId: pendingStudentId, score: 10, maxScore: 20 });
     expect(refusedGrade.status).toBe(400);
     expect(refusedGrade.body.code).toBe('STUDENT_CLASS_MISMATCH');
-    const math2 = await createEvaluation(context.scheduleId, mathResponse.body.subject.id, 'Devoir 2', 3, '2088-11-12');
-    const french = await createEvaluation(frenchSchedules[0]!.id, frenchResponse.body.subject.id, 'Dictée', 1, '2088-11-19');
+    const math2 = await createEvaluation(context.scheduleId, mathResponse.body.subject.id, 'Devoir 2', 3, evaluationDates[1]!);
+    const french = await createEvaluation(frenchSchedules[0]!.id, frenchResponse.body.subject.id, 'Dictée', 1, evaluationDates[2]!);
 
     const incompleteCalculation = await request().put('/api/v1/class-subject-completion').set(teacherHeaders).send({
       classId,
@@ -170,9 +180,9 @@ describe('academic grading integration', () => {
     const scopeWithDates = await request().get('/api/v1/evaluations/scope').set(teacherHeaders).query({ classId, gradingPeriodId });
     expect(scopeWithDates.status).toBe(200);
     expect(scopeWithDates.body.evaluations).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: math1, evaluationDate: '2088-10-15' }),
-      expect.objectContaining({ id: math2, evaluationDate: '2088-11-12' }),
-      expect.objectContaining({ id: french, evaluationDate: '2088-11-19' }),
+      expect.objectContaining({ id: math1, evaluationDate: evaluationDates[0] }),
+      expect.objectContaining({ id: math2, evaluationDate: evaluationDates[1] }),
+      expect.objectContaining({ id: french, evaluationDate: evaluationDates[2] }),
     ]));
 
     const saveGrade = (evaluationId: string, score: number) =>
@@ -213,7 +223,7 @@ describe('academic grading integration', () => {
     ]));
 
     vi.useFakeTimers();
-    const spontaneousDate = new Date(Date.UTC(2088, 9, 1));
+    const spontaneousDate = new Date(`${shiftDays(-25)}T00:00:00.000Z`);
     spontaneousDate.setUTCDate(
       spontaneousDate.getUTCDate() + ((seededSchedule[0]!.day_of_week - spontaneousDate.getUTCDay() + 7) % 7)
     );
@@ -276,17 +286,10 @@ describe('academic grading integration', () => {
       type: 'scheduled',
       coefficient: 1,
       label: 'Devoir 3',
-      evaluationDate: '2089-01-15',
+      evaluationDate: shiftDays(100),
     });
-    expect(routedEvaluation.status, JSON.stringify(routedEvaluation.body)).toBe(201);
-    expect(routedEvaluation.body.evaluation).toMatchObject({
-      gradingPeriodId: nextGradingPeriodId,
-      evaluationDate: '2089-01-15',
-    });
-    expect(routedEvaluation.body.routedToPeriod).toEqual({
-      id: nextGradingPeriodId,
-      label: 'Deuxième trimestre',
-    });
+    expect(routedEvaluation.status).toBe(400);
+    expect(routedEvaluation.body.code).toBe('EVALUATION_DATE_OUTSIDE_PERIOD');
 
     const completion = await request().put('/api/v1/class-subject-completion').set(teacherHeaders).send({
       classId,
@@ -300,6 +303,26 @@ describe('academic grading integration', () => {
     const validatedSubjectEdit = await saveGrade(math1, 14);
     expect(validatedSubjectEdit.status).toBe(409);
     expect(validatedSubjectEdit.body.code).toBe('SUBJECT_AVERAGES_VALIDATED');
+
+    const beginReview = await request().patch(`/api/v1/grading-periods/${gradingPeriodId}`)
+      .set(directorHeaders).send({ reviewStartDate: today });
+    expect(beginReview.status, JSON.stringify(beginReview.body)).toBe(200);
+    const simultaneous = await request().get('/api/v1/grading-periods').set(directorHeaders);
+    expect(simultaneous.body.gradingPeriods).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: gradingPeriodId, notesEntryOpen: false, conductReviewOpen: true }),
+      expect.objectContaining({ id: nextGradingPeriodId, notesEntryOpen: true }),
+    ]));
+    const closedT1Grade = await saveGrade(french, 13);
+    expect(closedT1Grade.status).toBe(409);
+    expect(closedT1Grade.body.code).toBe('GRADING_PERIOD_NOTES_CLOSED');
+    const t2Evaluation = await request().post('/api/v1/evaluations').set(teacherHeaders).send({
+      lessonSlotId: context.scheduleId, subjectId: mathResponse.body.subject.id,
+      classId, gradingPeriodId: nextGradingPeriodId, type: 'scheduled',
+      coefficient: 1, label: 'Devoir T2', evaluationDate: shiftDays(10),
+    });
+    expect(t2Evaluation.status, JSON.stringify(t2Evaluation.body)).toBe(201);
+    expect(t2Evaluation.body.routedToPeriod).toBeNull();
+    expect((await saveGrade(t2Evaluation.body.evaluation.id as string, 14)).status).toBe(200);
 
     await queryTenant(`
       UPDATE schedules
@@ -342,11 +365,11 @@ describe('academic grading integration', () => {
       .send({
         subjectId: frenchResponse.body.subject.id,
         classId,
-        gradingPeriodId,
+        gradingPeriodId: nextGradingPeriodId,
         type: 'scheduled',
         coefficient: 1,
         label: 'Devoir sans EDT',
-        evaluationDate: '2088-12-10',
+        evaluationDate: shiftDays(12),
       });
     expect(evaluationWithoutSchedule.status, JSON.stringify(evaluationWithoutSchedule.body)).toBe(201);
     expect(evaluationWithoutSchedule.body.evaluation.lessonSlotId).toBeNull();
@@ -363,7 +386,7 @@ describe('academic grading integration', () => {
       .send({
         classId,
         subjectId: frenchResponse.body.subject.id,
-        gradingPeriodId,
+        gradingPeriodId: nextGradingPeriodId,
         status: 'in_progress',
       });
     expect(calculationWithoutSchedule.status, JSON.stringify(calculationWithoutSchedule.body)).toBe(200);

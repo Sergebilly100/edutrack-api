@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import { signAccessToken } from '../../src/modules/auth/auth.service.js';
 import { ReportCardsRepository } from '../../src/modules/report-cards/report-cards.repository.js';
+import { buildReportCardsService } from '../../src/modules/report-cards/report-cards.service.js';
 import { withTenantSchema } from '../../src/shared/database/db.js';
 import { getAuthHeaders, getSeedContext, queryTenant, request, tenantTable, TEST_SCHEMA_NAME } from './setup.js';
 
@@ -48,9 +49,9 @@ describe('report-cards routes (5c)', () => {
     );
     const yearId = years[0]!.id;
     const periods = await queryTenant<IdRow>(
-      `INSERT INTO ${tenantTable('grading_periods')} (school_year_id, type, order_index, label, start_date, end_date)
-       VALUES ($1::uuid, 'trimester', 1, 'T1 rc', '2096-09-01', '2096-12-15'),
-              ($1::uuid, 'trimester', 2, 'T2 rc', '2097-01-05', '2097-06-01')
+      `INSERT INTO ${tenantTable('grading_periods')} (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+       VALUES ($1::uuid, 'trimester', 1, 'T1 rc', CURRENT_DATE - 30, CURRENT_DATE - 1, CURRENT_DATE + 30),
+              ($1::uuid, 'trimester', 2, 'T2 rc', CURRENT_DATE - 1, CURRENT_DATE, CURRENT_DATE + 90)
        RETURNING id::text`,
       [yearId]
     );
@@ -121,6 +122,13 @@ describe('report-cards routes (5c)', () => {
        VALUES ($1::uuid, $2::uuid, 17, 1, $3::uuid)`,
       [studentAId, periodT1, context.directorUserId]
     );
+    await queryTenant(
+      `INSERT INTO ${tenantTable('conduct_grades')} (student_id, grading_period_id, note, coefficient, decided_by_user_id)
+       VALUES ($2::uuid, $3::uuid, 12, 1, $5::uuid),
+              ($1::uuid, $4::uuid, 16, 1, $5::uuid),
+              ($2::uuid, $4::uuid, 11, 1, $5::uuid)`,
+      [studentAId, studentBId, periodT1, periodT2, context.directorUserId]
+    );
 
     // Décision de fin d'année validée pour student-a (workflow 2ter)
     await queryTenant(
@@ -139,7 +147,23 @@ describe('report-cards routes (5c)', () => {
     parentHeaders = { authorization: `Bearer ${parentToken}` };
   });
 
+  it('refuse la génération quand une conduite finale manque', async () => {
+    await queryTenant(`DELETE FROM ${tenantTable('conduct_grades')} WHERE student_id = $1::uuid AND grading_period_id = $2::uuid`, [studentBId, periodT1]);
+    const response = await request().post('/api/v1/report-cards/generate').set(directorHeaders)
+      .send({ class_id: classId, grading_period_id: periodT1 });
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('CONDUCT_GRADES_PENDING');
+    const context = getSeedContext();
+    await queryTenant(`INSERT INTO ${tenantTable('conduct_grades')} (student_id, grading_period_id, note, coefficient, decided_by_user_id)
+      VALUES ($1::uuid, $2::uuid, 12, 1, $3::uuid)`, [studentBId, periodT1, context.directorUserId]);
+  });
+
   it('génère les bulletins de la classe en snapshot complet', async () => {
+    const yearId = (await queryTenant<{ school_year_id: string }>(`
+      SELECT school_year_id::text FROM ${tenantTable('grading_periods')} WHERE id = $1::uuid`, [periodT1]))[0]!.school_year_id;
+    const policy = await request().put(`/api/v1/conduct/policy/${yearId}`).set(directorHeaders)
+      .send({ mode: 'homeroom', coefficient: 2 });
+    expect(policy.status, JSON.stringify(policy.body)).toBe(200);
     const response = await request()
       .post('/api/v1/report-cards/generate')
       .set(directorHeaders)
@@ -148,6 +172,22 @@ describe('report-cards routes (5c)', () => {
     expect(response.status, JSON.stringify(response.body)).toBe(200);
     expect(response.body.generatedCount).toBe(2);
     expect(response.body.periodCompleted).toBe(true);
+    expect(response.body.classClosed).toBe(true);
+
+    const pdfPayload = await withTenantSchema(TEST_SCHEMA_NAME, async db => {
+      const card = (await queryTenant<IdRow>(`SELECT id::text FROM ${tenantTable('report_cards')}
+        WHERE student_id = $1::uuid AND grading_period_id = $2::uuid`, [studentAId, periodT1]))[0]!;
+      return buildReportCardsService(db).getPdfPayload(card.id);
+    });
+    expect(pdfPayload).toMatchObject({ schoolYearLabel: `rc-${suffix}`, generalAverage: 15.75, generalRank: 1,
+      classAverage: 12.875, classMinAverage: 10, classMaxAverage: 15.75 });
+    expect(pdfPayload.lines).toEqual(expect.arrayContaining([
+      expect.objectContaining({ isConduct: true, average: 17, coefficient: 2 }),
+    ]));
+    const coefficientChange = await request().put(`/api/v1/conduct/policy/${yearId}`).set(directorHeaders)
+      .send({ mode: 'homeroom', coefficient: 3 });
+    expect(coefficientChange.status).toBe(409);
+    expect(coefficientChange.body.code).toBe('CONDUCT_COEFFICIENT_LOCKED');
 
     const periods = await request().get('/api/v1/grading-periods').set(directorHeaders);
     expect(periods.status, JSON.stringify(periods.body)).toBe(200);
@@ -188,10 +228,18 @@ describe('report-cards routes (5c)', () => {
     expect(list.status).toBe(200);
     expect(list.body.reportCards).toHaveLength(1);
     expect(list.body.reportCards[0]).toMatchObject({
-      generalAverage: 15.571,
+      generalAverage: 15.75,
       rank: 1,
       classHeadcount: 2,
     });
+    const parentPdf = await request()
+      .post(`/api/v1/parent/students/${studentAId}/report-cards/${list.body.reportCards[0].id as string}/pdf`)
+      .set(parentHeaders);
+    expect(parentPdf.status).toBe(202);
+    const parentJob = await request().get(`/api/v1/jobs/${parentPdf.body.jobId as string}/status`).set(parentHeaders);
+    expect(parentJob.status).toBe(200);
+    const otherRoleJob = await request().get(`/api/v1/jobs/${parentPdf.body.jobId as string}/status`).set(directorHeaders);
+    expect(otherRoleJob.status).toBe(200);
   });
 
   it("régénération : les bulletins publiés restent inchangés", async () => {
@@ -210,11 +258,11 @@ describe('report-cards routes (5c)', () => {
     // Les deux bulletins sont publiés : rien n'est régénéré.
     expect(response.body.generatedCount).toBe(0);
 
-    // Le bulletin publié de student-a garde son snapshot initial (15, pas 18).
+    // Le bulletin publié garde sa moyenne officielle initiale.
     const parentList = await request()
       .get(`/api/v1/parent/students/${studentAId}/report-cards`)
       .set(parentHeaders);
-    expect(parentList.body.reportCards[0].generalAverage).toBe(15.571);
+    expect(parentList.body.reportCards[0].generalAverage).toBe(15.75);
   });
 
   it('décision de fin d\u2019année uniquement sur la dernière période', async () => {
@@ -251,14 +299,119 @@ describe('report-cards routes (5c)', () => {
     const cardId = (await queryTenant<IdRow>(`SELECT id::text FROM ${tenantTable('report_cards')}
       WHERE student_id=$1::uuid AND grading_period_id=$2::uuid`, [studentAId, periodT1]))[0]!.id;
     await queryTenant(`UPDATE ${tenantTable('classes')} SET is_active=false WHERE id=$1::uuid`, [classId]);
+    await queryTenant(`UPDATE ${tenantTable('students')} SET is_active=false WHERE id=$1::uuid`, [studentAId]);
     try {
       await withTenantSchema(TEST_SCHEMA_NAME, async (db) => {
         const repository = new ReportCardsRepository(db);
         expect((await repository.listPublishedSummariesForStudent(studentAId)).map((card) => card.id)).toContain(cardId);
         expect((await repository.findCardDetail(cardId))?.id).toBe(cardId);
       });
+      const list = await request().get(`/api/v1/students/${studentAId}/report-cards`).set(directorHeaders);
+      expect(list.status).toBe(200);
+      expect(list.body.reportCards).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: cardId, className: `RC class ${suffix}`, periodLabel: 'T1 rc' }),
+      ]));
+      const detail = await request().get(`/api/v1/students/${studentAId}/report-cards/${cardId}`).set(directorHeaders);
+      expect(detail.status).toBe(200);
+      expect(detail.body.reportCard).toMatchObject({ id: cardId, status: 'published' });
+      const pdf = await request().post(`/api/v1/students/${studentAId}/report-cards/${cardId}/pdf`).set(directorHeaders);
+      expect(pdf.status).toBe(202);
+      expect(pdf.body.jobId).toBeDefined();
+      const job = await request().get(`/api/v1/jobs/${pdf.body.jobId as string}/status`).set(directorHeaders);
+      expect(job.status).toBe(200);
+      const parentJob = await request().get(`/api/v1/jobs/${pdf.body.jobId as string}/status`).set(parentHeaders);
+      expect(parentJob.status).toBe(403);
+      const otherStudent = await request().get(`/api/v1/students/${studentBId}/report-cards/${cardId}`).set(directorHeaders);
+      expect(otherStudent.status).toBe(403);
+      const parent = await request().get(`/api/v1/students/${studentAId}/report-cards`).set(parentHeaders);
+      expect(parent.status).toBe(403);
     } finally {
       await queryTenant(`UPDATE ${tenantTable('classes')} SET is_active=true WHERE id=$1::uuid`, [classId]);
+      await queryTenant(`UPDATE ${tenantTable('students')} SET is_active=true WHERE id=$1::uuid`, [studentAId]);
+    }
+  });
+
+  it('clôture chaque classe séparément et ne rouvre pas une revue après une inscription tardive', async () => {
+    const yearId = (await queryTenant<{ school_year_id: string }>(
+      `SELECT school_year_id::text FROM ${tenantTable('grading_periods')} WHERE id=$1::uuid`, [periodT1]
+    ))[0]!.school_year_id;
+    const secondClassId = (await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('classes')} (name, level_id, school_year_id, is_active)
+       VALUES ($1, $2::uuid, $3::uuid, true) RETURNING id::text`,
+      [`RC second ${suffix}`, levelId, yearId]
+    ))[0]!.id;
+    const secondStudentId = (await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
+       VALUES ($1::uuid, 'Autre', 'Classe', $2) RETURNING id::text`,
+      [secondClassId, `RCC-${suffix}`]
+    ))[0]!.id;
+    await queryTenant(
+      `INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 'new_registration', 'confirmed')`,
+      [secondStudentId, secondClassId, yearId]
+    );
+    const before = await request().get('/api/v1/grading-periods').set(directorHeaders);
+    const t1Before = before.body.gradingPeriods.find((period: { id: string }) => period.id === periodT1);
+    expect(t1Before.closedClassIds).toContain(classId);
+    expect(t1Before.closedClassIds).not.toContain(secondClassId);
+    expect(t1Before.conductReviewOpen).toBe(true);
+
+    await seedAverage(secondStudentId, periodT1, null, 14);
+    await seedAverage(secondStudentId, periodT1, subjectMathsId, 15);
+    await seedAverage(secondStudentId, periodT1, subjectFrenchId, 12);
+    await queryTenant(`INSERT INTO ${tenantTable('conduct_grades')} (student_id, grading_period_id, note, coefficient, decided_by_user_id)
+      VALUES ($1::uuid, $2::uuid, 14, 1, $3::uuid)`, [secondStudentId, periodT1, getSeedContext().directorUserId]);
+    await queryTenant(
+      `INSERT INTO ${tenantTable('class_subject_completion')} (class_id, subject_id, grading_period_id, status, completed_at)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 'completed', now()),
+              ($1::uuid, $4::uuid, $3::uuid, 'completed', now())`,
+      [secondClassId, subjectMathsId, periodT1, subjectFrenchId]
+    );
+    const secondGeneration = await request().post('/api/v1/report-cards/generate').set(directorHeaders)
+      .send({ class_id: secondClassId, grading_period_id: periodT1 });
+    expect(secondGeneration.status, JSON.stringify(secondGeneration.body)).toBe(200);
+    expect(secondGeneration.body).toMatchObject({ generatedCount: 1, classClosed: true });
+
+    const lateStudentId = (await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
+       VALUES ($1::uuid, 'Inscription', 'Tardive', $2) RETURNING id::text`,
+      [classId, `RCL-${suffix}`]
+    ))[0]!.id;
+    await queryTenant(
+      `INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 'new_registration', 'confirmed')`,
+      [lateStudentId, classId, yearId]
+    );
+    const again = await request().post('/api/v1/report-cards/generate').set(directorHeaders)
+      .send({ class_id: classId, grading_period_id: periodT1 });
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+    expect(again.body).toMatchObject({ generatedCount: 0, classClosed: true });
+    expect(await queryTenant(`SELECT id FROM ${tenantTable('report_cards')} WHERE student_id=$1::uuid AND grading_period_id=$2::uuid`,
+      [lateStudentId, periodT1])).toHaveLength(0);
+    const after = await request().get('/api/v1/grading-periods').set(directorHeaders);
+    expect(after.body.gradingPeriods.find((period: { id: string }) => period.id === periodT1)).toMatchObject({
+      isClosed: true,
+      closedClassIds: expect.arrayContaining([classId, secondClassId]),
+    });
+  });
+
+  it('signale une période historique dont la ligne conduite ne concorde plus avec la moyenne', async () => {
+    const before = await request().get('/api/v1/report-cards/conduct-audit').set(directorHeaders);
+    expect(before.status, JSON.stringify(before.body)).toBe(200);
+    expect(before.body.periods).toEqual([]);
+    const cardId = (await queryTenant<IdRow>(`SELECT id::text FROM ${tenantTable('report_cards')}
+      WHERE student_id = $1::uuid AND grading_period_id = $2::uuid`, [studentAId, periodT2]))[0]!.id;
+    await queryTenant(`UPDATE ${tenantTable('report_card_lines')} SET subject_coefficient = 1
+      WHERE report_card_id = $1::uuid AND line_type = 'conduct'`, [cardId]);
+    try {
+      const audit = await request().get('/api/v1/report-cards/conduct-audit').set(directorHeaders);
+      expect(audit.status, JSON.stringify(audit.body)).toBe(200);
+      expect(audit.body.periods).toEqual(expect.arrayContaining([
+        expect.objectContaining({ gradingPeriodId: periodT2, generatedCount: 1, publishedCount: 0 }),
+      ]));
+    } finally {
+      await queryTenant(`UPDATE ${tenantTable('report_card_lines')} SET subject_coefficient = 2
+        WHERE report_card_id = $1::uuid AND line_type = 'conduct'`, [cardId]);
     }
   });
 });

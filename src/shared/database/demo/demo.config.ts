@@ -32,9 +32,9 @@ export function demoCalendar(today: string) {
     today, start, end, review: shiftDate(end, -30),
     label: `${start.slice(5, 7)}/${start.slice(0, 4)} - ${end.slice(5, 7)}/${end.slice(0, 4)}`,
     periods: [
-      { label: 'Trimestre 1', start, end: shiftDate(today, -119) },
-      { label: 'Trimestre 2', start: shiftDate(today, -105), end: shiftDate(today, -15) },
-      { label: 'Trimestre 3', start: shiftDate(today, -10), end },
+      { label: 'Trimestre 1', start, reviewStart: shiftDate(today, -105), end: shiftDate(today, -90) },
+      { label: 'Trimestre 2', start: shiftDate(today, -105), reviewStart: shiftDate(today, -10), end: shiftDate(today, -5) },
+      { label: 'Trimestre 3', start: shiftDate(today, -10), reviewStart: shiftDate(end, -30), end },
     ],
   };
 }

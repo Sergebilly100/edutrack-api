@@ -40,6 +40,7 @@ export type ReportCardDetail = {
   className: string;
   gradingPeriodId: string;
   periodLabel: string;
+  schoolYearLabel: string;
   generalAverage: number;
   rank: number;
   classAverage: number;
@@ -69,6 +70,7 @@ export type ClassReadiness = {
   className: string;
   headcount: number;
   studentsWithGeneralAverage: number;
+  studentsWithFinalConduct: number;
   subjects: Array<{
     subjectId: string;
     subjectName: string;

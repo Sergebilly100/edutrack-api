@@ -1,8 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
+import { z } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
-import { requirePermission } from '../../shared/middleware/auth.middleware.js';
+import { authenticateRequest, requirePermission } from '../../shared/middleware/auth.middleware.js';
 import { requireParent } from '../../shared/middleware/auth.middleware.js';
 import {
   buildReportCardsService,
@@ -59,6 +60,19 @@ type PdfQueueHandle = {
   ) => Promise<{ id?: string | number }>;
 };
 
+const studentCardParamsSchema = z.object({
+  studentId: z.string().uuid(),
+  cardId: z.string().uuid().optional(),
+});
+
+const requireStudentReportAccess = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  await authenticateRequest(request, reply);
+  if (reply.sent) return;
+  if (!request.permissions?.has('report_cards.view') && !request.permissions?.has('enrollments.view')) {
+    reply.code(403).send({ error: 'Accès aux bulletins refusé', code: 'FORBIDDEN', statusCode: 403 });
+  }
+};
+
 export type ReportCardsControllerOptions = {
   pdfQueue?: PdfQueueHandle;
 };
@@ -67,6 +81,68 @@ export default async function reportCardsController(
   app: FastifyInstance,
   options: ReportCardsControllerOptions = {}
 ): Promise<void> {
+  app.get('/api/v1/report-cards/conduct-audit', { preHandler: requirePermission('report_cards.view') }, async (request, reply) => {
+    try {
+      const result = await withTenantSchema(request.claims!.schemaName, db => buildReportCardsService(db).listConductAmbiguities());
+      return reply.send(result);
+    } catch (error) { return handleError(request, reply, error); }
+  });
+  app.get(
+    '/api/v1/students/:studentId/report-cards',
+    { preHandler: requireStudentReportAccess },
+    async (request, reply) => {
+      try {
+        const { studentId } = studentCardParamsSchema.parse(request.params ?? {});
+        const cards = await withTenantSchema(request.claims!.schemaName, (tenantDb) =>
+          buildReportCardsService(tenantDb).listPublishedForStudent(studentId)
+        );
+        return reply.send({ reportCards: cards });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.get(
+    '/api/v1/students/:studentId/report-cards/:cardId',
+    { preHandler: requireStudentReportAccess },
+    async (request, reply) => {
+      try {
+        const { studentId, cardId } = studentCardParamsSchema.parse(request.params ?? {});
+        const detail = await withTenantSchema(request.claims!.schemaName, (tenantDb) =>
+          buildReportCardsService(tenantDb).getPublishedDetail(studentId, cardId!)
+        );
+        return reply.send({ reportCard: detail });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/students/:studentId/report-cards/:cardId/pdf',
+    { preHandler: requireStudentReportAccess },
+    async (request, reply) => {
+      try {
+        if (!options.pdfQueue) {
+          return reply.code(503).send({ error: 'File d’export PDF indisponible', code: 'PDF_QUEUE_UNAVAILABLE', statusCode: 503 });
+        }
+        const { studentId, cardId } = studentCardParamsSchema.parse(request.params ?? {});
+        await withTenantSchema(request.claims!.schemaName, (tenantDb) =>
+          buildReportCardsService(tenantDb).getPublishedDetail(studentId, cardId!)
+        );
+        const job = await options.pdfQueue.add(
+          'report-card',
+          { type: 'report-card', schemaName: request.claims!.schemaName, reportCardId: cardId },
+          { removeOnComplete: 20, removeOnFail: 50 }
+        );
+        return reply.code(202).send({ jobId: job.id });
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
   // ── Génération / publication (direction) ─────────────────────────────────
   app.post(
     '/api/v1/report-cards/generate',
@@ -233,7 +309,7 @@ export default async function reportCardsController(
         void detail;
         const job = await options.pdfQueue.add(
           'report-card',
-          { type: 'report-card', schemaName: request.claims!.schemaName, reportCardId: cardId },
+          { type: 'report-card', schemaName: request.claims!.schemaName, reportCardId: cardId, parentId: request.claims!.sub },
           { removeOnComplete: 20, removeOnFail: 50 }
         );
         return reply.code(202).send({ jobId: job.id });

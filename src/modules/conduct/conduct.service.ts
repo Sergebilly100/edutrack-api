@@ -6,6 +6,7 @@ import type {
   ConductOverview,
   EducatorAssignmentBody,
   EducatorAssignmentItem,
+  ConductPolicyMode,
 } from './conduct.types.js';
 
 export class ConductModuleError extends Error {
@@ -21,6 +22,38 @@ export class ConductModuleError extends Error {
 
 export class ConductService {
   constructor(private readonly repository: ConductRepository) {}
+
+  async getPolicy(schoolYearId: string) {
+    const policy = await this.repository.findPolicy(schoolYearId);
+    if (!policy) throw new ConductModuleError('Année scolaire introuvable', 404, 'SCHOOL_YEAR_NOT_FOUND');
+    return { policy };
+  }
+
+  async updatePolicy(schoolYearId: string, mode: ConductPolicyMode, coefficient: number, userId: string) {
+    const updated = await this.repository.updatePolicy(schoolYearId, mode, coefficient, userId);
+    if (!updated) throw new ConductModuleError('Année scolaire introuvable', 404, 'SCHOOL_YEAR_NOT_FOUND');
+    return this.getPolicy(schoolYearId);
+  }
+
+  async listEligibleEducators() { return { users: await this.repository.listEligibleEducators() }; }
+
+  async listDecisionClasses(context: { userId: string; canFinalize: boolean }) {
+    const modes: ConductPolicyMode[] = ['homeroom', 'direction', 'delegated'];
+    const groups = await Promise.all(modes.map(async mode =>
+      mode === 'delegated' && !context.canFinalize ? [] : this.repository.listDecisionClasses(context.userId, mode)
+    ));
+    const classes = groups.flat();
+    return { classes, gradingPeriods: await this.repository.listDecisionPeriods(classes.map(klass => klass.id)) };
+  }
+
+  async listDecisionStudents(classId: string, gradingPeriodId: string, context: { userId: string; canFinalize: boolean }) {
+    const { classes, gradingPeriods } = await this.listDecisionClasses(context);
+    const klass = classes.find(item => item.id === classId);
+    if (!klass || !gradingPeriods.some(period => period.id === gradingPeriodId && period.schoolYearId === klass.schoolYearId)) {
+      throw new ConductModuleError('Classe ou période non autorisée', 403, 'NOT_CONDUCT_DECIDER');
+    }
+    return { students: await this.repository.listDecisionStudents(classId, gradingPeriodId) };
+  }
 
   async listEducatorAssignments(): Promise<{ assignments: EducatorAssignmentItem[] }> {
     return { assignments: await this.repository.listEducatorAssignments() };
@@ -41,6 +74,10 @@ export class ConductService {
         400,
         'INVALID_ASSIGNMENT_TARGET'
       );
+    }
+
+    if (!(await this.repository.educatorTargetExists(input.class_id, input.level_id))) {
+      throw new ConductModuleError('Classe ou niveau introuvable', 400, 'INVALID_ASSIGNMENT_SCOPE');
     }
 
     // Règle métier : on ne peut assigner qu'un utilisateur détenant
@@ -86,11 +123,11 @@ export class ConductService {
     if (!(await this.repository.gradingPeriodExists(input.grading_period_id))) {
       throw new ConductModuleError('Période d\u2019évaluation introuvable', 404, 'GRADING_PERIOD_NOT_FOUND');
     }
-    if (await this.repository.isGradingPeriodCompleted(input.grading_period_id)) {
+    if (await this.repository.isGradingPeriodCompleted(input.grading_period_id, student.classId)) {
       throw new ConductModuleError('Cette période est finalisée : ses bulletins ont déjà été générés', 409, 'GRADING_PERIOD_COMPLETED');
     }
-    if (!(await this.repository.isCurrentGradingPeriod(input.grading_period_id))) {
-      throw new ConductModuleError('Cette période n’est pas encore ouverte à la saisie', 409, 'GRADING_PERIOD_NOT_CURRENT');
+    if (!(await this.repository.isConductReviewOpen(input.grading_period_id))) {
+      throw new ConductModuleError('La revue de conduite de cette période n’est pas encore ouverte', 409, 'CONDUCT_REVIEW_NOT_OPEN');
     }
 
     // Un prof ne saisit la conduite que pour les élèves de ses classes.
@@ -103,16 +140,8 @@ export class ConductService {
       );
     }
 
-    if (!(await this.repository.teacherHasAverageCalculation(
-      teacher.id,
-      student.classId,
-      input.grading_period_id
-    ))) {
-      throw new ConductModuleError(
-        'Lancez d’abord le calcul des moyennes de votre matière pour cette période',
-        409,
-        'AVERAGE_CALCULATION_NOT_STARTED'
-      );
+    if (await this.repository.findFinalGrade(input.student_id, input.grading_period_id)) {
+      throw new ConductModuleError('La note finale verrouille les avis enseignants', 409, 'CONDUCT_INPUT_LOCKED');
     }
 
     await this.repository.insertTeacherConductInput({ ...input, teacherId: teacher.id });
@@ -133,12 +162,6 @@ export class ConductService {
     if (!(await this.repository.gradingPeriodMatchesClass(gradingPeriodId, classId))) {
       throw new ConductModuleError('La période ne correspond pas à la classe', 400, 'CONDUCT_SCOPE_MISMATCH');
     }
-    const isAvailable = await this.repository.teacherHasAverageCalculation(
-      teacher.id,
-      classId,
-      gradingPeriodId
-    );
-    if (!isAvailable) return { isAvailable: false, students: [] };
     return {
       isAvailable: true,
       students: await this.repository.listTeacherConductScope(teacher.id, classId, gradingPeriodId),
@@ -159,22 +182,15 @@ export class ConductService {
     if (!(await this.repository.gradingPeriodMatchesClass(input.grading_period_id, input.class_id))) {
       throw new ConductModuleError('La période ne correspond pas à la classe', 400, 'CONDUCT_SCOPE_MISMATCH');
     }
-    if (await this.repository.isGradingPeriodCompleted(input.grading_period_id)) {
+    if (await this.repository.isGradingPeriodCompleted(input.grading_period_id, input.class_id)) {
       throw new ConductModuleError('Cette période est finalisée : ses bulletins ont déjà été générés', 409, 'GRADING_PERIOD_COMPLETED');
     }
-    if (!(await this.repository.isCurrentGradingPeriod(input.grading_period_id))) {
-      throw new ConductModuleError('Cette période n’est pas encore ouverte à la saisie', 409, 'GRADING_PERIOD_NOT_CURRENT');
+    if (!(await this.repository.isConductReviewOpen(input.grading_period_id))) {
+      throw new ConductModuleError('La revue de conduite de cette période n’est pas encore ouverte', 409, 'CONDUCT_REVIEW_NOT_OPEN');
     }
-    if (!(await this.repository.teacherHasAverageCalculation(
-      teacher.id,
-      input.class_id,
-      input.grading_period_id
-    ))) {
-      throw new ConductModuleError(
-        'Lancez d’abord le calcul des moyennes de votre matière pour cette période',
-        409,
-        'AVERAGE_CALCULATION_NOT_STARTED'
-      );
+    const locked = await Promise.all(input.student_ids.map(studentId => this.repository.findFinalGrade(studentId, input.grading_period_id)));
+    if (locked.some(Boolean)) {
+      throw new ConductModuleError('Une note finale verrouille les avis sélectionnés', 409, 'CONDUCT_INPUT_LOCKED');
     }
     if (!(await this.repository.studentsBelongToClass(input.student_ids, input.class_id))) {
       throw new ConductModuleError('Un élève sélectionné ne fait pas partie de la classe', 400, 'STUDENT_CLASS_MISMATCH');
@@ -196,15 +212,15 @@ export class ConductService {
     gradingPeriodId: string,
     context: { userId: string; canFinalize: boolean }
   ): Promise<void> {
-    const isHomeroomTeacher = await this.repository.isHomeroomTeacherForStudent(context.userId, studentId, gradingPeriodId);
-    if (isHomeroomTeacher) return;
-
-    const isAssignedEducator = context.canFinalize
-      && await this.repository.isAssignedEducatorForStudent(context.userId, studentId, gradingPeriodId);
-    if (isAssignedEducator) return;
+    const policy = await this.repository.findPolicyForPeriod(gradingPeriodId);
+    if (!policy) throw new ConductModuleError('Période introuvable', 404, 'GRADING_PERIOD_NOT_FOUND');
+    if (policy.mode === 'homeroom' && await this.repository.isHomeroomTeacherForStudent(context.userId, studentId, gradingPeriodId)) return;
+    if (policy.mode === 'direction' && await this.repository.isActiveDirector(context.userId)) return;
+    if (policy.mode === 'delegated' && context.canFinalize
+      && await this.repository.isAssignedEducatorForStudent(context.userId, studentId, gradingPeriodId)) return;
 
     throw new ConductModuleError(
-      'Vous devez être le professeur principal de cette classe ou l’éducateur assigné pour décider la conduite',
+      'Vous ne pouvez pas décider la conduite de cette classe selon la politique de l’année',
       403,
       'NOT_CONDUCT_DECIDER'
     );
@@ -267,32 +283,23 @@ export class ConductService {
     if (!(await this.repository.gradingPeriodExists(input.grading_period_id))) {
       throw new ConductModuleError('Période d\u2019évaluation introuvable', 404, 'GRADING_PERIOD_NOT_FOUND');
     }
-    if (await this.repository.isGradingPeriodCompleted(input.grading_period_id)) {
+    if (await this.repository.isGradingPeriodCompleted(input.grading_period_id, student.classId)) {
       throw new ConductModuleError('Cette période est finalisée : ses bulletins ont déjà été générés', 409, 'GRADING_PERIOD_COMPLETED');
     }
-    if (!(await this.repository.isCurrentGradingPeriod(input.grading_period_id))) {
-      throw new ConductModuleError('Cette période n’est pas encore ouverte à la saisie', 409, 'GRADING_PERIOD_NOT_CURRENT');
+    if (!(await this.repository.isConductReviewOpen(input.grading_period_id))) {
+      throw new ConductModuleError('La revue de conduite de cette période n’est pas encore ouverte', 409, 'CONDUCT_REVIEW_NOT_OPEN');
     }
 
     await this.assertCanManageFinalConduct(input.student_id, input.grading_period_id, context);
 
-    const teacherInputs = await this.repository.listConductInputsForStudent(
-      input.student_id,
-      input.grading_period_id
-    );
-    const missingTeacherInputs = teacherInputs.filter((teacherInput) => !teacherInput.isSubmitted);
-    if (teacherInputs.length === 0 || missingTeacherInputs.length > 0) {
-      throw new ConductModuleError(
-        'Tous les enseignants de la classe doivent renseigner leur note de conduite avant la décision finale',
-        409,
-        'CONDUCT_INPUTS_INCOMPLETE'
-      );
-    }
+    const policy = await this.repository.findPolicyForPeriod(input.grading_period_id);
+    if (!policy) throw new ConductModuleError('Période introuvable', 404, 'GRADING_PERIOD_NOT_FOUND');
 
     await this.repository.upsertConductGrade({
       ...input,
-      coefficient: input.coefficient ?? 1,
+      coefficient: policy.coefficient,
       decidedByUserId: context.userId,
+      canFinalize: context.canFinalize,
     });
   }
 }

@@ -1,6 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
-import { createSubjectsBulkBodySchema, updateSubjectsBulkBodySchema } from '../../src/modules/academic/academic-grading.types.js';
+import { createGradingPeriodBodySchema, createSubjectsBulkBodySchema, updateSubjectsBulkBodySchema } from '../../src/modules/academic/academic-grading.types.js';
+
+describe('createGradingPeriodBodySchema', () => {
+  const period = {
+    schoolYearId: '11111111-1111-4111-8111-111111111111', type: 'trimester', orderIndex: 1,
+    label: 'T1', startDate: '2026-09-01', reviewStartDate: '2026-11-15', endDate: '2026-12-20',
+  };
+
+  it('exige une revue comprise entre les deux bornes', () => {
+    expect(createGradingPeriodBodySchema.safeParse(period).success).toBe(true);
+    expect(createGradingPeriodBodySchema.safeParse({ ...period, reviewStartDate: undefined }).success).toBe(false);
+    expect(createGradingPeriodBodySchema.safeParse({ ...period, reviewStartDate: '2026-08-31' }).success).toBe(false);
+    expect(createGradingPeriodBodySchema.safeParse({ ...period, reviewStartDate: '2026-12-21' }).success).toBe(false);
+  });
+});
 
 describe('createSubjectsBulkBodySchema', () => {
   it('refuse la sélection du même niveau deux fois', () => {

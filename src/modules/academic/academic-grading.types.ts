@@ -86,11 +86,14 @@ export const createGradingPeriodBodySchema = z
     orderIndex: z.number().int().positive(),
     label: z.string().trim().min(1).max(100),
     startDate: isoDateSchema,
+    reviewStartDate: isoDateSchema,
     endDate: isoDateSchema,
   })
   .refine((input) => input.startDate <= input.endDate, {
     message: 'Period start date must be before or equal to end date',
     path: ['startDate'],
+  }).refine((input) => input.startDate <= input.reviewStartDate && input.reviewStartDate <= input.endDate, {
+    message: 'Review start date must be within the grading period', path: ['reviewStartDate'],
   });
 
 export const updateGradingPeriodBodySchema = z
@@ -98,6 +101,7 @@ export const updateGradingPeriodBodySchema = z
     orderIndex: z.number().int().positive().optional(),
     label: z.string().trim().min(1).max(100).optional(),
     startDate: isoDateSchema.optional(),
+    reviewStartDate: isoDateSchema.optional(),
     endDate: isoDateSchema.optional(),
   })
   .refine((input) => Object.values(input).some((value) => value !== undefined), {
@@ -172,10 +176,17 @@ export type GradingPeriodItem = {
   orderIndex: number;
   label: string;
   startDate: string;
+  reviewStartDate: string;
   endDate: string;
-  /** Une période est terminée seulement lorsque tous les bulletins des classes actives sont générés. */
+  notesEntryOpen: boolean;
+  conductReviewOpen: boolean;
+  bulletinGenerationAvailable: boolean;
+  isClosed: boolean;
+  closedClassIds: string[];
+  hasGeneratedCards: boolean;
+  /** Toutes les classes actives avec inscriptions confirmées ont leurs bulletins. */
   isCompleted: boolean;
-  /** Première période non terminée de l'année ; aucune si l'année est entièrement finalisée. */
+  /** Compatibilité des anciens consommateurs : saisie ou revue ouverte. */
   isCurrent: boolean;
 };
 

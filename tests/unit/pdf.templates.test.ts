@@ -8,6 +8,7 @@ import {
   renderTeacherMultiPeriodBilan,
   renderTeacherSalaryBilan,
   renderTuitionReceipt,
+  renderReportCard,
   type SchoolSalarySummary,
   type TeacherSalaryDetails,
 } from '../../src/shared/pdf/index.js';
@@ -54,6 +55,23 @@ const teacher = (rows: number): TeacherSalaryDetails => ({
     lateMinutes: i % 3 === 1 ? 10 : null,
     hoursDone: i % 3 === 2 ? 0 : 1,
   })),
+});
+
+describe('pdf/templates - bulletin avec conduite pondérée', () => {
+  it('produit un PDF valide à partir des valeurs officielles coefficient 2', async () => {
+    const pages = await isValidPdf(await renderReportCard(branding, {
+      studentName: 'Awa Bulletin', className: '3ème A', periodLabel: 'Trimestre 1',
+      schoolYearLabel: '2026-2027', generalAverage: 15.75, generalRank: 1,
+      classHeadcount: 2, classAverage: 12.875, classMinAverage: 10,
+      classMaxAverage: 15.75, yearEndDecisionLabel: null,
+      lines: [
+        { label: 'Maths', average: 16, coefficient: 4, rank: 1 },
+        { label: 'Français', average: 14, coefficient: 2, rank: 1 },
+        { label: 'Conduite', average: 17, coefficient: 2, rank: null, isConduct: true },
+      ],
+    }));
+    expect(pages).toBeGreaterThanOrEqual(1);
+  });
 });
 
 describe('pdf/templates - bilan salaire professeur', () => {

@@ -719,7 +719,7 @@ describe('schedule history protection integration', () => {
     const headers = await getAuthHeaders('director');
     const context = getSeedContext();
     const today = toIsoDate(new Date());
-    const month = today.slice(0, 7);
+    const month = (Number(today.slice(8, 10)) <= 2 ? addDays(today, -3) : today).slice(0, 7);
     const { start: monthStart, end: monthEnd } = monthBounds(month);
 
     const upperBound = addDays(today, -2);

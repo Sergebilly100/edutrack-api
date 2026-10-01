@@ -280,6 +280,7 @@ export type BillingPdfJobData =
       type: 'report-card';
       schemaName: string;
       reportCardId: string;
+      parentId?: string;
     }
   | {
       type: 'cash-journal';

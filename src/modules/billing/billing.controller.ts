@@ -16,7 +16,7 @@ import {
   type BillingPdfJobData,
 } from './billing.queue.js';
 import { BillingModuleError, buildBillingService } from './billing.service.js';
-import { mapJobStatus, resolveJobFileResult } from './billing.helpers.js';
+import { canReadReportCardJob, mapJobStatus, resolveJobFileResult } from './billing.helpers.js';
 import {
   jobParamsSchema,
   jobDownloadQuerySchema,
@@ -210,6 +210,15 @@ const canReadPdfJob = (
 
   if (ATTENDANCE_EXPORT_JOB_TYPES.has(jobType)) {
     return hasAnyPermission(request.permissions, ['attendance.view', 'teachers.attendance.view']);
+  }
+
+  if (jobType === 'report-card') {
+    return canReadReportCardJob(job.data, {
+      schemaName: request.claims?.schemaName,
+      role: request.claims?.role,
+      userId: request.claims?.sub,
+      permissions: request.permissions,
+    });
   }
 
   if (jobType === 'attendance-hours-export') {

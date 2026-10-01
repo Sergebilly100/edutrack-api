@@ -21,6 +21,10 @@ const repository = {
   findTeacherByUserId: vi.fn(),
   findSubject: vi.fn(),
   findGradingPeriod: vi.fn(),
+  getSchoolYear: vi.fn(),
+  listGradingPeriods: vi.fn(),
+  hasGeneratedCards: vi.fn(),
+  updateGradingPeriod: vi.fn(),
   findNextGradingPeriod: vi.fn(),
   getClassScope: vi.fn(),
   getLessonSlotScope: vi.fn(),
@@ -30,6 +34,7 @@ const repository = {
   countMissingScheduledGrades: vi.fn(),
   upsertCompletion: vi.fn(),
   createEvaluation: vi.fn(),
+  findEvaluation: vi.fn(),
 } as unknown as Record<keyof AcademicGradingRepository, ReturnType<typeof vi.fn>>;
 
 const service = new AcademicGradingService(
@@ -52,10 +57,15 @@ beforeEach(() => {
     schoolYearId: ids.schoolYear,
     isCompleted: false,
     isCurrent: true,
+    notesEntryOpen: true,
+    closedClassIds: [],
     startDate: '2026-09-01',
+    reviewStartDate: '2026-12-01',
     endDate: '2026-12-20',
   });
   repository.findNextGradingPeriod.mockResolvedValue(null);
+  repository.getSchoolYear.mockResolvedValue({ startDate: '2026-09-01', endDate: '2027-06-30' });
+  repository.hasGeneratedCards.mockResolvedValue(false);
   repository.getClassScope.mockResolvedValue({
     id: ids.schoolClass,
     levelId: ids.level,
@@ -66,6 +76,36 @@ beforeEach(() => {
   repository.countScheduledEvaluations.mockResolvedValue(1);
   repository.countMissingScheduledGrades.mockResolvedValue(0);
   repository.upsertCompletion.mockResolvedValue({ status: 'in_progress' });
+});
+
+describe('AcademicGradingService.updateGradingPeriod', () => {
+  const legacyPeriods = [
+    { id: ids.period, schoolYearId: ids.schoolYear, type: 'trimester', orderIndex: 1, label: 'T1', startDate: '2026-09-01', reviewStartDate: '2026-12-15', endDate: '2026-12-15' },
+    { id: ids.nextPeriod, schoolYearId: ids.schoolYear, type: 'trimester', orderIndex: 2, label: 'T2', startDate: '2027-01-01', reviewStartDate: '2027-03-15', endDate: '2027-03-15' },
+    { id: '550e8400-e29b-41d4-a716-446655440009', schoolYearId: ids.schoolYear, type: 'trimester', orderIndex: 3, label: 'T3', startDate: '2027-04-01', reviewStartDate: '2027-06-01', endDate: '2027-06-30' },
+  ];
+
+  beforeEach(() => {
+    repository.findGradingPeriod.mockResolvedValue(legacyPeriods[0]);
+    repository.listGradingPeriods.mockResolvedValue(legacyPeriods);
+    repository.updateGradingPeriod.mockResolvedValue({ ...legacyPeriods[0], reviewStartDate: '2027-01-01', endDate: '2027-01-15' });
+  });
+
+  it('permet de réparer une frontière malgré une autre lacune historique', async () => {
+    await expect(service.updateGradingPeriod(ids.period, {
+      reviewStartDate: '2027-01-01', endDate: '2027-01-15',
+    })).resolves.toMatchObject({ reviewStartDate: '2027-01-01' });
+    expect(repository.updateGradingPeriod).toHaveBeenCalledWith(ids.period, {
+      reviewStartDate: '2027-01-01', endDate: '2027-01-15',
+    });
+  });
+
+  it('refuse une modification qui laisse la frontière voisine incohérente', async () => {
+    await expect(service.updateGradingPeriod(ids.period, {
+      reviewStartDate: '2026-12-10', endDate: '2026-12-20',
+    })).rejects.toMatchObject({ code: 'GRADING_PERIOD_SEQUENCE_INVALID', statusCode: 409 });
+    expect(repository.updateGradingPeriod).not.toHaveBeenCalled();
+  });
 });
 
 describe('AcademicGradingService.updateCompletion', () => {
@@ -93,6 +133,33 @@ describe('AcademicGradingService.updateCompletion', () => {
 });
 
 describe('AcademicGradingService.createEvaluation', () => {
+  it('verrouille une évaluation T1 au début de revue sans rouvrir la période', async () => {
+    repository.findGradingPeriod.mockResolvedValue({
+      id: ids.period, schoolYearId: ids.schoolYear, startDate: '2026-09-01',
+      reviewStartDate: '2026-11-15', endDate: '2026-12-20',
+      notesEntryOpen: false, conductReviewOpen: true, isCompleted: false, closedClassIds: [],
+    });
+    await expect(service.createEvaluation({
+      classId: ids.schoolClass, subjectId: ids.subject, gradingPeriodId: ids.period,
+      type: 'scheduled', coefficient: 1, label: 'Devoir tardif', evaluationDate: '2026-11-10',
+    }, ids.user)).rejects.toMatchObject({ code: 'GRADING_PERIOD_NOTES_CLOSED', statusCode: 409 });
+    expect(repository.createEvaluation).not.toHaveBeenCalled();
+  });
+
+  it('verrouille la modification de note T1 pendant sa revue', async () => {
+    repository.findEvaluation.mockResolvedValue({
+      id: 'evaluation-1', teacherId: ids.teacher, classId: ids.schoolClass,
+      subjectId: ids.subject, gradingPeriodId: ids.period,
+    });
+    repository.findGradingPeriod.mockResolvedValue({
+      id: ids.period, schoolYearId: ids.schoolYear, startDate: '2026-09-01',
+      reviewStartDate: '2026-11-15', endDate: '2026-12-20',
+      notesEntryOpen: false, conductReviewOpen: true, isCompleted: false, closedClassIds: [],
+    });
+    await expect(service.upsertGrade('evaluation-1', {
+      studentId: ids.user, score: 12, maxScore: 20,
+    }, ids.user)).rejects.toMatchObject({ code: 'GRADING_PERIOD_NOTES_CLOSED', statusCode: 409 });
+  });
   it('autorise une évaluation sans créneau EDT pour une affectation professeur-matière-classe', async () => {
     repository.createEvaluation.mockResolvedValue({ id: 'evaluation-1' });
 
@@ -116,7 +183,7 @@ describe('AcademicGradingService.createEvaluation', () => {
     }), ids.teacher);
   });
 
-  it('redirige une nouvelle évaluation vers la période suivante après le lancement du calcul', async () => {
+  it('accepte la période suivante explicitement sélectionnée pendant la revue de la précédente', async () => {
     repository.getSubjectCompletion.mockImplementation(
       async (_classId: string, _subjectId: string, periodId: string) =>
         periodId === ids.period ? { status: 'in_progress' } : null
@@ -129,6 +196,8 @@ describe('AcademicGradingService.createEvaluation', () => {
       endDate: '2027-03-31',
       isCompleted: false,
       isCurrent: false,
+      notesEntryOpen: true,
+      closedClassIds: [],
     });
     repository.findGradingPeriod.mockImplementation(async (id: string) => id === ids.nextPeriod
       ? {
@@ -139,6 +208,8 @@ describe('AcademicGradingService.createEvaluation', () => {
           endDate: '2027-03-31',
           isCompleted: false,
           isCurrent: false,
+          notesEntryOpen: true,
+          closedClassIds: [],
         }
       : {
           id: ids.period,
@@ -147,20 +218,22 @@ describe('AcademicGradingService.createEvaluation', () => {
           endDate: '2026-12-20',
           isCompleted: false,
           isCurrent: true,
+          notesEntryOpen: false,
+          closedClassIds: [],
         });
     repository.createEvaluation.mockResolvedValue({ id: 'evaluation-2' });
 
     await expect(service.createEvaluation({
       classId: ids.schoolClass,
       subjectId: ids.subject,
-      gradingPeriodId: ids.period,
+      gradingPeriodId: ids.nextPeriod,
       type: 'scheduled',
       coefficient: 1,
       label: 'Devoir suivant',
       evaluationDate: '2027-01-15',
     }, ids.user)).resolves.toEqual({
       evaluation: { id: 'evaluation-2' },
-      routedToPeriod: { id: ids.nextPeriod, label: 'Deuxième trimestre' },
+      routedToPeriod: null,
     });
     expect(repository.createEvaluation).toHaveBeenCalledWith(
       expect.objectContaining({ gradingPeriodId: ids.nextPeriod }),
@@ -168,7 +241,7 @@ describe('AcademicGradingService.createEvaluation', () => {
     );
   });
 
-  it('refuse une nouvelle évaluation après le calcul si aucune période suivante n’existe', async () => {
+  it('refuse une évaluation dont la date appartient à une autre période sans la rediriger', async () => {
     repository.getSubjectCompletion.mockResolvedValue({ status: 'in_progress' });
 
     await expect(service.createEvaluation({
@@ -180,8 +253,8 @@ describe('AcademicGradingService.createEvaluation', () => {
       label: 'Devoir suivant',
       evaluationDate: '2027-01-15',
     }, ids.user)).rejects.toMatchObject<Partial<AcademicGradingError>>({
-      code: 'NEXT_GRADING_PERIOD_NOT_CONFIGURED',
-      statusCode: 409,
+      code: 'EVALUATION_DATE_OUTSIDE_PERIOD',
+      statusCode: 400,
     });
     expect(repository.createEvaluation).not.toHaveBeenCalled();
   });

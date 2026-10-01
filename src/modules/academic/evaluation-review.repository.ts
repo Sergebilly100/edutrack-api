@@ -32,9 +32,10 @@ export class EvaluationReviewRepository {
     const [years, periods, levels, classes, subjects, teachers] = await Promise.all([
       this.db.execute<{ id: string; label: string; active: boolean }>(sql`
         SELECT id::text, label, status = 'active' AS active FROM school_years ORDER BY start_date DESC`),
-      this.db.execute<{ id: string; label: string; school_year_id: string; is_current: boolean; is_future: boolean; has_evaluations: boolean }>(sql`
+      this.db.execute<{ id: string; label: string; school_year_id: string; is_current: boolean; notes_entry_open: boolean; is_future: boolean; has_evaluations: boolean }>(sql`
         SELECT gp.id::text, gp.label, gp.school_year_id::text,
           CURRENT_DATE BETWEEN gp.start_date AND gp.end_date AS is_current,
+          CURRENT_DATE >= gp.start_date AND CURRENT_DATE < gp.review_start_date AS notes_entry_open,
           gp.start_date > CURRENT_DATE AS is_future,
           EXISTS (SELECT 1 FROM evaluations e JOIN classes c ON c.id = e.class_id
             JOIN subjects s ON s.id = e.subject_id AND s.level_id = c.level_id
@@ -78,7 +79,7 @@ export class EvaluationReviewRepository {
     return {
       schoolYears: rows(years),
       gradingPeriods: rows(periods).map((p) => ({ id: p.id, label: p.label, schoolYearId: p.school_year_id,
-        isCurrent: p.is_current, isFuture: p.is_future, hasEvaluations: p.has_evaluations })),
+        isCurrent: p.is_current, notesEntryOpen: p.notes_entry_open, isFuture: p.is_future, hasEvaluations: p.has_evaluations })),
       levels: rows(levels),
       classes: rows(classes).map((c) => ({ id: c.id, label: c.label, levelId: c.level_id })),
       subjects: rows(subjects).map((s) => ({ id: s.id, label: s.label, levelId: s.level_id })),

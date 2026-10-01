@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { QueryResult, QueryResultRow } from 'pg';
+import { getPeriodCapabilities } from './grading-period-capabilities.js';
 
 import type {
   CompletionInput,
@@ -36,6 +37,7 @@ type PeriodRow = {
   order_index: number;
   label: string;
   start_date: string;
+  review_start_date: string;
   end_date: string;
   is_completed?: boolean;
 };
@@ -55,7 +57,11 @@ const mapPeriod = (row: PeriodRow): GradingPeriodItem => ({
   orderIndex: row.order_index,
   label: row.label,
   startDate: row.start_date,
+  reviewStartDate: row.review_start_date,
   endDate: row.end_date,
+  ...getPeriodCapabilities({ startDate: row.start_date, reviewStartDate: row.review_start_date, endDate: row.end_date }, null, row.is_completed ?? false),
+  closedClassIds: [],
+  hasGeneratedCards: false,
   isCompleted: row.is_completed ?? false,
   isCurrent: false,
 });
@@ -181,26 +187,48 @@ export class AcademicGradingRepository {
   private async withPeriodStates(periods: PeriodRow[]): Promise<GradingPeriodItem[]> {
     if (periods.length === 0) return [];
     const periodIds = periods.map((period) => period.id);
-    const result = await this.db.execute<{ grading_period_id: string; is_completed: boolean }>(sql`
+    const result = await this.db.execute<{ grading_period_id: string; class_id: string; class_closed: boolean; has_cards: boolean }>(sql`
       WITH class_progress AS (
         SELECT gp.id AS grading_period_id,
                c.id AS class_id,
                COUNT(s.id)::int AS student_count,
                COUNT(rc.id) FILTER (WHERE rc.status IN ('generated', 'published'))::int AS card_count
         FROM grading_periods gp
-        INNER JOIN classes c ON c.school_year_id = gp.school_year_id AND c.is_active = true
+        INNER JOIN classes c ON c.school_year_id = gp.school_year_id
+          AND (c.is_active = true
+            OR EXISTS (SELECT 1 FROM report_cards existing WHERE existing.class_id = c.id AND existing.grading_period_id = gp.id)
+            OR EXISTS (SELECT 1 FROM grading_period_class_closures closure WHERE closure.class_id = c.id AND closure.grading_period_id = gp.id))
         LEFT JOIN students s ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
         LEFT JOIN report_cards rc ON rc.student_id = s.id AND rc.grading_period_id = gp.id
         WHERE gp.id = ANY(ARRAY[${sql.join(periodIds.map((id) => sql`${id}::uuid`), sql`, `)}]::uuid[])
         GROUP BY gp.id, c.id
       )
-      SELECT grading_period_id::text,
-             COALESCE(BOOL_AND(student_count > 0 AND card_count >= student_count), false) AS is_completed
+      SELECT grading_period_id::text, class_id::text,
+             (EXISTS (
+               SELECT 1 FROM grading_period_class_closures closure
+               WHERE closure.grading_period_id = class_progress.grading_period_id
+                 AND closure.class_id = class_progress.class_id
+             ) OR (student_count > 0 AND card_count >= student_count)) AS class_closed,
+             EXISTS (
+               SELECT 1 FROM report_cards existing
+               WHERE existing.grading_period_id = class_progress.grading_period_id
+                 AND existing.class_id = class_progress.class_id
+             ) AS has_cards
       FROM class_progress
-      GROUP BY grading_period_id
     `);
-    const completionById = new Map(rows(result).map((row) => [row.grading_period_id, row.is_completed]));
-    const mapped = periods.map((period) => mapPeriod({ ...period, is_completed: completionById.get(period.id) ?? false }));
+    const closedByPeriod = new Map<string, string[]>();
+    const cardsByPeriod = new Set<string>();
+    const classCountByPeriod = new Map<string, number>();
+    for (const row of rows(result)) {
+      classCountByPeriod.set(row.grading_period_id, (classCountByPeriod.get(row.grading_period_id) ?? 0) + 1);
+      if (row.class_closed) closedByPeriod.set(row.grading_period_id, [...(closedByPeriod.get(row.grading_period_id) ?? []), row.class_id]);
+      if (row.has_cards) cardsByPeriod.add(row.grading_period_id);
+    }
+    const mapped = periods.map((period) => {
+      const closedClassIds = closedByPeriod.get(period.id) ?? [];
+      const isCompleted = closedClassIds.length > 0 && closedClassIds.length === classCountByPeriod.get(period.id);
+      return { ...mapPeriod({ ...period, is_completed: isCompleted }), closedClassIds, hasGeneratedCards: cardsByPeriod.has(period.id) };
+    });
     const byYear = new Map<string, GradingPeriodItem[]>();
     for (const period of mapped) {
       const items = byYear.get(period.schoolYearId) ?? [];
@@ -208,15 +236,19 @@ export class AcademicGradingRepository {
       byYear.set(period.schoolYearId, items);
     }
     for (const yearPeriods of byYear.values()) {
-      const current = [...yearPeriods].sort((left, right) => left.orderIndex - right.orderIndex).find((period) => !period.isCompleted);
-      if (current) current.isCurrent = true;
+      const ordered = [...yearPeriods].sort((left, right) => left.orderIndex - right.orderIndex);
+      ordered.forEach((period, index) => {
+        const previous = ordered[index - 1];
+        Object.assign(period, getPeriodCapabilities(period, previous?.reviewStartDate ?? null, period.isCompleted));
+        period.isCurrent = period.notesEntryOpen || period.conductReviewOpen;
+      });
     }
     return mapped;
   }
 
   async listGradingPeriods(schoolYearId?: string): Promise<GradingPeriodItem[]> {
     const result = await this.db.execute<PeriodRow>(sql`
-      SELECT id, school_year_id, type, order_index, label, start_date::text, end_date::text
+      SELECT id, school_year_id, type, order_index, label, start_date::text, review_start_date::text, end_date::text
       FROM grading_periods
       WHERE (${schoolYearId ?? null}::uuid IS NULL OR school_year_id = ${schoolYearId ?? null}::uuid)
       ORDER BY school_year_id, order_index
@@ -226,13 +258,13 @@ export class AcademicGradingRepository {
 
   async findGradingPeriod(id: string): Promise<GradingPeriodItem | null> {
     const result = await this.db.execute<PeriodRow>(sql`
-      SELECT id, school_year_id, type, order_index, label, start_date::text, end_date::text
+      SELECT id, school_year_id, type, order_index, label, start_date::text, review_start_date::text, end_date::text
       FROM grading_periods WHERE id = ${id}::uuid LIMIT 1
     `);
     const row = rows(result)[0];
     if (!row) return null;
     const periodsInYear = await this.db.execute<PeriodRow>(sql`
-      SELECT id, school_year_id, type, order_index, label, start_date::text, end_date::text
+      SELECT id, school_year_id, type, order_index, label, start_date::text, review_start_date::text, end_date::text
       FROM grading_periods
       WHERE school_year_id = ${row.school_year_id}::uuid
       ORDER BY order_index
@@ -248,6 +280,7 @@ export class AcademicGradingRepository {
              next_period.order_index,
              next_period.label,
              next_period.start_date::text,
+             next_period.review_start_date::text,
              next_period.end_date::text
       FROM grading_periods current_period
       INNER JOIN grading_periods next_period
@@ -259,6 +292,14 @@ export class AcademicGradingRepository {
     `);
     const row = rows(result)[0];
     return row ? mapPeriod(row) : null;
+  }
+
+  async hasGeneratedCards(gradingPeriodId: string): Promise<boolean> {
+    const result = await this.db.execute<{ exists: boolean }>(sql`
+      SELECT EXISTS(SELECT 1 FROM report_cards
+        WHERE grading_period_id = ${gradingPeriodId}::uuid AND status IN ('generated', 'published')) AS exists
+    `);
+    return rows(result)[0]?.exists ?? false;
   }
 
   async getSchoolYear(id: string): Promise<{ id: string; startDate: string; endDate: string; gradingPeriodType: 'trimester' | 'semester' } | null> {
@@ -281,9 +322,9 @@ export class AcademicGradingRepository {
 
   async createGradingPeriod(input: CreateGradingPeriodInput): Promise<GradingPeriodItem> {
     const result = await this.db.execute<PeriodRow>(sql`
-      INSERT INTO grading_periods (school_year_id, type, order_index, label, start_date, end_date)
-      VALUES (${input.schoolYearId}::uuid, ${input.type}::grading_period_type, ${input.orderIndex}, ${input.label}, ${input.startDate}::date, ${input.endDate}::date)
-      RETURNING id, school_year_id, type, order_index, label, start_date::text, end_date::text
+      INSERT INTO grading_periods (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+      VALUES (${input.schoolYearId}::uuid, ${input.type}::grading_period_type, ${input.orderIndex}, ${input.label}, ${input.startDate}::date, ${input.reviewStartDate}::date, ${input.endDate}::date)
+      RETURNING id, school_year_id, type, order_index, label, start_date::text, review_start_date::text, end_date::text
     `);
     const row = rows(result)[0];
     if (!row) throw new Error('Failed to create grading period');
@@ -296,10 +337,11 @@ export class AcademicGradingRepository {
       SET order_index = CASE WHEN ${input.orderIndex !== undefined} THEN ${input.orderIndex ?? null} ELSE order_index END,
           label = CASE WHEN ${input.label !== undefined} THEN ${input.label ?? null} ELSE label END,
           start_date = CASE WHEN ${input.startDate !== undefined} THEN ${input.startDate ?? null}::date ELSE start_date END,
+          review_start_date = CASE WHEN ${input.reviewStartDate !== undefined} THEN ${input.reviewStartDate ?? null}::date ELSE review_start_date END,
           end_date = CASE WHEN ${input.endDate !== undefined} THEN ${input.endDate ?? null}::date ELSE end_date END,
           updated_at = now()
       WHERE id = ${id}::uuid
-      RETURNING id, school_year_id, type, order_index, label, start_date::text, end_date::text
+      RETURNING id, school_year_id, type, order_index, label, start_date::text, review_start_date::text, end_date::text
     `);
     const row = rows(result)[0];
     return row ? mapPeriod(row) : null;
@@ -335,11 +377,13 @@ export class AcademicGradingRepository {
       SELECT DISTINCT c.id::text, c.name, l.id::text AS level_id, l.name AS level_name,
              sy.id::text AS school_year_id, sy.label AS school_year_label,
              c.homeroom_teacher_id::text
-      FROM teacher_subject_assignments tsa
-      INNER JOIN classes c ON c.id = tsa.class_id AND c.is_active = true
+      FROM classes c
       INNER JOIN levels l ON l.id = c.level_id
       INNER JOIN school_years sy ON sy.id = c.school_year_id
-      WHERE tsa.teacher_id = ${teacherId}::uuid
+      WHERE c.is_active = true AND (
+        EXISTS (SELECT 1 FROM teacher_subject_assignments tsa WHERE tsa.class_id = c.id AND tsa.teacher_id = ${teacherId}::uuid)
+        OR EXISTS (SELECT 1 FROM schedules sch WHERE sch.class_id = c.id AND sch.teacher_id = ${teacherId}::uuid AND sch.is_active = true)
+      )
       ORDER BY sy.label DESC, l.name, c.name
     `);
     return rows(result).map((row) => ({
@@ -356,14 +400,15 @@ export class AcademicGradingRepository {
   async listTeacherGradingPeriods(teacherId: string): Promise<GradingPeriodItem[]> {
     const result = await this.db.execute<PeriodRow>(sql`
       SELECT DISTINCT gp.id, gp.school_year_id, gp.type, gp.order_index, gp.label,
-             gp.start_date::text, gp.end_date::text
+             gp.start_date::text, gp.review_start_date::text, gp.end_date::text
       FROM grading_periods gp
       WHERE EXISTS (
         SELECT 1
-        FROM teacher_subject_assignments tsa
-        INNER JOIN classes c ON c.id = tsa.class_id
-        WHERE tsa.teacher_id = ${teacherId}::uuid
-          AND c.school_year_id = gp.school_year_id
+        FROM classes c
+        WHERE c.school_year_id = gp.school_year_id AND c.is_active = true AND (
+          EXISTS (SELECT 1 FROM teacher_subject_assignments tsa WHERE tsa.class_id = c.id AND tsa.teacher_id = ${teacherId}::uuid)
+          OR EXISTS (SELECT 1 FROM schedules sch WHERE sch.class_id = c.id AND sch.teacher_id = ${teacherId}::uuid AND sch.is_active = true)
+        )
       )
       ORDER BY gp.start_date::text DESC, gp.order_index
     `);
@@ -580,6 +625,19 @@ export class AcademicGradingRepository {
       ON CONFLICT (student_id, grading_period_id) WHERE subject_id IS NULL
       DO UPDATE SET average = EXCLUDED.average, rank = NULL, computed_at = now()
     `);
+  }
+
+  async findConductForAverage(studentId: string, gradingPeriodId: string): Promise<{ note: number; coefficient: number } | null> {
+    const result = await this.db.execute<{ note: string; coefficient: string }>(sql`
+      SELECT cg.note::text, sy.conduct_coefficient::text AS coefficient
+      FROM conduct_grades cg
+      INNER JOIN grading_periods gp ON gp.id = cg.grading_period_id
+      INNER JOIN school_years sy ON sy.id = gp.school_year_id
+      WHERE cg.student_id = ${studentId}::uuid AND cg.grading_period_id = ${gradingPeriodId}::uuid
+      LIMIT 1
+    `);
+    const row = rows(result)[0];
+    return row ? { note: Number(row.note), coefficient: Number(row.coefficient) } : null;
   }
 
   async upsertCompletion(input: CompletionInput) {

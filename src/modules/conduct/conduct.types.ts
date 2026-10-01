@@ -47,8 +47,14 @@ export const conductGradeBodySchema = z.object({
   student_id: z.string().uuid(),
   grading_period_id: z.string().uuid(),
   note: z.coerce.number().min(0).max(20),
-  coefficient: z.coerce.number().positive().optional(),
 });
+
+export const conductPolicyParamsSchema = z.object({ schoolYearId: z.string().uuid() });
+export const conductPolicyBodySchema = z.object({
+  mode: z.enum(['homeroom', 'direction', 'delegated']),
+  coefficient: z.coerce.number().min(0.001).max(99999.999).refine(value => Math.abs(value * 1000 - Math.round(value * 1000)) < 1e-7, 'Trois décimales au maximum'),
+});
+export type ConductPolicyMode = z.infer<typeof conductPolicyBodySchema>['mode'];
 
 export type ConductGradeBody = z.infer<typeof conductGradeBodySchema>;
 
@@ -87,6 +93,7 @@ export type TeacherConductScopeItem = {
   fullName: string;
   matricule: string | null;
   input: { note: number; observation: string | null; createdAt: string } | null;
+  isLocked: boolean;
 };
 
 export type SpontaneousEvaluationItem = {

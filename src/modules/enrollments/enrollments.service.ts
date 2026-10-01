@@ -107,7 +107,15 @@ export class EnrollmentsService {
         currency?: string;
         totalDue?: number;
         confirmedPaid?: number;
+        waivedAmount?: number;
         standing?: 'up_to_date' | 'late';
+      }>;
+      getHistoricalFinancialStatus?(studentId: string, schoolYearId: string): Promise<{
+        remainingDue: number;
+        currency?: string;
+        totalDue?: number;
+        confirmedPaid?: number;
+        waivedAmount?: number;
       }>;
       getEnrollmentPaymentPreview(studentId: string, schoolYearId: string): Promise<{
         remainingDue: number; currency: string; totalDue: number; confirmedPaid: number;
@@ -150,22 +158,36 @@ export class EnrollmentsService {
         return {
           schoolYearId: row.school_year_id,
           schoolYearLabel: row.school_year_label,
+          startDate: row.school_year_start_date,
+          endDate: row.school_year_end_date,
           className: row.class_name,
+          enrollmentStatus: row.enrollment_status,
           decision: mapDecisionLabel(row.final_decision),
           financialStatus: 'unavailable' as const,
           remainingDue: null,
+          totalDue: null,
+          confirmedPaid: null,
+          waivedAmount: null,
           currency: 'FCFA',
         };
       }
       try {
-        const financial = await this.finance.getFinancialStatus(studentId, row.school_year_id);
+        const financial = row.enrollment_status === 'confirmed' && row.school_year_status === 'closed' && this.finance.getHistoricalFinancialStatus
+          ? await this.finance.getHistoricalFinancialStatus(studentId, row.school_year_id)
+          : await this.finance.getFinancialStatus(studentId, row.school_year_id);
         return {
           schoolYearId: row.school_year_id,
           schoolYearLabel: row.school_year_label,
+          startDate: row.school_year_start_date,
+          endDate: row.school_year_end_date,
           className: row.class_name,
+          enrollmentStatus: row.enrollment_status,
           decision: mapDecisionLabel(row.final_decision),
           financialStatus: financial.remainingDue > 0 ? 'remaining_due' as const : 'settled' as const,
           remainingDue: financial.remainingDue,
+          totalDue: financial.totalDue ?? null,
+          confirmedPaid: financial.confirmedPaid ?? null,
+          waivedAmount: financial.waivedAmount ?? null,
           currency: financial.currency ?? 'FCFA',
         };
       } catch (error) {
@@ -173,10 +195,16 @@ export class EnrollmentsService {
           return {
             schoolYearId: row.school_year_id,
             schoolYearLabel: row.school_year_label,
+            startDate: row.school_year_start_date,
+            endDate: row.school_year_end_date,
             className: row.class_name,
+            enrollmentStatus: row.enrollment_status,
             decision: mapDecisionLabel(row.final_decision),
             financialStatus: 'unavailable' as const,
             remainingDue: null,
+            totalDue: null,
+            confirmedPaid: null,
+            waivedAmount: null,
             currency: 'FCFA',
           };
         }
@@ -184,10 +212,16 @@ export class EnrollmentsService {
           return {
             schoolYearId: row.school_year_id,
             schoolYearLabel: row.school_year_label,
+            startDate: row.school_year_start_date,
+            endDate: row.school_year_end_date,
             className: row.class_name,
+            enrollmentStatus: row.enrollment_status,
             decision: mapDecisionLabel(row.final_decision),
             financialStatus: 'not_configured' as const,
             remainingDue: null,
+            totalDue: null,
+            confirmedPaid: null,
+            waivedAmount: null,
             currency: 'FCFA',
           };
         }

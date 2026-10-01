@@ -900,6 +900,53 @@ export class StudentsRepository {
     };
   }
 
+  async findCurrentConfirmedSchoolYear(studentId: string): Promise<{ id: string; label: string } | null> {
+    const result = await this.db.execute(sql`
+      SELECT school_year.id::text AS id, school_year.label
+      FROM school_years school_year
+      WHERE school_year.status = 'active'
+        AND ${confirmedSchoolStudent(sql`${studentId}::uuid`, sql`school_year.id`)}
+      ORDER BY school_year.start_date DESC
+      LIMIT 1
+    `);
+    return getRows<{ id: string; label: string }>(result)[0] ?? null;
+  }
+
+  async findLatestHistoricalConfirmedSchoolYear(studentId: string): Promise<{ id: string; label: string; className: string } | null> {
+    const result = await this.db.execute(sql`
+      SELECT sy.id::text AS id, sy.label, c.name AS "className"
+      FROM enrollments e
+      JOIN school_years sy ON sy.id = e.school_year_id
+      JOIN classes c ON c.id = e.class_id AND c.school_year_id = sy.id
+      WHERE e.student_id = ${studentId}::uuid
+        AND e.status = 'confirmed'
+        AND sy.status = 'closed'
+      ORDER BY sy.start_date DESC, e.created_at DESC
+      LIMIT 1
+    `);
+    return getRows<{ id: string; label: string; className: string }>(result)[0] ?? null;
+  }
+
+  async findActiveSchoolYear(): Promise<{ id: string; label: string } | null> {
+    const result = await this.db.execute(sql`
+      SELECT id::text AS id, label FROM school_years
+      WHERE status = 'active' ORDER BY start_date DESC LIMIT 1
+    `);
+    return getRows<{ id: string; label: string }>(result)[0] ?? null;
+  }
+
+  async hasConfirmedEnrollmentInActiveSchoolYear(studentId: string): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      SELECT EXISTS (
+        SELECT 1 FROM enrollments e
+        JOIN school_years sy ON sy.id = e.school_year_id AND sy.status = 'active'
+        JOIN classes c ON c.id = e.class_id AND c.school_year_id = sy.id
+        WHERE e.student_id = ${studentId}::uuid AND e.status = 'confirmed'
+      ) AS confirmed
+    `);
+    return getRows<{ confirmed: boolean }>(result)[0]?.confirmed === true;
+  }
+
   async findScheduleById(
     scheduleId: string
   ): Promise<{ id: string; classId: string; subject: string } | null> {

@@ -312,6 +312,40 @@ export default async function studentsController(
   );
 
   app.get(
+    '/api/v1/students/:id/historical-profile',
+    { preHandler: requirePermission('enrollments.view') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const params = updateStudentParamsSchema.parse(request.params ?? {});
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          return buildStudentsService(tenantDb).getHistoricalStudentProfile(params.id);
+        });
+        return reply.send({ data: result });
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.get(
+    '/api/v1/students/:id/school-profile',
+    { preHandler: requirePermission('students.view') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const params = updateStudentParamsSchema.parse(request.params ?? {});
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          return buildStudentsService(tenantDb).getCurrentStudentProfile(params.id);
+        });
+        return reply.send({ data: result });
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.get(
     '/api/v1/students/:id',
     { preHandler: requirePermission('students.view') },
     async (request, reply) => {

@@ -223,6 +223,16 @@ export type StudentDetailRecord = {
   parentSms: StudentParentSmsRecord[];
 };
 
+export type CurrentStudentProfile = StudentDetailRecord & {
+  activeSchoolYear: { id: string; label: string };
+};
+
+export type HistoricalStudentProfile = StudentDetailRecord & {
+  activeSchoolYear: { id: string; label: string } | null;
+  latestConfirmedSchoolYear: { id: string; label: string; className: string };
+  confirmedInActiveYear: boolean;
+};
+
 export type AttendanceStudentRecord = {
   id: string;
   date: string;

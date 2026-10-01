@@ -16,6 +16,8 @@ import {
   conductStudentParamsSchema,
   educatorAssignmentBodySchema,
   educatorAssignmentParamsSchema,
+  conductPolicyBodySchema,
+  conductPolicyParamsSchema,
 } from './conduct.types.js';
 
 const handleError = (
@@ -54,7 +56,60 @@ const handleError = (
   });
 };
 
+const requireConductPolicyView = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  await authenticateRequest(request, reply);
+  if (reply.sent) return;
+  const permissions = request.permissions;
+  if (!permissions?.has('school_years.view') && !permissions?.has('school_years.edit') && !permissions?.has('settings.positions')) {
+    reply.code(403).send({ error: 'Permission required', code: 'FORBIDDEN', statusCode: 403 });
+  }
+};
+
 export default async function conductController(app: FastifyInstance): Promise<void> {
+  app.get('/api/v1/conduct/policy/:schoolYearId', { preHandler: requireConductPolicyView }, async (request, reply) => {
+    try {
+      const { schoolYearId } = conductPolicyParamsSchema.parse(request.params ?? {});
+      const result = await withTenantSchema(request.claims!.schemaName, db => buildConductService(db).getPolicy(schoolYearId));
+      return reply.send(result);
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.put('/api/v1/conduct/policy/:schoolYearId', { preHandler: requirePermission('school_years.edit') }, async (request, reply) => {
+    try {
+      const { schoolYearId } = conductPolicyParamsSchema.parse(request.params ?? {});
+      const body = conductPolicyBodySchema.parse(request.body ?? {});
+      const result = await withTenantSchema(request.claims!.schemaName, db =>
+        buildConductService(db).updatePolicy(schoolYearId, body.mode, body.coefficient, request.user!.userId));
+      return reply.send(result);
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.get('/api/v1/conduct/decision-classes', { preHandler: authenticateRequest }, async (request, reply) => {
+    try {
+      const result = await withTenantSchema(request.claims!.schemaName, db => buildConductService(db).listDecisionClasses({
+        userId: request.user!.userId, canFinalize: request.permissions?.has('conduct.finalize') === true,
+      }));
+      return reply.send(result);
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.get('/api/v1/conduct/decision-students', { preHandler: authenticateRequest }, async (request, reply) => {
+    try {
+      const query = conductInputScopeQuerySchema.parse(request.query ?? {});
+      const result = await withTenantSchema(request.claims!.schemaName, db => buildConductService(db).listDecisionStudents(
+        query.class_id, query.grading_period_id,
+        { userId: request.user!.userId, canFinalize: request.permissions?.has('conduct.finalize') === true },
+      ));
+      return reply.send(result);
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.get('/api/v1/conduct/eligible-educators', { preHandler: requirePermission('settings.positions') }, async (request, reply) => {
+    try {
+      const result = await withTenantSchema(request.claims!.schemaName, db => buildConductService(db).listEligibleEducators());
+      return reply.send(result);
+    } catch (error) { return handleError(request, reply, error); }
+  });
   // ── Assignations éducateur (gestion des rôles) ────────────────────────────
   app.get(
     '/api/v1/conduct/educator-assignments',
