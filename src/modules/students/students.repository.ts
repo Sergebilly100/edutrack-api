@@ -1,5 +1,6 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { confirmedSchoolClassCount, confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
+import { teacherClassRelation } from '../../shared/database/teacher-class-relation.js';
 
 import {
   ensureParentAccountForStudent,
@@ -530,9 +531,9 @@ export class StudentsRepository {
       SELECT EXISTS (
         SELECT 1
         FROM teachers t
-        INNER JOIN teacher_subject_assignments tsa ON tsa.teacher_id = t.id
+        INNER JOIN classes c ON c.id = ${input.classId}::uuid AND c.is_active = true
         WHERE t.user_id = ${input.teacherUserId}
-          AND tsa.class_id = ${input.classId}
+          AND ${teacherClassRelation(sql`t.id`, sql`c.id`)}
         LIMIT 1
       ) AS has_access
     `);

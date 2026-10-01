@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
+import { teacherClassRelation } from '../../shared/database/teacher-class-relation.js';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { QueryResult, QueryResultRow } from 'pg';
 import { getPeriodCapabilities } from './grading-period-capabilities.js';
@@ -380,10 +381,7 @@ export class AcademicGradingRepository {
       FROM classes c
       INNER JOIN levels l ON l.id = c.level_id
       INNER JOIN school_years sy ON sy.id = c.school_year_id
-      WHERE c.is_active = true AND (
-        EXISTS (SELECT 1 FROM teacher_subject_assignments tsa WHERE tsa.class_id = c.id AND tsa.teacher_id = ${teacherId}::uuid)
-        OR EXISTS (SELECT 1 FROM schedules sch WHERE sch.class_id = c.id AND sch.teacher_id = ${teacherId}::uuid AND sch.is_active = true)
-      )
+      WHERE c.is_active = true AND ${teacherClassRelation(sql`${teacherId}::uuid`, sql`c.id`)}
       ORDER BY sy.label DESC, l.name, c.name
     `);
     return rows(result).map((row) => ({
@@ -405,10 +403,8 @@ export class AcademicGradingRepository {
       WHERE EXISTS (
         SELECT 1
         FROM classes c
-        WHERE c.school_year_id = gp.school_year_id AND c.is_active = true AND (
-          EXISTS (SELECT 1 FROM teacher_subject_assignments tsa WHERE tsa.class_id = c.id AND tsa.teacher_id = ${teacherId}::uuid)
-          OR EXISTS (SELECT 1 FROM schedules sch WHERE sch.class_id = c.id AND sch.teacher_id = ${teacherId}::uuid AND sch.is_active = true)
-        )
+        WHERE c.school_year_id = gp.school_year_id AND c.is_active = true
+          AND ${teacherClassRelation(sql`${teacherId}::uuid`, sql`c.id`)}
       )
       ORDER BY gp.start_date::text DESC, gp.order_index
     `);
@@ -795,12 +791,7 @@ export class AcademicGradingRepository {
       FROM classes c
       WHERE c.id = ${classId}::uuid
         AND c.is_active = true
-        AND EXISTS (
-          SELECT 1
-          FROM teacher_subject_assignments tsa
-          WHERE tsa.teacher_id = ${teacherId}::uuid
-            AND tsa.class_id = c.id
-        )
+        AND ${teacherClassRelation(sql`${teacherId}::uuid`, sql`c.id`)}
       LIMIT 1
     `);
     const row = rows(result)[0];

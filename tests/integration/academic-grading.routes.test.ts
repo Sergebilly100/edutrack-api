@@ -135,6 +135,59 @@ describe('academic grading integration', () => {
       expect.objectContaining({ subjectId: mathResponse.body.subject.id, calculationStarted: false }),
     ]));
 
+    // Une classe portée uniquement par l'EDT doit ouvrir les deux lectures utilisées par Notes.
+    const scheduleOnlyClass = await queryTenant<{ id: string }>(`
+      INSERT INTO classes (name, level_id, school_year_id, is_active)
+      VALUES ($1, $2, $3, true) RETURNING id
+    `, [`Classe EDT ${suffix}`, levels[0]!.id, years[0]!.id]);
+    const scheduleOnlyClassId = scheduleOnlyClass[0]!.id;
+    const freeDay = await queryTenant<{ day_of_week: number }>(`
+      SELECT days.day_of_week FROM generate_series(1, 6) AS days(day_of_week)
+      WHERE NOT EXISTS (SELECT 1 FROM schedules sch
+        WHERE sch.schedule_period_id = $1 AND sch.teacher_id = $2 AND sch.time_slot_id = $3
+          AND sch.day_of_week = days.day_of_week AND sch.is_active = true AND sch.end_date IS NULL)
+      ORDER BY days.day_of_week LIMIT 1
+    `, [seededSchedule[0]!.schedule_period_id, context.teacherId, seededSchedule[0]!.time_slot_id]);
+    await queryTenant(`
+      INSERT INTO schedules (schedule_period_id, teacher_id, class_id, room_id, time_slot_id, day_of_week, subject, is_active)
+      VALUES ($1, $2, $3, $4, $5, $6, 'Mathématiques', true)
+    `, [seededSchedule[0]!.schedule_period_id, context.teacherId, scheduleOnlyClassId,
+      seededSchedule[0]!.room_id, seededSchedule[0]!.time_slot_id, freeDay[0]!.day_of_week]);
+    const scheduleOnlyStudent = await queryTenant<{ id: string }>(`
+      INSERT INTO students (class_id, matricule, first_name, last_name, is_active)
+      VALUES ($1, $2, 'Élève', 'EDT', true) RETURNING id
+    `, [scheduleOnlyClassId, `NOTE-EDT-${suffix}`]);
+    await queryTenant(`INSERT INTO enrollments (student_id, class_id, school_year_id, type, status)
+      VALUES ($1, $2, $3, 'new_registration', 'confirmed')`, [scheduleOnlyStudent[0]!.id, scheduleOnlyClassId, years[0]!.id]);
+    const scheduleOnlyContext = await request().get('/api/v1/academic/teacher-context').set(teacherHeaders);
+    expect(scheduleOnlyContext.body.classes).toEqual(expect.arrayContaining([expect.objectContaining({ id: scheduleOnlyClassId })]));
+    const scheduleOnlyStudents = await request().get('/api/v1/students').set(teacherHeaders)
+      .query({ class_id: scheduleOnlyClassId, is_active: true, page: 1, limit: 100 });
+    expect(scheduleOnlyStudents.status, JSON.stringify(scheduleOnlyStudents.body)).toBe(200);
+    expect(scheduleOnlyStudents.body.data).toEqual(expect.arrayContaining([expect.objectContaining({ id: scheduleOnlyStudent[0]!.id })]));
+    const scheduleOnlyScope = await request().get('/api/v1/evaluations/scope').set(teacherHeaders)
+      .query({ classId: scheduleOnlyClassId, gradingPeriodId });
+    expect(scheduleOnlyScope.status, JSON.stringify(scheduleOnlyScope.body)).toBe(200);
+    expect(scheduleOnlyScope.body.subjects).toEqual(expect.arrayContaining([expect.objectContaining({ id: mathResponse.body.subject.id })]));
+    await queryTenant(`UPDATE schedules SET is_active = false WHERE class_id = $1 AND teacher_id = $2`,
+      [scheduleOnlyClassId, context.teacherId]);
+    const inactiveScheduleContext = await request().get('/api/v1/academic/teacher-context').set(teacherHeaders);
+    expect(inactiveScheduleContext.body.classes.some((item: { id: string }) => item.id === scheduleOnlyClassId)).toBe(false);
+    expect((await request().get('/api/v1/students').set(teacherHeaders)
+      .query({ class_id: scheduleOnlyClassId, is_active: true, page: 1, limit: 100 })).status).toBe(403);
+    expect((await request().get('/api/v1/evaluations/scope').set(teacherHeaders)
+      .query({ classId: scheduleOnlyClassId, gradingPeriodId })).status).toBe(403);
+
+    const unrelatedClass = await queryTenant<{ id: string }>(`
+      INSERT INTO classes (name, level_id, school_year_id, is_active)
+      VALUES ($1, $2, $3, true) RETURNING id
+    `, [`Classe hors portée ${suffix}`, levels[0]!.id, years[0]!.id]);
+    const unrelatedClassId = unrelatedClass[0]!.id;
+    expect((await request().get('/api/v1/students').set(teacherHeaders)
+      .query({ class_id: unrelatedClassId, is_active: true, page: 1, limit: 100 })).status).toBe(403);
+    expect((await request().get('/api/v1/evaluations/scope').set(teacherHeaders)
+      .query({ classId: unrelatedClassId, gradingPeriodId })).status).toBe(403);
+
     const noEvaluationCalculation = await request().put('/api/v1/class-subject-completion').set(teacherHeaders).send({
       classId,
       subjectId: mathResponse.body.subject.id,

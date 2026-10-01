@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { TenantDb } from '../../shared/database/db.js';
 import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
 import { authorizedConductClass } from '../../shared/database/conduct-decision-scope.js';
+import { teacherClassRelation } from '../../shared/database/teacher-class-relation.js';
 
 type QueryResult<T> = { rows?: T[] };
 const rows = <T>(result: unknown): T[] => {
@@ -42,12 +43,7 @@ export class ConductReviewRepository {
              gp.id::text AS grading_period_id, gp.label AS grading_period_label,
              COUNT(DISTINCT s.id) FILTER (WHERE tci.id IS NULL AND cg.id IS NULL)::int AS pending_count
       FROM teachers t
-      INNER JOIN classes c ON c.is_active = true AND (
-        EXISTS (SELECT 1 FROM teacher_subject_assignments tsa
-          WHERE tsa.teacher_id = t.id AND tsa.class_id = c.id)
-        OR EXISTS (SELECT 1 FROM schedules sch
-          WHERE sch.teacher_id = t.id AND sch.class_id = c.id AND sch.is_active = true)
-      )
+      INNER JOIN classes c ON c.is_active = true AND ${teacherClassRelation(sql`t.id`, sql`c.id`)}
       INNER JOIN grading_periods gp ON gp.school_year_id = c.school_year_id
         AND gp.review_start_date <= CURRENT_DATE
       LEFT JOIN enrollments e ON e.class_id = c.id AND e.school_year_id = c.school_year_id

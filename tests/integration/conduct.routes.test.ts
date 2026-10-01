@@ -503,6 +503,13 @@ describe('conduct routes (5b)', () => {
     const denied = await request().put('/api/v1/conduct/grades').set(educatorHeaders)
       .send({ student_id: studentId, grading_period_id: gradingPeriodId, note: 12 });
     expect(denied.status).toBe(403);
+    const formerHomeroomScope = await request().get('/api/v1/conduct/decision-workspace').set(teacherAHeaders);
+    expect(formerHomeroomScope.status).toBe(200);
+    expect(formerHomeroomScope.body.decisionScopes).toEqual([]);
+    const formerHomeroomDecision = await request().put('/api/v1/conduct/grades').set(teacherAHeaders)
+      .send({ student_id: studentId, grading_period_id: gradingPeriodId, note: 12 });
+    expect(formerHomeroomDecision.status).toBe(403);
+    expect(formerHomeroomDecision.body.code).toBe('NOT_CONDUCT_DECIDER');
   });
 
   it('recalcule les moyennes et les rangs après changement du coefficient annuel', async () => {
