@@ -16,8 +16,10 @@ const lastNames = ['Koné', 'Kouamé', 'Bamba', 'Traoré', 'Kouassi', 'Soro', 'D
 const slotStarts = ['07:30', '08:30', '09:45', '10:45', '14:00', '15:00'];
 const slotEnds = ['08:30', '09:30', '10:45', '11:45', '15:00', '16:00'];
 
-type DemoClass = { id: string; roomId: string; subjectIds: string[]; students: string[] };
+type DemoClass = { id: string; roomId: string; levelId: string; levelName: string; subjectIds: string[]; students: string[] };
 type DemoTeacher = { id: string; userId: string };
+
+const SMS_MONTHLY_PRICE_FCFA = 1000;
 
 async function seedFamilies(repo: DemoRepository, klass: DemoClass, classIndex: number, yearId: string,
   directorId: string, passwordHash: string, calendar: DemoCalendar) {
@@ -41,12 +43,23 @@ async function seedFamilies(repo: DemoRepository, klass: DemoClass, classIndex: 
       email: `parent${number + 1}@demo.example`, password_hash: passwordHash, must_change_password: false,
       access_sent_at: calendar.start, created_at: calendar.start });
     let subscriptionId: string | null = null;
-    if (index % 3 !== 1) {
-      subscriptionId = await repo.insert('parent_subscriptions', { parent_id: parentId, unit_price_fcfa: 9000,
-        student_count: 1, total_amount_fcfa: 9000, duration_months: 10, starts_at: calendar.start,
-        ends_at: calendar.end, status: 'active', created_by: directorId, created_at: calendar.start });
-      await repo.insert('subscription_payments', { subscription_id: subscriptionId, amount_fcfa: 9000,
-        payment_method: 'cash', paid_at: calendar.start, recorded_by: directorId, created_at: calendar.start });
+    const subscriptionScenario = index % 6;
+    if (subscriptionScenario !== 1) {
+      const subscription = subscriptionScenario === 2
+        ? { status: 'active', durationMonths: 1, startsAt: shiftDate(calendar.today, -25), endsAt: shiftDate(calendar.today, 5), autoRenewAlert: true }
+        : subscriptionScenario === 3
+          ? { status: 'expired', durationMonths: 1, startsAt: shiftDate(calendar.today, -34), endsAt: shiftDate(calendar.today, -4), autoRenewAlert: false }
+          : subscriptionScenario === 4
+            ? { status: 'cancelled', durationMonths: 3, startsAt: shiftDate(calendar.today, -10), endsAt: calendar.end, autoRenewAlert: false }
+            : { status: 'active', durationMonths: 3, startsAt: calendar.periods[2]!.start, endsAt: calendar.end, autoRenewAlert: false };
+      const totalAmount = SMS_MONTHLY_PRICE_FCFA * subscription.durationMonths;
+      subscriptionId = await repo.insert('parent_subscriptions', { parent_id: parentId, unit_price_fcfa: SMS_MONTHLY_PRICE_FCFA,
+        student_count: 1, total_amount_fcfa: totalAmount, duration_months: subscription.durationMonths, starts_at: subscription.startsAt,
+        ends_at: subscription.endsAt, status: subscription.status, auto_renew_alert: subscription.autoRenewAlert,
+        created_by: directorId, created_at: subscription.startsAt });
+      if (subscription.status !== 'cancelled') await repo.insert('subscription_payments', { subscription_id: subscriptionId, amount_fcfa: totalAmount,
+        payment_method: subscriptionScenario === 2 ? 'momo_mtn' : 'cash', paid_at: subscription.startsAt,
+        recorded_by: directorId, created_at: subscription.startsAt });
     }
     await repo.insert('parent_student_links', { parent_id: parentId, student_id: studentId,
       subscription_id: subscriptionId, created_at: calendar.start });
@@ -88,17 +101,23 @@ async function seedAcademicHistory(repo: DemoRepository, classes: DemoClass[], t
   for (const [periodIndex, periodId] of periodIds.entries()) {
     for (const [classIndex, klass] of classes.entries()) {
       for (const [subjectIndex, subjectId] of klass.subjectIds.entries()) {
-        if (periodIndex === 2 && subjectIndex > 2) continue;
+        if (periodIndex === 2 && subjectIndex > 3) continue;
         const teacher = teachers[subjectIndex]!;
         for (let assessment = 0; assessment < (periodIndex === 2 ? 1 : 2); assessment++) {
+          const t3Evaluation = periodIndex === 2
+            ? subjectIndex === 0
+              ? { label: 'Interrogation de reprise', date: shiftDate(calendar.periods[2]!.start, 4), gradedStudents: klass.students.length }
+              : subjectIndex === 1
+                ? { label: 'Contrôle de lecture', date: shiftDate(calendar.today, -1), gradedStudents: 16 }
+                : { label: 'Évaluation programmée', date: shiftDate(calendar.today, subjectIndex === 2 ? 4 : 9), gradedStudents: 0 }
+            : null;
           const evaluation = await academic.createEvaluation({ classId: klass.id, subjectId, gradingPeriodId: periodId,
             type: 'scheduled', coefficient: assessment + 1,
-            label: `${assessment === 0 ? 'Interrogation' : 'Devoir de synthèse'} — ${subjects[subjectIndex]}`,
-            evaluationDate: shiftDate(calendar.periods[periodIndex]!.start, periodIndex === 2 ? subjectIndex + 2 : 28 + assessment * 35),
+            label: `${t3Evaluation?.label ?? (assessment === 0 ? 'Interrogation' : 'Devoir de synthèse')} — ${subjects[subjectIndex]}`,
+            evaluationDate: t3Evaluation?.date ?? shiftDate(calendar.periods[periodIndex]!.start, 28 + assessment * 35),
           }, teacher.userId);
           for (const [index, studentId] of klass.students.entries()) {
-            // T3 French remains partly entered, as on a real early-term workspace.
-            if (periodIndex === 2 && subjectIndex === 1 && index > 17) continue;
+            if (periodIndex === 2 && index >= (t3Evaluation?.gradedStudents ?? 0)) continue;
             const score = index === 0 ? [14, 10, 7][periodIndex]! + assessment
               : Math.min(19, 8 + ((index * 3 + subjectIndex + classIndex) % 10) + assessment * 0.5 + periodIndex * 0.25);
             await academic.upsertGrade(evaluation.evaluation.id, { studentId, score, maxScore: 20 }, teacher.userId);
@@ -137,6 +156,103 @@ async function seedAcademicHistory(repo: DemoRepository, classes: DemoClass[], t
       await repo.dateAcademicHistory(periodId, calendar.periods[periodIndex]!.end);
     }
   }
+}
+
+async function seedArchivedSchoolRecords(repo: DemoRepository, currentClasses: DemoClass[], teachers: DemoTeacher[],
+  directorId: string, calendar: DemoCalendar) {
+  const archiveStart = shiftDate(calendar.start, -280);
+  const archiveEnd = shiftDate(calendar.start, -1);
+  const archiveStartYear = Number(archiveStart.slice(0, 4));
+  const archiveLabel = `${archiveStartYear}-${archiveStartYear + 1}`;
+  const importedHistoryLabel = `${archiveStartYear - 1}-${archiveStartYear}`;
+  const archiveYearId = await repo.insert('school_years', {
+    label: archiveLabel, start_date: archiveStart, end_date: archiveEnd,
+    end_of_year_review_start_date: shiftDate(archiveEnd, -30), status: 'closed', grading_period_type: 'trimester', created_at: archiveStart,
+  });
+  const archivePeriods = [
+    { label: 'Trimestre 1', start: archiveStart, reviewStart: shiftDate(archiveStart, 92), end: shiftDate(archiveStart, 107) },
+    { label: 'Trimestre 2', start: shiftDate(archiveStart, 92), reviewStart: shiftDate(archiveStart, 184), end: shiftDate(archiveStart, 199) },
+    { label: 'Trimestre 3', start: shiftDate(archiveStart, 184), reviewStart: shiftDate(archiveEnd, -30), end: archiveEnd },
+  ];
+  const archivePeriodIds = await Promise.all(archivePeriods.map((period, index) => repo.insert('grading_periods', {
+    school_year_id: archiveYearId, type: 'trimester', order_index: index + 1, label: period.label,
+    // Le seed rejoue les opérations métier à la date courante, puis remet les
+    // dates historiques une fois les bulletins publiés.
+    start_date: period.start, review_start_date: shiftDate(calendar.today, index + 1), end_date: shiftDate(calendar.today, index + 2), created_at: period.start,
+  })));
+  const archiveClasses: DemoClass[] = [];
+
+  for (const [classIndex, currentClass] of currentClasses.entries()) {
+    const students = currentClass.students.slice(0, 2);
+    const archiveClassId = await repo.insert('classes', {
+      name: `${currentClass.levelName} A — archive`, level: currentClass.levelName, level_id: currentClass.levelId,
+      school_year_id: archiveYearId, student_count: students.length, homeroom_teacher_id: teachers[classIndex]!.id, created_at: archiveStart,
+    });
+    const archiveClass: DemoClass = {
+      id: archiveClassId, roomId: currentClass.roomId, levelId: currentClass.levelId, levelName: currentClass.levelName,
+      subjectIds: currentClass.subjectIds, students,
+    };
+    archiveClasses.push(archiveClass);
+    for (const studentId of students) await repo.insert('enrollments', {
+      student_id: studentId, class_id: archiveClassId, school_year_id: archiveYearId, type: 're_registration', status: 'confirmed',
+      confirmed_by_user_id: directorId, enrolled_at: archiveStart, created_at: archiveStart,
+    });
+    for (const [subjectIndex, subjectId] of archiveClass.subjectIds.entries()) {
+      await repo.insert('teacher_subject_assignments', { teacher_id: teachers[subjectIndex]!.id, subject_id: subjectId, class_id: archiveClassId });
+    }
+  }
+
+  const academic = buildAcademicGradingService(repo.db);
+  const conduct = buildConductService(repo.db);
+  const cards = buildReportCardsService(repo.db);
+  for (const [periodIndex, periodId] of archivePeriodIds.entries()) {
+    for (const [classIndex, klass] of archiveClasses.entries()) {
+      for (const [subjectIndex, subjectId] of klass.subjectIds.entries()) {
+        const teacher = teachers[subjectIndex]!;
+        const evaluation = await academic.createEvaluation({
+          classId: klass.id, subjectId, gradingPeriodId: periodId, type: 'scheduled', coefficient: 1,
+          label: `Devoir archivé — ${subjects[subjectIndex]}`, evaluationDate: shiftDate(archivePeriods[periodIndex]!.start, 24 + subjectIndex * 4),
+        }, teacher.userId);
+        for (const [studentIndex, studentId] of klass.students.entries()) {
+          const score = Math.min(18, 9 + subjectIndex + periodIndex + classIndex + studentIndex * 2);
+          await academic.upsertGrade(evaluation.evaluation.id, { studentId, score, maxScore: 20 }, teacher.userId);
+        }
+        await academic.updateCompletion({ classId: klass.id, subjectId, gradingPeriodId: periodId, status: 'in_progress' }, teacher.userId);
+        await academic.updateCompletion({ classId: klass.id, subjectId, gradingPeriodId: periodId, status: 'completed' }, teacher.userId);
+      }
+    }
+    await repo.setPeriodReviewStart(periodId, shiftDate(calendar.today, -1));
+    for (const [classIndex, klass] of archiveClasses.entries()) {
+      for (const [subjectIndex] of klass.subjectIds.entries()) {
+        const teacher = teachers[subjectIndex]!;
+        for (const [studentIndex, studentId] of klass.students.entries()) {
+          await conduct.submitTeacherConductInput({ student_id: studentId, grading_period_id: periodId,
+            note: 13 + ((studentIndex + subjectIndex + periodIndex) % 6), observation: 'Avis archivé de la période.',
+          }, { userId: teacher.userId });
+        }
+      }
+      for (const [studentIndex, studentId] of klass.students.entries()) {
+        await conduct.decideConductGrade({ student_id: studentId, grading_period_id: periodId, note: 14 + ((studentIndex + periodIndex) % 4) },
+          { userId: teachers[classIndex]!.userId, canFinalize: false });
+      }
+      await cards.generateForClass(klass.id, periodId);
+      await cards.publishBulk(klass.id, periodId, directorId);
+    }
+    await repo.finalizePeriodCalendar(periodId, archivePeriods[periodIndex]!.reviewStart, archivePeriods[periodIndex]!.end);
+    await repo.dateAcademicHistory(periodId, archivePeriods[periodIndex]!.end);
+  }
+
+  const importHistoryId = await repo.insert('import_history', {
+    import_type: 'students', imported_count: 0, updated_count: archiveClasses.flatMap((klass) => klass.students).length,
+    imported_by: directorId, imported_by_role: 'director', historical_school_year_label: importedHistoryLabel, imported_at: archiveEnd,
+  });
+  for (const klass of archiveClasses) {
+    for (const studentId of klass.students) await repo.insert('student_historical_sources', {
+      student_id: studentId, school_year_label: importedHistoryLabel, old_class_name: `${klass.levelName} B`,
+      row_key: randomBytes(32).toString('hex'), import_history_id: importHistoryId, imported_at: archiveEnd,
+    });
+  }
+  await repo.archiveClasses(archiveClasses.map((klass) => klass.id));
 }
 
 async function seedAttendance(repo: DemoRepository, classes: DemoClass[], teachers: DemoTeacher[],
@@ -211,7 +327,7 @@ export async function seedDemo(repo: DemoRepository, directorId: string, passwor
     const roomId = await repo.insert('rooms', { name: `Salle ${index + 1}`, qr_token: randomBytes(32).toString('hex'), capacity: 35 });
     const id = await repo.insert('classes', { name: `${level} A`, level, level_id: levelId,
       school_year_id: yearId, student_count: 24, homeroom_teacher_id: teachers[index]!.id, created_at: calendar.start });
-    const klass: DemoClass = { id, roomId, subjectIds: [], students: [] };
+    const klass: DemoClass = { id, roomId, levelId, levelName: level, subjectIds: [], students: [] };
     for (const [subjectIndex, name] of subjects.entries()) {
       const subjectId = await repo.insert('subjects', { level_id: levelId, name, coefficient: [4, 4, 2, 2, 2, 3][subjectIndex]! });
       klass.subjectIds.push(subjectId);
@@ -224,6 +340,7 @@ export async function seedDemo(repo: DemoRepository, directorId: string, passwor
     await seedFamilies(repo, klass, index, yearId, directorId, passwordHash, calendar);
     classes.push(klass);
   }
+  await seedArchivedSchoolRecords(repo, classes, teachers, directorId, calendar);
   const slotIds: string[] = [];
   for (const [index, start] of slotStarts.entries()) slotIds.push(await repo.insert('time_slots', {
     label: `${start} - ${slotEnds[index]}`, start_time: start, end_time: slotEnds[index]!, sort_order: index,
@@ -234,5 +351,8 @@ export async function seedDemo(repo: DemoRepository, directorId: string, passwor
   await seedAcademicHistory(repo, classes, teachers, periodIds, directorId, calendar);
   await buildFinancialCacheService(repo.db).recalcAll(yearId);
   await buildRiskService(repo.db).recalculateAll();
-  return { yearId, teachers: usernames, parentActive: '2250700000001', parentUnsubscribed: '2250700000002' };
+  return {
+    yearId, teachers: usernames, parentActive: '2250700000001', parentNearExpiry: '2250700000003',
+    parentUnsubscribed: '2250700000002', archivedStudentsPerClass: 2,
+  };
 }

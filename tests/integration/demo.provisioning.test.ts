@@ -66,10 +66,15 @@ describe('demo creation: isolated critical path', () => {
     expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
   });
 
-  it('calculates, closes and publishes T1/T2, keeps T3 open and generates real dashboard actions', async () => {
+  it('builds a realistic T3 demo with archived records, conduct, finance and dashboard actions', async () => {
     const before = await fingerprint();
     const result = await create(names[1]!, 'seeded');
-    expect(result.counts).toMatchObject({ students: 72, classes: 3, teachers: 6, parents: 72, cards: 144 });
+    expect(result.counts).toMatchObject({
+      students: 72, classes: 6, years: 2, teachers: 6, parents: 72, cards: 162,
+      historical_cards: 18, historical_sources: 6, teacher_absences: 24,
+      financial_late: 18, active_parent_subscriptions: 36,
+      future_evaluations: 6, partially_graded_evaluations: 3,
+    });
     const token = await signAccessToken({ sub: result.directorId, role: 'director', schemaName: result.schemaName });
     const periods = await request().get('/api/v1/grading-periods').set('authorization', `Bearer ${token}`);
     expect(periods.status).toBe(200);
@@ -78,9 +83,14 @@ describe('demo creation: isolated critical path', () => {
     const query = (statement: string) => queryPublic(statement.replaceAll('DEMO_SCHEMA', `"${result.schemaName}"`));
     expect(await query("SELECT 1 FROM DEMO_SCHEMA.payments WHERE status='waived_by_school'")).toHaveLength(9);
     expect(await query('SELECT 1 FROM DEMO_SCHEMA.student_tuition_overrides WHERE discount_amount=30000')).toHaveLength(9);
-    expect(await query("SELECT 1 FROM DEMO_SCHEMA.parent_subscriptions WHERE status='active'")).toHaveLength(48);
-    expect(await query('SELECT 1 FROM DEMO_SCHEMA.parent_student_links WHERE subscription_id IS NULL')).toHaveLength(24);
+    expect(await query("SELECT 1 FROM DEMO_SCHEMA.parent_subscriptions WHERE status='active'")).toHaveLength(36);
+    expect(await query('SELECT 1 FROM DEMO_SCHEMA.parent_student_links WHERE subscription_id IS NULL')).toHaveLength(12);
     expect(await query("SELECT 1 FROM DEMO_SCHEMA.student_financial_status WHERE status='late'")).toHaveLength(18);
+    expect(await query("SELECT 1 FROM DEMO_SCHEMA.report_cards rc JOIN DEMO_SCHEMA.grading_periods gp ON gp.id=rc.grading_period_id JOIN DEMO_SCHEMA.school_years sy ON sy.id=gp.school_year_id WHERE sy.status='closed' AND rc.status='published'")).toHaveLength(18);
+    expect(await query('SELECT 1 FROM DEMO_SCHEMA.student_historical_sources')).toHaveLength(6);
+    expect(await query("SELECT 1 FROM DEMO_SCHEMA.attendances_teacher WHERE status='absent'")).toHaveLength(24);
+    expect(await query("SELECT 1 FROM DEMO_SCHEMA.evaluations e JOIN DEMO_SCHEMA.grading_periods gp ON gp.id=e.grading_period_id JOIN DEMO_SCHEMA.school_years sy ON sy.id=gp.school_year_id WHERE sy.status='active' AND e.evaluation_date > CURRENT_DATE AND NOT EXISTS (SELECT 1 FROM DEMO_SCHEMA.evaluation_grades eg WHERE eg.evaluation_id=e.id)")).toHaveLength(6);
+    expect(await query("SELECT e.id FROM DEMO_SCHEMA.evaluations e JOIN DEMO_SCHEMA.grading_periods gp ON gp.id=e.grading_period_id JOIN DEMO_SCHEMA.school_years sy ON sy.id=gp.school_year_id LEFT JOIN DEMO_SCHEMA.evaluation_grades eg ON eg.evaluation_id=e.id WHERE sy.status='active' AND e.evaluation_date <= CURRENT_DATE GROUP BY e.id HAVING COUNT(eg.id) BETWEEN 1 AND 23")).toHaveLength(3);
     expect(await query('SELECT 1 FROM DEMO_SCHEMA.conduct_grades g JOIN DEMO_SCHEMA.students s ON s.id=g.student_id JOIN DEMO_SCHEMA.classes c ON c.id=s.class_id JOIN DEMO_SCHEMA.teachers t ON t.id=c.homeroom_teacher_id WHERE g.decided_by_user_id <> t.user_id')).toHaveLength(0);
     expect(await query('SELECT 1 FROM DEMO_SCHEMA.dashboard_action_items')).toHaveLength(0);
     const first = await runDashboardActionsForSchema({ schemaName: result.schemaName });

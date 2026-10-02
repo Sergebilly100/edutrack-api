@@ -9,6 +9,7 @@ const tables = [
   'students', 'enrollments', 'parents', 'parent_subscriptions', 'parent_student_links',
   'subscription_payments', 'tuition_plans', 'tuition_schedule_steps', 'student_tuition_overrides',
   'student_tuition_schedule_steps', 'payments', 'attendances_teacher', 'attendances_student',
+  'import_history', 'student_historical_sources',
 ] as const;
 
 export class DemoRepository {
@@ -86,8 +87,10 @@ export class DemoRepository {
 
   async configureTenant(tenantId: string, seeded: boolean, yearLabel?: string): Promise<void> {
     await this.db.execute(sql`
-      INSERT INTO public.school_sms_features (tenant_id, is_enabled, monetize_parent_alerts, commission_pct, sms_cap_per_student)
-      VALUES (${tenantId}::uuid, false, ${seeded}, 0, 0)
+      INSERT INTO public.school_sms_features (
+        tenant_id, is_enabled, monetize_parent_alerts, commission_pct, sms_cap_per_student, sms_unit_price_fcfa
+      )
+      VALUES (${tenantId}::uuid, ${seeded}, ${seeded}, 0, ${seeded ? 60 : 0}, ${seeded ? 1000 : null})
     `);
     await this.db.execute(sql`
       INSERT INTO public.subscriptions (tenant_id, status, mrr_fcfa, billing_cycle, current_period_start, current_period_end)
@@ -131,17 +134,49 @@ export class DemoRepository {
     await this.db.execute(sql`UPDATE report_cards SET generated_at = ${end}::date, published_at = ${end}::date + INTERVAL '1 day', created_at = ${end}::date, updated_at = ${end}::date + INTERVAL '1 day' WHERE grading_period_id = ${periodId}::uuid`);
   }
 
+  async archiveClasses(classIds: string[]): Promise<void> {
+    if (classIds.length === 0) return;
+    await this.db.execute(sql`
+      UPDATE classes SET is_active = false, updated_at = NOW()
+      WHERE id IN (${sql.join(classIds.map((id) => sql`${id}::uuid`), sql`, `)})
+    `);
+  }
+
   async verify(seeded: boolean) {
-    const result = await this.db.execute<{ students: number; classes: number; years: number; rooms: number; slots: number; cards: number; teachers: number; parents: number; risky_students: number; risky_teachers: number }>(sql`
+    const result = await this.db.execute<{
+      students: number; classes: number; years: number; rooms: number; slots: number; cards: number; teachers: number; parents: number;
+      historical_cards: number; historical_sources: number; risky_students: number; risky_teachers: number; teacher_absences: number;
+      financial_late: number; active_parent_subscriptions: number; future_evaluations: number; partially_graded_evaluations: number;
+    }>(sql`
       SELECT (SELECT COUNT(*)::int FROM students) AS students, (SELECT COUNT(*)::int FROM classes) AS classes,
         (SELECT COUNT(*)::int FROM school_years) AS years, (SELECT COUNT(*)::int FROM rooms) AS rooms,
         (SELECT COUNT(*)::int FROM time_slots) AS slots, (SELECT COUNT(*)::int FROM report_cards WHERE status = 'published') AS cards,
         (SELECT COUNT(*)::int FROM teachers) AS teachers, (SELECT COUNT(*)::int FROM parents) AS parents,
+        (SELECT COUNT(*)::int FROM report_cards rc INNER JOIN grading_periods gp ON gp.id = rc.grading_period_id
+          INNER JOIN school_years sy ON sy.id = gp.school_year_id WHERE rc.status = 'published' AND sy.status = 'closed') AS historical_cards,
+        (SELECT COUNT(*)::int FROM student_historical_sources) AS historical_sources,
         (SELECT COUNT(*)::int FROM student_risk_status WHERE level IN ('warning','critical')) AS risky_students,
-        (SELECT COUNT(*)::int FROM teacher_risk_status WHERE absences_signal) AS risky_teachers
+        (SELECT COUNT(*)::int FROM teacher_risk_status WHERE absences_signal) AS risky_teachers,
+        (SELECT COUNT(*)::int FROM attendances_teacher WHERE status = 'absent') AS teacher_absences,
+        (SELECT COUNT(*)::int FROM student_financial_status WHERE status = 'late') AS financial_late,
+        (SELECT COUNT(*)::int FROM parent_subscriptions WHERE status = 'active' AND ends_at >= CURRENT_DATE) AS active_parent_subscriptions,
+        (SELECT COUNT(*)::int FROM evaluations e INNER JOIN grading_periods gp ON gp.id = e.grading_period_id
+          INNER JOIN school_years sy ON sy.id = gp.school_year_id
+          WHERE sy.status = 'active' AND e.evaluation_date > CURRENT_DATE
+            AND NOT EXISTS (SELECT 1 FROM evaluation_grades eg WHERE eg.evaluation_id = e.id)) AS future_evaluations,
+        (SELECT COUNT(*)::int FROM (
+          SELECT e.id FROM evaluations e INNER JOIN grading_periods gp ON gp.id = e.grading_period_id
+          INNER JOIN school_years sy ON sy.id = gp.school_year_id
+          LEFT JOIN evaluation_grades eg ON eg.evaluation_id = e.id
+          WHERE sy.status = 'active' AND e.evaluation_date <= CURRENT_DATE
+          GROUP BY e.id HAVING COUNT(eg.id) BETWEEN 1 AND 23
+        ) partial) AS partially_graded_evaluations
     `);
     const counts = result.rows[0]!;
-    if (seeded ? counts.students !== 72 || counts.cards !== 144 || counts.risky_students < 1 || counts.risky_teachers < 1
+    if (seeded ? counts.students !== 72 || counts.classes !== 6 || counts.years !== 2 || counts.cards !== 162
+      || counts.historical_cards !== 18 || counts.historical_sources !== 6 || counts.risky_students < 1
+      || counts.risky_teachers < 1 || counts.teacher_absences < 1 || counts.financial_late < 1
+      || counts.active_parent_subscriptions < 1 || counts.future_evaluations < 1 || counts.partially_graded_evaluations < 1
       : Object.values(counts).some((value) => value !== 0)) throw new Error('DEMO_INVARIANT_FAILED');
     return counts;
   }

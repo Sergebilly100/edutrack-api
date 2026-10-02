@@ -29,27 +29,27 @@ Le backend habituel doit être démarré avec sa configuration locale. Si `CORS_
 
 ## Histoire du profil `seeded`
 
-Le Collège des Flamboyants est une école fictive de Yamoussoukro. Le calendrier est **glissant**, afin que les tableaux de bord fondés sur la date système aient du contenu dès la création : rentrée J−203, T1 terminé J−119, T2 terminé J−15, T3 commencé J−10, fin d'année J+77. Ce calendrier de simulation n'est pas le calendrier scolaire officiel ivoirien. Le 24 septembre 2026, son libellé est `03/2026 - 12/2026`.
+Le Collège des Flamboyants est une école fictive de Yamoussoukro. Le calendrier est **glissant**, afin que les tableaux de bord fondés sur la date système aient du contenu dès la création : rentrée J−203, revue de T1 et ouverture de T2 à J−105, clôture de T1 à J−90, revue de T2 et ouverture de T3 à J−10, clôture de T2 à J−5, fin d'année J+77. Ce calendrier de simulation n'est pas le calendrier scolaire officiel ivoirien.
 
 | Données | Scénario |
 | --- | --- |
 | Structure | 6ème A, 4ème A, 3ème A ; 24 élèves par classe ; 3ème marquée classe d'examen |
 | Enseignants | Six matières et six professeurs, permanents et vacataires ; professeur principal attribué à chaque classe |
 | T1 et T2 | Deux évaluations par matière et classe, saisies complètes, calculs et clôtures réels, 144 bulletins générés et publiés |
-| T3 | Quelques évaluations dans trois matières ; français partiellement saisi ; aucun bulletin publié |
-| Conduite | Avis des enseignants et décision de chaque professeur principal pour T1/T2 |
+| T3 | Une interrogation intégralement corrigée, un contrôle de français avec huit notes à saisir par classe et deux évaluations programmées dans les jours à venir ; aucun bulletin publié |
+| Conduite | Avis des enseignants et décision finale du professeur principal pour T1/T2, avec une note de conduite intégrée aux bulletins |
+| Dossiers archivés | Une année scolaire clôturée, trois anciennes classes inactives, six inscriptions historiques et 18 bulletins publiés. Une trace d'import historique relie ces six élèves à leurs données antérieures |
 | Scolarité | 300 000 FCFA annuels, trois seuils cumulés ; paiements espèces, mobile money et virement |
 | Familles | Soldes annuels réglés, paiements réguliers ou irréguliers, 18 élèves en retard ; 9 remises sociales de 30 000 FCFA ; 9 paiements `waived_by_school` de 50 000 FCFA |
 | Assiduité | Six semaines, week-ends et coupure T2/T3 exclus ; absences, retards, absences justifiées et validations en attente |
-| Risques | Six élèves à risque et un enseignant avec signal d'absences lors de la recette |
-| Parents | 72 comptes liés à leurs enfants : 48 abonnements actifs et payés, 24 sans abonnement |
+| Risques | Plusieurs élèves à risque et un enseignant avec signal d'absences lors de la recette |
+| Parents | 72 comptes liés à leurs enfants : 36 abonnements actifs et payés, 12 parents sans abonnement, 12 abonnements expirés ou annulés. Un abonnement actif arrive à échéance sous cinq jours |
+| Offre SMS parent | Service activé et monétisé à 1 000 FCFA par enfant et par mois, avec paiements espèces et MTN MoMo fictifs |
 | Actions | Générées après création par `runDashboardActionsForSchema`, le gestionnaire utilisé par le job existant ; aucune insertion manuelle |
 
 Les moyennes, décisions, bulletins, caches financiers et risques passent par les services métier existants. Les dates historiques des évaluations et bulletins sont ensuite rétablies. « Bulletin généré » désigne le bulletin métier enregistré et publié ; le PDF reste produit à la demande par le mécanisme asynchrone habituel.
 
-Aucun message SMS, email ou push n'est envoyé par le provisionnement. Le canal SMS du nouveau tenant est désactivé. Les paiements et contacts sont fictifs ; aucune transaction externe n'est réalisée. Les données vieillissent naturellement après création : créer un nouveau nom pour retrouver le scénario de début de T3.
-
-**Comportement produit constaté :** les parents sans abonnement peuvent se connecter et consulter leurs enfants. Leur endpoint de statut d'abonnement retourne `404 SUBSCRIPTION_NOT_FOUND`, contre un abonnement actif pour les abonnés. Le seed conserve cette règle existante. Les écarts de calcul financier et de carte de risque professeur sont détaillés dans le [rapport de recette](verification.md).
+Aucun message SMS, email ou push n'est envoyé par le provisionnement. Le service SMS est seulement configuré pour permettre de parcourir les écrans et statuts d'abonnement. Les paiements et contacts sont fictifs ; aucune transaction externe n'est réalisée. Les données vieillissent naturellement après création : créer un nouveau nom pour retrouver le scénario de début de T3.
 
 ## Profil `empty`
 
