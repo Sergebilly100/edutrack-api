@@ -26,7 +26,7 @@ export class DemoRepository {
     const result = await this.db.execute<{ id: string }>(sql`
       INSERT INTO public.tenants (name, subdomain, schema_name, plan, status, city, teaching_type,
         max_users, onboarding_completed, mid_year_onboarding)
-      VALUES (${`Collège des Flamboyants — Démo ${options.name}`}, ${options.name.replaceAll('_', '-')},
+      VALUES (${`Collège des Flamboyants - Démo ${options.name}`}, ${options.name.replaceAll('_', '-')},
         ${schema}, 'pro', 'active', 'Yamoussoukro', 'secondaire', 50, ${options.type === 'seeded'}, false)
       RETURNING id
     `);

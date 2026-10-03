@@ -113,7 +113,7 @@ async function seedAcademicHistory(repo: DemoRepository, classes: DemoClass[], t
             : null;
           const evaluation = await academic.createEvaluation({ classId: klass.id, subjectId, gradingPeriodId: periodId,
             type: 'scheduled', coefficient: assessment + 1,
-            label: `${t3Evaluation?.label ?? (assessment === 0 ? 'Interrogation' : 'Devoir de synthèse')} — ${subjects[subjectIndex]}`,
+            label: `${t3Evaluation?.label ?? (assessment === 0 ? 'Interrogation' : 'Devoir de synthèse')} - ${subjects[subjectIndex]}`,
             evaluationDate: t3Evaluation?.date ?? shiftDate(calendar.periods[periodIndex]!.start, 28 + assessment * 35),
           }, teacher.userId);
           for (const [index, studentId] of klass.students.entries()) {
@@ -185,7 +185,7 @@ async function seedArchivedSchoolRecords(repo: DemoRepository, currentClasses: D
   for (const [classIndex, currentClass] of currentClasses.entries()) {
     const students = currentClass.students.slice(0, 2);
     const archiveClassId = await repo.insert('classes', {
-      name: `${currentClass.levelName} A — archive`, level: currentClass.levelName, level_id: currentClass.levelId,
+      name: `${currentClass.levelName} A - archive`, level: currentClass.levelName, level_id: currentClass.levelId,
       school_year_id: archiveYearId, student_count: students.length, homeroom_teacher_id: teachers[classIndex]!.id, created_at: archiveStart,
     });
     const archiveClass: DemoClass = {
@@ -211,7 +211,7 @@ async function seedArchivedSchoolRecords(repo: DemoRepository, currentClasses: D
         const teacher = teachers[subjectIndex]!;
         const evaluation = await academic.createEvaluation({
           classId: klass.id, subjectId, gradingPeriodId: periodId, type: 'scheduled', coefficient: 1,
-          label: `Devoir archivé — ${subjects[subjectIndex]}`, evaluationDate: shiftDate(archivePeriods[periodIndex]!.start, 24 + subjectIndex * 4),
+          label: `Devoir archivé - ${subjects[subjectIndex]}`, evaluationDate: shiftDate(archivePeriods[periodIndex]!.start, 24 + subjectIndex * 4),
         }, teacher.userId);
         for (const [studentIndex, studentId] of klass.students.entries()) {
           const score = Math.min(18, 9 + subjectIndex + periodIndex + classIndex + studentIndex * 2);
