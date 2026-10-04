@@ -497,7 +497,7 @@ export const processBillingPdfJob = async (
       // bulletins - les reçus ne les utilisent jamais.
       const seals = await loadSchoolSeals(job.data.schemaName);
       const payload = await buildReportCardsService(tenantDb).getPdfPayload(job.data.reportCardId);
-      const fileName = `bulletin_${toSafeFilePart(payload.studentName)}_${toSafeFilePart(payload.periodLabel)}.pdf`;
+      const fileName = `bulletin_${toSafeFilePart(job.data.reportCardId)}.pdf`;
       const bytes = await renderReportCard(branding, payload, seals);
       const result = await persistPdf(bytes, fileName);
       return { ...result, fileType: 'pdf' };

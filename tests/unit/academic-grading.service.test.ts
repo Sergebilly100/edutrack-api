@@ -18,7 +18,9 @@ const ids = {
 };
 
 const repository = {
+  transaction: vi.fn(),
   findTeacherByUserId: vi.fn(),
+  lockClassPeriod: vi.fn(),
   findSubject: vi.fn(),
   findGradingPeriod: vi.fn(),
   getSchoolYear: vi.fn(),
@@ -35,6 +37,16 @@ const repository = {
   upsertCompletion: vi.fn(),
   createEvaluation: vi.fn(),
   findEvaluation: vi.fn(),
+  activeCorrectionClaimId: vi.fn(),
+  appendAudit: vi.fn(),
+  studentBelongsToClass: vi.fn(),
+  findGrade: vi.fn(),
+  upsertGrade: vi.fn(),
+  listStudentPeriodGrades: vi.fn(),
+  findConductForAverage: vi.fn(),
+  upsertAverage: vi.fn(),
+  deleteAverage: vi.fn(),
+  markClaimCorrected: vi.fn(),
 } as unknown as Record<keyof AcademicGradingRepository, ReturnType<typeof vi.fn>>;
 
 const service = new AcademicGradingService(
@@ -50,6 +62,8 @@ const completionInput = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  repository.transaction.mockImplementation(async (work: (repo: AcademicGradingRepository) => Promise<unknown>) =>
+    work(repository as unknown as AcademicGradingRepository));
   repository.findTeacherByUserId.mockResolvedValue(ids.teacher);
   repository.findSubject.mockResolvedValue({ id: ids.subject, levelId: ids.level });
   repository.findGradingPeriod.mockResolvedValue({
@@ -76,6 +90,12 @@ beforeEach(() => {
   repository.countScheduledEvaluations.mockResolvedValue(1);
   repository.countMissingScheduledGrades.mockResolvedValue(0);
   repository.upsertCompletion.mockResolvedValue({ status: 'in_progress' });
+  repository.activeCorrectionClaimId.mockResolvedValue(null);
+  repository.studentBelongsToClass.mockResolvedValue(true);
+  repository.findGrade.mockResolvedValue(null);
+  repository.upsertGrade.mockResolvedValue({ score: 12, maxScore: 20, comment: null });
+  repository.listStudentPeriodGrades.mockResolvedValue([]);
+  repository.findConductForAverage.mockResolvedValue(null);
 });
 
 describe('AcademicGradingService.updateGradingPeriod', () => {
@@ -133,20 +153,21 @@ describe('AcademicGradingService.updateCompletion', () => {
 });
 
 describe('AcademicGradingService.createEvaluation', () => {
-  it('verrouille une évaluation T1 au début de revue sans rouvrir la période', async () => {
+  it('autorise une évaluation T1 pendant la revue', async () => {
     repository.findGradingPeriod.mockResolvedValue({
       id: ids.period, schoolYearId: ids.schoolYear, startDate: '2026-09-01',
       reviewStartDate: '2026-11-15', endDate: '2026-12-20',
       notesEntryOpen: false, conductReviewOpen: true, isCompleted: false, closedClassIds: [],
     });
+    repository.createEvaluation.mockResolvedValue({ id: 'evaluation-review' });
     await expect(service.createEvaluation({
       classId: ids.schoolClass, subjectId: ids.subject, gradingPeriodId: ids.period,
       type: 'scheduled', coefficient: 1, label: 'Devoir tardif', evaluationDate: '2026-11-10',
-    }, ids.user)).rejects.toMatchObject({ code: 'GRADING_PERIOD_NOTES_CLOSED', statusCode: 409 });
-    expect(repository.createEvaluation).not.toHaveBeenCalled();
+    }, ids.user)).resolves.toMatchObject({ evaluation: { id: 'evaluation-review' } });
+    expect(repository.appendAudit).toHaveBeenCalledWith(expect.objectContaining({ operation: 'evaluation_created' }));
   });
 
-  it('verrouille la modification de note T1 pendant sa revue', async () => {
+  it('autorise une note T1 pendant sa revue et trace la création', async () => {
     repository.findEvaluation.mockResolvedValue({
       id: 'evaluation-1', teacherId: ids.teacher, classId: ids.schoolClass,
       subjectId: ids.subject, gradingPeriodId: ids.period,
@@ -158,7 +179,10 @@ describe('AcademicGradingService.createEvaluation', () => {
     });
     await expect(service.upsertGrade('evaluation-1', {
       studentId: ids.user, score: 12, maxScore: 20,
-    }, ids.user)).rejects.toMatchObject({ code: 'GRADING_PERIOD_NOTES_CLOSED', statusCode: 409 });
+    }, ids.user)).resolves.toMatchObject({ grade: { score: 12 } });
+    expect(repository.appendAudit).toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'grade_created', oldValue: null, studentId: ids.user,
+    }));
   });
   it('autorise une évaluation sans créneau EDT pour une affectation professeur-matière-classe', async () => {
     repository.createEvaluation.mockResolvedValue({ id: 'evaluation-1' });

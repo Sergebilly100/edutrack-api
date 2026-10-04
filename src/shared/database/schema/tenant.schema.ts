@@ -901,6 +901,44 @@ export const evaluationGrades = tenant.table(
   })
 );
 
+export const reportCardClaims = tenant.table('report_card_claims', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  classId: uuid('class_id').notNull().references(() => classes.id),
+  studentId: uuid('student_id').references(() => students.id),
+  subjectId: uuid('subject_id').notNull().references(() => subjects.id),
+  gradingPeriodId: uuid('grading_period_id').notNull().references(() => gradingPeriods.id),
+  requestedByUserId: uuid('requested_by_user_id').notNull().references(() => users.id),
+  reason: text('reason').notNull(),
+  status: varchar('status', { length: 40 }).notNull().default('open'),
+  phase: varchar('phase', { length: 24 }),
+  decidedByUserId: uuid('decided_by_user_id').references(() => users.id),
+  decisionReason: text('decision_reason'),
+  decidedAt: timestamp('decided_at', { withTimezone: true }),
+  revalidatedAt: timestamp('revalidated_at', { withTimezone: true }),
+  regeneratedAt: timestamp('regenerated_at', { withTimezone: true }),
+  republishedAt: timestamp('republished_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  scopeIdx: index('idx_report_card_claims_scope').on(table.gradingPeriodId, table.classId, table.subjectId),
+  openScopeUnique: uniqueIndex('report_card_claims_open_scope_unique').on(table.gradingPeriodId, table.classId)
+    .where(sql`status IN ('open', 'pending_exceptional_authorization', 'approved') OR (phase <> 'before' AND status IN ('corrected', 'regenerated'))`),
+}));
+
+export const academicChangeAudit = tenant.table('academic_change_audit', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  actorUserId: uuid('actor_user_id').notNull().references(() => users.id),
+  classId: uuid('class_id').notNull().references(() => classes.id),
+  subjectId: uuid('subject_id').notNull().references(() => subjects.id),
+  gradingPeriodId: uuid('grading_period_id').notNull().references(() => gradingPeriods.id),
+  evaluationId: uuid('evaluation_id').references(() => evaluations.id),
+  studentId: uuid('student_id').references(() => students.id),
+  claimId: uuid('claim_id').references(() => reportCardClaims.id),
+  operation: varchar('operation', { length: 40 }).notNull(),
+  oldValue: jsonb('old_value'),
+  newValue: jsonb('new_value'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({ scopeIdx: index('idx_academic_change_audit_scope').on(table.gradingPeriodId, table.classId, table.subjectId) }));
+
 export const educatorAssignments = tenant.table(
   'educator_assignments',
   {
@@ -1663,3 +1701,22 @@ export const reportCardLines = tenant.table(
     reportCardLinesReportIdx: index('idx_report_card_lines_report').on(table.reportCardId),
   })
 );
+
+export const reportCardVersions = tenant.table('report_card_versions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  cardId: uuid('card_id').notNull(),
+  studentId: uuid('student_id').notNull().references(() => students.id),
+  classId: uuid('class_id').notNull().references(() => classes.id),
+  gradingPeriodId: uuid('grading_period_id').notNull().references(() => gradingPeriods.id),
+  revision: integer('revision').notNull(),
+  snapshot: jsonb('snapshot').notNull(),
+  publishedAt: timestamp('published_at', { withTimezone: true }).notNull(),
+  publishedByUserId: uuid('published_by_user_id').notNull().references(() => users.id),
+  invalidatedAt: timestamp('invalidated_at', { withTimezone: true }),
+  invalidatedByUserId: uuid('invalidated_by_user_id').references(() => users.id),
+  invalidationClaimId: uuid('invalidation_claim_id').references(() => reportCardClaims.id),
+  invalidationReason: text('invalidation_reason'),
+}, (table) => ({
+  revisionUnique: unique('report_card_versions_student_period_revision_unique').on(table.studentId, table.gradingPeriodId, table.revision),
+  activeUnique: uniqueIndex('report_card_versions_one_active_unique').on(table.studentId, table.gradingPeriodId).where(sql`invalidated_at IS NULL`),
+}));

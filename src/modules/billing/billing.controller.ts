@@ -6,8 +6,9 @@ import path from 'node:path';
 import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
+import { ReportCardCurrentRepository } from '../../shared/database/report-card-current.repository.js';
 import { authenticateRequest, requirePermission } from '../../shared/middleware/auth.middleware.js';
-import { presignDownload } from '../../shared/storage/r2.js';
+import { presignDownload, readR2Buffer } from '../../shared/storage/r2.js';
 import type { PermissionKey } from '../../shared/types/index.js';
 import { buildDashboardRepository } from '../dashboard/dashboard.repository.js';
 
@@ -127,6 +128,12 @@ type BillingPdfQueueHandle = {
   getJob: (jobId: string) => Promise<BillingPdfJobHandle | null>;
 };
 
+const isCurrentReportCardJob = async (job: BillingPdfJobHandle): Promise<boolean> => {
+  const data = job.data;
+  if (data?.type !== 'report-card') return true;
+  return withTenantSchema(data.schemaName, db => new ReportCardCurrentRepository(db).exists(data.reportCardId));
+};
+
 const getExportContentType = (fileName: string): 'application/pdf' | 'application/zip' => {
   return path.extname(fileName).toLowerCase() === '.zip' ? 'application/zip' : 'application/pdf';
 };
@@ -143,6 +150,9 @@ const buildCompletedJobDownloadUrl = async (
   job: BillingPdfJobHandle,
   result: NonNullable<ReturnType<typeof resolveJobFileResult>>
 ): Promise<string> => {
+  if (job.data?.type === 'report-card') {
+    return buildSignedDownloadUrl(request, String(job.id), request.claims!.sub);
+  }
   if (result.r2Key) {
     return presignDownload(result.r2Key, 300, {
       filename: result.fileName,
@@ -277,6 +287,10 @@ const requirePdfJobAccess =
         code: 'FORBIDDEN',
         statusCode: 403,
       });
+      return;
+    }
+    if (!(await isCurrentReportCardJob(job))) {
+      reply.code(410).send({ error: 'Ce PDF est obsolète', code: 'REPORT_CARD_PDF_OBSOLETE', statusCode: 410 });
     }
   };
 
@@ -699,6 +713,10 @@ export default async function billingController(
         });
       }
 
+      if (!(await isCurrentReportCardJob(job))) {
+        return reply.code(410).send({ error: 'Ce PDF est obsolète', code: 'REPORT_CARD_PDF_OBSOLETE', statusCode: 410 });
+      }
+
       const state = await job.getState();
       const response: {
         jobId: string;
@@ -808,6 +826,10 @@ export default async function billingController(
         });
       }
 
+      if (!(await isCurrentReportCardJob(job))) {
+        return reply.code(410).send({ error: 'Ce PDF est obsolète', code: 'REPORT_CARD_PDF_OBSOLETE', statusCode: 410 });
+      }
+
       const state = await job.getState();
       if (state !== 'completed') {
         return reply.code(409).send({
@@ -830,6 +852,16 @@ export default async function billingController(
       // valid for 5 min - long enough for the browser to follow the redirect but
       // short enough that leaked Referer/log entries decay quickly.
       if (result.r2Key) {
+        if (job.data?.type === 'report-card') {
+          const bytes = await readR2Buffer(result.r2Key);
+          // The job may have been invalidated while R2 returned the object.
+          if (!(await isCurrentReportCardJob(job))) {
+            return reply.code(410).send({ error: 'Ce PDF est obsolète', code: 'REPORT_CARD_PDF_OBSOLETE', statusCode: 410 });
+          }
+          reply.header('Content-Type', 'application/pdf');
+          reply.header('Content-Disposition', `attachment; filename="${result.fileName}"`);
+          return reply.send(bytes);
+        }
         const presignedUrl = await presignDownload(result.r2Key, 300, {
           filename: result.fileName,
           contentType: getExportContentType(result.fileName),

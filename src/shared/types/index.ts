@@ -125,6 +125,7 @@ export type PermissionKey =
   | 'report_cards.view'
   | 'evaluations.view'
   | 'report_cards.publish'
+  | 'report_cards.published_correction'
   | 'import.students'
   | 'import.teachers'
   | 'import.schedule'

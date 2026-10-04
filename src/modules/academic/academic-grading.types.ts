@@ -130,11 +130,11 @@ export const createEvaluationBodySchema = z.object({
 export const upsertEvaluationGradeBodySchema = z
   .object({
     studentId: z.string().uuid(),
-    score: z.number().finite().nonnegative(),
+    score: z.number().finite().nonnegative().nullable(),
     maxScore: positiveDecimalSchema,
     comment: z.string().trim().max(2000).nullable().optional(),
   })
-  .refine((input) => input.score <= input.maxScore, {
+  .refine((input) => input.score === null || input.score <= input.maxScore, {
     message: 'Score must be less than or equal to max score',
     path: ['score'],
   });

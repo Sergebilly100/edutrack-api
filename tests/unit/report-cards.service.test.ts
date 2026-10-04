@@ -9,11 +9,17 @@ import {
 } from '../../src/modules/report-cards/report-cards.service.js';
 
 const repository = {
+  transaction: vi.fn(),
   findClassContext: vi.fn(),
+  schoolYearStatus: vi.fn(),
+  lockClassPeriod: vi.fn(),
   findGradingPeriod: vi.fn(),
   isBulletinGenerationAvailable: vi.fn(),
   isClassReviewClosed: vi.fn(),
   closeClassReview: vi.fn(),
+  markRegenerated: vi.fn(),
+  markRepublished: vi.fn(),
+  getCorrectionPublicationState: vi.fn(),
   isLastPeriodOfYear: vi.fn(),
   listIncompleteSubjects: vi.fn(),
   listClassStudents: vi.fn(),
@@ -30,7 +36,11 @@ const repository = {
   listPublishedSummariesForStudent: vi.fn(),
   listCardLines: vi.fn(),
   findCardDetail: vi.fn(),
+  listCardsOfClass: vi.fn(),
+  listClaims: vi.fn(),
 } as unknown as ReportCardsRepository;
+
+vi.mocked(repository.transaction).mockImplementation(async (work) => work(repository));
 
 describe('computeRankMap (rang compétitif)', () => {
   it('partage le rang des ex aequo et saute les rangs suivants', () => {
@@ -82,6 +92,7 @@ describe('ReportCardsService.generateForClass', () => {
 
   const baseRepo = (): void => {
     repository.findClassContext.mockResolvedValue(classContext);
+    repository.schoolYearStatus.mockResolvedValue('active');
     repository.findGradingPeriod.mockResolvedValue(period);
     repository.isBulletinGenerationAvailable.mockResolvedValue(true);
     repository.isClassReviewClosed.mockResolvedValue(false);
@@ -317,8 +328,133 @@ describe('publishBulk', () => {
     const result = await service.publishBulk('class-1', 'period-1', 'user-1');
 
     expect(result.publishedCount).toBe(2);
+    expect(repository.transaction).toHaveBeenCalledOnce();
     expect(repository.publishCard).toHaveBeenCalledTimes(2);
     expect(repository.publishCard).toHaveBeenNthCalledWith(1, 'c1', 'user-1');
     expect(repository.publishCard).toHaveBeenNthCalledWith(2, 'c2', 'user-1');
+  });
+});
+
+describe('consultation historique des bulletins', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    repository.findClassContext.mockResolvedValue({ schoolYearId: 'year-old' });
+    repository.findGradingPeriod.mockResolvedValue({ schoolYearId: 'year-current' });
+  });
+
+  it('refuse une classe et une période de deux années avant de lire les cartes', async () => {
+    await expect(new ReportCardsService(repository).listClassCards('class-old', 'period-current'))
+      .rejects.toMatchObject({ code: 'CLASS_PERIOD_YEAR_MISMATCH', statusCode: 400 });
+    expect(repository.listCardsOfClass).not.toHaveBeenCalled();
+  });
+
+  it('refuse le même couple interannées avant de lire les réclamations', async () => {
+    await expect(new ReportCardsService(repository).listClaims({ classId: 'class-old', gradingPeriodId: 'period-current' }))
+      .rejects.toMatchObject({ code: 'CLASS_PERIOD_YEAR_MISMATCH', statusCode: 400 });
+    expect(repository.listClaims).not.toHaveBeenCalled();
+  });
+
+  it('interdit de publier une année clôturée', async () => {
+    repository.transaction.mockImplementation(async (work) => work(repository));
+    repository.findClassContext.mockResolvedValue({ schoolYearId: 'year-old' });
+    repository.findGradingPeriod.mockResolvedValue({ schoolYearId: 'year-old' });
+    repository.schoolYearStatus.mockResolvedValue('closed');
+    await expect(new ReportCardsService(repository).publishBulk('class-old', 'period-old', 'user-1'))
+      .rejects.toMatchObject({ code: 'SCHOOL_YEAR_CLOSED', statusCode: 409 });
+    expect(repository.publishCard).not.toHaveBeenCalled();
+  });
+});
+
+describe('réclamations et autorisation de correction', () => {
+  const claim = {
+    id: 'claim-1', class_id: 'class-1', subject_id: 'subject-1',
+    grading_period_id: 'period-1', status: 'pending_exceptional_authorization',
+  };
+  const scopedRepository = {
+    transaction: vi.fn(), lockClassPeriod: vi.fn(), findClassContext: vi.fn(),
+    schoolYearStatus: vi.fn(),
+    findGradingPeriod: vi.fn(), subjectBelongsToClass: vi.fn(),
+    isAssignedSubject: vi.fn(), isSubjectCompleted: vi.fn(), listClaims: vi.fn(), listClassStudents: vi.fn(),
+    getCardsPhase: vi.fn(), createClaim: vi.fn(), findClaim: vi.fn(),
+    setClaimDecision: vi.fn(), reopenSubject: vi.fn(), invalidateClassCards: vi.fn(),
+  };
+  const service = new ReportCardsService(scopedRepository as unknown as ReportCardsRepository);
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    scopedRepository.transaction.mockImplementation(async (work: (repo: unknown) => Promise<unknown>) => work(scopedRepository));
+    scopedRepository.findClassContext.mockResolvedValue({ schoolYearId: 'year-1' });
+    scopedRepository.schoolYearStatus.mockResolvedValue('active');
+    scopedRepository.findGradingPeriod.mockResolvedValue({ schoolYearId: 'year-1' });
+    scopedRepository.subjectBelongsToClass.mockResolvedValue(true);
+    scopedRepository.isAssignedSubject.mockResolvedValue(true);
+    scopedRepository.isSubjectCompleted.mockResolvedValue(true);
+    scopedRepository.listClassStudents.mockResolvedValue([{ id: 'student-1', fullName: 'Aya Test' }]);
+    scopedRepository.listClaims.mockResolvedValue([]);
+    scopedRepository.getCardsPhase.mockResolvedValue('before');
+    scopedRepository.createClaim.mockResolvedValue('claim-1');
+    scopedRepository.findClaim.mockResolvedValue(claim);
+  });
+
+  it('accepte une nouvelle réclamation après correction avant génération', async () => {
+    scopedRepository.listClaims.mockResolvedValue([{ status: 'corrected', phase: 'before' }]);
+    await expect(service.createClaim({ classId: 'class-1', subjectId: 'subject-1', gradingPeriodId: 'period-1', userId: 'user-1', reason: 'Erreur de note' }))
+      .resolves.toEqual({ id: 'claim-1' });
+    expect(scopedRepository.createClaim).toHaveBeenCalled();
+  });
+
+  it('cible un élève confirmé de la classe et refuse un élève extérieur', async () => {
+    const input = { classId: 'class-1', studentId: 'student-1', subjectId: 'subject-1',
+      gradingPeriodId: 'period-1', userId: 'user-1', reason: 'Erreur de note' };
+    await expect(service.createClaim(input)).resolves.toEqual({ id: 'claim-1' });
+    expect(scopedRepository.createClaim).toHaveBeenCalledWith(expect.objectContaining({ studentId: 'student-1' }));
+    scopedRepository.createClaim.mockClear();
+    await expect(service.createClaim({ ...input, studentId: 'student-exterieur' }))
+      .rejects.toMatchObject({ code: 'CLAIM_STUDENT_CLASS_MISMATCH' });
+    expect(scopedRepository.createClaim).not.toHaveBeenCalled();
+  });
+
+  it('refuse une deuxième correction ouverte dans la même classe et période', async () => {
+    scopedRepository.listClaims.mockResolvedValue([{ status: 'corrected', phase: 'published' }]);
+    await expect(service.createClaim({ classId: 'class-1', subjectId: 'subject-2', gradingPeriodId: 'period-1', userId: 'user-1', reason: 'Erreur de note' }))
+      .rejects.toMatchObject({ code: 'CLAIM_ALREADY_OPEN' });
+    expect(scopedRepository.createClaim).not.toHaveBeenCalled();
+  });
+
+  it('réserve la correction publiée au directeur autorisé', async () => {
+    scopedRepository.getCardsPhase.mockResolvedValue('published');
+    const input = { claimId: 'claim-1', decision: 'approved' as const, userId: 'user-1', reason: 'Erreur confirmée', canPublish: true, canCorrectPublished: true };
+    await expect(service.decideClaim({ ...input, role: 'staff' })).rejects.toMatchObject({ code: 'PUBLISHED_CORRECTION_FORBIDDEN' });
+    await expect(service.decideClaim({ ...input, role: 'director', canCorrectPublished: false })).rejects.toMatchObject({ code: 'PUBLISHED_CORRECTION_FORBIDDEN' });
+    expect(scopedRepository.invalidateClassCards).not.toHaveBeenCalled();
+    await expect(service.decideClaim({ ...input, role: 'director' })).resolves.toMatchObject({ status: 'approved', phase: 'published' });
+    expect(scopedRepository.invalidateClassCards).toHaveBeenCalledWith(expect.objectContaining({ claimId: 'claim-1', classId: 'class-1', reason: 'Erreur confirmée' }));
+  });
+
+  it('ouvre la seule matière avant génération avec le droit de publication', async () => {
+    scopedRepository.findClaim.mockResolvedValue({ ...claim, status: 'open' });
+    await service.decideClaim({ claimId: 'claim-1', decision: 'approved', userId: 'user-1',
+      role: 'staff', reason: 'Erreur confirmée', canPublish: true, canCorrectPublished: false });
+    expect(scopedRepository.reopenSubject).toHaveBeenCalledWith(expect.objectContaining({
+      classId: 'class-1', subjectId: 'subject-1', claimId: 'claim-1',
+    }));
+    expect(scopedRepository.invalidateClassCards).not.toHaveBeenCalled();
+  });
+
+  it('invalide les cartes générées sans exiger le droit exceptionnel', async () => {
+    scopedRepository.findClaim.mockResolvedValue({ ...claim, status: 'open' });
+    scopedRepository.getCardsPhase.mockResolvedValue('generated');
+    await service.decideClaim({ claimId: 'claim-1', decision: 'approved', userId: 'user-1',
+      role: 'staff', reason: 'Erreur confirmée', canPublish: true, canCorrectPublished: false });
+    expect(scopedRepository.invalidateClassCards).toHaveBeenCalledOnce();
+  });
+
+  it('refuse une réclamation avant toute réouverture', async () => {
+    scopedRepository.findClaim.mockResolvedValue({ ...claim, status: 'open' });
+    await expect(service.decideClaim({ claimId: 'claim-1', decision: 'refused', userId: 'user-1', role: 'director', reason: 'Note vérifiée', canPublish: true, canCorrectPublished: false }))
+      .resolves.toMatchObject({ status: 'refused' });
+    expect(scopedRepository.setClaimDecision).toHaveBeenCalled();
+    expect(scopedRepository.reopenSubject).not.toHaveBeenCalled();
+    expect(scopedRepository.invalidateClassCards).not.toHaveBeenCalled();
   });
 });

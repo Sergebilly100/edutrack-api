@@ -15,10 +15,38 @@ export const readinessQuerySchema = z.object({
   grading_period_id: z.string().uuid(),
 });
 
+export const reportCardClassesQuerySchema = z.object({
+  schoolYearId: z.string().uuid(),
+});
+
 export const publishBulkBodySchema = z.object({
   class_id: z.string().uuid().optional(),
   grading_period_id: z.string().uuid(),
 });
+
+export const createReportCardClaimBodySchema = z.object({
+  classId: z.string().uuid(),
+  studentId: z.string().uuid().optional(),
+  subjectId: z.string().uuid(),
+  gradingPeriodId: z.string().uuid(),
+  reason: z.string().trim().min(10).max(4000),
+});
+
+export const decideReportCardClaimBodySchema = z.object({
+  decision: z.enum(['approved', 'refused']),
+  reason: z.string().trim().min(10).max(4000),
+});
+
+export const reportCardClaimQuerySchema = z.object({
+  schoolYearId: z.string().uuid().optional(),
+  gradingPeriodId: z.string().uuid().optional(),
+  classId: z.string().uuid().optional(),
+  studentId: z.string().uuid().optional(),
+  subjectId: z.string().uuid().optional(),
+  status: z.enum(['open', 'pending_exceptional_authorization', 'approved', 'refused', 'corrected', 'regenerated', 'republished']).optional(),
+});
+
+export const claimIdParamsSchema = z.object({ id: z.string().uuid() });
 
 export type PublishBulkBody = z.infer<typeof publishBulkBodySchema>;
 

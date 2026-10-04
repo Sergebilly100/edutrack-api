@@ -301,6 +301,19 @@ describe('report-cards routes (5c)', () => {
     await queryTenant(`UPDATE ${tenantTable('classes')} SET is_active=false WHERE id=$1::uuid`, [classId]);
     await queryTenant(`UPDATE ${tenantTable('students')} SET is_active=false WHERE id=$1::uuid`, [studentAId]);
     try {
+      const currentYearId = (await queryTenant<{ school_year_id: string }>(
+        `SELECT school_year_id::text FROM ${tenantTable('classes')} WHERE id=$1::uuid`, [classId]
+      ))[0]!.school_year_id;
+      const historyOptions = await request().get(`/api/v1/report-cards/classes?schoolYearId=${currentYearId}`).set(directorHeaders);
+      expect(historyOptions.status, JSON.stringify(historyOptions.body)).toBe(200);
+      expect(historyOptions.body.classes).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: classId, isActive: false }),
+      ]));
+      const cards = await request().get(`/api/v1/report-cards/class/${classId}?grading_period_id=${periodT1}`).set(directorHeaders);
+      expect(cards.status, JSON.stringify(cards.body)).toBe(200);
+      expect(cards.body.reportCards).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: cardId, status: 'published', rank: 1, generalAverage: 15.75 }),
+      ]));
       await withTenantSchema(TEST_SCHEMA_NAME, async (db) => {
         const repository = new ReportCardsRepository(db);
         expect((await repository.listPublishedSummariesForStudent(studentAId)).map((card) => card.id)).toContain(cardId);
@@ -329,6 +342,49 @@ describe('report-cards routes (5c)', () => {
       await queryTenant(`UPDATE ${tenantTable('classes')} SET is_active=true WHERE id=$1::uuid`, [classId]);
       await queryTenant(`UPDATE ${tenantTable('students')} SET is_active=true WHERE id=$1::uuid`, [studentAId]);
     }
+  });
+
+  it('refuse les lectures classe–période interannées par appel forgé', async () => {
+    const otherYearId = (await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('school_years')} (label, start_date, end_date, end_of_year_review_start_date, status)
+       VALUES ($1, '2093-09-01', '2094-06-30', '2094-05-01', 'closed') RETURNING id::text`,
+      [`rc-history-${suffix}`]
+    ))[0]!.id;
+    const otherPeriodId = (await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('grading_periods')} (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+       VALUES ($1::uuid, 'trimester', 1, 'T1 ancien', '2093-09-01', '2093-11-15', '2093-12-15') RETURNING id::text`,
+      [otherYearId]
+    ))[0]!.id;
+    const closedClassId = (await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('classes')} (name, level_id, school_year_id, is_active)
+       VALUES ($1, $2::uuid, $3::uuid, true) RETURNING id::text`,
+      [`RC closed ${suffix}`, levelId, otherYearId]
+    ))[0]!.id;
+    const cards = await request().get(`/api/v1/report-cards/class/${classId}?grading_period_id=${otherPeriodId}`).set(directorHeaders);
+    expect(cards.status).toBe(400);
+    expect(cards.body).toMatchObject({ code: 'CLASS_PERIOD_YEAR_MISMATCH', statusCode: 400 });
+    const completion = await request().get(`/api/v1/report-cards/completion?classId=${classId}&gradingPeriodId=${otherPeriodId}`).set(directorHeaders);
+    expect(completion.status).toBe(400);
+    expect(completion.body).toMatchObject({ code: 'COMPLETION_SCOPE_MISMATCH', statusCode: 400 });
+    const claims = await request().get(`/api/v1/report-cards/claims?classId=${classId}&gradingPeriodId=${otherPeriodId}`).set(directorHeaders);
+    expect(claims.status).toBe(400);
+    expect(claims.body).toMatchObject({ code: 'CLASS_PERIOD_YEAR_MISMATCH', statusCode: 400 });
+    const options = await request().get(`/api/v1/report-cards/classes?schoolYearId=${otherYearId}`).set(directorHeaders);
+    expect(options.status).toBe(200);
+    expect(options.body.classes).toEqual([]);
+    const generateClosed = await request().post('/api/v1/report-cards/generate').set(directorHeaders)
+      .send({ class_id: closedClassId, grading_period_id: otherPeriodId });
+    expect(generateClosed.status).toBe(409);
+    expect(generateClosed.body).toMatchObject({ code: 'SCHOOL_YEAR_CLOSED', statusCode: 409 });
+    const publishClosed = await request().post('/api/v1/report-cards/publish-bulk').set(directorHeaders)
+      .send({ class_id: closedClassId, grading_period_id: otherPeriodId });
+    expect(publishClosed.status).toBe(409);
+    expect(publishClosed.body).toMatchObject({ code: 'SCHOOL_YEAR_CLOSED', statusCode: 409 });
+    const claimClosed = await request().post('/api/v1/report-cards/claims').set(directorHeaders)
+      .send({ classId: closedClassId, gradingPeriodId: otherPeriodId, subjectId: subjectMathsId,
+        reason: 'Vérification du bulletin archivé' });
+    expect(claimClosed.status).toBe(409);
+    expect(claimClosed.body).toMatchObject({ code: 'SCHOOL_YEAR_CLOSED', statusCode: 409 });
   });
 
   it('clôture chaque classe séparément et ne rouvre pas une revue après une inscription tardive', async () => {
@@ -412,6 +468,20 @@ describe('report-cards routes (5c)', () => {
     } finally {
       await queryTenant(`UPDATE ${tenantTable('report_card_lines')} SET subject_coefficient = 2
         WHERE report_card_id = $1::uuid AND line_type = 'conduct'`, [cardId]);
+    }
+  });
+
+  it('ne fait pas entrer la classe archivée dans la liste normale des inscriptions', async () => {
+    const yearId = (await queryTenant<{ school_year_id: string }>(
+      `SELECT school_year_id::text FROM ${tenantTable('classes')} WHERE id=$1::uuid`, [classId]
+    ))[0]!.school_year_id;
+    await queryTenant(`UPDATE ${tenantTable('classes')} SET is_active=false WHERE id=$1::uuid`, [classId]);
+    try {
+      const response = await request().get(`/api/v1/classes?schoolYearId=${yearId}`).set(directorHeaders);
+      expect(response.status).toBe(200);
+      expect(response.body.classes.map((item: { id: string }) => item.id)).not.toContain(classId);
+    } finally {
+      await queryTenant(`UPDATE ${tenantTable('classes')} SET is_active=true WHERE id=$1::uuid`, [classId]);
     }
   });
 });

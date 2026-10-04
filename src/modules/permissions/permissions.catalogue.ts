@@ -75,6 +75,7 @@ const DEFINITIONS = {
   'report_cards.view': { domain: 'report_cards', label: 'Voir les bulletins' },
   'evaluations.view': { domain: 'evaluations', label: 'Consulter les évaluations et notes' },
   'report_cards.publish': { domain: 'report_cards', label: 'Publier les bulletins' },
+  'report_cards.published_correction': { domain: 'report_cards', label: 'Autoriser une correction exceptionnelle après publication' },
   'import.students': { domain: 'import', label: 'Importer les élèves' },
   'import.teachers': { domain: 'import', label: 'Importer les professeurs' },
   'import.schedule': { domain: 'import', label: 'Importer l’emploi du temps' },
@@ -114,7 +115,7 @@ const VIEW_ACTIONS = new Set([
   'create', 'edit', 'delete', 'block', 'documents', 'ranking.view', 'attendance.view',
   'password.reset', 'excuse', 'compute', 'mark_paid', 'export', 'approve', 'reject',
   'validate', 'confirm_payment', 'renew', 'cancel', 'revenue', 'mark_students',
-  'publish', 'grant_discount', 'record',
+  'publish', 'published_correction', 'grant_discount', 'record',
 ]);
 
 export const buildPermissionCatalogue = (features: ActivationFeatures) => ({
@@ -128,10 +129,13 @@ export const buildPermissionCatalogue = (features: ActivationFeatures) => ({
       feature, label: ACTIVATION_LABELS[feature], enabled: features[feature],
     }));
     const unavailable = activationDependencies.filter((dependency) => !dependency.enabled);
+    const sensitive = key === 'report_cards.published_correction';
     const [category, ...action] = key.split('.');
     const viewKey = `${category}.view`;
-    const requiredPermissions: CatalogueKey[] = VIEW_ACTIONS.has(action.join('.'))
-      ? PERMISSION_KEYS.filter((candidate) => candidate === viewKey) : [];
+    const requiredPermissions: CatalogueKey[] = sensitive
+      ? ['report_cards.view', 'report_cards.publish']
+      : VIEW_ACTIONS.has(action.join('.'))
+        ? PERMISSION_KEYS.filter((candidate) => candidate === viewKey) : [];
     return {
       key,
       domain: definition.domain,
@@ -139,8 +143,9 @@ export const buildPermissionCatalogue = (features: ActivationFeatures) => ({
       label: definition.label,
       requiredPermissions,
       activationDependencies,
-      available: unavailable.length === 0,
-      unavailableReason: unavailable.length ? unavailable.map((dependency) => ACTIVATION_REASONS[dependency.feature]).join(' ') : null,
+      available: unavailable.length === 0 && !sensitive,
+      unavailableReason: sensitive ? 'Réservée au directeur ou au super administrateur délégué au tenant.'
+        : unavailable.length ? unavailable.map((dependency) => ACTIVATION_REASONS[dependency.feature]).join(' ') : null,
     };
   }),
 });

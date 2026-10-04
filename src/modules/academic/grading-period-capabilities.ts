@@ -10,9 +10,9 @@ export const getPeriodCapabilities = (
   isCompleted: boolean,
   today: string = new Date().toISOString().slice(0, 10),
 ) => {
-  const entryStart = previousReviewStartDate && previousReviewStartDate > period.startDate
-    ? previousReviewStartDate : period.startDate;
-  const notesEntryOpen = !isCompleted && today >= entryStart && today < period.reviewStartDate;
+  // Le début de revue organise la conduite et les bulletins ; seul l'état de
+  // la matière et la clôture de la classe verrouillent les notes.
+  const notesEntryOpen = !isCompleted;
   const conductReviewOpen = !isCompleted && today >= period.reviewStartDate;
   return {
     notesEntryOpen,

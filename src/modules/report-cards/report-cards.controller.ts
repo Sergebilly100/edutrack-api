@@ -13,7 +13,12 @@ import {
   generateReportCardBodySchema,
   publishBulkBodySchema,
   readinessQuerySchema,
+  reportCardClassesQuerySchema,
   reportCardIdParamsSchema,
+  createReportCardClaimBodySchema,
+  decideReportCardClaimBodySchema,
+  reportCardClaimQuerySchema,
+  claimIdParamsSchema,
 } from './report-cards.types.js';
 
 const handleError = (
@@ -73,6 +78,14 @@ const requireStudentReportAccess = async (request: FastifyRequest, reply: Fastif
   }
 };
 
+const requireReportClaimAccess = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  await authenticateRequest(request, reply);
+  if (reply.sent) return;
+  if (!request.permissions?.has('report_cards.view') && !request.permissions?.has('report_cards.publish')) {
+    reply.code(403).send({ error: 'Accès aux réclamations refusé', code: 'FORBIDDEN', statusCode: 403 });
+  }
+};
+
 export type ReportCardsControllerOptions = {
   pdfQueue?: PdfQueueHandle;
 };
@@ -81,6 +94,74 @@ export default async function reportCardsController(
   app: FastifyInstance,
   options: ReportCardsControllerOptions = {}
 ): Promise<void> {
+  app.get('/api/v1/report-cards/classes', { preHandler: requirePermission('report_cards.view') }, async (request, reply) => {
+    try {
+      const { schoolYearId } = reportCardClassesQuerySchema.parse(request.query ?? {});
+      const classes = await withTenantSchema(request.claims!.schemaName, (tenantDb) =>
+        buildReportCardsService(tenantDb).listReportCardClasses(schoolYearId)
+      );
+      return reply.send({ classes });
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+  app.get('/api/v1/report-cards/claims/students', { preHandler: requireReportClaimAccess }, async (request, reply) => {
+    try {
+      const { classId } = z.object({ classId: z.string().uuid() }).parse(request.query ?? {});
+      const students = await withTenantSchema(request.claims!.schemaName, db => buildReportCardsService(db).listClaimStudents(classId));
+      return reply.send({ students });
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.get('/api/v1/report-cards/claims', { preHandler: requireReportClaimAccess }, async (request, reply) => {
+    try {
+      const filters = reportCardClaimQuerySchema.parse(request.query ?? {});
+      const claims = await withTenantSchema(request.claims!.schemaName, db => buildReportCardsService(db).listClaims(filters));
+      return reply.send({ claims });
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.post('/api/v1/report-cards/claims', { preHandler: requireReportClaimAccess }, async (request, reply) => {
+    try {
+      const body = createReportCardClaimBodySchema.parse(request.body ?? {});
+      const claim = await withTenantSchema(request.claims!.schemaName, db => buildReportCardsService(db).createClaim({ ...body, userId: request.user!.userId }));
+      return reply.code(201).send({ claim });
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.post('/api/v1/report-cards/claims/:id/decision', { preHandler: requirePermission('report_cards.publish') }, async (request, reply) => {
+    try {
+      const { id } = claimIdParamsSchema.parse(request.params ?? {});
+      const body = decideReportCardClaimBodySchema.parse(request.body ?? {});
+      const claim = await withTenantSchema(request.claims!.schemaName, db => buildReportCardsService(db).decideClaim({
+        claimId: id, ...body, userId: request.user!.userId, role: request.claims!.role,
+        canPublish: request.permissions?.has('report_cards.publish') ?? false,
+        canCorrectPublished: request.permissions?.has('report_cards.published_correction') ?? false,
+      }));
+      return reply.send({ claim });
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.get('/api/v1/report-cards/versions', { preHandler: requirePermission('report_cards.published_correction') }, async (request, reply) => {
+    try {
+      if (!['director', 'super_admin'].includes(request.claims!.role)) {
+        return reply.code(403).send({ error: 'Accès à l’audit refusé', code: 'FORBIDDEN', statusCode: 403 });
+      }
+      const query = z.object({ classId: z.string().uuid(), gradingPeriodId: z.string().uuid() }).parse(request.query ?? {});
+      const versions = await withTenantSchema(request.claims!.schemaName, db => buildReportCardsService(db).listVersions(query.classId, query.gradingPeriodId));
+      return reply.send({ versions });
+    } catch (error) { return handleError(request, reply, error); }
+  });
+  app.get('/api/v1/report-cards/audit', { preHandler: requirePermission('report_cards.published_correction') }, async (request, reply) => {
+    try {
+      if (!['director', 'super_admin'].includes(request.claims!.role)) {
+        return reply.code(403).send({ error: 'Accès à l’audit refusé', code: 'FORBIDDEN', statusCode: 403 });
+      }
+      const query = z.object({ classId: z.string().uuid(), gradingPeriodId: z.string().uuid() }).parse(request.query ?? {});
+      const entries = await withTenantSchema(request.claims!.schemaName, db => buildReportCardsService(db).listAcademicAudit(query.classId, query.gradingPeriodId));
+      return reply.send({ entries });
+    } catch (error) { return handleError(request, reply, error); }
+  });
   app.get('/api/v1/report-cards/conduct-audit', { preHandler: requirePermission('report_cards.view') }, async (request, reply) => {
     try {
       const result = await withTenantSchema(request.claims!.schemaName, db => buildReportCardsService(db).listConductAmbiguities());
@@ -152,7 +233,7 @@ export default async function reportCardsController(
         const claims = request.claims!;
         const body = generateReportCardBodySchema.parse(request.body ?? {});
         const result = await withTenantSchema(claims.schemaName, (tenantDb) =>
-          buildReportCardsService(tenantDb).generateForClass(body.class_id, body.grading_period_id)
+          tenantDb.transaction(tx => buildReportCardsService(tx).generateForClass(body.class_id, body.grading_period_id, request.user!.userId))
         );
         return reply.send(result);
       } catch (error) {
@@ -169,7 +250,7 @@ export default async function reportCardsController(
         const claims = request.claims!;
         const params = reportCardIdParamsSchema.parse(request.params ?? {});
         await withTenantSchema(claims.schemaName, (tenantDb) =>
-          buildReportCardsService(tenantDb).publish(params.id, request.user!.userId)
+          tenantDb.transaction(tx => buildReportCardsService(tx).publish(params.id, request.user!.userId))
         );
         return reply.send({ success: true });
       } catch (error) {
@@ -193,7 +274,7 @@ export default async function reportCardsController(
           });
         }
         const result = await withTenantSchema(claims.schemaName, (tenantDb) =>
-          buildReportCardsService(tenantDb).publishBulk(body.class_id!, body.grading_period_id, request.user!.userId)
+          tenantDb.transaction(tx => buildReportCardsService(tx).publishBulk(body.class_id!, body.grading_period_id, request.user!.userId))
         );
         return reply.send(result);
       } catch (error) {
@@ -335,10 +416,14 @@ export default async function reportCardsController(
           });
         }
 
-        const cards = await withTenantSchema(request.claims!.schemaName, (tenantDb) =>
-          buildReportCardsService(tenantDb).listPublishedForStudent(studentId)
-        );
-        return reply.send({ reportCards: cards });
+        const result = await withTenantSchema(request.claims!.schemaName, async (tenantDb) => {
+          const service = buildReportCardsService(tenantDb);
+          const [reportCards, inRevision] = await Promise.all([
+            service.listPublishedForStudent(studentId), service.isStudentReportInRevision(studentId),
+          ]);
+          return { reportCards, inRevision };
+        });
+        return reply.send(result);
       } catch (error) {
         return handleError(request, reply, error);
       }

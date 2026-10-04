@@ -56,6 +56,7 @@ export const PERMISSION_KEYS = [
   'classes.delete',
   'report_cards.view',
   'report_cards.publish',
+  'report_cards.published_correction',
   'evaluations.view',
   'import.students',
   'import.teachers',

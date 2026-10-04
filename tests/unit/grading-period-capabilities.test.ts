@@ -5,9 +5,9 @@ const first = { orderIndex: 1, startDate: '2026-09-01', reviewStartDate: '2026-1
 const second = { orderIndex: 2, startDate: '2026-11-15', reviewStartDate: '2027-02-15', endDate: '2027-03-31' };
 
 describe('grading period capabilities', () => {
-  it('ferme les notes T1 au début de sa revue et ouvre les notes T2 le même jour', () => {
+  it('garde les notes révisables au début de revue et ouvre la conduite', () => {
     expect(getPeriodCapabilities(first, null, false, '2026-11-14')).toMatchObject({ notesEntryOpen: true, conductReviewOpen: false });
-    expect(getPeriodCapabilities(first, null, false, '2026-11-15')).toMatchObject({ notesEntryOpen: false, conductReviewOpen: true, bulletinGenerationAvailable: true });
+    expect(getPeriodCapabilities(first, null, false, '2026-11-15')).toMatchObject({ notesEntryOpen: true, conductReviewOpen: true, bulletinGenerationAvailable: true });
     expect(getPeriodCapabilities(second, first.reviewStartDate, false, '2026-11-15')).toMatchObject({ notesEntryOpen: true, conductReviewOpen: false });
   });
 
@@ -26,7 +26,7 @@ describe('grading period capabilities', () => {
     const semesterOne = { orderIndex: 1, startDate: '2026-09-01', reviewStartDate: '2027-01-15', endDate: '2027-02-15' };
     const semesterTwo = { orderIndex: 2, startDate: '2027-01-15', reviewStartDate: '2027-05-31', endDate: '2027-06-30' };
     expect(validatePeriodSequence([semesterOne, semesterTwo])).toBeNull();
-    expect(getPeriodCapabilities(semesterOne, null, false, '2027-01-15')).toMatchObject({ notesEntryOpen: false, conductReviewOpen: true });
+    expect(getPeriodCapabilities(semesterOne, null, false, '2027-01-15')).toMatchObject({ notesEntryOpen: true, conductReviewOpen: true });
     expect(getPeriodCapabilities(semesterTwo, semesterOne.reviewStartDate, false, '2027-01-15')).toMatchObject({ notesEntryOpen: true, conductReviewOpen: false });
     expect(validatePeriodSequence([semesterOne, { ...semesterTwo, startDate: '2027-02-16' }])).not.toBeNull();
   });

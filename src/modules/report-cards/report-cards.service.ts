@@ -64,12 +64,128 @@ export const computeWeightedGeneralAverage = (
 export class ReportCardsService {
   constructor(private readonly repository: ReportCardsRepository) {}
 
+  async listReportCardClasses(schoolYearId: string) {
+    if (!(await this.repository.schoolYearExists(schoolYearId))) {
+      throw new ReportCardsModuleError('Année scolaire introuvable', 404, 'SCHOOL_YEAR_NOT_FOUND');
+    }
+    return this.repository.listReportCardClasses(schoolYearId);
+  }
+
+  async assertClassPeriodScope(classId: string, gradingPeriodId: string): Promise<void> {
+    const [klass, period] = await Promise.all([
+      this.repository.findClassContext(classId),
+      this.repository.findGradingPeriod(gradingPeriodId),
+    ]);
+    if (!klass) throw new ReportCardsModuleError('Classe introuvable', 404, 'CLASS_NOT_FOUND');
+    if (!period) throw new ReportCardsModuleError('Période introuvable', 404, 'GRADING_PERIOD_NOT_FOUND');
+    if (klass.schoolYearId !== period.schoolYearId) {
+      throw new ReportCardsModuleError('La classe et la période doivent appartenir à la même année scolaire', 400, 'CLASS_PERIOD_YEAR_MISMATCH');
+    }
+  }
+
+  private async assertYearEditable(schoolYearId: string): Promise<void> {
+    if (await this.repository.schoolYearStatus(schoolYearId) === 'closed') {
+      throw new ReportCardsModuleError('L’année scolaire est clôturée', 409, 'SCHOOL_YEAR_CLOSED');
+    }
+  }
+
+  async createClaim(input: { classId: string; studentId?: string; subjectId: string; gradingPeriodId: string; userId: string; reason: string }) {
+    return this.repository.transaction(async (repository) => {
+      await repository.lockClassPeriod(input.classId, input.gradingPeriodId);
+      const klass = await repository.findClassContext(input.classId);
+      const period = await repository.findGradingPeriod(input.gradingPeriodId);
+      if (!klass || !period || klass.schoolYearId !== period.schoolYearId
+        || !(await repository.subjectBelongsToClass(input.classId, input.subjectId))) {
+        throw new ReportCardsModuleError('Classe, matière ou période incohérente', 400, 'CLAIM_SCOPE_MISMATCH');
+      }
+      await new ReportCardsService(repository).assertYearEditable(klass.schoolYearId);
+      if (!(await repository.isAssignedSubject(input.classId, input.subjectId))) {
+        throw new ReportCardsModuleError('Aucun professeur affecté à cette matière', 409, 'CLAIM_TEACHER_MISSING');
+      }
+      if (input.studentId && !(await repository.listClassStudents(input.classId)).some((student) => student.id === input.studentId)) {
+        throw new ReportCardsModuleError('Cet élève ne fait pas partie de la classe', 400, 'CLAIM_STUDENT_CLASS_MISMATCH');
+      }
+      if (!(await repository.isSubjectCompleted(input.classId, input.subjectId, input.gradingPeriodId))) {
+        throw new ReportCardsModuleError('Les moyennes de cette matière ne sont pas validées', 409, 'CLAIM_SUBJECT_NOT_COMPLETED');
+      }
+      const existing = await repository.listClaims({ classId: input.classId, gradingPeriodId: input.gradingPeriodId });
+      if (existing.some((claim) => ['open', 'pending_exceptional_authorization', 'approved'].includes(claim.status)
+        || (claim.phase !== 'before' && ['corrected', 'regenerated'].includes(claim.status)))) {
+        throw new ReportCardsModuleError('Une correction est déjà en cours pour cette classe et cette période', 409, 'CLAIM_ALREADY_OPEN');
+      }
+      const phase = await repository.getCardsPhase(input.classId, input.gradingPeriodId);
+      return { id: await repository.createClaim({ ...input, phase, status: phase === 'published' ? 'pending_exceptional_authorization' : 'open' }) };
+    });
+  }
+
+  async decideClaim(input: { claimId: string; decision: 'approved' | 'refused'; userId: string; role: string; reason: string; canPublish: boolean; canCorrectPublished: boolean }) {
+    return this.repository.transaction(async (repository) => {
+      const claim = await repository.findClaim(input.claimId, true);
+      if (!claim) throw new ReportCardsModuleError('Réclamation introuvable', 404, 'CLAIM_NOT_FOUND');
+      await repository.lockClassPeriod(claim.class_id, claim.grading_period_id);
+      const klass = await repository.findClassContext(claim.class_id);
+      if (!klass) throw new ReportCardsModuleError('Classe introuvable', 404, 'CLASS_NOT_FOUND');
+      await new ReportCardsService(repository).assertYearEditable(klass.schoolYearId);
+      if (claim.status !== 'open' && claim.status !== 'pending_exceptional_authorization') {
+        throw new ReportCardsModuleError('Cette réclamation a déjà été traitée', 409, 'CLAIM_ALREADY_DECIDED');
+      }
+      if (!input.canPublish) throw new ReportCardsModuleError('Autorisation de publication requise', 403, 'FORBIDDEN');
+      const phase = await repository.getCardsPhase(claim.class_id, claim.grading_period_id);
+      if (input.decision === 'approved' && phase === 'published' && (!input.canCorrectPublished || !['director', 'super_admin'].includes(input.role))) {
+        throw new ReportCardsModuleError('Autorisation exceptionnelle de direction requise', 403, 'PUBLISHED_CORRECTION_FORBIDDEN');
+      }
+      await repository.setClaimDecision(claim.id, { status: input.decision, phase, userId: input.userId, reason: input.reason, oldStatus: claim.status });
+      if (input.decision === 'approved') {
+        const scope = { classId: claim.class_id, subjectId: claim.subject_id,
+          gradingPeriodId: claim.grading_period_id, claimId: claim.id, userId: input.userId, reason: input.reason };
+        if (phase === 'before') await repository.reopenSubject(scope);
+        else await repository.invalidateClassCards(scope);
+      }
+      return { id: claim.id, status: input.decision, phase };
+    });
+  }
+
+  async listClaims(filters: Parameters<ReportCardsRepository['listClaims']>[0]) {
+    if (filters.classId && filters.gradingPeriodId) {
+      await this.assertClassPeriodScope(filters.classId, filters.gradingPeriodId);
+    }
+    return this.repository.listClaims(filters);
+  }
+
+  async listClaimStudents(classId: string) {
+    if (!(await this.repository.findClassContext(classId))) {
+      throw new ReportCardsModuleError('Classe introuvable', 404, 'CLASS_NOT_FOUND');
+    }
+    return this.repository.listClassStudents(classId);
+  }
+
+  async listVersions(classId: string, gradingPeriodId: string) {
+    await this.assertClassPeriodScope(classId, gradingPeriodId);
+    return this.repository.listVersions(classId, gradingPeriodId);
+  }
+
+  async listAcademicAudit(classId: string, gradingPeriodId: string) {
+    await this.assertClassPeriodScope(classId, gradingPeriodId);
+    return this.repository.listAcademicAudit(classId, gradingPeriodId);
+  }
+
+  async isStudentReportInRevision(studentId: string) {
+    return this.repository.isStudentReportInRevision(studentId);
+  }
+
   async listConductAmbiguities() {
     return { periods: await this.repository.listConductAmbiguities() };
   }
 
   // periodCompleted remains a compatibility alias for the class-level result.
-  async generateForClass(classId: string, gradingPeriodId: string): Promise<{ generatedCount: number; classClosed: boolean; periodCompleted: boolean }> {
+  async generateForClass(classId: string, gradingPeriodId: string, userId?: string): Promise<{ generatedCount: number; classClosed: boolean; periodCompleted: boolean }> {
+    return this.repository.transaction(async (repository) => {
+      await repository.lockClassPeriod(classId, gradingPeriodId);
+      return new ReportCardsService(repository).generateForClassLocked(classId, gradingPeriodId, userId);
+    });
+  }
+
+  private async generateForClassLocked(classId: string, gradingPeriodId: string, userId?: string): Promise<{ generatedCount: number; classClosed: boolean; periodCompleted: boolean }> {
     const klass = await this.repository.findClassContext(classId);
     if (!klass) {
       throw new ReportCardsModuleError('Classe introuvable', 404, 'CLASS_NOT_FOUND');
@@ -79,6 +195,7 @@ export class ReportCardsService {
     if (!period || period.schoolYearId !== klass.schoolYearId) {
       throw new ReportCardsModuleError('Période introuvable pour cette classe', 404, 'GRADING_PERIOD_NOT_FOUND');
     }
+    await this.assertYearEditable(klass.schoolYearId);
     const wasClosed = await this.repository.isClassReviewClosed(gradingPeriodId, classId);
     const roster = await this.repository.listClassStudents(classId);
     const existingCards = await Promise.all(roster.map((student) => this.repository.findExistingCard(student.id, gradingPeriodId)));
@@ -236,24 +353,55 @@ export class ReportCardsService {
 
     const classClosed = roster.length > 0
       && existingCards.filter((card) => card !== null).length + newlyCreatedCount >= roster.length;
-    if (classClosed) await this.repository.closeClassReview(gradingPeriodId, classId);
+    if (classClosed) {
+      await this.repository.closeClassReview(gradingPeriodId, classId);
+      await this.repository.markRegenerated(classId, gradingPeriodId, userId);
+    }
     return { generatedCount, classClosed, periodCompleted: classClosed };
   }
 
   async publish(cardId: string, userId: string): Promise<void> {
-    await this.repository.publishCard(cardId, userId);
+    await this.repository.transaction(async (repository) => {
+      const existing = await repository.findCardDetail(cardId);
+      if (existing) await repository.lockClassPeriod(existing.class_id, existing.grading_period_id);
+      if (existing) {
+        const klass = await repository.findClassContext(existing.class_id);
+        if (klass) await new ReportCardsService(repository).assertYearEditable(klass.schoolYearId);
+      }
+      if (existing && await repository.getCorrectionPublicationState(existing.class_id, existing.grading_period_id)) {
+        throw new ReportCardsModuleError('Publiez toute la classe après une correction', 409, 'CORRECTION_BULK_PUBLICATION_REQUIRED');
+      }
+      await repository.publishCard(cardId, userId);
+      const card = await repository.findCardDetail(cardId);
+      if (card) await repository.markRepublished(card.class_id, card.grading_period_id, userId);
+    });
   }
 
   async listClassCards(classId: string, gradingPeriodId: string) {
+    await this.assertClassPeriodScope(classId, gradingPeriodId);
     return this.repository.listCardsOfClass(classId, gradingPeriodId);
   }
 
   async publishBulk(classId: string, gradingPeriodId: string, userId: string): Promise<{ publishedCount: number }> {
-    const cardIds = await this.repository.listPublishableCardsOfClass(classId, gradingPeriodId);
-    for (const id of cardIds) {
-      await this.repository.publishCard(id, userId);
-    }
-    return { publishedCount: cardIds.length };
+    return this.repository.transaction(async (repository) => {
+      await repository.lockClassPeriod(classId, gradingPeriodId);
+      await new ReportCardsService(repository).assertClassPeriodScope(classId, gradingPeriodId);
+      const klass = await repository.findClassContext(classId);
+      if (klass) await new ReportCardsService(repository).assertYearEditable(klass.schoolYearId);
+      const correctionState = await repository.getCorrectionPublicationState(classId, gradingPeriodId);
+      if (correctionState && correctionState !== 'regenerated') {
+        throw new ReportCardsModuleError('Régénérez tous les bulletins avant publication', 409, 'CORRECTION_REGENERATION_REQUIRED');
+      }
+      const cardIds = await repository.listPublishableCardsOfClass(classId, gradingPeriodId);
+      if (correctionState === 'regenerated' && cardIds.length === 0) {
+        throw new ReportCardsModuleError('Aucun bulletin corrigé à publier', 409, 'CORRECTION_CARDS_MISSING');
+      }
+      for (const id of cardIds) {
+        await repository.publishCard(id, userId);
+      }
+      await repository.markRepublished(classId, gradingPeriodId, userId);
+      return { publishedCount: cardIds.length };
+    });
   }
 
   async getClassReadiness(gradingPeriodId: string, schoolYearId: string): Promise<ClassReadiness[]> {

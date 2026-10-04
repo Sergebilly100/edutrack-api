@@ -103,6 +103,9 @@ export class PermissionsService {
   }
 
   private async validateSavablePermissions(schemaName: string, permissions: readonly PermissionKey[]) {
+    if (permissions.includes('report_cards.published_correction')) {
+      throw new PermissionsModuleError('La correction des bulletins publiés est réservée à la direction', 403, 'SENSITIVE_PERMISSION_FORBIDDEN');
+    }
     const catalogue = await this.getCatalogue(schemaName);
     for (const key of new Set(permissions)) {
       const entry = catalogue.permissions.find((permission) => permission.key === key);
@@ -552,7 +555,9 @@ export const resolveEffectivePermissions = async (
   }
 
   const assignedPermissions = await repository.listAssignedPermissions(claims.sub);
-  const effective = new Set<PermissionKey>([...rolePermissions, ...assignedPermissions]);
+  const effective = new Set<PermissionKey>([...rolePermissions, ...assignedPermissions.filter(
+    (permission) => permission !== 'report_cards.published_correction'
+  )]);
   return withFeaturePermissionGuards([...effective], {
     canEditSmsTemplate,
     monetizeParentAlerts,

@@ -348,6 +348,7 @@ export class AcademicGradingService {
     subjectId: string,
     gradingPeriodId: string,
   ): Promise<void> {
+    await this.repository.lockClassPeriod(classId, gradingPeriodId);
     const period = await this.repository.findGradingPeriod(gradingPeriodId);
     if (!period) {
       throw new AcademicGradingError('Grading period not found', 400, 'GRADING_PERIOD_NOT_FOUND');
@@ -359,21 +360,12 @@ export class AcademicGradingService {
         'GRADING_PERIOD_COMPLETED'
       );
     }
-    if (!period.notesEntryOpen) {
-      throw new AcademicGradingError(
-        'La saisie des notes de cette période est fermée depuis le début de sa revue, ou n’est pas encore ouverte',
-        409,
-        'GRADING_PERIOD_NOTES_CLOSED'
-      );
-    }
     const completion = await this.repository.getSubjectCompletion(classId, subjectId, gradingPeriodId);
-    if (completion) {
+    if (completion?.status === 'completed') {
       throw new AcademicGradingError(
-        completion.status === 'completed'
-          ? 'La saisie est clôturée pour cette classe, cette matière et cette période'
-          : 'Le calcul des moyennes a commencé : les notes de cette matière ne sont plus modifiables pour cette période',
+        'La saisie est clôturée pour cette classe, cette matière et cette période',
         409,
-        completion.status === 'completed' ? 'SUBJECT_AVERAGES_VALIDATED' : 'SUBJECT_CALCULATION_STARTED'
+        'SUBJECT_AVERAGES_VALIDATED'
       );
     }
   }
@@ -394,13 +386,14 @@ export class AcademicGradingService {
     if (!scope) {
       throw new AcademicGradingError('Class is outside the teacher scope', 403, 'EVALUATION_SCOPE_FORBIDDEN');
     }
-    const [rawLessonSlots, assignedSubjects, scheduledSubjectNames, levelSubjects, evaluations, completion] = await Promise.all([
+    const [rawLessonSlots, assignedSubjects, scheduledSubjectNames, levelSubjects, evaluations, completion, correctionStatuses] = await Promise.all([
       this.repository.listTeacherLessonSlotsForClass(teacherId, classId),
       this.repository.listTeacherAssignedSubjectsForClass(teacherId, classId),
       this.repository.listTeacherScheduleSubjects(teacherId, classId),
       scope.levelId ? this.repository.listSubjects(scope.levelId) : Promise.resolve([]),
       this.repository.listEvaluationsWithGrades(teacherId, classId, gradingPeriodId),
       this.repository.getCompletion(classId, gradingPeriodId),
+      this.repository.listCorrectionStatuses(classId, gradingPeriodId),
     ]);
     const assignedSubjectIds = new Set(assignedSubjects.map((subject) => subject.id));
     const scheduledSubjectKeys = new Set(scheduledSubjectNames.map(normalizeSubjectKey));
@@ -419,6 +412,7 @@ export class AcademicGradingService {
       subjects,
       evaluations,
       completion: completion.filter((item) => subjectIds.has(item.subjectId)),
+      correctionStatuses: correctionStatuses.filter((item) => subjectIds.has(item.subjectId)),
     };
   }
 
@@ -467,13 +461,29 @@ export class AcademicGradingService {
   }
 
   async createEvaluation(input: CreateEvaluationInput, userId: string) {
+    return this.repository.transaction((repository) =>
+      new AcademicGradingService(repository).createEvaluationInTransaction(input, userId));
+  }
+
+  private async createEvaluationInTransaction(input: CreateEvaluationInput, userId: string) {
     const teacherId = await this.teacherIdForUser(userId);
     await this.assertEvaluationScope(input, teacherId);
     const evaluation = await this.repository.createEvaluation(input, teacherId);
+    await this.repository.appendAudit({
+      actorUserId: userId, classId: input.classId, subjectId: input.subjectId,
+      gradingPeriodId: input.gradingPeriodId, evaluationId: evaluation.id,
+      claimId: await this.repository.activeCorrectionClaimId(input.classId, input.subjectId, input.gradingPeriodId),
+      operation: 'evaluation_created', oldValue: null, newValue: evaluation,
+    });
     return { evaluation, routedToPeriod: null };
   }
 
   async upsertGrade(evaluationId: string, input: UpsertEvaluationGradeInput, userId: string) {
+    return this.repository.transaction((repository) =>
+      new AcademicGradingService(repository).upsertGradeInTransaction(evaluationId, input, userId));
+  }
+
+  private async upsertGradeInTransaction(evaluationId: string, input: UpsertEvaluationGradeInput, userId: string) {
     const teacherId = await this.teacherIdForUser(userId);
     const evaluation = await this.repository.findEvaluation(evaluationId);
     if (!evaluation) throw new AcademicGradingError('Evaluation not found', 404, 'EVALUATION_NOT_FOUND');
@@ -487,12 +497,31 @@ export class AcademicGradingService {
       throw new AcademicGradingError('Student is not enrolled in the evaluation class', 400, 'STUDENT_CLASS_MISMATCH');
     }
 
+    const oldValue = await this.repository.findGrade(evaluationId, input.studentId);
     const grade = await this.repository.upsertGrade(evaluationId, input);
-    const averages = await this.recalculateStudentPeriod(input.studentId, evaluation.gradingPeriodId);
+    const claimId = await this.repository.activeCorrectionClaimId(evaluation.classId, evaluation.subjectId, evaluation.gradingPeriodId);
+    await this.repository.appendAudit({
+      actorUserId: userId, classId: evaluation.classId, subjectId: evaluation.subjectId,
+      gradingPeriodId: evaluation.gradingPeriodId, evaluationId, studentId: input.studentId,
+      claimId,
+      operation: input.score === null ? 'grade_deleted' : oldValue ? 'grade_updated' : 'grade_created',
+      oldValue, newValue: grade ? { score: grade.score, maxScore: grade.maxScore, comment: grade.comment } : null,
+    });
+    const averages = await this.recalculateStudentPeriod(input.studentId, evaluation.gradingPeriodId, evaluation.subjectId);
+    if (claimId) await this.repository.appendAudit({
+      actorUserId: userId, classId: evaluation.classId, subjectId: evaluation.subjectId,
+      gradingPeriodId: evaluation.gradingPeriodId, evaluationId, studentId: input.studentId,
+      claimId, operation: 'averages_recalculated', oldValue: null, newValue: averages,
+    });
     return { grade, averages };
   }
 
   async createSpontaneousGrade(input: SpontaneousGradeInput, userId: string) {
+    return this.repository.transaction((repository) =>
+      new AcademicGradingService(repository).createSpontaneousGradeInTransaction(input, userId));
+  }
+
+  private async createSpontaneousGradeInTransaction(input: SpontaneousGradeInput, userId: string) {
     const teacherId = await this.teacherIdForUser(userId);
     const slot = await this.repository.getLessonSlotScope(input.lessonSlotId);
     if (!slot || slot.teacherId !== teacherId || slot.classId !== input.classId) {
@@ -522,14 +551,31 @@ export class AcademicGradingService {
       throw new AcademicGradingError('Student is not enrolled in the lesson class', 400, 'STUDENT_CLASS_MISMATCH');
     }
     const evaluation = await this.repository.createSpontaneousEvaluation(input, teacherId);
+    const claimId = await this.repository.activeCorrectionClaimId(input.classId, input.subjectId, input.gradingPeriodId);
+    await this.repository.appendAudit({
+      actorUserId: userId, classId: input.classId, subjectId: input.subjectId,
+      gradingPeriodId: input.gradingPeriodId, evaluationId: evaluation.id, claimId,
+      operation: 'evaluation_created', oldValue: null, newValue: evaluation,
+    });
     const grade = await this.repository.upsertGrade(evaluation.id, {
       studentId: input.studentId,
       score: Math.abs(input.adjustment),
       maxScore: 20,
       comment: input.comment,
     });
+    await this.repository.appendAudit({
+      actorUserId: userId, classId: input.classId, subjectId: input.subjectId,
+      gradingPeriodId: input.gradingPeriodId, evaluationId: evaluation.id, studentId: input.studentId, claimId,
+      operation: 'grade_created', oldValue: null,
+      newValue: { score: Math.abs(input.adjustment), maxScore: 20, comment: input.comment },
+    });
     const averages = await this.recalculateStudentPeriod(input.studentId, input.gradingPeriodId);
-    return { evaluation, grade: { ...grade, score: input.adjustment }, averages };
+    if (claimId) await this.repository.appendAudit({
+      actorUserId: userId, classId: input.classId, subjectId: input.subjectId,
+      gradingPeriodId: input.gradingPeriodId, evaluationId: evaluation.id, studentId: input.studentId,
+      claimId, operation: 'averages_recalculated', oldValue: null, newValue: averages,
+    });
+    return { evaluation, grade: { ...grade!, score: input.adjustment }, averages };
   }
 
   /**
@@ -540,7 +586,7 @@ export class AcademicGradingService {
    *    coefficient de MATIÈRE (défini au niveau, partagé par toutes les classes).
    * Chaque upsert de note déclenche un recalcul complet de l'élève/période.
    */
-  private async recalculateStudentPeriod(studentId: string, gradingPeriodId: string) {
+  private async recalculateStudentPeriod(studentId: string, gradingPeriodId: string, changedSubjectId?: string) {
     const gradeRows = await this.repository.listStudentPeriodGrades(studentId, gradingPeriodId);
     const groups = new Map<string, {
       subjectCoefficient: number;
@@ -565,34 +611,41 @@ export class AcademicGradingService {
       await this.repository.upsertAverage(studentId, gradingPeriodId, subjectId, average);
       subjects.push({ subjectId, average, coefficient: group.subjectCoefficient });
     }
+    if (changedSubjectId && !subjects.some((subject) => subject.subjectId === changedSubjectId)) {
+      await this.repository.deleteAverage(studentId, gradingPeriodId, changedSubjectId);
+    }
     const conduct = await this.repository.findConductForAverage(studentId, gradingPeriodId);
     const generalAverage = calculateGeneralAverage(conduct
       ? [...subjects, { average: conduct.note, coefficient: conduct.coefficient }]
       : subjects);
     if (generalAverage !== null) {
       await this.repository.upsertAverage(studentId, gradingPeriodId, null, generalAverage);
+    } else {
+      await this.repository.deleteAverage(studentId, gradingPeriodId, null);
     }
     return { subjects, generalAverage };
   }
 
   async updateCompletion(input: CompletionInput, userId: string) {
+    return this.repository.transaction((repository) =>
+      new AcademicGradingService(repository).updateCompletionInTransaction(input, userId));
+  }
+
+  private async updateCompletionInTransaction(input: CompletionInput, userId: string) {
+    await this.repository.lockClassPeriod(input.classId, input.gradingPeriodId);
     const teacherId = await this.teacherIdForUser(userId);
-    const [subject, period, schoolClass] = await Promise.all([
-      this.repository.findSubject(input.subjectId),
-      this.repository.findGradingPeriod(input.gradingPeriodId),
-      this.repository.getClassScope(input.classId),
-    ]);
+    const subject = await this.repository.findSubject(input.subjectId);
+    const period = await this.repository.findGradingPeriod(input.gradingPeriodId);
+    const schoolClass = await this.repository.getClassScope(input.classId);
     if (!subject || !period || !schoolClass || subject.levelId !== schoolClass.levelId || period.schoolYearId !== schoolClass.schoolYearId) {
       throw new AcademicGradingError('Completion scope is invalid', 400, 'COMPLETION_SCOPE_MISMATCH');
     }
     const classClosed = period.isCompleted || period.closedClassIds.includes(input.classId);
-    if (classClosed || !period.notesEntryOpen) {
+    if (classClosed) {
       throw new AcademicGradingError(
-        classClosed
-          ? 'Cette période est finalisée : ses bulletins ont déjà été générés'
-          : 'La saisie des notes de cette période est fermée depuis le début de sa revue, ou n’est pas encore ouverte',
+        'Cette période est finalisée : ses bulletins ont déjà été générés',
         409,
-        classClosed ? 'GRADING_PERIOD_COMPLETED' : 'GRADING_PERIOD_NOTES_CLOSED'
+        'GRADING_PERIOD_COMPLETED'
       );
     }
     let assigned = await this.repository.hasTeacherSubjectAssignment(teacherId, input.subjectId, input.classId);
@@ -615,7 +668,7 @@ export class AcademicGradingService {
     );
     if (!current && input.status !== 'in_progress') {
       throw new AcademicGradingError(
-        'Clôturez d’abord la saisie avant de valider les moyennes',
+        'Calculez d’abord les moyennes avant de les valider définitivement',
         409,
         'AVERAGE_CALCULATION_NOT_STARTED'
       );
@@ -627,20 +680,12 @@ export class AcademicGradingService {
         'SUBJECT_AVERAGES_VALIDATED'
       );
     }
-    const [evaluationCount, missingGrades] = await Promise.all([
-      this.repository.countScheduledEvaluations(
-        teacherId,
-        input.classId,
-        input.subjectId,
-        input.gradingPeriodId
-      ),
-      this.repository.countMissingScheduledGrades(
-        teacherId,
-        input.classId,
-        input.subjectId,
-        input.gradingPeriodId
-      ),
-    ]);
+    const evaluationCount = await this.repository.countScheduledEvaluations(
+      teacherId, input.classId, input.subjectId, input.gradingPeriodId
+    );
+    const missingGrades = await this.repository.countMissingScheduledGrades(
+      teacherId, input.classId, input.subjectId, input.gradingPeriodId
+    );
     if (evaluationCount === 0) {
       throw new AcademicGradingError(
         'Créez au moins une évaluation avant de calculer ou de clôturer les moyennes',
@@ -648,14 +693,23 @@ export class AcademicGradingService {
         'EVALUATIONS_REQUIRED'
       );
     }
-    if (missingGrades > 0) {
+    if (input.status === 'completed' && missingGrades > 0) {
       throw new AcademicGradingError(
-        `${missingGrades} note(s) d’évaluation restent à saisir avant le calcul ou la clôture`,
+        `${missingGrades} note(s) d’évaluation restent à saisir avant la validation définitive`,
         409,
         'GRADES_INCOMPLETE'
       );
     }
-    return this.repository.upsertCompletion(input);
+    const claimId = await this.repository.activeCorrectionClaimId(input.classId, input.subjectId, input.gradingPeriodId);
+    const result = await this.repository.upsertCompletion(input);
+    await this.repository.appendAudit({
+      actorUserId: userId, classId: input.classId, subjectId: input.subjectId,
+      gradingPeriodId: input.gradingPeriodId, claimId,
+      operation: input.status === 'completed' ? 'averages_validated' : 'averages_recalculated',
+      oldValue: current?.status ?? null, newValue: input.status,
+    });
+    if (claimId && input.status === 'completed') await this.repository.markClaimCorrected(claimId, userId);
+    return result;
   }
 
   async getCompletion(classId: string, gradingPeriodId: string) {

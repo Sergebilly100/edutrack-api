@@ -542,7 +542,7 @@ export default async function academicController(app: FastifyInstance): Promise<
       try {
         const body = completionBodySchema.parse(request.body ?? {});
         const completion = await withTenantSchema(request.claims!.schemaName, (tenantDb) =>
-          buildAcademicGradingService(tenantDb).updateCompletion(body, request.user!.userId)
+          tenantDb.transaction((tx) => buildAcademicGradingService(tx).updateCompletion(body, request.user!.userId))
         );
         return reply.send({ completion });
       } catch (error) {

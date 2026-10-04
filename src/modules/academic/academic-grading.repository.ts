@@ -109,6 +109,14 @@ const mapEvaluation = (row: EvaluationRow): EvaluationItem => ({
 export class AcademicGradingRepository {
   constructor(private readonly db: AcademicGradingQueryExecutor) {}
 
+  async transaction<T>(work: (repository: AcademicGradingRepository) => Promise<T>): Promise<T> {
+    return this.db.transaction((tx) => work(new AcademicGradingRepository(tx as AcademicGradingQueryExecutor)));
+  }
+
+  async lockClassPeriod(classId: string, gradingPeriodId: string): Promise<void> {
+    await this.db.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${classId}), hashtext(${gradingPeriodId}))`);
+  }
+
   async listSubjects(levelId?: string): Promise<SubjectItem[]> {
     const result = await this.db.execute<SubjectRow>(sql`
       SELECT s.id, s.level_id, l.name AS level_name, s.name, s.coefficient
@@ -556,7 +564,69 @@ export class AcademicGradingRepository {
     return rows(result)[0]?.exists ?? false;
   }
 
+  async findGrade(evaluationId: string, studentId: string): Promise<{ score: number; maxScore: number; comment: string | null } | null> {
+    const result = await this.db.execute<{ score: string; max_score: string; comment: string | null }>(sql`
+      SELECT score::text, max_score::text, comment FROM evaluation_grades
+      WHERE evaluation_id = ${evaluationId}::uuid AND student_id = ${studentId}::uuid FOR UPDATE
+    `);
+    const row = rows(result)[0];
+    return row ? { score: Number(row.score), maxScore: Number(row.max_score), comment: row.comment } : null;
+  }
+
+  async activeCorrectionClaimId(classId: string, subjectId: string, gradingPeriodId: string): Promise<string | null> {
+    const result = await this.db.execute<{ id: string }>(sql`
+      SELECT id::text FROM report_card_claims
+      WHERE class_id = ${classId}::uuid AND subject_id = ${subjectId}::uuid
+        AND grading_period_id = ${gradingPeriodId}::uuid AND status = 'approved'
+      LIMIT 1
+    `);
+    return rows(result)[0]?.id ?? null;
+  }
+
+  async listCorrectionStatuses(classId: string, gradingPeriodId: string): Promise<Array<{ subjectId: string; status: string }>> {
+    const result = await this.db.execute<{ subject_id: string; status: string }>(sql`
+      SELECT DISTINCT ON (subject_id) subject_id::text, status FROM report_card_claims
+      WHERE class_id = ${classId}::uuid AND grading_period_id = ${gradingPeriodId}::uuid
+        AND status IN ('open', 'pending_exceptional_authorization', 'approved', 'corrected', 'regenerated')
+      ORDER BY subject_id, created_at DESC, id DESC
+    `);
+    return rows(result).map((row) => ({ subjectId: row.subject_id, status: row.status }));
+  }
+
+  async markClaimCorrected(claimId: string, userId: string): Promise<void> {
+    await this.db.execute(sql`
+      WITH changed AS (
+        UPDATE report_card_claims SET status = 'corrected', revalidated_at = now()
+        WHERE id = ${claimId}::uuid AND status = 'approved'
+        RETURNING id, class_id, subject_id, grading_period_id
+      )
+      INSERT INTO academic_change_audit (actor_user_id, class_id, subject_id, grading_period_id,
+        claim_id, operation, old_value, new_value)
+      SELECT ${userId}::uuid, class_id, subject_id, grading_period_id, id,
+        'claim_corrected', '"approved"'::jsonb, '"corrected"'::jsonb FROM changed
+    `);
+  }
+
+  async appendAudit(input: {
+    actorUserId: string; classId: string; subjectId: string; gradingPeriodId: string;
+    evaluationId?: string; studentId?: string; claimId?: string | null;
+    operation: string; oldValue: unknown; newValue: unknown;
+  }): Promise<void> {
+    await this.db.execute(sql`
+      INSERT INTO academic_change_audit (actor_user_id, class_id, subject_id, grading_period_id,
+        evaluation_id, student_id, claim_id, operation, old_value, new_value)
+      VALUES (${input.actorUserId}::uuid, ${input.classId}::uuid, ${input.subjectId}::uuid,
+        ${input.gradingPeriodId}::uuid, ${input.evaluationId ?? null}::uuid,
+        ${input.studentId ?? null}::uuid, ${input.claimId ?? null}::uuid, ${input.operation},
+        ${JSON.stringify(input.oldValue)}::jsonb, ${JSON.stringify(input.newValue)}::jsonb)
+    `);
+  }
+
   async upsertGrade(evaluationId: string, input: UpsertEvaluationGradeInput) {
+    if (input.score === null) {
+      await this.db.execute(sql`DELETE FROM evaluation_grades WHERE evaluation_id = ${evaluationId}::uuid AND student_id = ${input.studentId}::uuid`);
+      return null;
+    }
     const result = await this.db.execute<{
       id: string; evaluation_id: string; student_id: string; score: string | number;
       max_score: string | number; comment: string | null;
@@ -570,6 +640,14 @@ export class AcademicGradingRepository {
     const row = rows(result)[0];
     if (!row) throw new Error('Failed to save grade');
     return { id: row.id, evaluationId: row.evaluation_id, studentId: row.student_id, score: decimal(row.score), maxScore: decimal(row.max_score), comment: row.comment };
+  }
+
+  async deleteAverage(studentId: string, gradingPeriodId: string, subjectId: string | null): Promise<void> {
+    await this.db.execute(sql`
+      DELETE FROM student_period_averages WHERE student_id = ${studentId}::uuid
+        AND grading_period_id = ${gradingPeriodId}::uuid
+        AND subject_id IS NOT DISTINCT FROM ${subjectId}::uuid
+    `);
   }
 
   async listStudentPeriodGrades(studentId: string, gradingPeriodId: string): Promise<Array<{

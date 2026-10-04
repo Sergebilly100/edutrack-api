@@ -469,6 +469,21 @@ describe('permissions.service resolveEffectivePermissions', () => {
 
     expect(result).toEqual([]);
   });
+
+  it('ignore une permission exceptionnelle injectée dans un poste staff', async () => {
+    repository.listAssignedPermissions.mockResolvedValue([
+      'report_cards.view', 'report_cards.publish', 'report_cards.published_correction',
+    ]);
+    const staff = await resolveEffectivePermissions(repository as never, {
+      sub: 'staff-1', role: 'staff', schemaName: 'school_sainte_marie',
+    });
+    expect(staff).toContain('report_cards.publish');
+    expect(staff).not.toContain('report_cards.published_correction');
+    const director = await resolveEffectivePermissions(repository as never, {
+      sub: 'director-1', role: 'director', schemaName: 'school_sainte_marie',
+    });
+    expect(director).toContain('report_cards.published_correction');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -646,7 +661,7 @@ describe('permissions.service exclusivité conduct.finalize', () => {
 });
 
 describe('C14 sauvegarde exhaustive et conservation des attributions', () => {
-  it.each(PERMISSION_KEYS)('autorise la sauvegarde de %s quand ses services sont actifs', async (permission) => {
+  it.each(PERMISSION_KEYS.filter((key) => key !== 'report_cards.published_correction'))('autorise la sauvegarde de %s quand ses services sont actifs', async (permission) => {
     repository.getSchoolConfigBySchemaName.mockResolvedValue({
       can_edit_sms_template: true, sms_enabled: true, monetize_parent_alerts: true,
     });
@@ -658,6 +673,14 @@ describe('C14 sauvegarde exhaustive et conservation des attributions', () => {
     await service.updatePosition('poste', { permissions: [permission], schemaName: 'school_test' });
     expect(repository.createPosition).toHaveBeenCalledWith(expect.objectContaining({ permissions: [permission] }));
     expect(repository.updatePosition).toHaveBeenCalledWith('poste', { permissions: [permission] });
+  });
+
+  it('refuse la permission de correction publiée dans un poste personnalisé', async () => {
+    const service = new PermissionsService(repository as never);
+    await expect(service.createPosition({ name: 'Poste', permissions: ['report_cards.published_correction'], createdBy: 'dir', schemaName: 'school_test' }))
+      .rejects.toMatchObject({ code: 'SENSITIVE_PERMISSION_FORBIDDEN', statusCode: 403 });
+    await expect(service.updatePosition('poste', { permissions: ['report_cards.published_correction'], schemaName: 'school_test' }))
+      .rejects.toMatchObject({ code: 'SENSITIVE_PERMISSION_FORBIDDEN', statusCode: 403 });
   });
 
   const conditionalKeys = PERMISSION_KEYS.filter((key) => key === 'settings.sms_templates' || key.startsWith('subscriptions.'));

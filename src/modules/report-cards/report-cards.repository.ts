@@ -4,6 +4,16 @@ import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-m
 import type { TenantDb } from '../../shared/database/db.js';
 
 type Rows<T> = { rows?: T[] };
+type ClaimRow = {
+  id: string; class_id: string; student_id: string | null; subject_id: string; grading_period_id: string;
+  requested_by_user_id: string; reason: string; status: string; phase: string | null;
+};
+type ClaimListRow = ClaimRow & {
+  school_year_id: string; subject_name: string; class_name: string; student_name: string | null;
+  decided_by_user_id: string | null; decision_reason: string | null;
+  created_at: string; decided_at: string | null; revalidated_at: string | null;
+  regenerated_at: string | null; republished_at: string | null;
+};
 
 const getRows = <T>(result: unknown): T[] => {
   if (typeof result !== 'object' || result === null || !('rows' in result)) {
@@ -15,6 +25,300 @@ const getRows = <T>(result: unknown): T[] => {
 
 export class ReportCardsRepository {
   constructor(readonly db: TenantDb) {}
+
+  async transaction<T>(work: (repository: ReportCardsRepository) => Promise<T>): Promise<T> {
+    return this.db.transaction((tx) => work(new ReportCardsRepository(tx as TenantDb)));
+  }
+
+  async lockClassPeriod(classId: string, gradingPeriodId: string): Promise<void> {
+    await this.db.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${classId}), hashtext(${gradingPeriodId}))`);
+  }
+
+  async schoolYearExists(schoolYearId: string): Promise<boolean> {
+    const result = await this.db.execute<{ exists: boolean }>(sql`
+      SELECT EXISTS (SELECT 1 FROM school_years WHERE id = ${schoolYearId}::uuid) AS exists
+    `);
+    return getRows<{ exists: boolean }>(result)[0]?.exists ?? false;
+  }
+
+  async schoolYearStatus(schoolYearId: string): Promise<string | null> {
+    const result = await this.db.execute<{ status: string }>(sql`
+      SELECT status::text FROM school_years WHERE id = ${schoolYearId}::uuid LIMIT 1
+    `);
+    return getRows<{ status: string }>(result)[0]?.status ?? null;
+  }
+
+  async listReportCardClasses(schoolYearId: string): Promise<Array<{
+    id: string; name: string; isActive: boolean; level: { id: string; name: string; orderIndex: number };
+  }>> {
+    const result = await this.db.execute<{
+      id: string; name: string; is_active: boolean;
+      level_id: string; level_name: string; level_order_index: number;
+    }>(sql`
+      SELECT c.id::text, c.name, c.is_active,
+        l.id::text AS level_id, l.name AS level_name, l.order_index AS level_order_index
+      FROM classes c
+      JOIN levels l ON l.id = c.level_id
+      JOIN school_years sy ON sy.id = c.school_year_id
+      WHERE c.school_year_id = ${schoolYearId}::uuid
+        AND ((sy.status <> 'closed' AND c.is_active = true)
+          OR EXISTS (SELECT 1 FROM report_cards rc
+            JOIN grading_periods gp ON gp.id = rc.grading_period_id
+            WHERE rc.class_id = c.id AND gp.school_year_id = c.school_year_id)
+          OR EXISTS (SELECT 1 FROM grading_period_class_closures gcc
+            JOIN grading_periods gp ON gp.id = gcc.grading_period_id
+            WHERE gcc.class_id = c.id AND gp.school_year_id = c.school_year_id))
+      ORDER BY l.order_index, c.name
+    `);
+    return getRows<{
+      id: string; name: string; is_active: boolean;
+      level_id: string; level_name: string; level_order_index: number;
+    }>(result).map((row) => ({
+      id: row.id, name: row.name, isActive: row.is_active,
+      level: { id: row.level_id, name: row.level_name, orderIndex: row.level_order_index },
+    }));
+  }
+
+  async isAssignedSubject(classId: string, subjectId: string): Promise<boolean> {
+    const result = await this.db.execute<{ allowed: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1 FROM teacher_subject_assignments tsa
+        INNER JOIN teachers t ON t.id = tsa.teacher_id AND t.is_blocked = false
+        INNER JOIN users u ON u.id = t.user_id AND u.is_active = true
+        WHERE tsa.class_id = ${classId}::uuid AND tsa.subject_id = ${subjectId}::uuid
+      ) AS allowed
+    `);
+    return getRows<{ allowed: boolean }>(result)[0]?.allowed ?? false;
+  }
+
+  async subjectBelongsToClass(classId: string, subjectId: string): Promise<boolean> {
+    const result = await this.db.execute<{ allowed: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1 FROM classes c JOIN subjects s ON s.level_id = c.level_id
+        WHERE c.id = ${classId}::uuid AND s.id = ${subjectId}::uuid
+      ) AS allowed
+    `);
+    return getRows<{ allowed: boolean }>(result)[0]?.allowed ?? false;
+  }
+
+  async isSubjectCompleted(classId: string, subjectId: string, gradingPeriodId: string): Promise<boolean> {
+    const result = await this.db.execute<{ completed: boolean }>(sql`
+      SELECT EXISTS (SELECT 1 FROM class_subject_completion
+        WHERE class_id = ${classId}::uuid AND subject_id = ${subjectId}::uuid
+          AND grading_period_id = ${gradingPeriodId}::uuid AND status = 'completed') AS completed
+    `);
+    return getRows<{ completed: boolean }>(result)[0]?.completed ?? false;
+  }
+
+  async createClaim(input: { classId: string; studentId?: string; subjectId: string; gradingPeriodId: string; userId: string; reason: string; status: 'open' | 'pending_exceptional_authorization'; phase: 'before' | 'generated' | 'published' }) {
+    const result = await this.db.execute<{ id: string }>(sql`
+      INSERT INTO report_card_claims (class_id, student_id, subject_id, grading_period_id, requested_by_user_id, reason, status, phase)
+      VALUES (${input.classId}::uuid, ${input.studentId ?? null}::uuid, ${input.subjectId}::uuid, ${input.gradingPeriodId}::uuid,
+        ${input.userId}::uuid, ${input.reason}, ${input.status}, ${input.phase}) RETURNING id::text
+    `);
+    const claimId = getRows<{ id: string }>(result)[0]!.id;
+    await this.db.execute(sql`
+      INSERT INTO academic_change_audit (actor_user_id, class_id, subject_id, grading_period_id,
+        claim_id, operation, old_value, new_value)
+      VALUES (${input.userId}::uuid, ${input.classId}::uuid, ${input.subjectId}::uuid,
+        ${input.gradingPeriodId}::uuid, ${claimId}::uuid, 'claim_created', NULL,
+        jsonb_build_object('status', ${input.status}::text, 'phase', ${input.phase}::text,
+          'studentId', ${input.studentId ?? null}::text, 'reason', ${input.reason}::text))
+    `);
+    return claimId;
+  }
+
+  async findClaim(claimId: string, forUpdate = false) {
+    const result = await this.db.execute<ClaimRow>(sql`
+      SELECT id::text, class_id::text, student_id::text, subject_id::text, grading_period_id::text,
+        requested_by_user_id::text, reason, status, phase
+      FROM report_card_claims WHERE id = ${claimId}::uuid
+      ${forUpdate ? sql`FOR UPDATE` : sql``}
+    `);
+    return getRows<ClaimRow>(result)[0] ?? null;
+  }
+
+  async listClaims(filters: { schoolYearId?: string; gradingPeriodId?: string; classId?: string; studentId?: string; subjectId?: string; status?: string }) {
+    const result = await this.db.execute<ClaimListRow>(sql`
+      SELECT r.id::text, r.class_id::text, r.student_id::text, r.subject_id::text, r.grading_period_id::text,
+        gp.school_year_id::text, s.name AS subject_name, c.name AS class_name,
+        CASE WHEN student.id IS NULL THEN NULL ELSE concat_ws(' ', student.first_name, student.last_name) END AS student_name,
+        r.status, r.reason, r.phase, r.requested_by_user_id::text,
+        r.decided_by_user_id::text, r.decision_reason, r.created_at::text,
+        r.decided_at::text, r.revalidated_at::text, r.regenerated_at::text, r.republished_at::text
+      FROM report_card_claims r
+      JOIN classes c ON c.id = r.class_id
+      JOIN subjects s ON s.id = r.subject_id
+      LEFT JOIN students student ON student.id = r.student_id
+      JOIN grading_periods gp ON gp.id = r.grading_period_id AND gp.school_year_id = c.school_year_id
+      WHERE (${filters.schoolYearId ?? null}::uuid IS NULL OR gp.school_year_id = ${filters.schoolYearId ?? null}::uuid)
+        AND (${filters.gradingPeriodId ?? null}::uuid IS NULL OR r.grading_period_id = ${filters.gradingPeriodId ?? null}::uuid)
+        AND (${filters.classId ?? null}::uuid IS NULL OR r.class_id = ${filters.classId ?? null}::uuid)
+        AND (${filters.studentId ?? null}::uuid IS NULL OR r.student_id = ${filters.studentId ?? null}::uuid)
+        AND (${filters.subjectId ?? null}::uuid IS NULL OR r.subject_id = ${filters.subjectId ?? null}::uuid)
+        AND (${filters.status ?? null}::text IS NULL OR r.status = ${filters.status ?? null})
+      ORDER BY r.created_at DESC
+    `);
+    return getRows<ClaimListRow>(result);
+  }
+
+  async getCardsPhase(classId: string, gradingPeriodId: string): Promise<'published' | 'generated' | 'before'> {
+    const result = await this.db.execute<{ published: number; generated: number }>(sql`
+      SELECT count(*) FILTER (WHERE status = 'published')::int AS published,
+             count(*) FILTER (WHERE status = 'generated')::int AS generated
+      FROM report_cards WHERE class_id = ${classId}::uuid AND grading_period_id = ${gradingPeriodId}::uuid
+    `);
+    const row = getRows<{ published: number; generated: number }>(result)[0];
+    return row?.published ? 'published' : row?.generated ? 'generated' : 'before';
+  }
+
+  async setClaimDecision(claimId: string, input: { status: 'approved' | 'refused'; phase: string; userId: string; reason: string; oldStatus: string }): Promise<void> {
+    await this.db.execute(sql`
+      UPDATE report_card_claims SET status = ${input.status}, phase = ${input.phase},
+        decided_by_user_id = ${input.userId}::uuid, decision_reason = ${input.reason}, decided_at = now()
+      WHERE id = ${claimId}::uuid
+    `);
+    await this.db.execute(sql`
+      INSERT INTO academic_change_audit (actor_user_id, class_id, subject_id, grading_period_id,
+        claim_id, operation, old_value, new_value)
+      SELECT ${input.userId}::uuid, class_id, subject_id, grading_period_id, id,
+        ${input.status === 'approved' ? 'claim_approved' : 'claim_refused'},
+        jsonb_build_object('status', ${input.oldStatus}::text),
+        jsonb_build_object('status', ${input.status}::text, 'phase', ${input.phase}::text, 'reason', ${input.reason}::text)
+      FROM report_card_claims WHERE id = ${claimId}::uuid
+    `);
+  }
+
+  async snapshotPublishedCards(classId: string, gradingPeriodId: string): Promise<void> {
+    await this.db.execute(sql`
+      INSERT INTO report_card_versions (card_id, student_id, class_id, grading_period_id,
+        revision, snapshot, published_at, published_by_user_id)
+      SELECT rc.id, rc.student_id, rc.class_id, rc.grading_period_id,
+        COALESCE((SELECT max(v.revision) FROM report_card_versions v
+          WHERE v.student_id = rc.student_id AND v.grading_period_id = rc.grading_period_id), 0) + 1,
+        jsonb_build_object('card', to_jsonb(rc), 'lines', COALESCE(
+          (SELECT jsonb_agg(to_jsonb(l) ORDER BY l.created_at) FROM report_card_lines l WHERE l.report_card_id = rc.id), '[]'::jsonb)),
+        rc.published_at, rc.published_by_user_id
+      FROM report_cards rc
+      WHERE rc.class_id = ${classId}::uuid AND rc.grading_period_id = ${gradingPeriodId}::uuid
+        AND rc.status = 'published' AND rc.published_at IS NOT NULL AND rc.published_by_user_id IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM report_card_versions v WHERE v.card_id = rc.id AND v.invalidated_at IS NULL)
+    `);
+  }
+
+  async invalidateClassCards(input: { classId: string; gradingPeriodId: string; subjectId: string; claimId: string; userId: string; reason: string }): Promise<void> {
+    await this.snapshotPublishedCards(input.classId, input.gradingPeriodId);
+    await this.db.execute(sql`
+      UPDATE report_card_versions SET invalidated_at = now(), invalidated_by_user_id = ${input.userId}::uuid,
+        invalidation_claim_id = ${input.claimId}::uuid, invalidation_reason = ${input.reason}
+      WHERE class_id = ${input.classId}::uuid AND grading_period_id = ${input.gradingPeriodId}::uuid
+        AND invalidated_at IS NULL
+    `);
+    await this.db.execute(sql`DELETE FROM report_cards WHERE class_id = ${input.classId}::uuid AND grading_period_id = ${input.gradingPeriodId}::uuid`);
+    await this.db.execute(sql`DELETE FROM grading_period_class_closures WHERE class_id = ${input.classId}::uuid AND grading_period_id = ${input.gradingPeriodId}::uuid`);
+    await this.reopenSubject(input);
+  }
+
+  async reopenSubject(input: { classId: string; gradingPeriodId: string; subjectId: string; claimId: string; userId: string }): Promise<void> {
+    const result = await this.db.execute(sql`
+      UPDATE class_subject_completion SET status = 'in_progress', completed_at = NULL, updated_at = now()
+      WHERE class_id = ${input.classId}::uuid AND subject_id = ${input.subjectId}::uuid
+        AND grading_period_id = ${input.gradingPeriodId}::uuid AND status = 'completed'
+      RETURNING id
+    `);
+    if (getRows(result).length !== 1) throw new Error('Subject was not completed at correction approval');
+    await this.db.execute(sql`
+      INSERT INTO academic_change_audit (actor_user_id, class_id, subject_id, grading_period_id,
+        claim_id, operation, old_value, new_value)
+      VALUES (${input.userId}::uuid, ${input.classId}::uuid, ${input.subjectId}::uuid,
+        ${input.gradingPeriodId}::uuid, ${input.claimId}::uuid, 'correction_opened',
+        '"completed"'::jsonb, '"in_progress"'::jsonb)
+    `);
+  }
+
+  async markRegenerated(classId: string, gradingPeriodId: string, userId?: string): Promise<void> {
+    if (!userId) return;
+    await this.db.execute(sql`
+      WITH changed AS (
+        UPDATE report_card_claims SET status = 'regenerated', regenerated_at = now()
+        WHERE class_id = ${classId}::uuid AND grading_period_id = ${gradingPeriodId}::uuid
+          AND status = 'corrected' AND phase <> 'before'
+        RETURNING id, class_id, subject_id, grading_period_id
+      )
+      INSERT INTO academic_change_audit (actor_user_id, class_id, subject_id, grading_period_id,
+        claim_id, operation, old_value, new_value)
+      SELECT ${userId}::uuid, class_id, subject_id, grading_period_id, id,
+        'cards_regenerated', '"corrected"'::jsonb, '"regenerated"'::jsonb FROM changed
+    `);
+  }
+
+  async markRepublished(classId: string, gradingPeriodId: string, userId: string): Promise<void> {
+    await this.db.execute(sql`
+      WITH changed AS (
+        UPDATE report_card_claims SET status = 'republished', republished_at = now()
+        WHERE class_id = ${classId}::uuid AND grading_period_id = ${gradingPeriodId}::uuid
+          AND status = 'regenerated'
+          AND NOT EXISTS (SELECT 1 FROM report_cards rc WHERE rc.class_id = ${classId}::uuid
+            AND rc.grading_period_id = ${gradingPeriodId}::uuid AND rc.status <> 'published')
+        RETURNING id, class_id, subject_id, grading_period_id
+      )
+      INSERT INTO academic_change_audit (actor_user_id, class_id, subject_id, grading_period_id,
+        claim_id, operation, old_value, new_value)
+      SELECT ${userId}::uuid, class_id, subject_id, grading_period_id, id,
+        'cards_republished', '"regenerated"'::jsonb, '"republished"'::jsonb FROM changed
+    `);
+  }
+
+  async getCorrectionPublicationState(classId: string, gradingPeriodId: string): Promise<string | null> {
+    const result = await this.db.execute<{ status: string }>(sql`
+      SELECT status FROM report_card_claims
+      WHERE class_id = ${classId}::uuid AND grading_period_id = ${gradingPeriodId}::uuid
+        AND phase <> 'before'
+        AND status IN ('approved', 'corrected', 'regenerated')
+      ORDER BY created_at DESC LIMIT 1
+    `);
+    return getRows<{ status: string }>(result)[0]?.status ?? null;
+  }
+
+  async listVersions(classId: string, gradingPeriodId: string) {
+    const result = await this.db.execute<{ id: string; student_id: string; revision: number; snapshot: unknown; published_at: string; invalidated_at: string | null; invalidation_reason: string | null }>(sql`
+      SELECT id::text, student_id::text, revision, snapshot, published_at::text,
+        invalidated_at::text, invalidation_reason FROM report_card_versions
+      WHERE class_id = ${classId}::uuid AND grading_period_id = ${gradingPeriodId}::uuid
+      ORDER BY student_id, revision
+    `);
+    return getRows(result);
+  }
+
+  async listAcademicAudit(classId: string, gradingPeriodId: string) {
+    const result = await this.db.execute<{
+      id: string; actor_user_id: string; class_id: string; subject_id: string;
+      grading_period_id: string; evaluation_id: string | null; student_id: string | null;
+      claim_id: string | null; operation: string; old_value: unknown; new_value: unknown; created_at: string;
+    }>(sql`
+      SELECT id::text, actor_user_id::text, class_id::text, subject_id::text,
+        grading_period_id::text, evaluation_id::text, student_id::text, claim_id::text,
+        operation, old_value, new_value, created_at::text
+      FROM academic_change_audit
+      WHERE class_id = ${classId}::uuid AND grading_period_id = ${gradingPeriodId}::uuid
+      ORDER BY created_at, id
+    `);
+    return getRows(result);
+  }
+
+  async isStudentReportInRevision(studentId: string): Promise<boolean> {
+    const result = await this.db.execute<{ active: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1 FROM report_card_claims r
+        JOIN enrollments e ON e.class_id = r.class_id AND e.student_id = ${studentId}::uuid
+        JOIN classes c ON c.id = r.class_id AND c.school_year_id = e.school_year_id
+        JOIN grading_periods gp ON gp.id = r.grading_period_id AND gp.school_year_id = c.school_year_id
+        WHERE e.status = 'confirmed' AND r.phase = 'published'
+          AND r.status IN ('approved', 'corrected', 'regenerated')
+      ) AS active
+    `);
+    return getRows<{ active: boolean }>(result)[0]?.active ?? false;
+  }
 
   async findClassContext(classId: string): Promise<{ id: string; name: string; levelId: string; schoolYearId: string } | null> {
     const result = await this.db.execute<{
@@ -329,7 +633,9 @@ export class ReportCardsRepository {
   }
 
   async publishCard(cardId: string, userId: string): Promise<void> {
-    const result = await this.db.execute(sql`
+    await this.db.transaction(async (tx) => {
+    const txDb = tx as TenantDb;
+    const result = await txDb.execute(sql`
       UPDATE report_cards
       SET status = 'published', published_at = NOW(), published_by_user_id = ${userId}::uuid, updated_at = NOW()
       WHERE id = ${cardId}::uuid AND status = 'generated'
@@ -347,6 +653,18 @@ export class ReportCardsRepository {
       conflict.code = 'REPORT_CARD_NOT_PUBLISHABLE';
       throw conflict;
     }
+    await txDb.execute(sql`
+      INSERT INTO report_card_versions (card_id, student_id, class_id, grading_period_id,
+        revision, snapshot, published_at, published_by_user_id)
+      SELECT rc.id, rc.student_id, rc.class_id, rc.grading_period_id,
+        COALESCE((SELECT max(v.revision) FROM report_card_versions v
+          WHERE v.student_id = rc.student_id AND v.grading_period_id = rc.grading_period_id), 0) + 1,
+        jsonb_build_object('card', to_jsonb(rc), 'lines', COALESCE(
+          (SELECT jsonb_agg(to_jsonb(l) ORDER BY l.created_at) FROM report_card_lines l WHERE l.report_card_id = rc.id), '[]'::jsonb)),
+        rc.published_at, rc.published_by_user_id
+      FROM report_cards rc WHERE rc.id = ${cardId}::uuid
+    `);
+    });
   }
 
   async listPublishableCardsOfClass(classId: string, gradingPeriodId: string): Promise<string[]> {
@@ -376,8 +694,11 @@ export class ReportCardsRepository {
       FROM report_cards rc
       INNER JOIN students s ON s.id = rc.student_id
       INNER JOIN classes c ON c.id = rc.class_id
+      INNER JOIN grading_periods gp ON gp.id = rc.grading_period_id AND gp.school_year_id = c.school_year_id
       WHERE rc.class_id = ${classId}::uuid AND rc.grading_period_id = ${gradingPeriodId}::uuid
-        AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
+        AND EXISTS (SELECT 1 FROM enrollments e
+          WHERE e.student_id = rc.student_id AND e.class_id = rc.class_id
+            AND e.school_year_id = c.school_year_id AND e.status = 'confirmed')
       ORDER BY rc.rank ASC
     `);
     return getRows<{

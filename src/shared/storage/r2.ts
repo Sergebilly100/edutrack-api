@@ -136,3 +136,10 @@ export const deleteFromR2 = async (key: string): Promise<void> => {
     })
   );
 };
+
+/** Reads a private export through the API so access can be checked at download time. */
+export const readR2Buffer = async (key: string): Promise<Buffer> => {
+  const result = await getR2Client().send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
+  if (!result.Body) throw new Error('R2 object has no body');
+  return Buffer.from(await result.Body.transformToByteArray());
+};
