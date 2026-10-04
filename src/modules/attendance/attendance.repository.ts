@@ -174,6 +174,7 @@ type FeatureFlagsRow = {
 type TeacherComplianceRow = {
   teacher_id: string;
   teacher_name: string;
+  total_scheduled: number;
   total_checkins: number;
   total_checkouts: number;
   compliance_rate: string | number;
@@ -710,20 +711,9 @@ export class AttendanceRepository {
     return row;
   }
 
-  // listeTeacherCompliance fait le lien entre les données de présence (check-in, check-out, scan de salle, rollcall) et les enseignants, 
-  // pour calculer des taux de conformité globaux et par aspect (scan de salle, concordance de salle, rollcall). 
-  // Elle inclut aussi les enseignants sans pointage ce qui permet d'afficher une liste complète dans le dashboard directeur.
-  // la logique de calcul des taux est encapsulée dans la view teacher_scan_compliance pour garantir une cohérence des données et alléger la charge côté API.
-  // En résumé voici le calcul des taux :
-  // - compliance_rate : % de jours avec check-in parmi les jours planifiés
-  // - scan_end_rate : % de check-out avec scan de salle de fin parmi les check-out réalisés
-  // - room_correct_rate : % de check-in avec concordance de salle parmi les check-in réalisés
-  // - rollcall_rate : % de jours avec rollcall réalisé parmi les jours planifiés
-  // - attendance_rate : % de jours présents (status 'present') parmi les jours planifiés
-
-  // la difference entre compliance_rate et attendance_rate permet d'identifier les cas où le professeur a pointé (check-in) 
-  // mais a été finalement marqué absent (status 'absent') soit par une validation manuelle (validation_status 'rejected') soit par une règle automatique
-  // (ex: scan de salle non conforme, rollcall non réalisé, geolocalisation suspecte etc).  
+  // Conformité mensuelle : fin de cours 30 %, salle correcte 25 %, appel 25 %, présence 20 %.
+  // Les professeurs sans cours restent dans le résultat avec 100 % et total_scheduled = 0.
+  // Dès qu'un cours est programmé, les quatre composantes gardent leurs dénominateurs habituels.
   async listTeacherCompliance(params: {
     monthStart: string;
     monthEnd: string;
@@ -840,13 +830,22 @@ export class AttendanceRepository {
       SELECT
         teacher_id::text AS teacher_id,
         teacher_name,
+        total_scheduled,
         total_checkins,
         total_checkouts,
-        COALESCE(ROUND(total_checkouts::numeric / NULLIF(total_checkins, 0) * 100, 1), 0) AS scan_end_rate,
-        COALESCE(ROUND(room_correct_count::numeric / NULLIF(checkins_with_time, 0) * 100, 1), 0) AS room_correct_rate,
-        COALESCE(ROUND(rollcall_done_count::numeric / NULLIF(present_like_count, 0) * 100, 1), 0) AS rollcall_rate,
-        COALESCE(ROUND(present_count::numeric / NULLIF(total_scheduled, 0) * 100, 1), 0) AS attendance_rate,
-        COALESCE(
+        CASE WHEN total_scheduled = 0 THEN 100 ELSE LEAST(100, GREATEST(0,
+          COALESCE(ROUND(total_checkouts::numeric / NULLIF(total_checkins, 0) * 100, 1), 0)
+        )) END AS scan_end_rate,
+        CASE WHEN total_scheduled = 0 THEN 100 ELSE LEAST(100, GREATEST(0,
+          COALESCE(ROUND(room_correct_count::numeric / NULLIF(checkins_with_time, 0) * 100, 1), 0)
+        )) END AS room_correct_rate,
+        CASE WHEN total_scheduled = 0 THEN 100 ELSE LEAST(100, GREATEST(0,
+          COALESCE(ROUND(rollcall_done_count::numeric / NULLIF(present_like_count, 0) * 100, 1), 0)
+        )) END AS rollcall_rate,
+        CASE WHEN total_scheduled = 0 THEN 100 ELSE LEAST(100, GREATEST(0,
+          COALESCE(ROUND(present_count::numeric / NULLIF(total_scheduled, 0) * 100, 1), 0)
+        )) END AS attendance_rate,
+        CASE WHEN total_scheduled = 0 THEN 100 ELSE LEAST(100, GREATEST(0, COALESCE(
           ROUND(
             COALESCE(total_checkouts::numeric / NULLIF(total_checkins, 0) * 30, 0)
             + COALESCE(room_correct_count::numeric / NULLIF(checkins_with_time, 0) * 25, 0)
@@ -855,7 +854,7 @@ export class AttendanceRepository {
             1
           ),
           0
-        ) AS compliance_rate
+        ))) END AS compliance_rate
       FROM aggregated
       WHERE ${params.subject ? sql`total_scheduled > 0 OR EXISTS (
         SELECT 1

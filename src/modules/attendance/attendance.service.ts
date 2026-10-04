@@ -1064,6 +1064,8 @@ export class AttendanceService {
     Array<{
       teacherId: string;
       teacherName: string;
+      totalScheduled: number;
+      hasScheduledLessons: boolean;
       totalCheckins: number;
       totalCheckouts: number;
       complianceRate: number;
@@ -1096,13 +1098,15 @@ export class AttendanceService {
     return rows.map((row, index) => ({
       teacherId: row.teacher_id,
       teacherName: row.teacher_name,
+      totalScheduled: Number(row.total_scheduled),
+      hasScheduledLessons: Number(row.total_scheduled) > 0,
       totalCheckins: Number(row.total_checkins),
       totalCheckouts: Number(row.total_checkouts),
       complianceRate: Number(row.compliance_rate), // taux de conformité global resultat du calcul prenant en compte tous les aspects du pointage (check-in, check-out, scans QR, etc.)
       scanEndRate: Number(row.scan_end_rate),
       roomCorrectRate: Number(row.room_correct_rate),
       rollcallRate: Number(row.rollcall_rate),
-      attendanceRate: Number(row.attendance_rate), // taux de présence des cours (cours avec check-in ou check-out enregistré / cours totaux)
+      attendanceRate: Number(row.attendance_rate), // cours au statut present/late parmi les cours programmés
       rank: index + 1,
     }));
   }

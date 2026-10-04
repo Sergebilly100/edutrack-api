@@ -48,6 +48,7 @@ const repository = {
   getTeacherAttendance: vi.fn(),
   checkOut: vi.fn(),
   listStudentRollCallForSchedule: vi.fn(),
+  listTeacherCompliance: vi.fn(),
 };
 
 beforeEach(() => {
@@ -65,6 +66,36 @@ afterEach(() => {
 });
 
 describe('attendance.service', () => {
+  it('getTeacherCompliance expose le nombre de cours et conserve les scores du repository', async () => {
+    const row = (teacherId: string, totalScheduled: number, rate: number) => ({
+      teacher_id: teacherId,
+      teacher_name: teacherId,
+      total_scheduled: totalScheduled,
+      total_checkins: totalScheduled > 0 && rate === 100 ? 1 : 0,
+      total_checkouts: totalScheduled > 0 && rate === 100 ? 1 : 0,
+      compliance_rate: String(rate),
+      scan_end_rate: String(rate),
+      room_correct_rate: String(rate),
+      rollcall_rate: String(rate),
+      attendance_rate: String(rate),
+    });
+    repository.listTeacherCompliance.mockResolvedValue([
+      row('sans-cours', 0, 100),
+      row('complet', 1, 100),
+      row('sans-pointage', 1, 0),
+    ]);
+
+    const result = await new AttendanceService(repository as never).getTeacherCompliance({ month: '2026-04' });
+
+    expect(result.map(({ teacherId, totalScheduled, hasScheduledLessons, complianceRate, rank }) => ({
+      teacherId, totalScheduled, hasScheduledLessons, complianceRate, rank,
+    }))).toEqual([
+      { teacherId: 'sans-cours', totalScheduled: 0, hasScheduledLessons: false, complianceRate: 100, rank: 1 },
+      { teacherId: 'complet', totalScheduled: 1, hasScheduledLessons: true, complianceRate: 100, rank: 2 },
+      { teacherId: 'sans-pointage', totalScheduled: 1, hasScheduledLessons: true, complianceRate: 0, rank: 3 },
+    ]);
+  });
+
   it('checkIn() en retard (>15min) émet teacher.late et programme le check QR manquant', async () => {
     vi.setSystemTime(new Date('2026-04-14T07:50:00.000Z'));
     repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1' });
