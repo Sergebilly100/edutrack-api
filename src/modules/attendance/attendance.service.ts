@@ -1,4 +1,5 @@
 import type { Queue } from 'bullmq';
+import { resolveScheduleSubjectDisplay } from '../../shared/utils/schedule-subject-display.js';
 import {
   emitStudentAbsent,
   emitTeacherCheckedIn,
@@ -661,6 +662,7 @@ export class AttendanceService {
     class_id: string;
     class_name: string;
     subject: string;
+    subjectDisplay: string;
     room_id: string;
     room_name: string;
     day_of_week: number;
@@ -672,7 +674,10 @@ export class AttendanceService {
       throw new AttendanceModuleError('No schedule found for this week', 404, 'SCHEDULE_NOT_FOUND');
     }
 
-    return scheduleForWeek;
+    return scheduleForWeek.map(({ level_subjects, ...slot }) => ({
+      ...slot,
+      subjectDisplay: resolveScheduleSubjectDisplay(slot.subject, level_subjects),
+    }));
   }
 
   private computeAfterSlotEndMs(date: string, slotEndTime: string, delayMs: number): number {

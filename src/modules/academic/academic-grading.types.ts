@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 const isoDateSchema = z.string().date();
 const positiveDecimalSchema = z.number().finite().positive();
+const abbreviationSchema = z.string().trim().max(30).nullable().transform((value) => value || null);
 
 export const academicIdParamsSchema = z.object({ id: z.string().uuid() });
 
@@ -12,6 +13,7 @@ export const listSubjectsQuerySchema = z.object({
 export const createSubjectBodySchema = z.object({
   levelId: z.string().uuid(),
   name: z.string().trim().min(1).max(100),
+  abbreviation: abbreviationSchema.optional(),
   coefficient: positiveDecimalSchema,
 });
 
@@ -50,6 +52,7 @@ const uniqueBatchAssignments = <T extends { assignments: Array<{ levelId: string
 export const createSubjectsBulkBodySchema = z
   .object({
     name: z.string().trim().min(1).max(100),
+    abbreviation: abbreviationSchema.optional(),
     assignments: z.array(batchSubjectAssignmentSchema).min(1).max(100),
   })
   .superRefine(uniqueBatchAssignments);
@@ -57,6 +60,7 @@ export const createSubjectsBulkBodySchema = z
 export const updateSubjectsBulkBodySchema = z
   .object({
     name: z.string().trim().min(1).max(100),
+    abbreviation: abbreviationSchema.optional(),
     assignments: z.array(batchSubjectAssignmentSchema.extend({
       subjectId: z.string().uuid().optional(),
     })).min(1).max(100).refine(
@@ -69,9 +73,10 @@ export const updateSubjectsBulkBodySchema = z
 export const updateSubjectBodySchema = z
   .object({
     name: z.string().trim().min(1).max(100).optional(),
+    abbreviation: abbreviationSchema.optional(),
     coefficient: positiveDecimalSchema.optional(),
   })
-  .refine((input) => input.name !== undefined || input.coefficient !== undefined, {
+  .refine((input) => input.name !== undefined || input.coefficient !== undefined || input.abbreviation !== undefined, {
     message: 'At least one field is required',
   });
 
@@ -166,6 +171,7 @@ export type SubjectItem = {
   levelId: string;
   levelName: string;
   name: string;
+  abbreviation: string | null;
   coefficient: number;
 };
 

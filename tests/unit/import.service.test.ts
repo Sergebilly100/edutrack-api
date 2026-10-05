@@ -567,6 +567,26 @@ describe('import.service - teachers confirm', () => {
 // ---------------------------------------------------------------------------
 
 describe('import.service - schedule dry-run', () => {
+  it('accepte le libellé officiel mais rejette son abréviation seule', async () => {
+    repository.listScheduleAssignments.mockResolvedValue([
+      { teacher_id: 'teacher-1', class_id: 'class-1', subject: 'Mathématiques', abbreviation: 'Maths' },
+    ]);
+    const service = new ImportService(repository);
+    const row = (subject: string) => ({
+      'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': subject,
+      'Jour*': 'Lundi', 'Créneau*': '7h30 - 9h00', Salle: 'Salle A1',
+    });
+    const period = { schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-03' } };
+
+    const official = await service.dryRun('schedule', await toWorkbookBuffer([row('Mathématiques')]), db, period);
+    const abbreviated = await service.dryRun('schedule', await toWorkbookBuffer([row('Maths')]), db, period);
+    expect(official.valid).toBe(1);
+    expect(abbreviated.valid).toBe(0);
+    expect(abbreviated.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ column: 'Matière*', message: expect.stringContaining('libellé officiel') }),
+    ]));
+  });
+
   it('dates absentes → IMPORT_INVALID_PERIOD', async () => {
     repository.findActiveSchedulePeriodId.mockResolvedValueOnce(null);
     const service = new ImportService(repository);

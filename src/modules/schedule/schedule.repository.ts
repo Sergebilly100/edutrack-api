@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { QueryResult, QueryResultRow } from 'pg';
 import { normalizeSubjectKey } from '../../shared/utils/subject-normalization.js';
+import type { ScheduleSubjectReference } from '../../shared/utils/schedule-subject-display.js';
 
 export type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
 
@@ -35,6 +36,7 @@ type ActiveScheduleRow = {
   sort_order: number;
   day_of_week: number;
   subject: string;
+  level_subjects: ScheduleSubjectReference[];
   start_date: string | null;
   end_date: string | null;
   attendance_status: 'present' | 'absent' | 'late' | null;
@@ -48,6 +50,7 @@ export type ActiveSchedule = {
   schedulePeriodId: string;
   dayOfWeek: number;
   subject: string;
+  subjectDisplay: string;
   startDate: string | null;
   endDate: string | null;
   teacher: {
@@ -78,6 +81,10 @@ export type ActiveSchedule = {
   };
   pastAttendanceCount: number;
   hasPastAttendance: boolean;
+};
+
+export type ScheduleWithSubjectReferences = Omit<ActiveSchedule, 'subjectDisplay'> & {
+  subjectReferences: ScheduleSubjectReference[];
 };
 
 type RoomRow = {
@@ -245,11 +252,12 @@ const mapTimeSlotCatalogItem = (row: TimeSlotCatalogRow): TimeSlotCatalogItem =>
   sortOrder: row.sort_order,
 });
 
-const mapActiveSchedule = (row: ActiveScheduleRow): ActiveSchedule => ({
+const mapActiveSchedule = (row: ActiveScheduleRow): ScheduleWithSubjectReferences => ({
   id: row.id,
   schedulePeriodId: row.schedule_period_id,
   dayOfWeek: row.day_of_week,
   subject: row.subject,
+  subjectReferences: row.level_subjects ?? [],
   startDate: row.start_date,
   endDate: row.end_date,
   teacher: {
@@ -544,7 +552,7 @@ export const listSchedulesForPeriodAndDay = async (
     date: string;
     teacherId?: string;
   }
-): Promise<ActiveSchedule[]> => {
+): Promise<ScheduleWithSubjectReferences[]> => {
   const teacherFilter = params.teacherId
     ? sql`AND s.teacher_id = ${params.teacherId}`
     : sql``;
@@ -568,6 +576,10 @@ export const listSchedulesForPeriodAndDay = async (
       ts.sort_order,
       s.day_of_week,
       s.subject,
+      COALESCE((
+        SELECT json_agg(json_build_object('name', sub.name, 'abbreviation', sub.abbreviation) ORDER BY sub.id)
+        FROM subjects sub WHERE sub.level_id = c.level_id
+      ), '[]'::json) AS level_subjects,
       s.start_date::text AS start_date,
       s.end_date::text AS end_date,
       at.status::text AS attendance_status,
@@ -609,7 +621,7 @@ export const listSchedulesForPeriod = async (
     weekStart?: string;
     weekEnd?: string;
   }
-): Promise<ActiveSchedule[]> => {
+): Promise<ScheduleWithSubjectReferences[]> => {
   const dayFilter =
     params.weekStart && params.weekEnd // Si on a une plage de semaine, on filtre les créneaux pour ne récupérer que ceux qui ont un jour de semaine correspondant à au moins une date de la plage (pour éviter de récupérer des créneaux qui ne sont pas actifs du tout sur la plage, même s'ils sont actifs à la date ciblée).
       ? sql`
@@ -671,6 +683,10 @@ export const listSchedulesForPeriod = async (
       ts.sort_order,
       s.day_of_week,
       s.subject,
+      COALESCE((
+        SELECT json_agg(json_build_object('name', sub.name, 'abbreviation', sub.abbreviation) ORDER BY sub.id)
+        FROM subjects sub WHERE sub.level_id = c.level_id
+      ), '[]'::json) AS level_subjects,
       s.start_date::text AS start_date,
       s.end_date::text AS end_date,
       at.status::text AS attendance_status,

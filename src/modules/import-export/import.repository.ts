@@ -31,7 +31,7 @@ type TeacherDirectoryRow = {
   is_blocked: boolean;
   is_active: boolean;
 };
-type ScheduleAssignmentRow = { teacher_id: string; class_id: string; subject: string };
+type ScheduleAssignmentRow = { teacher_id: string; class_id: string; subject: string; abbreviation: string | null };
 type RoomRow = { id: string; name: string; building: string | null; capacity: number | null; is_active: boolean };
 type TimeSlotRow = { id: string; label: string; start_time: string; end_time: string };
 type SchedulePeriodRow = { id: string; valid_from?: string; valid_to?: string };
@@ -221,7 +221,7 @@ export const defaultImportRepository: ImportRepository = {
 
   async listScheduleAssignments(db) {
     const result = await db.execute(sql`
-      SELECT tsa.teacher_id::text, tsa.class_id::text, s.name AS subject
+      SELECT tsa.teacher_id::text, tsa.class_id::text, s.name AS subject, s.abbreviation
       FROM teacher_subject_assignments tsa
       INNER JOIN teachers t ON t.id = tsa.teacher_id AND t.is_blocked = false
       INNER JOIN users u ON u.id = t.user_id AND u.is_active = true

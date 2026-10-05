@@ -37,6 +37,7 @@ type ScheduleRow = {
   schedule_id: string;
   day_of_week: number;
   subject: string;
+  level_subjects: Array<{ name: string; abbreviation: string | null }>;
   room_name: string;
   teacher_name: string;
   start_time: string;
@@ -257,6 +258,12 @@ export class ParentPortalRepository {
         s.id::text AS schedule_id,
         s.day_of_week,
         s.subject,
+        COALESCE((
+          SELECT json_agg(json_build_object('name', sub.name, 'abbreviation', sub.abbreviation) ORDER BY sub.id)
+          FROM subjects sub
+          INNER JOIN classes c ON c.level_id = sub.level_id
+          WHERE c.id = s.class_id
+        ), '[]'::json) AS level_subjects,
         r.name AS room_name,
         u.name AS teacher_name,
         ts.start_time::text AS start_time,

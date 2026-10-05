@@ -95,7 +95,10 @@ describe('schedule.service', () => {
       created_by: 'user-1',
       created_at: '2026-04-10T08:00:00.000Z',
     });
-    repositoryMocks.listSchedulesForPeriodAndDay.mockResolvedValue([{ id: 'sched-1' }]);
+    repositoryMocks.listSchedulesForPeriodAndDay.mockResolvedValue([{
+      id: 'sched-1', subject: 'Mathématiques',
+      subjectReferences: [{ name: 'Mathématiques', abbreviation: 'Maths' }],
+    }]);
 
     const result = await getActiveSchedulesForDate(db, '2026-04-13');
 
@@ -105,7 +108,9 @@ describe('schedule.service', () => {
       date: '2026-04-13',
       teacherId: undefined,
     });
-    expect(result.schedules).toEqual([{ id: 'sched-1' }]);
+    expect(result.schedules).toEqual([{
+      id: 'sched-1', subject: 'Mathématiques', subjectDisplay: 'Maths',
+    }]);
   });
 
   it('getActiveSchedulesForDate() transmet teacherId quand fourni', async () => {

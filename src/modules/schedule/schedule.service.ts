@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { weeklyPeriodSchema } from '../../shared/utils/schedule-period.js';
+import { resolveScheduleSubjectDisplay } from '../../shared/utils/schedule-subject-display.js';
 
 import {
   createRoom,
@@ -21,6 +22,7 @@ import {
   findSchedulePeriodById,
   listSchedulesForPeriodAndDay,
   type ActiveSchedule,
+  type ScheduleWithSubjectReferences,
   type QueryExecutor,
   type SchedulePeriod,
   type TeacherCatalogItem,
@@ -75,6 +77,11 @@ export type CreateScheduleInput = {
 );
 
 const formatDate = (date: Date): string => date.toISOString().slice(0, 10);
+
+const withSubjectDisplay = ({ subjectReferences, ...schedule }: ScheduleWithSubjectReferences): ActiveSchedule => ({
+  ...schedule,
+  subjectDisplay: resolveScheduleSubjectDisplay(schedule.subject, subjectReferences),
+});
 
 const parseDateInput = (date: string | Date): Date => {
   if (date instanceof Date) {
@@ -192,7 +199,7 @@ export const getActiveSchedulesForDate = async (
     date: isoDate,
     dayOfWeek,
     period,
-    schedules,
+    schedules: schedules.map(withSubjectDisplay),
   };
 };
 
@@ -240,7 +247,7 @@ export const getWeeklySchedulesForDate = async (
   return {
     date: isoDate,
     period,
-    schedules,
+    schedules: schedules.map(withSubjectDisplay),
     teachers,
     classes,
     rooms: rooms.filter((room) => room.isActive),

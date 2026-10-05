@@ -199,6 +199,7 @@ type WeekScheduleRow = {
   class_id: string;
   class_name: string;
   subject: string;
+  level_subjects: Array<{ name: string; abbreviation: string | null }>;
   room_id: string;
   room_name: string;
   day_of_week: number;
@@ -1215,6 +1216,10 @@ export class AttendanceRepository {
             s.class_id::text    AS class_id,
             c.name              AS class_name,
             s.subject,
+            COALESCE((
+              SELECT json_agg(json_build_object('name', sub.name, 'abbreviation', sub.abbreviation) ORDER BY sub.id)
+              FROM subjects sub WHERE sub.level_id = c.level_id
+            ), '[]'::json) AS level_subjects,
             s.room_id::text     AS room_id,
             r.name              AS room_name,
             s.day_of_week,
@@ -1250,6 +1255,7 @@ export class AttendanceRepository {
       class_id: row.class_id,
       class_name: row.class_name,
       subject: row.subject,
+      level_subjects: row.level_subjects ?? [],
       room_id: row.room_id,
       room_name: row.room_name,
       day_of_week: Number(row.day_of_week),

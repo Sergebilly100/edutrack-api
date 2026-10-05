@@ -232,6 +232,13 @@
       "when": 1791055160149,
       "tag": "0084_student_report_card_claims",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1791111410235,
+      "tag": "0085_subjects_abbreviation",
+      "breakpoints": true
     }
   ]
 }

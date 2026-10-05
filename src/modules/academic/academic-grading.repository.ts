@@ -28,6 +28,7 @@ type SubjectRow = {
   level_id: string;
   level_name: string;
   name: string;
+  abbreviation: string | null;
   coefficient: string | number;
 };
 
@@ -48,6 +49,7 @@ const mapSubject = (row: SubjectRow): SubjectItem => ({
   levelId: row.level_id,
   levelName: row.level_name,
   name: row.name,
+  abbreviation: row.abbreviation,
   coefficient: decimal(row.coefficient),
 });
 
@@ -119,7 +121,7 @@ export class AcademicGradingRepository {
 
   async listSubjects(levelId?: string): Promise<SubjectItem[]> {
     const result = await this.db.execute<SubjectRow>(sql`
-      SELECT s.id, s.level_id, l.name AS level_name, s.name, s.coefficient
+      SELECT s.id, s.level_id, l.name AS level_name, s.name, s.abbreviation, s.coefficient
       FROM subjects s
       INNER JOIN levels l ON l.id = s.level_id
       WHERE (${levelId ?? null}::uuid IS NULL OR s.level_id = ${levelId ?? null}::uuid)
@@ -130,7 +132,7 @@ export class AcademicGradingRepository {
 
   async findSubject(id: string): Promise<SubjectItem | null> {
     const result = await this.db.execute<SubjectRow>(sql`
-      SELECT s.id, s.level_id, l.name AS level_name, s.name, s.coefficient
+      SELECT s.id, s.level_id, l.name AS level_name, s.name, s.abbreviation, s.coefficient
       FROM subjects s INNER JOIN levels l ON l.id = s.level_id
       WHERE s.id = ${id}::uuid LIMIT 1
     `);
@@ -141,11 +143,11 @@ export class AcademicGradingRepository {
   async createSubject(input: CreateSubjectInput & { name: string }): Promise<SubjectItem> {
     const result = await this.db.execute<SubjectRow>(sql`
       WITH inserted AS (
-        INSERT INTO subjects (level_id, name, coefficient)
-        VALUES (${input.levelId}::uuid, ${input.name}, ${input.coefficient})
+        INSERT INTO subjects (level_id, name, abbreviation, coefficient)
+        VALUES (${input.levelId}::uuid, ${input.name}, ${input.abbreviation ?? null}, ${input.coefficient})
         RETURNING *
       )
-      SELECT s.id, s.level_id, l.name AS level_name, s.name, s.coefficient
+      SELECT s.id, s.level_id, l.name AS level_name, s.name, s.abbreviation, s.coefficient
       FROM inserted s INNER JOIN levels l ON l.id = s.level_id
     `);
     const row = rows(result)[0];
@@ -174,12 +176,13 @@ export class AcademicGradingRepository {
       WITH updated AS (
         UPDATE subjects
         SET name = CASE WHEN ${input.name !== undefined} THEN ${input.name ?? null} ELSE name END,
+            abbreviation = CASE WHEN ${input.abbreviation !== undefined} THEN ${input.abbreviation ?? null} ELSE abbreviation END,
             coefficient = CASE WHEN ${input.coefficient !== undefined} THEN ${input.coefficient ?? null} ELSE coefficient END,
             updated_at = now()
         WHERE id = ${id}::uuid
         RETURNING *
       )
-      SELECT s.id, s.level_id, l.name AS level_name, s.name, s.coefficient
+      SELECT s.id, s.level_id, l.name AS level_name, s.name, s.abbreviation, s.coefficient
       FROM updated s INNER JOIN levels l ON l.id = s.level_id
     `);
     const row = rows(result)[0];
@@ -512,7 +515,7 @@ export class AcademicGradingRepository {
 
   async listTeacherAssignedSubjectsForClass(teacherId: string, classId: string): Promise<SubjectItem[]> {
     const result = await this.db.execute<SubjectRow>(sql`
-      SELECT s.id, s.level_id, l.name AS level_name, s.name, s.coefficient
+      SELECT s.id, s.level_id, l.name AS level_name, s.name, s.abbreviation, s.coefficient
       FROM teacher_subject_assignments tsa
       INNER JOIN subjects s ON s.id = tsa.subject_id
       INNER JOIN levels l ON l.id = s.level_id

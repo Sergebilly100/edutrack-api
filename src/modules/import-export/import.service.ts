@@ -1214,7 +1214,8 @@ export class ImportService {
       const line = sheetRow.line;
       const teacherName = normalizeCell(sheetRow.values['Nom professeur*']);
       const className = normalizeCell(sheetRow.values['Classe*']);
-      const subject = canonicalizeSubject(normalizeCell(sheetRow.values['Matière*']), subjectCatalog);
+      const subjectInput = normalizeCell(sheetRow.values['Matière*']);
+      const subject = canonicalizeSubject(subjectInput, subjectCatalog);
       const day = normalizeKey(sheetRow.values['Jour*']);
       const slotLabel = normalizeCell(sheetRow.values['Créneau*']);
       const parsedSlot = slotLabel ? parseTimeSlotLabel(slotLabel) : null;
@@ -1285,12 +1286,21 @@ export class ImportService {
         const teacher = teacherDirectory.find((item) => item.teacher_id === teacherMatches[0]);
         if (teacher?.is_blocked || teacher?.is_active === false) {
           errors.push(makeError({ row: line, column: 'Nom professeur*', message: 'Professeur bloqué ou inactif' }));
-        } else if (subject && classesByName.has(normalizeKey(className)) && !assignments.some((assignment) =>
-          assignment.teacher_id === teacherMatches[0]
-          && assignment.class_id === classesByName.get(normalizeKey(className))
-          && normalizeSubjectKey(assignment.subject) === normalizeSubjectKey(subject)
-        )) {
-          errors.push(makeError({ row: line, column: 'Matière*', message: "Le professeur doit être affecté à cette matière dans cette classe de l'année active" }));
+        } else if (subject && classesByName.has(normalizeKey(className))) {
+          const matchingAssignments = assignments.filter((assignment) =>
+            assignment.teacher_id === teacherMatches[0]
+            && assignment.class_id === classesByName.get(normalizeKey(className))
+            && normalizeSubjectKey(assignment.subject) === normalizeSubjectKey(subject)
+          );
+          if (matchingAssignments.length === 0) {
+            errors.push(makeError({ row: line, column: 'Matière*', message: "Le professeur doit être affecté à cette matière dans cette classe de l'année active" }));
+          } else if (matchingAssignments.some((assignment) =>
+            assignment.abbreviation
+            && normalizeHumanKey(subjectInput) === normalizeHumanKey(assignment.abbreviation)
+            && normalizeHumanKey(subjectInput) !== normalizeHumanKey(assignment.subject)
+          )) {
+            errors.push(makeError({ row: line, column: 'Matière*', message: 'Utilisez le libellé officiel de la matière, pas son abréviation' }));
+          }
         }
       }
 

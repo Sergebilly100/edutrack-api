@@ -788,6 +788,7 @@ export const subjects = tenant.table(
     id: uuid('id').defaultRandom().primaryKey(),
     levelId: uuid('level_id').notNull().references(() => levels.id, { onDelete: 'cascade' }),
     name: varchar('name', { length: 100 }).notNull(),
+    abbreviation: varchar('abbreviation', { length: 30 }),
     coefficient: numeric('coefficient', { precision: 8, scale: 3 }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),

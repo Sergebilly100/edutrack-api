@@ -1,4 +1,5 @@
 import argon2 from 'argon2';
+import { resolveScheduleSubjectDisplay } from '../../shared/utils/schedule-subject-display.js';
 
 import { ParentPortalRepository } from './parent-portal.repository.js';
 import type { TenantDb } from './parent-portal.repository.js';
@@ -223,6 +224,7 @@ export class ParentPortalService {
           return {
             time: slot.slot_label,
             subject: slot.subject,
+            subjectDisplay: resolveScheduleSubjectDisplay(slot.subject, slot.level_subjects ?? []),
             teacher: slot.teacher_name,
             room: slot.room_name,
             status,

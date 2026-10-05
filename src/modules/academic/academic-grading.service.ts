@@ -122,6 +122,7 @@ export class AcademicGradingService {
         const subject = await this.repository.createSubject({
           levelId: assignment.levelId,
           name,
+          abbreviation: input.abbreviation,
           coefficient: assignment.coefficient,
         });
         await this.syncAssignmentsFromSchedule(subject);
@@ -194,6 +195,7 @@ export class AcademicGradingService {
       for (const { assignment } of currentSubjects) {
         const subject = await this.repository.updateSubject(assignment.subjectId!, {
           name,
+          abbreviation: input.abbreviation,
           coefficient: assignment.coefficient,
         });
         if (!subject) throw new AcademicGradingError('Subject not found', 404, 'SUBJECT_NOT_FOUND');
@@ -204,6 +206,7 @@ export class AcademicGradingService {
         const subject = await this.repository.createSubject({
           levelId: assignment.levelId,
           name,
+          abbreviation: input.abbreviation,
           coefficient: assignment.coefficient,
         });
         await this.syncAssignmentsFromSchedule(subject);
