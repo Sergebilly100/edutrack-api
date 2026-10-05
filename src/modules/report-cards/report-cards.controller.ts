@@ -14,6 +14,7 @@ import {
   publishBulkBodySchema,
   readinessQuerySchema,
   reportCardClassesQuerySchema,
+  parentReportCardsQuerySchema,
   reportCardIdParamsSchema,
   createReportCardClaimBodySchema,
   decideReportCardClaimBodySchema,
@@ -416,12 +417,15 @@ export default async function reportCardsController(
           });
         }
 
+        const { schoolYearId } = parentReportCardsQuerySchema.parse(request.query ?? {});
         const result = await withTenantSchema(request.claims!.schemaName, async (tenantDb) => {
           const service = buildReportCardsService(tenantDb);
-          const [reportCards, inRevision] = await Promise.all([
-            service.listPublishedForStudent(studentId), service.isStudentReportInRevision(studentId),
+          const [reportCards, availableSchoolYears, inRevision] = await Promise.all([
+            service.listPublishedForStudent(studentId, schoolYearId),
+            service.listPublishedSchoolYearsForStudent(studentId),
+            service.isStudentReportInRevision(studentId, schoolYearId),
           ]);
-          return { reportCards, inRevision };
+          return { reportCards, availableSchoolYears, inRevision };
         });
         return reply.send(result);
       } catch (error) {

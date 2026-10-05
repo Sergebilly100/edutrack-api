@@ -169,8 +169,8 @@ export class ReportCardsService {
     return this.repository.listAcademicAudit(classId, gradingPeriodId);
   }
 
-  async isStudentReportInRevision(studentId: string) {
-    return this.repository.isStudentReportInRevision(studentId);
+  async isStudentReportInRevision(studentId: string, schoolYearId?: string) {
+    return this.repository.isStudentReportInRevision(studentId, schoolYearId);
   }
 
   async listConductAmbiguities() {
@@ -474,8 +474,12 @@ export class ReportCardsService {
     };
   }
 
-  async listPublishedForStudent(studentId: string) {
-    return this.repository.listPublishedSummariesForStudent(studentId);
+  async listPublishedForStudent(studentId: string, schoolYearId?: string) {
+    return this.repository.listPublishedSummariesForStudent(studentId, schoolYearId);
+  }
+
+  async listPublishedSchoolYearsForStudent(studentId: string) {
+    return this.repository.listPublishedSchoolYearsForStudent(studentId);
   }
 
   async getPublishedDetail(studentId: string, cardId: string): Promise<ReportCardDetail> {

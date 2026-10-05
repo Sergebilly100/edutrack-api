@@ -391,9 +391,9 @@ export class ParentPortalRepository {
   }): Promise<{ present: number; absent: number; total: number }> {
     const result = await this.db.execute<{ present_count: number; absent_count: number; total_count: number }>(sql`
       SELECT
-        COUNT(CASE WHEN status IN ('present', 'excused') THEN 1 END)::int AS present_count,
-        COUNT(CASE WHEN status = 'absent' THEN 1 END)::int AS absent_count,
-        COUNT(*)::int AS total_count
+        COUNT(*) FILTER (WHERE status IN ('present', 'excused'))::int AS present_count,
+        COUNT(*) FILTER (WHERE status = 'absent')::int AS absent_count,
+        COUNT(*) FILTER (WHERE status IN ('present', 'excused', 'late', 'absent'))::int AS total_count
       FROM attendances_student
       WHERE student_id = ${input.studentId}::uuid
         AND date BETWEEN ${input.monthStart}::date AND ${input.monthEnd}::date

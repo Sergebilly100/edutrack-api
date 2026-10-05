@@ -306,7 +306,7 @@ export class ReportCardsRepository {
     return getRows(result);
   }
 
-  async isStudentReportInRevision(studentId: string): Promise<boolean> {
+  async isStudentReportInRevision(studentId: string, schoolYearId?: string): Promise<boolean> {
     const result = await this.db.execute<{ active: boolean }>(sql`
       SELECT EXISTS (
         SELECT 1 FROM report_card_claims r
@@ -314,6 +314,7 @@ export class ReportCardsRepository {
         JOIN classes c ON c.id = r.class_id AND c.school_year_id = e.school_year_id
         JOIN grading_periods gp ON gp.id = r.grading_period_id AND gp.school_year_id = c.school_year_id
         WHERE e.status = 'confirmed' AND r.phase = 'published'
+          AND (${schoolYearId ?? null}::uuid IS NULL OR gp.school_year_id = ${schoolYearId ?? null}::uuid)
           AND r.status IN ('approved', 'corrected', 'regenerated')
       ) AS active
     `);
@@ -801,7 +802,26 @@ export class ReportCardsRepository {
     return getRows<{ class_id: string; subject_id: string; completed_count: number }>(result);
   }
 
-  async listPublishedSummariesForStudent(studentId: string): Promise<
+  async listPublishedSchoolYearsForStudent(studentId: string): Promise<Array<{ id: string; label: string }>> {
+    const result = await this.db.execute<{ id: string; label: string }>(sql`
+      SELECT sy.id::text AS id, sy.label
+      FROM report_cards rc
+      INNER JOIN grading_periods gp ON gp.id = rc.grading_period_id
+      INNER JOIN school_years sy ON sy.id = gp.school_year_id
+      INNER JOIN classes c ON c.id = rc.class_id AND c.school_year_id = sy.id
+      WHERE rc.student_id = ${studentId}::uuid AND rc.status = 'published'
+        AND EXISTS (
+          SELECT 1 FROM enrollments e
+          WHERE e.student_id = rc.student_id AND e.class_id = rc.class_id
+            AND e.school_year_id = sy.id AND e.status = 'confirmed'
+        )
+      GROUP BY sy.id, sy.label, sy.start_date
+      ORDER BY sy.start_date DESC, sy.id DESC
+    `);
+    return getRows<{ id: string; label: string }>(result);
+  }
+
+  async listPublishedSummariesForStudent(studentId: string, schoolYearId?: string): Promise<
     Array<{
       id: string;
       periodLabel: string;
@@ -833,6 +853,7 @@ export class ReportCardsRepository {
       INNER JOIN school_years sy ON sy.id = gp.school_year_id
       INNER JOIN classes c ON c.id = rc.class_id AND c.school_year_id = sy.id
       WHERE rc.student_id = ${studentId}::uuid AND rc.status = 'published'
+        AND (${schoolYearId ?? null}::uuid IS NULL OR sy.id = ${schoolYearId ?? null}::uuid)
         AND EXISTS (
           SELECT 1 FROM enrollments e
           WHERE e.student_id = rc.student_id AND e.class_id = rc.class_id

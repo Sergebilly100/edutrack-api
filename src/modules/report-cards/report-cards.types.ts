@@ -19,6 +19,10 @@ export const reportCardClassesQuerySchema = z.object({
   schoolYearId: z.string().uuid(),
 });
 
+export const parentReportCardsQuerySchema = z.object({
+  schoolYearId: z.string().uuid().optional(),
+});
+
 export const publishBulkBodySchema = z.object({
   class_id: z.string().uuid().optional(),
   grading_period_id: z.string().uuid(),

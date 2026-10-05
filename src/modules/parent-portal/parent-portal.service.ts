@@ -59,6 +59,19 @@ const toIsoDate = (date: Date): string => date.toISOString().slice(0, 10);
 
 const toDateWithTime = (date: string, time: string): Date => new Date(`${date}T${time}.000Z`);
 
+export const monthlyAttendanceRates = (breakdown: { present: number; absent: number; total: number }) => {
+  const total = Number.isFinite(breakdown.total) ? Math.max(0, breakdown.total) : 0;
+  const clampCount = (count: number) => Number.isFinite(count) ? Math.min(total, Math.max(0, count)) : 0;
+  const rate = (count: number) => total > 0 ? Math.min(100, Math.max(0, Math.round(clampCount(count) / total * 100))) : 0;
+  return {
+    // Legacy field: present + excused / all recorded statuses; late is in the denominator.
+    // With no recorded session, attendance retains its historical neutral value of 100%.
+    attendanceRateMonth: total > 0 ? rate(breakdown.present) : 100,
+    // All four recorded statuses count as sessions; only absent contributes to this rate.
+    absenceRateMonth: rate(breakdown.absent),
+  };
+};
+
 export class ParentPortalService {
   constructor(private readonly repository: ParentPortalRepository) {}
 
@@ -260,7 +273,8 @@ export class ParentPortalService {
     return this.repository.getParentOverview(input.studentId);
   }
 
-  async getStudentStats(input: { studentId: string }, context: ServiceContext) {    await this.assertStudentAccess(input.studentId, context);
+  async getStudentStats(input: { studentId: string }, context: ServiceContext) {
+    await this.assertStudentAccess(input.studentId, context);
 
     const now = new Date();
     const day = now.getUTCDay() || 7;
@@ -297,16 +311,12 @@ export class ParentPortalService {
       }),
     ]);
 
-    // si le mois en cours n'a pas encore commencé ou si l'élève n'a pas encore eu de cours ce mois-ci, on considère que le taux de présence est de 100%
-    const attendanceRateMonth = monthAbsences === 0
-      ? 100
-      : monthBreakdown.total > 0 ? Math.round((monthBreakdown.present / monthBreakdown.total) * 100) : 0;
-      
-    // Le taux de présence est arrondi à l'entier le plus proche. Si l'élève a été présent à tous les cours, le taux de présence est de 100%, même s'il n'a pas encore eu de cours ce mois-ci.
+    const { attendanceRateMonth, absenceRateMonth } = monthlyAttendanceRates(monthBreakdown);
     return {
       absences_this_week: weekAbsences,
       absences_this_month: monthAbsences,
       attendance_rate_month: attendanceRateMonth,
+      absence_rate_month: absenceRateMonth,
       total_absences_year: yearAbsences,
     };
   }

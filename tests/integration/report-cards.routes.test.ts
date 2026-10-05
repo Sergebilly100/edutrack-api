@@ -484,4 +484,84 @@ describe('report-cards routes (5c)', () => {
       await queryTenant(`UPDATE ${tenantTable('classes')} SET is_active=true WHERE id=$1::uuid`, [classId]);
     }
   });
+
+  it('filtre les années publiées par enfant et protège le détail et le PDF', async () => {
+    const oldYearId = (await queryTenant<{ school_year_id: string }>(
+      `SELECT school_year_id::text FROM ${tenantTable('grading_periods')} WHERE id=$1::uuid`, [periodT1]
+    ))[0]!.school_year_id;
+    const newYearId = (await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('school_years')} (label, start_date, end_date, end_of_year_review_start_date, status)
+       VALUES ($1, '2098-09-01', '2099-06-30', '2099-05-01', 'closed') RETURNING id::text`,
+      [`rc-new-${suffix}`]
+    ))[0]!.id;
+    const newClassId = (await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('classes')} (name, level_id, school_year_id, is_active)
+       VALUES ($1, $2::uuid, $3::uuid, false) RETURNING id::text`,
+      [`RC new class ${suffix}`, levelId, newYearId]
+    ))[0]!.id;
+    const newPeriodId = (await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('grading_periods')} (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+       VALUES ($1::uuid, 'trimester', 1, 'T1 nouveau', '2098-09-01', '2098-12-01', '2098-12-15') RETURNING id::text`,
+      [newYearId]
+    ))[0]!.id;
+    await queryTenant(
+      `INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 'new_registration', 'confirmed')`,
+      [studentAId, newClassId, newYearId]
+    );
+    const newCardId = (await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('report_cards')}
+       (student_id, class_id, grading_period_id, general_average, rank, class_average,
+        class_min_average, class_max_average, class_headcount, status, published_at)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 17, 1, 15, 10, 18, 2, 'published', NOW()) RETURNING id::text`,
+      [studentAId, newClassId, newPeriodId]
+    ))[0]!.id;
+
+    const multiToken = await signAccessToken({
+      sub: getSeedContext().directorUserId, role: 'parent', schemaName: TEST_SCHEMA_NAME,
+      studentIds: [studentAId, studentBId],
+    });
+    const multiHeaders = { authorization: `Bearer ${multiToken}` };
+    const oldA = await request().get(`/api/v1/parent/students/${studentAId}/report-cards`)
+      .query({ schoolYearId: oldYearId }).set(multiHeaders);
+    expect(oldA.status, JSON.stringify(oldA.body)).toBe(200);
+    expect(oldA.body.reportCards.map((card: { schoolYearId: string }) => card.schoolYearId)).toEqual([oldYearId]);
+    expect(oldA.body.availableSchoolYears).toEqual([
+      { id: newYearId, label: `rc-new-${suffix}` }, { id: oldYearId, label: `rc-${suffix}` },
+    ]);
+
+    const newA = await request().get(`/api/v1/parent/students/${studentAId}/report-cards`)
+      .query({ schoolYearId: newYearId }).set(multiHeaders);
+    expect(newA.status).toBe(200);
+    expect(newA.body.reportCards.map((card: { id: string }) => card.id)).toEqual([newCardId]);
+    const oldB = await request().get(`/api/v1/parent/students/${studentBId}/report-cards`)
+      .query({ schoolYearId: oldYearId }).set(multiHeaders);
+    expect(oldB.status).toBe(200);
+    expect(oldB.body.availableSchoolYears).toEqual([{ id: oldYearId, label: `rc-${suffix}` }]);
+    const emptyB = await request().get(`/api/v1/parent/students/${studentBId}/report-cards`)
+      .query({ schoolYearId: newYearId }).set(multiHeaders);
+    expect(emptyB.status).toBe(200);
+    expect(emptyB.body.reportCards).toEqual([]);
+    expect(emptyB.body.availableSchoolYears).toEqual(oldB.body.availableSchoolYears);
+
+    const invalidYear = await request().get(`/api/v1/parent/students/${studentAId}/report-cards`)
+      .query({ schoolYearId: 'incorrect' }).set(multiHeaders);
+    expect(invalidYear.status).toBe(400);
+    const deniedStudent = await request().get(`/api/v1/parent/students/${studentBId}/report-cards`)
+      .query({ schoolYearId: oldYearId }).set(parentHeaders);
+    expect(deniedStudent.status).toBe(403);
+    const foreignCardId = oldB.body.reportCards[0].id as string;
+    const deniedDetail = await request().get(`/api/v1/parent/students/${studentAId}/report-cards/${foreignCardId}`)
+      .set(parentHeaders);
+    expect(deniedDetail.status).toBe(403);
+    const deniedPdf = await request().post(`/api/v1/parent/students/${studentAId}/report-cards/${foreignCardId}/pdf`)
+      .set(parentHeaders);
+    expect(deniedPdf.status).toBe(403);
+    const ownDetail = await request().get(`/api/v1/parent/students/${studentAId}/report-cards/${newCardId}`)
+      .set(parentHeaders);
+    expect(ownDetail.status).toBe(200);
+    const ownPdf = await request().post(`/api/v1/parent/students/${studentAId}/report-cards/${newCardId}/pdf`)
+      .set(parentHeaders);
+    expect(ownPdf.status).toBe(202);
+  });
 });
