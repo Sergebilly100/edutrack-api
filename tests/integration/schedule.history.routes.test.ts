@@ -154,6 +154,45 @@ const createScheduleFixture = async (input: {
 };
 
 describe('schedule history protection integration', () => {
+  it('projette le niveau du catalogue et du créneau, avec null pour une classe historique', async () => {
+    const headers = await getAuthHeaders('director');
+    const context = getSeedContext();
+    const classRows = await queryTenant<{ class_id: string }>(
+      `SELECT class_id::text FROM ${tenantTable('schedules')} WHERE id = $1::uuid`,
+      [context.scheduleId]
+    );
+    const classId = classRows[0]?.class_id;
+    expect(classId).toBeTruthy();
+    const date = toIsoDate(new Date());
+    const readWeekly = () => request().get(`/api/v1/schedule/weekly?date=${date}`).set(headers);
+
+    const withoutLevel = await readWeekly();
+    expect(withoutLevel.status).toBe(200);
+    expect(withoutLevel.body.classes.find((item: { id: string }) => item.id === classId))
+      .toMatchObject({ levelId: null, levelName: null });
+    expect(withoutLevel.body.schedules.find((item: { id: string }) => item.id === context.scheduleId)?.class)
+      .toMatchObject({ levelId: null, levelName: null });
+
+    const levelName = `EDT niveau ${buildUniqueSuffix()}`;
+    const levelRows = await queryTenant<{ id: string }>(
+      `INSERT INTO ${tenantTable('levels')} (name, order_index) VALUES ($1, 1) RETURNING id::text`,
+      [levelName]
+    );
+    const levelId = levelRows[0]?.id;
+    expect(levelId).toBeTruthy();
+    try {
+      await queryTenant(`UPDATE ${tenantTable('classes')} SET level_id = $1::uuid WHERE id = $2::uuid`, [levelId, classId]);
+      const withLevel = await readWeekly();
+      expect(withLevel.status).toBe(200);
+      expect(withLevel.body.classes.find((item: { id: string }) => item.id === classId))
+        .toMatchObject({ levelId, levelName });
+      expect(withLevel.body.schedules.find((item: { id: string }) => item.id === context.scheduleId)?.class)
+        .toMatchObject({ levelId, levelName });
+    } finally {
+      await queryTenant(`UPDATE ${tenantTable('classes')} SET level_id = NULL WHERE id = $1::uuid`, [classId]);
+    }
+  });
+
   it('exige l’affectation explicite du professeur avant la création du créneau', async () => {
     const headers = await getAuthHeaders('director');
     const context = getSeedContext();

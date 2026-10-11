@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { findOrCreateTimeSlot } from '../../src/modules/schedule/schedule.repository.js';
+import {
+  findOrCreateTimeSlot,
+  listClassesCatalog,
+  listSchedulesForPeriod,
+  listSchedulesForPeriodAndDay,
+} from '../../src/modules/schedule/schedule.repository.js';
 
 describe('Schedule Repository', () => {
   let mockDb: any;
@@ -91,6 +96,45 @@ describe('Schedule Repository', () => {
           endTime: '08:00',
         })
       ).rejects.toThrow('failed to upsert time_slot');
+    });
+  });
+
+  describe('catalogue et créneaux avec niveau', () => {
+    const queryText = (query: { queryChunks: Array<{ value?: string[] }> }) =>
+      query.queryChunks.flatMap((chunk) => Array.isArray(chunk.value) ? chunk.value : []).join('');
+
+    it('projette le niveau du catalogue et conserve les classes sans niveau', async () => {
+      mockDb.execute.mockResolvedValue({ rows: [
+        { id: 'c1', name: '6A', level_id: 'l6', level_name: '6ème' },
+        { id: 'c2', name: 'Ancienne classe', level_id: null, level_name: null },
+      ] });
+
+      expect(await listClassesCatalog(mockDb)).toEqual([
+        { id: 'c1', name: '6A', levelId: 'l6', levelName: '6ème' },
+        { id: 'c2', name: 'Ancienne classe', levelId: null, levelName: null },
+      ]);
+      const query = queryText(mockDb.execute.mock.calls[0][0]);
+      expect(query).toContain('LEFT JOIN levels l ON l.id = c.level_id');
+      expect(query).toContain('ORDER BY l.order_index ASC NULLS LAST');
+    });
+
+    it.each([
+      ['daily', () => listSchedulesForPeriodAndDay(mockDb, { periodId: 'p1', date: '2026-10-05', dayOfWeek: 1 })],
+      ['weekly', () => listSchedulesForPeriod(mockDb, { periodId: 'p1', date: '2026-10-05', weekStart: '2026-10-05', weekEnd: '2026-10-10' })],
+    ])('projette le niveau des créneaux %s', async (_label, run) => {
+      mockDb.execute.mockResolvedValue({ rows: [
+        { id: 's1', class_id: 'c1', class_name: '6A', class_level_id: 'l6', class_level_name: '6ème', level_subjects: [] },
+        { id: 's2', class_id: 'c2', class_name: 'Ancienne classe', class_level_id: null, class_level_name: null, level_subjects: [] },
+      ] });
+      const schedules = await run();
+      expect(schedules.map((schedule) => schedule.class)).toEqual([
+        { id: 'c1', name: '6A', levelId: 'l6', levelName: '6ème' },
+        { id: 'c2', name: 'Ancienne classe', levelId: null, levelName: null },
+      ]);
+      const query = queryText(mockDb.execute.mock.calls[0][0]);
+      expect(query).toContain('c.level_id::text AS class_level_id');
+      expect(query).toContain('l.name AS class_level_name');
+      expect(query).toContain('LEFT JOIN levels l ON l.id = c.level_id');
     });
   });
 });

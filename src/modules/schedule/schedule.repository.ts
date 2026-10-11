@@ -26,6 +26,8 @@ type ActiveScheduleRow = {
   teacher_username: string;
   class_id: string;
   class_name: string;
+  class_level_id: string | null;
+  class_level_name: string | null;
   room_id: string;
   room_name: string;
   room_qr_token: string;
@@ -61,6 +63,8 @@ export type ActiveSchedule = {
   class: {
     id: string;
     name: string;
+    levelId: string | null;
+    levelName: string | null;
   };
   room: {
     id: string;
@@ -128,11 +132,15 @@ export type TeacherCatalogItem = {
 type ClassCatalogRow = {
   id: string;
   name: string;
+  level_id: string | null;
+  level_name: string | null;
 };
 
 export type ClassCatalogItem = {
   id: string;
   name: string;
+  levelId: string | null;
+  levelName: string | null;
 };
 
 type TimeSlotCatalogRow = {
@@ -242,6 +250,8 @@ const mapTeacherCatalogItem = (row: TeacherCatalogRow): TeacherCatalogItem => ({
 const mapClassCatalogItem = (row: ClassCatalogRow): ClassCatalogItem => ({
   id: row.id,
   name: row.name,
+  levelId: row.level_id,
+  levelName: row.level_name,
 });
 
 const mapTimeSlotCatalogItem = (row: TimeSlotCatalogRow): TimeSlotCatalogItem => ({
@@ -268,6 +278,8 @@ const mapActiveSchedule = (row: ActiveScheduleRow): ScheduleWithSubjectReference
   class: {
     id: row.class_id,
     name: row.class_name,
+    levelId: row.class_level_id,
+    levelName: row.class_level_name,
   },
   room: {
     id: row.room_id,
@@ -566,6 +578,8 @@ export const listSchedulesForPeriodAndDay = async (
       t.username AS teacher_username,
       s.class_id,
       c.name AS class_name,
+      c.level_id::text AS class_level_id,
+      l.name AS class_level_name,
       s.room_id,
       r.name AS room_name,
       r.qr_token AS room_qr_token,
@@ -590,6 +604,7 @@ export const listSchedulesForPeriodAndDay = async (
     INNER JOIN teachers t ON t.id = s.teacher_id
     INNER JOIN users u ON u.id = t.user_id
     INNER JOIN classes c ON c.id = s.class_id
+    LEFT JOIN levels l ON l.id = c.level_id
     INNER JOIN rooms r ON r.id = s.room_id
     INNER JOIN time_slots ts ON ts.id = s.time_slot_id
     LEFT JOIN attendances_teacher at ON at.schedule_id = s.id AND at.date = ${params.date}
@@ -673,6 +688,8 @@ export const listSchedulesForPeriod = async (
       t.username AS teacher_username,
       s.class_id,
       c.name AS class_name,
+      c.level_id::text AS class_level_id,
+      l.name AS class_level_name,
       s.room_id,
       r.name AS room_name,
       r.qr_token AS room_qr_token,
@@ -697,6 +714,7 @@ export const listSchedulesForPeriod = async (
     INNER JOIN teachers t ON t.id = s.teacher_id
     INNER JOIN users u ON u.id = t.user_id
     INNER JOIN classes c ON c.id = s.class_id
+    LEFT JOIN levels l ON l.id = c.level_id
     INNER JOIN rooms r ON r.id = s.room_id
     INNER JOIN time_slots ts ON ts.id = s.time_slot_id
     INNER JOIN schedule_periods sp ON sp.id = s.schedule_period_id
@@ -756,14 +774,15 @@ export const listClassesCatalog = async (
   db: QueryExecutor
 ): Promise<ClassCatalogItem[]> => {
   const result = await db.execute<ClassCatalogRow>(sql`
-    SELECT c.id, c.name
+    SELECT c.id, c.name, c.level_id::text AS level_id, l.name AS level_name
     FROM classes c
+    LEFT JOIN levels l ON l.id = c.level_id
     WHERE c.is_active = true
       AND (
         c.school_year_id IS NULL
         OR c.school_year_id = (SELECT id FROM school_years WHERE status = 'active' LIMIT 1)
       )
-    ORDER BY c.name ASC
+    ORDER BY l.order_index ASC NULLS LAST, l.name ASC, c.name ASC
   `);
 
   return getRows<ClassCatalogRow>(result).map(mapClassCatalogItem);

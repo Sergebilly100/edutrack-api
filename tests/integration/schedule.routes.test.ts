@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   attachTenantDb: vi.fn(),
   releaseTenantDb: vi.fn(),
   getActiveSchedulesForDate: vi.fn(),
+  getWeeklySchedulesForDate: vi.fn(),
   duplicatePeriod: vi.fn(),
   ensureScheduleTemporalColumns: vi.fn(),
   listSchedulePeriods: vi.fn(),
@@ -39,15 +40,7 @@ vi.mock('../../src/modules/schedule/schedule.service.js', async () => {
     ...actual,
     getActiveSchedulesForDate: mocks.getActiveSchedulesForDate,
     duplicatePeriod: mocks.duplicatePeriod,
-    getWeeklySchedulesForDate: vi.fn().mockResolvedValue({
-      date: '2026-05-09',
-      period: null,
-      schedules: [],
-      teachers: [],
-      classes: [],
-      rooms: [],
-      timeSlots: [],
-    }),
+    getWeeklySchedulesForDate: mocks.getWeeklySchedulesForDate,
     hasFutureOccurrenceInPeriod: vi.fn().mockResolvedValue(false),
     computeOneShotEndDate: vi.fn().mockReturnValue('2026-05-31'),
     assertTeacherCanBeScheduled: mocks.assertTeacherCanBeScheduled,
@@ -167,6 +160,10 @@ beforeEach(() => {
     ],
   });
 
+  mocks.getWeeklySchedulesForDate.mockResolvedValue({
+    date: '2026-05-09', period: null, schedules: [], teachers: [], classes: [], rooms: [], timeSlots: [],
+  });
+
   mocks.duplicatePeriod.mockResolvedValue({
     period: {
       id: 'new-period-id',
@@ -176,6 +173,29 @@ beforeEach(() => {
       isActive: true,
     },
     copiedCount: 12,
+  });
+});
+
+describe('GET /api/v1/schedule/weekly niveaux', () => {
+  it('transmet les niveaux des classes du catalogue et des créneaux sans filtrage serveur', async () => {
+    mocks.getWeeklySchedulesForDate.mockResolvedValueOnce({
+      date: '2026-10-05', period: { id: PERIOD_ID }, teachers: [], rooms: [], timeSlots: [],
+      classes: [
+        { id: 'c1', name: '6A', levelId: 'l6', levelName: '6ème' },
+        { id: 'c2', name: 'Ancienne classe', levelId: null, levelName: null },
+      ],
+      schedules: [
+        { id: 's1', class: { id: 'c1', name: '6A', levelId: 'l6', levelName: '6ème' } },
+        { id: 's2', class: { id: 'c2', name: 'Ancienne classe', levelId: null, levelName: null } },
+      ],
+    });
+    const app = await buildApp();
+    const response = await app.inject({ method: 'GET', url: '/api/v1/schedule/weekly?date=2026-10-05' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().classes).toHaveLength(2);
+    expect(response.json().classes[1]).toMatchObject({ levelId: null, levelName: null });
+    expect(response.json().schedules[0].class).toMatchObject({ levelId: 'l6', levelName: '6ème' });
+    await app.close();
   });
 });
 
