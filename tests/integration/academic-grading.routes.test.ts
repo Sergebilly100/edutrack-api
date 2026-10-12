@@ -227,8 +227,8 @@ describe('academic grading integration', () => {
       gradingPeriodId,
       status: 'in_progress',
     });
-    expect(incompleteCalculation.status).toBe(200);
-    expect(incompleteCalculation.body.completion.status).toBe('in_progress');
+    expect(incompleteCalculation.status).toBe(409);
+    expect(incompleteCalculation.body.code).toBe('GRADES_INCOMPLETE');
 
     const scopeWithDates = await request().get('/api/v1/evaluations/scope').set(teacherHeaders).query({ classId, gradingPeriodId });
     expect(scopeWithDates.status).toBe(200);
@@ -236,6 +236,9 @@ describe('academic grading integration', () => {
       expect.objectContaining({ id: math1, evaluationDate: evaluationDates[0] }),
       expect.objectContaining({ id: math2, evaluationDate: evaluationDates[1] }),
       expect.objectContaining({ id: french, evaluationDate: evaluationDates[2] }),
+    ]));
+    expect(scopeWithDates.body.preparation).toEqual(expect.arrayContaining([
+      expect.objectContaining({ subjectId: mathResponse.body.subject.id, evaluationCount: 2, canStartCalculation: false }),
     ]));
 
     const saveGrade = (evaluationId: string, score: number) =>
@@ -263,6 +266,11 @@ describe('academic grading integration', () => {
       [mathResponse.body.subject.id, 16],
       [frenchResponse.body.subject.id, 12],
       [null, 14.667],
+    ]));
+
+    const readyScope = await request().get('/api/v1/evaluations/scope').set(teacherHeaders).query({ classId, gradingPeriodId });
+    expect(readyScope.body.preparation).toEqual(expect.arrayContaining([
+      expect.objectContaining({ subjectId: mathResponse.body.subject.id, missingGrades: 0, canStartCalculation: true }),
     ]));
 
     const tracking = await request().get('/api/v1/report-cards/completion').set(directorHeaders).query({

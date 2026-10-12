@@ -9,4 +9,4 @@ DROP CONSTRAINT IF EXISTS notifications_log_channel_check;
 --> statement-breakpoint
 ALTER TABLE "tenant"."notifications_log"
 ADD CONSTRAINT notifications_log_channel_check
-CHECK ("channel" IN ('sms', 'email'));
+CHECK ("channel" IN ('sms', 'email', 'in_app'));

@@ -4,6 +4,7 @@ import type { AcademicGradingRepository } from '../../src/modules/academic/acade
 import {
   AcademicGradingError,
   AcademicGradingService,
+  subjectPreparation,
 } from '../../src/modules/academic/academic-grading.service.js';
 
 const ids = {
@@ -29,6 +30,15 @@ const repository = {
   updateGradingPeriod: vi.fn(),
   findNextGradingPeriod: vi.fn(),
   getClassScope: vi.fn(),
+  findTeacherClassScope: vi.fn(),
+  listTeacherLessonSlotsForClass: vi.fn(),
+  listTeacherAssignedSubjectsForClass: vi.fn(),
+  listTeacherScheduleSubjects: vi.fn(),
+  listSubjects: vi.fn(),
+  listEvaluationsWithGrades: vi.fn(),
+  getCompletion: vi.fn(),
+  listCorrectionStatuses: vi.fn(),
+  getScheduledGradeProgress: vi.fn(),
   getLessonSlotScope: vi.fn(),
   hasTeacherSubjectAssignment: vi.fn(),
   getSubjectCompletion: vi.fn(),
@@ -84,7 +94,18 @@ beforeEach(() => {
     id: ids.schoolClass,
     levelId: ids.level,
     schoolYearId: ids.schoolYear,
+    schoolYearStatus: 'active',
+    isActive: true,
   });
+  repository.findTeacherClassScope.mockResolvedValue({ levelId: ids.level });
+  repository.listTeacherLessonSlotsForClass.mockResolvedValue([]);
+  repository.listTeacherAssignedSubjectsForClass.mockResolvedValue([{ id: ids.subject, name: 'Mathématiques' }]);
+  repository.listTeacherScheduleSubjects.mockResolvedValue([]);
+  repository.listSubjects.mockResolvedValue([{ id: ids.subject, name: 'Mathématiques' }]);
+  repository.listEvaluationsWithGrades.mockResolvedValue([]);
+  repository.getCompletion.mockResolvedValue([{ subjectId: ids.subject, status: 'in_progress', calculationStarted: false }]);
+  repository.listCorrectionStatuses.mockResolvedValue([]);
+  repository.getScheduledGradeProgress.mockResolvedValue([]);
   repository.hasTeacherSubjectAssignment.mockResolvedValue(true);
   repository.getSubjectCompletion.mockResolvedValue(null);
   repository.countScheduledEvaluations.mockResolvedValue(1);
@@ -129,6 +150,16 @@ describe('AcademicGradingService.updateGradingPeriod', () => {
 });
 
 describe('AcademicGradingService.updateCompletion', () => {
+  it('refuse le calcul après clôture de l’année scolaire', async () => {
+    repository.getClassScope.mockResolvedValue({ levelId: ids.level, schoolYearId: ids.schoolYear, schoolYearStatus: 'closed', isActive: true });
+    await expect(service.updateCompletion(completionInput, ids.user)).rejects.toMatchObject({ code: 'SCHOOL_YEAR_CLOSED', statusCode: 409 });
+    expect(repository.upsertCompletion).not.toHaveBeenCalled();
+  });
+  it('refuse un démarrage avec des notes manquantes', async () => {
+    repository.countMissingScheduledGrades.mockResolvedValue(2);
+    await expect(service.updateCompletion(completionInput, ids.user)).rejects.toMatchObject({ code: 'GRADES_INCOMPLETE', statusCode: 409 });
+    expect(repository.upsertCompletion).not.toHaveBeenCalled();
+  });
   it('refuse le calcul lorsqu’aucune évaluation programmée n’existe', async () => {
     repository.countScheduledEvaluations.mockResolvedValue(0);
 
@@ -149,6 +180,37 @@ describe('AcademicGradingService.updateCompletion', () => {
       Partial<AcademicGradingError>
     >({ code: 'GRADES_INCOMPLETE', statusCode: 409 });
     expect(repository.upsertCompletion).not.toHaveBeenCalled();
+  });
+});
+
+describe('subjectPreparation', () => {
+  const base = { evaluationCount: 1, expectedGrades: 3, enteredGrades: 3, calculationStarted: false, status: 'in_progress' as const, periodClosed: false };
+
+  it('distingue absence d’évaluation, notes manquantes et matière prête', () => {
+    expect(subjectPreparation({ ...base, evaluationCount: 0 }).reasons).toContain('NO_EVALUATIONS');
+    expect(subjectPreparation({ ...base, enteredGrades: 1 })).toMatchObject({ missingGrades: 2, canStartCalculation: false, reasons: ['GRADES_INCOMPLETE'] });
+    expect(subjectPreparation(base)).toMatchObject({ canStartCalculation: true, canFinalize: false });
+  });
+
+  it('autorise la révision en cours et verrouille la validation définitive', () => {
+    expect(subjectPreparation({ ...base, calculationStarted: true })).toMatchObject({ canRecalculate: true, canFinalize: true });
+    expect(subjectPreparation({ ...base, calculationStarted: true, status: 'completed' })).toMatchObject({ canRecalculate: false, canFinalize: false, reasons: ['SUBJECT_COMPLETED'] });
+    expect(subjectPreparation({ ...base, periodClosed: true }).reasons).toContain('PERIOD_CLOSED');
+    expect(subjectPreparation({ ...base, periodClosed: true, closureReason: 'SCHOOL_YEAR_CLOSED' }).reasons).toContain('SCHOOL_YEAR_CLOSED');
+  });
+});
+
+describe('AcademicGradingService.listEvaluationsForTeacher', () => {
+  it('fournit les compteurs et permissions de la matière affectée', async () => {
+    repository.getScheduledGradeProgress.mockResolvedValue([{ subjectId: ids.subject, evaluationCount: 2, expectedGrades: 4, enteredGrades: 3 }]);
+    const result = await service.listEvaluationsForTeacher(ids.schoolClass, ids.period, ids.user);
+    expect(result.preparation).toEqual([expect.objectContaining({ subjectId: ids.subject, evaluationCount: 2, expectedGrades: 4, enteredGrades: 3, missingGrades: 1, canStartCalculation: false, reasons: ['GRADES_INCOMPLETE'] })]);
+    expect(result.periodState).toMatchObject({ isClosed: false, notesEntryOpen: true });
+  });
+
+  it('refuse une période forgée hors de l’année scolaire de la classe', async () => {
+    repository.findGradingPeriod.mockResolvedValue({ id: ids.period, schoolYearId: ids.nextPeriod, closedClassIds: [], isCompleted: false });
+    await expect(service.listEvaluationsForTeacher(ids.schoolClass, ids.period, ids.user)).rejects.toMatchObject({ code: 'EVALUATION_PERIOD_FORBIDDEN', statusCode: 403 });
   });
 });
 

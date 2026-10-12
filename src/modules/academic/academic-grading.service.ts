@@ -35,6 +35,32 @@ const dbCode = (error: unknown): string => {
   return '';
 };
 
+export type PreparationReason = 'PERIOD_CLOSED' | 'SCHOOL_YEAR_CLOSED' | 'CLASS_INACTIVE' | 'NO_EVALUATIONS' | 'GRADES_INCOMPLETE' | 'SUBJECT_COMPLETED';
+
+export function subjectPreparation(input: {
+  evaluationCount: number; expectedGrades: number; enteredGrades: number;
+  calculationStarted: boolean; status: 'in_progress' | 'completed'; periodClosed: boolean;
+  closureReason?: 'SCHOOL_YEAR_CLOSED' | 'CLASS_INACTIVE' | 'PERIOD_CLOSED' | null;
+}) {
+  const missingGrades = Math.max(0, input.expectedGrades - input.enteredGrades);
+  const reasons: PreparationReason[] = [];
+  if (input.periodClosed) reasons.push(input.closureReason ?? 'PERIOD_CLOSED');
+  if (input.status === 'completed' && input.calculationStarted) reasons.push('SUBJECT_COMPLETED');
+  if (input.evaluationCount === 0) reasons.push('NO_EVALUATIONS');
+  if (missingGrades > 0) reasons.push('GRADES_INCOMPLETE');
+  const ready = reasons.length === 0;
+  return {
+    evaluationCount: input.evaluationCount,
+    expectedGrades: input.expectedGrades,
+    enteredGrades: input.enteredGrades,
+    missingGrades,
+    reasons,
+    canStartCalculation: ready && !input.calculationStarted,
+    canRecalculate: ready && input.calculationStarted,
+    canFinalize: ready && input.calculationStarted,
+  };
+}
+
 const assertPeriodOrder = (type: 'trimester' | 'semester', orderIndex: number): void => {
   const maximum = type === 'trimester' ? 3 : 2;
   if (orderIndex > maximum) {
@@ -352,9 +378,18 @@ export class AcademicGradingService {
     gradingPeriodId: string,
   ): Promise<void> {
     await this.repository.lockClassPeriod(classId, gradingPeriodId);
-    const period = await this.repository.findGradingPeriod(gradingPeriodId);
+    const [period, schoolClass] = await Promise.all([
+      this.repository.findGradingPeriod(gradingPeriodId),
+      this.repository.getClassScope(classId),
+    ]);
     if (!period) {
       throw new AcademicGradingError('Grading period not found', 400, 'GRADING_PERIOD_NOT_FOUND');
+    }
+    if (schoolClass?.schoolYearStatus === 'closed') {
+      throw new AcademicGradingError('L’année scolaire est clôturée', 409, 'SCHOOL_YEAR_CLOSED');
+    }
+    if (schoolClass?.isActive === false) {
+      throw new AcademicGradingError('La classe est inactive', 409, 'CLASS_INACTIVE');
     }
     if (period.isCompleted || period.closedClassIds.includes(classId)) {
       throw new AcademicGradingError(
@@ -389,7 +424,14 @@ export class AcademicGradingService {
     if (!scope) {
       throw new AcademicGradingError('Class is outside the teacher scope', 403, 'EVALUATION_SCOPE_FORBIDDEN');
     }
-    const [rawLessonSlots, assignedSubjects, scheduledSubjectNames, levelSubjects, evaluations, completion, correctionStatuses] = await Promise.all([
+    const [schoolClass, period] = await Promise.all([
+      this.repository.getClassScope(classId),
+      this.repository.findGradingPeriod(gradingPeriodId),
+    ]);
+    if (!schoolClass || !period || schoolClass.schoolYearId !== period.schoolYearId) {
+      throw new AcademicGradingError('Period is outside the teacher class scope', 403, 'EVALUATION_PERIOD_FORBIDDEN');
+    }
+    const [rawLessonSlots, assignedSubjects, scheduledSubjectNames, levelSubjects, evaluations, completion, correctionStatuses, gradeProgress] = await Promise.all([
       this.repository.listTeacherLessonSlotsForClass(teacherId, classId),
       this.repository.listTeacherAssignedSubjectsForClass(teacherId, classId),
       this.repository.listTeacherScheduleSubjects(teacherId, classId),
@@ -397,6 +439,7 @@ export class AcademicGradingService {
       this.repository.listEvaluationsWithGrades(teacherId, classId, gradingPeriodId),
       this.repository.getCompletion(classId, gradingPeriodId),
       this.repository.listCorrectionStatuses(classId, gradingPeriodId),
+      this.repository.getScheduledGradeProgress(teacherId, classId, gradingPeriodId),
     ]);
     const assignedSubjectIds = new Set(assignedSubjects.map((subject) => subject.id));
     const scheduledSubjectKeys = new Set(scheduledSubjectNames.map(normalizeSubjectKey));
@@ -410,12 +453,46 @@ export class AcademicGradingService {
       )?.id ?? null,
     }));
     const subjectIds = new Set(subjects.map((subject) => subject.id));
+    const progressBySubject = new Map(gradeProgress.map((item) => [item.subjectId, item]));
+    const closureReason = schoolClass.schoolYearStatus === 'closed' ? 'SCHOOL_YEAR_CLOSED'
+      : schoolClass.isActive === false ? 'CLASS_INACTIVE'
+        : period.isCompleted || period.closedClassIds.includes(classId) ? 'PERIOD_CLOSED' : null;
+    const periodClosed = closureReason !== null;
     return {
       lessonSlots,
       subjects,
       evaluations,
       completion: completion.filter((item) => subjectIds.has(item.subjectId)),
       correctionStatuses: correctionStatuses.filter((item) => subjectIds.has(item.subjectId)),
+      periodState: {
+        isClosed: periodClosed,
+        schoolYearStatus: schoolClass.schoolYearStatus,
+        classActive: schoolClass.isActive,
+        notesEntryOpen: period.notesEntryOpen,
+        reviewOpen: period.conductReviewOpen,
+        reason: closureReason,
+      },
+      preparation: subjects.map((subject) => {
+        const state = completion.find((item) => item.subjectId === subject.id);
+        const counts = progressBySubject.get(subject.id);
+        const correction = correctionStatuses.find((item) => item.subjectId === subject.id);
+        return {
+          subjectId: subject.id,
+          subjectName: subject.name,
+          status: state?.status ?? 'in_progress',
+          calculationStarted: state?.calculationStarted ?? false,
+          correctionStatus: correction?.status ?? null,
+          ...subjectPreparation({
+            evaluationCount: counts?.evaluationCount ?? 0,
+            expectedGrades: counts?.expectedGrades ?? 0,
+            enteredGrades: counts?.enteredGrades ?? 0,
+            calculationStarted: state?.calculationStarted ?? false,
+            status: state?.status ?? 'in_progress',
+            periodClosed,
+            closureReason,
+          }),
+        };
+      }),
     };
   }
 
@@ -643,6 +720,12 @@ export class AcademicGradingService {
     if (!subject || !period || !schoolClass || subject.levelId !== schoolClass.levelId || period.schoolYearId !== schoolClass.schoolYearId) {
       throw new AcademicGradingError('Completion scope is invalid', 400, 'COMPLETION_SCOPE_MISMATCH');
     }
+    if (schoolClass.schoolYearStatus === 'closed') {
+      throw new AcademicGradingError('L’année scolaire est clôturée', 409, 'SCHOOL_YEAR_CLOSED');
+    }
+    if (schoolClass.isActive === false) {
+      throw new AcademicGradingError('La classe est inactive', 409, 'CLASS_INACTIVE');
+    }
     const classClosed = period.isCompleted || period.closedClassIds.includes(input.classId);
     if (classClosed) {
       throw new AcademicGradingError(
@@ -696,9 +779,9 @@ export class AcademicGradingService {
         'EVALUATIONS_REQUIRED'
       );
     }
-    if (input.status === 'completed' && missingGrades > 0) {
+    if (missingGrades > 0) {
       throw new AcademicGradingError(
-        `${missingGrades} note(s) d’évaluation restent à saisir avant la validation définitive`,
+        `${missingGrades} note(s) d’évaluation restent à saisir avant le calcul ou la validation`,
         409,
         'GRADES_INCOMPLETE'
       );

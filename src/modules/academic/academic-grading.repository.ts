@@ -452,12 +452,14 @@ export class AcademicGradingRepository {
     } : null;
   }
 
-  async getClassScope(id: string): Promise<{ levelId: string | null; schoolYearId: string | null } | null> {
-    const result = await this.db.execute<{ level_id: string | null; school_year_id: string | null }>(sql`
-      SELECT level_id, school_year_id FROM classes WHERE id = ${id}::uuid LIMIT 1
+  async getClassScope(id: string): Promise<{ levelId: string | null; schoolYearId: string | null; schoolYearStatus: 'draft' | 'active' | 'closed' | null; isActive: boolean } | null> {
+    const result = await this.db.execute<{ level_id: string | null; school_year_id: string | null; school_year_status: 'draft' | 'active' | 'closed' | null; is_active: boolean }>(sql`
+      SELECT c.level_id, c.school_year_id, sy.status AS school_year_status, c.is_active
+      FROM classes c LEFT JOIN school_years sy ON sy.id = c.school_year_id
+      WHERE c.id = ${id}::uuid LIMIT 1
     `);
     const row = rows(result)[0];
-    return row ? { levelId: row.level_id, schoolYearId: row.school_year_id } : null;
+    return row ? { levelId: row.level_id, schoolYearId: row.school_year_id, schoolYearStatus: row.school_year_status, isActive: row.is_active } : null;
   }
 
   async ensureTeacherSubjectAssignment(teacherId: string, subjectId: string, classId: string): Promise<void> {
@@ -791,6 +793,38 @@ export class AcademicGradingRepository {
         AND type = 'scheduled'
     `);
     return Number(rows(result)[0]?.evaluation_count ?? 0);
+  }
+
+  async getScheduledGradeProgress(teacherId: string, classId: string, gradingPeriodId: string): Promise<Array<{
+    subjectId: string; evaluationCount: number; expectedGrades: number; enteredGrades: number;
+  }>> {
+    const result = await this.db.execute<{
+      subject_id: string; evaluation_count: string; expected_grades: string; entered_grades: string;
+    }>(sql`
+      WITH eligible_students AS (
+        SELECT s.id FROM students s
+        INNER JOIN classes c ON c.id = ${classId}::uuid
+        WHERE ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
+      ), scheduled AS (
+        SELECT e.id, e.subject_id FROM evaluations e
+        WHERE e.teacher_id = ${teacherId}::uuid AND e.class_id = ${classId}::uuid
+          AND e.grading_period_id = ${gradingPeriodId}::uuid AND e.type = 'scheduled'
+      )
+      SELECT e.subject_id::text AS subject_id,
+             COUNT(DISTINCT e.id)::text AS evaluation_count,
+             COUNT(s.id)::text AS expected_grades,
+             COUNT(eg.id)::text AS entered_grades
+      FROM scheduled e
+      LEFT JOIN eligible_students s ON true
+      LEFT JOIN evaluation_grades eg ON eg.evaluation_id = e.id AND eg.student_id = s.id
+      GROUP BY e.subject_id
+    `);
+    return rows(result).map((row) => ({
+      subjectId: row.subject_id,
+      evaluationCount: Number(row.evaluation_count),
+      expectedGrades: Number(row.expected_grades),
+      enteredGrades: Number(row.entered_grades),
+    }));
   }
 
   async getCompletion(classId: string, gradingPeriodId: string) {

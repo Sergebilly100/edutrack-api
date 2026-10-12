@@ -24,7 +24,7 @@
   "0021_sms_business_constraints.sql": "214cd677d1866144da1cf259c9100666e5375cb37bb71b0749b46e99f05459b5",
   "0022_financial_idempotency_audit.sql": "7476d44d1b8ba863737065a3879adb8541777a513d4e6d606d062ba2846bc07d",
   "0022_subscription_cancellation_audit.sql": "73f8c2e3a774c55275527e1a04155a166f67c3ba25c03e207b1d11b1a8eded9f",
-  "0023_notifications_email_channel.sql": "238b4006e2627c2cfa941817fbefb13d0555c088e735532d7eb53357e18186ba",
+  "0023_notifications_email_channel.sql": "f2966566465f7e015bc60ed66a6acd96b02debc3e7718b2c6824089c13907091",
   "0024_africas_talking_sms_provider.sql": "b898030b0a3a3dde79aac454fad34faf3b8995924eb4505b5f2d0040f9ffb87d",
   "0025_salary_nothing_to_pay_and_parent_alert_monetization.sql": "51c40615df6b8749ddc541d8ef0e6d570c6fc1e22453735ab7c175d09042b3c6",
   "0026_real_hours_geolocation.sql": "f9cbc7f73c9d2a08d34c0ff2bd013832209ccbfa9c344958b231faba5a1a5d8a",
@@ -88,5 +88,5 @@
   "0083_report_card_corrections.sql": "2c161183ba4a0724fd2679ef48f8c1c9dc0e0350c5cb35b832652d7aff12fd08",
   "0084_student_report_card_claims.sql": "0bbb9507f5e024e540374f0bff6c2d424800cc625e89789b9dd0e9ee36fcaeac",
   "0085_subjects_abbreviation.sql": "2c08d0750f8ffefd9676df83196f36ff3e557eba35dc0e2e80d5e2c121a574ec",
-  "0086_parent_access_log_redaction.sql": "8f39dd0cd89a65e5880d5a91e48b0b50824a2cd18cb674e123ccbaa7534157ef"
+  "0086_parent_access_log_redaction.sql": "1a968e5b2d05336fa1fb62790a5985305aaa358c12832e3b79ad45886a055ac3"
 }
