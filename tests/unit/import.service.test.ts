@@ -9,6 +9,7 @@ const repository = {
   listScheduleAssignments: vi.fn(),
   listRooms: vi.fn(),
   listTimeSlots: vi.fn(),
+  listSchedulesForImportPeriod: vi.fn(),
   findOrCreateTimeSlot: vi.fn(),
   findActiveSchedulePeriodId: vi.fn(),
   findSchedulePeriodById: vi.fn(),
@@ -100,6 +101,7 @@ beforeEach(() => {
       end_time: '09:00:00',
     },
   ]);
+  repository.listSchedulesForImportPeriod.mockResolvedValue([]);
   repository.findOrCreateTimeSlot.mockResolvedValue({
     id: 'slot-created',
     label: '09:00 – 10:30',
@@ -567,6 +569,51 @@ describe('import.service - teachers confirm', () => {
 // ---------------------------------------------------------------------------
 
 describe('import.service - schedule dry-run', () => {
+  it('accepts flexible minutes and rejects malformed, zero or reversed ranges without a partial row', async () => {
+    const service = new ImportService(repository);
+    const row = (slot: string, day = 'Lundi') => ({
+      'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': 'Mathématiques',
+      'Jour*': day, 'Créneau*': slot, Salle: 'Salle A1',
+    });
+    const report = await service.dryRun('schedule', await toWorkbookBuffer([
+      row('07:15 - 08:05'), row('12:20 - 13:10', 'Mardi'),
+      row('24:00 - 08:05', 'Mercredi'), row('12:60 - 13:10', 'Jeudi'),
+      row('07:15 - 07:15', 'Vendredi'), row('08:05 - 07:45', 'Samedi'),
+      row('07:15 - 08:05 rubbish', 'Mercredi'),
+    ]), db, { schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-03' } });
+    expect(report.valid).toBe(2);
+    expect(report.errors.filter((error) => error.column === 'Créneau*')).toHaveLength(5);
+  });
+
+  it('reports partial resource overlaps in the preview', async () => {
+    const service = new ImportService(repository);
+    const row = (slot: string) => ({
+      'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': 'Mathématiques',
+      'Jour*': 'Lundi', 'Créneau*': slot, Salle: 'Salle A1',
+    });
+    const report = await service.dryRun('schedule', await toWorkbookBuffer([
+      row('07:15 - 08:05'), row('07:45 - 08:30'), row('08:05 - 08:30'),
+    ]), db, { schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-03' } });
+    expect(report.valid).toBe(2);
+    expect(report.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ column: 'Créneau*', message: expect.stringContaining('Chevauchement') }),
+    ]));
+  });
+
+  it('reports partial overlap against another saved schedule in the tenant', async () => {
+    repository.listSchedulesForImportPeriod.mockResolvedValueOnce([{
+      teacher_id: 'teacher-1', class_id: 'class-other', room_name: 'Salle B',
+      day_of_week: 1, start_time: '07:45:00', end_time: '08:30:00',
+    }]);
+    const service = new ImportService(repository);
+    const report = await service.dryRun('schedule', await toWorkbookBuffer([{
+      'Nom professeur*': 'Ibrahim Diallo', 'Classe*': '3ème A', 'Matière*': 'Mathématiques',
+      'Jour*': 'Lundi', 'Créneau*': '07:15 - 08:05', Salle: 'Salle A1',
+    }]), db, { schedulePeriod: { weekStart: '2026-04-27', weekEnd: '2026-05-03' } });
+    expect(report.valid).toBe(0);
+    expect(report.errors[0]?.message).toContain('cours existant');
+    expect(repository.listSchedulesForImportPeriod).toHaveBeenCalledWith(db, '2026-04-27', '2026-05-03');
+  });
   it('accepte le libellé officiel mais rejette son abréviation seule', async () => {
     repository.listScheduleAssignments.mockResolvedValue([
       { teacher_id: 'teacher-1', class_id: 'class-1', subject: 'Mathématiques', abbreviation: 'Maths' },

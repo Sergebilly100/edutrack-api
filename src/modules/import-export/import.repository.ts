@@ -34,6 +34,11 @@ type TeacherDirectoryRow = {
 type ScheduleAssignmentRow = { teacher_id: string; class_id: string; subject: string; abbreviation: string | null };
 type RoomRow = { id: string; name: string; building: string | null; capacity: number | null; is_active: boolean };
 type TimeSlotRow = { id: string; label: string; start_time: string; end_time: string };
+type ImportScheduleConflictRow = {
+  teacher_id: string; class_id: string; room_name: string;
+  day_of_week: number; start_time: string; end_time: string; end_date: string | null;
+  period_from: string; period_to: string;
+};
 type SchedulePeriodRow = { id: string; valid_from?: string; valid_to?: string };
 type SchedulePeriodConflictRow = { id: string; name: string; valid_from: string; valid_to: string };
 type ExistingStudentRow = { id: string; matricule: string | null };
@@ -89,6 +94,7 @@ export type ImportRepository = {
     input: { name: string; qrToken: string; building?: string | null; capacity?: number | null }
   ) => Promise<{ id: string; name: string }>;
   listTimeSlots: (db: QueryExecutor) => Promise<TimeSlotRow[]>;
+  listSchedulesForImportPeriod: (db: QueryExecutor, start: string, end: string) => Promise<ImportScheduleConflictRow[]>;
   findOrCreateTimeSlot: (
     db: QueryExecutor,
     input: { label: string; startTime: string; endTime: string }
@@ -268,6 +274,25 @@ export const defaultImportRepository: ImportRepository = {
     `);
 
     return getRows<TimeSlotRow>(result);
+  },
+
+  async listSchedulesForImportPeriod(db, start, end) {
+    const result = await db.execute(sql`
+      SELECT s.teacher_id::text AS teacher_id, s.class_id::text AS class_id,
+        r.name AS room_name, s.day_of_week,
+        ts.start_time::text AS start_time, ts.end_time::text AS end_time,
+        s.end_date::text AS end_date,
+        sp.valid_from::text AS period_from, sp.valid_to::text AS period_to
+      FROM schedules s
+      INNER JOIN schedule_periods sp ON sp.id = s.schedule_period_id
+      INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+      INNER JOIN rooms r ON r.id = s.room_id
+      WHERE s.is_active = true AND sp.is_active = true
+        AND sp.valid_from <= ${end}::date AND sp.valid_to >= ${start}::date
+        AND (s.start_date IS NULL OR s.start_date <= ${end}::date)
+        AND (s.end_date IS NULL OR s.end_date > ${start}::date)
+    `);
+    return getRows<ImportScheduleConflictRow>(result);
   },
 
   async findOrCreateTimeSlot(db, input) {

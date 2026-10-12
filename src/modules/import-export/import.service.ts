@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import ExcelJS from 'exceljs';
 
 import { weeklyPeriodSchema } from '../../shared/utils/schedule-period.js';
+import { isValidScheduleInterval, parseScheduleTime } from '../../shared/utils/schedule-time.js';
 import { emit } from '../../shared/events/event-bus.js';
 import { generateUsername } from '../../shared/utils/username.js';
 import { matriculeKey, trimMatricule } from '../../shared/utils/matricule.js';
@@ -320,18 +321,18 @@ const normalizeTimeValue = (hour: string, minute?: string): string | null => {
     return null;
   }
 
-  return `${String(parsedHour).padStart(2, '0')}:${String(parsedMinute).padStart(2, '0')}:00`;
+  const value = `${String(parsedHour).padStart(2, '0')}:${String(parsedMinute).padStart(2, '0')}`;
+  return parseScheduleTime(value) === null ? null : `${value}:00`;
 };
 
 const parseTimeSlotLabel = (label: string): { startTime: string; endTime: string; label: string } | null => {
-  const matches = [...label.matchAll(/(\d{1,2})(?:\s*(?:h|:)\s*(\d{1,2}))?/gi)];
-  if (matches.length < 2) {
-    return null;
-  }
-
-  const startTime = normalizeTimeValue(matches[0][1], matches[0][2]);
-  const endTime = normalizeTimeValue(matches[1][1], matches[1][2]);
-  if (!startTime || !endTime || startTime >= endTime) {
+  // Preserve the existing 7h30 notation, while requiring the entire cell to
+  // contain exactly two complete times and one range separator.
+  const match = /^\s*(\d{1,2})\s*(?:h|:)\s*(\d{2})\s*[-–—]\s*(\d{1,2})\s*(?:h|:)\s*(\d{2})\s*$/i.exec(label);
+  if (!match) return null;
+  const startTime = normalizeTimeValue(match[1], match[2]);
+  const endTime = normalizeTimeValue(match[3], match[4]);
+  if (!startTime || !endTime || !isValidScheduleInterval(startTime.slice(0, 5), endTime.slice(0, 5))) {
     return null;
   }
 
@@ -1176,11 +1177,12 @@ export class ImportService {
     ensureRequiredHeaders(parsed.rows, SCHEDULE_HEADERS);
     const resolvedPeriodBounds = { validFrom: period.weekStart, validTo: period.weekEnd };
 
-    const [classes, teacherDirectory, timeSlots, assignments] = await Promise.all([
+    const [classes, teacherDirectory, timeSlots, assignments, existingSchedules] = await Promise.all([
       this.repository.listClasses(db),
       this.repository.listTeacherDirectory(db),
       this.repository.listTimeSlots(db),
       this.repository.listScheduleAssignments(db),
+      this.repository.listSchedulesForImportPeriod(db, period.weekStart, period.weekEnd),
     ]);
 
     const classesByName = new Map(classes.map((item) => [normalizeKey(item.name), item.id]));
@@ -1209,6 +1211,10 @@ export class ImportService {
 
     const errors: ImportError[] = [];
     const validRows: ScheduleImportRow[] = [];
+    const validatedSlots: Array<{
+      row: number; dayOfWeek: number; start: number; end: number;
+      teacherId: string; classId: string; roomName: string;
+    }> = [];
 
     parsed.rows.forEach((sheetRow) => {
       const line = sheetRow.line;
@@ -1331,7 +1337,7 @@ export class ImportService {
           makeError({
             row: line,
             column: 'Créneau*',
-            message: 'Format de créneau invalide (ex: 07:30 - 09:00 ou 7h30 - 9h00)',
+            message: 'Créneau invalide (ex: 07:15 - 08:05 ; heures HH:MM, début avant fin)',
             value: slotLabel,
           })
         );
@@ -1387,6 +1393,53 @@ export class ImportService {
       if (hasRowError || shouldSkipRow) {
         return;
       }
+
+      const slot = slotsByLabel.get(normalizeKey(slotLabel));
+      const start = slot ? parseScheduleTime(slot.startTime.slice(0, 5)) : null;
+      const end = slot ? parseScheduleTime(slot.endTime.slice(0, 5)) : null;
+      if (start === null || end === null) return;
+      const teacherId = teacherMatches[0];
+      const classId = classesByName.get(normalizeKey(className));
+      if (!teacherId || !classId) return;
+      const overlap = validatedSlots.find((previous) =>
+        previous.dayOfWeek === DAY_MAP[day]
+        && previous.start < end && start < previous.end
+        && (previous.teacherId === teacherId || previous.classId === classId
+          || previous.roomName === normalizeKey(roomName))
+      );
+      if (overlap) {
+        errors.push(makeError({
+          row: line,
+          column: 'Créneau*',
+          message: `Chevauchement avec la ligne ${overlap.row} (professeur, classe ou salle)`,
+          value: slotLabel,
+        }));
+        return;
+      }
+      const existingConflict = existingSchedules.some((previous) => {
+        if (startDate && previous.end_date && previous.end_date <= startDate) return false;
+        const previousStart = parseScheduleTime(previous.start_time.slice(0, 5));
+        const previousEnd = parseScheduleTime(previous.end_time.slice(0, 5));
+        if (previousStart === null || previousEnd === null || previous.day_of_week !== DAY_MAP[day]) return false;
+        if (previousStart >= end || start >= previousEnd) return false;
+        // The import upsert replaces an existing teacher+exact-slot assignment.
+        if (previous.teacher_id === teacherId && previousStart === start && previousEnd === end
+          && previous.period_from === period.weekStart && previous.period_to === period.weekEnd) return false;
+        return previous.teacher_id === teacherId || previous.class_id === classId
+          || normalizeKey(previous.room_name) === normalizeKey(roomName);
+      });
+      if (existingConflict) {
+        errors.push(makeError({
+          row: line, column: 'Créneau*',
+          message: 'Chevauchement avec un cours existant (professeur, classe ou salle)',
+          value: slotLabel,
+        }));
+        return;
+      }
+      validatedSlots.push({
+        row: line, dayOfWeek: DAY_MAP[day], start, end,
+        teacherId, classId, roomName: normalizeKey(roomName),
+      });
 
       validRows.push({
         teacherName,

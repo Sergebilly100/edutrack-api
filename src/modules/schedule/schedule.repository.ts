@@ -999,7 +999,13 @@ export const findScheduleConflicts = async (
           AND (s.end_date IS NULL OR s.end_date > ${input.referenceDate}::date)
           AND s.schedule_period_id IN (SELECT id FROM overlapping_periods)
           AND s.day_of_week = ${input.dayOfWeek}
-          AND s.time_slot_id = ${input.timeSlotId}
+          AND EXISTS (
+            SELECT 1 FROM time_slots existing_slot, time_slots target_slot
+            WHERE existing_slot.id = s.time_slot_id
+              AND target_slot.id = ${input.timeSlotId}::uuid
+              AND existing_slot.start_time < target_slot.end_time
+              AND existing_slot.end_time > target_slot.start_time
+          )
           AND s.teacher_id = ${input.teacherId}
           AND (${input.excludeScheduleId ?? null}::uuid IS NULL OR s.id <> ${input.excludeScheduleId ?? null}::uuid)
       ) AS teacher_conflict,
@@ -1011,7 +1017,13 @@ export const findScheduleConflicts = async (
           AND (s.end_date IS NULL OR s.end_date > ${input.referenceDate}::date)
           AND s.schedule_period_id IN (SELECT id FROM overlapping_periods)
           AND s.day_of_week = ${input.dayOfWeek}
-          AND s.time_slot_id = ${input.timeSlotId}
+          AND EXISTS (
+            SELECT 1 FROM time_slots existing_slot, time_slots target_slot
+            WHERE existing_slot.id = s.time_slot_id
+              AND target_slot.id = ${input.timeSlotId}::uuid
+              AND existing_slot.start_time < target_slot.end_time
+              AND existing_slot.end_time > target_slot.start_time
+          )
           AND s.room_id = ${input.roomId}
           AND (${input.excludeScheduleId ?? null}::uuid IS NULL OR s.id <> ${input.excludeScheduleId ?? null}::uuid)
       ) AS room_conflict,
@@ -1023,7 +1035,13 @@ export const findScheduleConflicts = async (
           AND (s.end_date IS NULL OR s.end_date > ${input.referenceDate}::date)
           AND s.schedule_period_id IN (SELECT id FROM overlapping_periods)
           AND s.day_of_week = ${input.dayOfWeek}
-          AND s.time_slot_id = ${input.timeSlotId}
+          AND EXISTS (
+            SELECT 1 FROM time_slots existing_slot, time_slots target_slot
+            WHERE existing_slot.id = s.time_slot_id
+              AND target_slot.id = ${input.timeSlotId}::uuid
+              AND existing_slot.start_time < target_slot.end_time
+              AND existing_slot.end_time > target_slot.start_time
+          )
           AND s.class_id = ${input.classId}
           AND (${input.excludeScheduleId ?? null}::uuid IS NULL OR s.id <> ${input.excludeScheduleId ?? null}::uuid)
       ) AS class_conflict

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   findOrCreateTimeSlot,
+  findScheduleConflicts,
   listClassesCatalog,
   listSchedulesForPeriod,
   listSchedulesForPeriodAndDay,
@@ -16,6 +17,11 @@ describe('Schedule Repository', () => {
   });
 
   describe('findOrCreateTimeSlot', () => {
+    it('keeps exact flexible times in the time slot lookup', async () => {
+      mockDb.execute.mockResolvedValue({ rows: [{ id: 'flex-slot', label: '07:15 – 08:05', start_time: '07:15:00', end_time: '08:05:00', sort_order: 435 }] });
+      const slot = await findOrCreateTimeSlot(mockDb, { startTime: '07:15', endTime: '08:05' });
+      expect(slot).toMatchObject({ id: 'flex-slot', sortOrder: 435, startTime: '07:15:00', endTime: '08:05:00' });
+    });
     it('should return existing time_slot if found', async () => {
       mockDb.execute.mockResolvedValue({
         rows: [{
@@ -97,6 +103,23 @@ describe('Schedule Repository', () => {
         })
       ).rejects.toThrow('failed to upsert time_slot');
     });
+  });
+
+  it('compares real half-open intervals for teacher, room and class conflicts', async () => {
+    mockDb.execute.mockResolvedValue({ rows: [{ teacher_conflict: true, room_conflict: false, class_conflict: true }] });
+    const conflicts = await findScheduleConflicts(mockDb, {
+      schedulePeriodId: '11111111-1111-4111-8111-111111111111',
+      teacherId: '22222222-2222-4222-8222-222222222222',
+      classId: '33333333-3333-4333-8333-333333333333',
+      roomId: '44444444-4444-4444-8444-444444444444',
+      timeSlotId: '55555555-5555-4555-8555-555555555555',
+      dayOfWeek: 1, subject: 'Maths', referenceDate: '2099-01-05',
+    });
+    expect(conflicts).toEqual({ teacherConflict: true, roomConflict: false, classConflict: true });
+    const query = mockDb.execute.mock.calls[0][0].queryChunks
+      .flatMap((chunk: { value?: string[] } | null) => chunk?.value ?? []).join('');
+    expect(query.match(/existing_slot\.start_time < target_slot\.end_time/g)).toHaveLength(3);
+    expect(query.match(/existing_slot\.end_time > target_slot\.start_time/g)).toHaveLength(3);
   });
 
   describe('catalogue et créneaux avec niveau', () => {

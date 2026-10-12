@@ -1,12 +1,8 @@
 import { z } from 'zod';
 import { mondayDateSchema, sundayDateSchema } from '../../shared/utils/schedule-period.js';
+import { isValidScheduleInterval, scheduleTimeSchema } from '../../shared/utils/schedule-time.js';
 
 const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Invalid date format');
-
-// Format "HH:MM" strict
-const timeStringSchema = z
-  .string()
-  .regex(/^\d{2}:\d{2}$/, 'Invalid time format - expected HH:MM');
 
 export const periodPayloadSchema = z
   .object({
@@ -70,8 +66,8 @@ export const schedulePayloadSchema = z
     // Optionnel - si absent, start_time + end_time sont requis
     time_slot_id: z.string().uuid().optional(),
     // Horaires libres (alternative à time_slot_id)
-    start_time: timeStringSchema.optional(),
-    end_time: timeStringSchema.optional(),
+    start_time: scheduleTimeSchema.optional(),
+    end_time: scheduleTimeSchema.optional(),
     day_of_week: z.number().int().min(1).max(6),
     subject: z.string().trim().min(1).max(100),
     effective_from: dateStringSchema.optional(),
@@ -101,7 +97,7 @@ export const schedulePayloadSchema = z
     (value) => {
       // Si les deux heures sont fournies, vérifier start < end
       if (!value.start_time || !value.end_time) return true;
-      return value.start_time < value.end_time;
+      return isValidScheduleInterval(value.start_time, value.end_time);
     },
     {
       message: 'start_time must be before end_time',

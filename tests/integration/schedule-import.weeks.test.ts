@@ -152,4 +152,73 @@ describe('C11 complete weekly imports, real HTTP and persistence', () => {
     }
     expect((await counts())!.periods).toBe(1);
   });
+  it('previews and imports exact flexible minutes, then rejects partial overlap while allowing adjacency', async () => {
+    const period = bounds(100);
+    const book = new ExcelJS.Workbook();
+    const sheet = book.addWorksheet('EDT');
+    sheet.addRow(['Nom professeur*', 'Classe*', 'Matière*', 'Jour*', 'Créneau*', 'Salle']);
+    sheet.addRow([teacherName, getSeedContext().className, 'Mathematiques', 'Lundi', '07:15 - 08:05', 'Salle A1']);
+    const flexibleWorkbook = Buffer.from(await book.xlsx.writeBuffer());
+    const headers = await getAuthHeaders('director');
+    const sendImport = (action: 'dry-run' | 'confirm') => request()
+      .post(`/api/v1/import/schedule/${action}`)
+      .set(headers)
+      .field('week_start', period.start)
+      .field('week_end', period.end)
+      .attach('file', flexibleWorkbook, { filename: 'edt-flexible.xlsx' });
+
+    const preview = await sendImport('dry-run');
+    expect(preview.status, JSON.stringify(preview.body)).toBe(200);
+    expect(preview.body.valid).toBe(1);
+    const confirmed = await sendImport('confirm');
+    expect(confirmed.status, JSON.stringify(confirmed.body)).toBe(200);
+    const [saved] = await queryTenant<{ id: string; start_time: string; end_time: string }>(`
+      SELECT ts.id, ts.start_time::text, ts.end_time::text
+      FROM schedules s JOIN time_slots ts ON ts.id = s.time_slot_id
+      JOIN schedule_periods sp ON sp.id = s.schedule_period_id
+      WHERE sp.valid_from = $1 AND sp.valid_to = $2 AND s.teacher_id = $3
+        AND ts.start_time = '07:15'::time AND ts.end_time = '08:05'::time
+      LIMIT 1`, [period.start, period.end, getSeedContext().teacherId]);
+    expect(saved).toMatchObject({ start_time: '07:15:00', end_time: '08:05:00' });
+    const reconfirmed = await request().post('/api/v1/import/schedule/confirm').set(headers)
+      .field('week_start', period.start).field('week_end', period.end)
+      .field('conflict_acknowledged', 'true')
+      .attach('file', flexibleWorkbook, { filename: 'edt-flexible.xlsx' });
+    expect(reconfirmed.status, JSON.stringify(reconfirmed.body)).toBe(200);
+    const [slotCount] = await queryTenant<{ count: number }>(
+      "SELECT count(*)::int AS count FROM time_slots WHERE start_time = '07:15'::time AND end_time = '08:05'::time"
+    );
+    expect(slotCount?.count).toBe(1);
+
+    const [createdPeriod] = await queryTenant<{ id: string }>(
+      'SELECT id FROM schedule_periods WHERE valid_from = $1 AND valid_to = $2 LIMIT 1',
+      [period.start, period.end]
+    );
+    const payload = {
+      schedule_period_id: createdPeriod!.id, teacher_id: getSeedContext().teacherId,
+      class_id: classId, room_id: roomId, day_of_week: 1, subject: 'Mathematiques',
+      recurrence: 'one_shot', effective_from: period.start,
+    };
+    const overlapping = await request().post('/api/v1/schedule').set(headers)
+      .send({ ...payload, start_time: '07:45', end_time: '08:30' });
+    expect(overlapping.status, JSON.stringify(overlapping.body)).toBe(409);
+    expect(overlapping.body.code).toBe('TEACHER_SCHEDULE_CONFLICT');
+
+    const adjacent = await request().post('/api/v1/schedule').set(headers)
+      .send({ ...payload, start_time: '08:05', end_time: '08:30' });
+    expect(adjacent.status, JSON.stringify(adjacent.body)).toBe(201);
+    const edited = await request().put(`/api/v1/schedule/${adjacent.body.schedule.id}`).set(headers)
+      .send({ ...payload, start_time: '12:20', end_time: '13:10', update_scope: 'all' });
+    expect(edited.status, JSON.stringify(edited.body)).toBe(200);
+    const [editedSlot] = await queryTenant<{ start_time: string; end_time: string }>(`
+      SELECT ts.start_time::text, ts.end_time::text FROM schedules s
+      JOIN time_slots ts ON ts.id = s.time_slot_id WHERE s.id = $1`, [adjacent.body.schedule.id]);
+    expect(editedSlot).toEqual({ start_time: '12:20:00', end_time: '13:10:00' });
+    const invalid = await request().post('/api/v1/schedule').set(headers)
+      .send({ ...payload, start_time: '24:00', end_time: '08:30' });
+    expect(invalid.status).toBe(400);
+    const invalidEdit = await request().put(`/api/v1/schedule/${adjacent.body.schedule.id}`).set(headers)
+      .send({ ...payload, start_time: '12:60', end_time: '13:10', update_scope: 'all' });
+    expect(invalidEdit.status).toBe(400);
+  });
 });
