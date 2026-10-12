@@ -1,8 +1,9 @@
+import { civilDateSchema } from '../../shared/utils/date-validation.js';
 import { z } from 'zod';
 import { mondayDateSchema, sundayDateSchema } from '../../shared/utils/schedule-period.js';
 import { isValidScheduleInterval, scheduleTimeSchema } from '../../shared/utils/schedule-time.js';
 
-const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Invalid date format');
+const dateStringSchema = civilDateSchema;
 
 export const periodPayloadSchema = z
   .object({
@@ -11,7 +12,7 @@ export const periodPayloadSchema = z
     valid_to: sundayDateSchema,
   })
   .refine((value) => value.valid_from <= value.valid_to, {
-    message: 'valid_from must be before or equal to valid_to',
+    message: 'La date de fin doit être postérieure ou égale à la date de début.',
     path: ['valid_to'],
   });
 
@@ -33,7 +34,7 @@ export const periodUpdatePayloadSchema = z
       return value.valid_from <= value.valid_to;
     },
     {
-      message: 'valid_from must be before or equal to valid_to',
+      message: 'La date de fin doit être postérieure ou égale à la date de début.',
       path: ['valid_to'],
     }
   );
@@ -45,7 +46,7 @@ export const periodDuplicatePayloadSchema = z
     new_valid_to: sundayDateSchema,
   })
   .refine((value) => value.new_valid_from <= value.new_valid_to, {
-    message: 'new_valid_from must be before or equal to new_valid_to',
+    message: 'La date de fin doit être postérieure ou égale à la date de début.',
     path: ['new_valid_to'],
   });
 

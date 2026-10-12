@@ -259,6 +259,18 @@ describe('GET /api/v1/students', () => {
 // ─── POST /students ───────────────────────────────────────────────────────────
 
 describe('POST /api/v1/students', () => {
+  it('refuse les naissances aujourd’hui, futures ou impossibles avant tout appel au service', async () => {
+    const app = await buildApp();
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Abidjan', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    for (const birth_date of [today, '9999-12-31', '2026-02-30']) {
+      const response = await app.inject({ method: 'POST', url: '/api/v1/students',
+        headers: { authorization: 'Bearer token' }, payload: { first_name: 'Awa', last_name: 'Kouassi', birth_date } });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ code: 'INVALID_BIRTH_DATE', statusCode: 400 });
+    }
+    expect(mocks.service.createStudent).not.toHaveBeenCalled();
+    await app.close();
+  });
   it('crée un élève et retourne 201', async () => {
     const app = await buildApp();
     const response = await app.inject({
@@ -295,6 +307,14 @@ describe('POST /api/v1/students', () => {
 // ─── PUT /students/:id ────────────────────────────────────────────────────────
 
 describe('PUT /api/v1/students/:id', () => {
+  it('refuse une naissance invalide avant mise à jour', async () => {
+    const app = await buildApp();
+    const response = await app.inject({ method: 'PUT', url: '/api/v1/students/66f048d8-d053-48e2-b4a8-7fce3ebc3ed8',
+      headers: { authorization: 'Bearer token' }, payload: { birth_date: '2026-02-30' } });
+    expect(response.json()).toMatchObject({ code: 'INVALID_BIRTH_DATE', statusCode: 400 });
+    expect(mocks.service.updateStudent).not.toHaveBeenCalled();
+    await app.close();
+  });
   it('met à jour et retourne 200', async () => {
     const app = await buildApp();
     const response = await app.inject({
@@ -377,6 +397,19 @@ describe('GET /api/v1/students/:id', () => {
 // ─── GET /students/absence-stats ─────────────────────────────────────────────
 
 describe('GET /api/v1/students/absence-stats', () => {
+  it('refuse une plage inversée et une date impossible sans appeler le service', async () => {
+    const app = await buildApp();
+    for (const [from, to, code] of [
+      ['2026-04-02', '2026-04-01', 'INVALID_DATE_RANGE'],
+      ['2026-02-30', '2026-04-01', 'INVALID_CIVIL_DATE'],
+    ]) {
+      const response = await app.inject({ method: 'GET', url: `/api/v1/students/absence-stats?from=${from}&to=${to}`,
+        headers: { authorization: 'Bearer token' } });
+      expect(response.json()).toMatchObject({ code, statusCode: 400 });
+    }
+    expect(mocks.service.getAbsenceStats).not.toHaveBeenCalled();
+    await app.close();
+  });
   it('transmet niveau et classe aux statistiques et valide le niveau', async () => {
     const app = await buildApp();
     const levelId = '66f048d8-d053-48e2-b4a8-7fce3ebc3ed8';

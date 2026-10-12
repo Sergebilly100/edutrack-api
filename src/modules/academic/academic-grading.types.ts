@@ -1,6 +1,7 @@
+import { civilDateSchema } from '../../shared/utils/date-validation.js';
 import { z } from 'zod';
 
-const isoDateSchema = z.string().date();
+const isoDateSchema = civilDateSchema;
 const positiveDecimalSchema = z.number().finite().positive();
 const abbreviationSchema = z.string().trim().max(30).nullable().transform((value) => value || null);
 
@@ -95,10 +96,10 @@ export const createGradingPeriodBodySchema = z
     endDate: isoDateSchema,
   })
   .refine((input) => input.startDate <= input.endDate, {
-    message: 'Period start date must be before or equal to end date',
+    message: 'La date de fin doit être postérieure ou égale à la date de début.',
     path: ['startDate'],
   }).refine((input) => input.startDate <= input.reviewStartDate && input.reviewStartDate <= input.endDate, {
-    message: 'Review start date must be within the grading period', path: ['reviewStartDate'],
+    message: 'Le début de revue doit se situer entre le début et la fin de la période.', path: ['reviewStartDate'],
   });
 
 export const updateGradingPeriodBodySchema = z
@@ -114,7 +115,7 @@ export const updateGradingPeriodBodySchema = z
   })
   .refine(
     (input) => !input.startDate || !input.endDate || input.startDate <= input.endDate,
-    { message: 'Period start date must be before or equal to end date', path: ['startDate'] }
+    { message: 'La date de fin doit être postérieure ou égale à la date de début.', path: ['startDate'] }
   );
 
 export const createEvaluationBodySchema = z.object({

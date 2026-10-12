@@ -237,6 +237,20 @@ describe('import.service - students dry-run', () => {
     expect(report.toDelete).toHaveLength(1);
     expect(report.toDelete?.[0]?.displayName).toContain('Ancien');
   });
+
+  it('une cellule de naissance vide ne propose pas d’effacer la date existante', async () => {
+    repository.listExistingStudents.mockResolvedValue([{
+      id: 'existing', key: '3ème a::aya::kone', matricule: 'E-001', firstName: 'Aya', lastName: 'Kone',
+      className: '3ème A', birthDate: '2010-03-15', parentName: null, parentPhone: null,
+      parentEmail: null, parentName2: null, parentPhone2: null, isActive: true,
+    }]);
+    const service = new ImportService(repository);
+    const report = await service.dryRun('students', await toWorkbookBuffer([{
+      Matricule: 'E-001', 'Prénom*': 'Aya', 'Nom*': 'Kone', 'Classe*': '3ème A', 'Date de naissance': '',
+    }]), db);
+    expect(report.errors).toHaveLength(0);
+    expect(report.toUpdate).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -987,6 +1001,15 @@ describe('import.service - parseDateToIso (via dry-run students)', () => {
     expect(report.errors).toEqual(
       expect.arrayContaining([expect.objectContaining({ column: 'Date de naissance' })])
     );
+  });
+
+  it.each(['2026-02-30', '9999-12-31'])('date de naissance %s refusée sur sa ligne', async (birthDate) => {
+    const service = new ImportService(repository);
+    const report = await service.dryRun('students', await toWorkbookBuffer([
+      { 'Prénom*': 'Awa', 'Nom*': 'Bah', 'Classe*': '3ème A', 'Date de naissance': birthDate },
+    ]), db);
+    expect(report.valid).toBe(0);
+    expect(report.errors).toEqual(expect.arrayContaining([expect.objectContaining({ row: 2, column: 'Date de naissance' })]));
   });
 });
 

@@ -1,3 +1,4 @@
+import { civilMonthSchema, civilWeekSchema } from '../../shared/utils/date-validation.js';
 import { z } from 'zod';
 
 export const parentLoginSchema = z.object({
@@ -10,11 +11,11 @@ export const parentStudentIdParamsSchema = z.object({
 });
 
 export const parentScheduleQuerySchema = z.object({
-  week: z.string().regex(/^\d{4}-W\d{2}$/),
+  week: civilWeekSchema,
 });
 
 export const parentAbsencesQuerySchema = z.object({
-  month: z.string().regex(/^\d{4}-\d{2}$/),
+  month: civilMonthSchema,
 });
 
 export const parentChangePasswordSchema = z.object({

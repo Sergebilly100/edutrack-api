@@ -1,3 +1,5 @@
+import { dateValidationProblem } from '../../shared/utils/date-validation.js';
+import { civilDateSchema, orderedDateRange } from '../../shared/utils/date-validation.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError, z } from 'zod';
 
@@ -94,6 +96,8 @@ type AdminControllerOptions = {
 
 const handleError = (reply: FastifyReply, error: unknown, request?: FastifyRequest): FastifyReply => {
   if (error instanceof ZodError) {
+    const dateProblem = dateValidationProblem(error);
+    if (dateProblem) return reply.code(400).send(dateProblem);
     return reply.code(400).send({
       error: 'Validation error',
       code: 'BAD_REQUEST',
@@ -189,13 +193,13 @@ export default async function adminController(
   };
 
   const manualPaymentBodySchema = z.object({
-    date: z.string().min(10),
+    date: civilDateSchema,
     amount_fcfa: z.coerce.number().int().min(1),
     provider: z.enum(['manual', 'mtn_momo', 'orange_money']).default('manual'),
     reference: z.string().optional(),
-    period_from: z.string().optional(),
-    period_to: z.string().optional(),
-  });
+    period_from: civilDateSchema.optional(),
+    period_to: civilDateSchema.optional(),
+  }).superRefine(orderedDateRange('period_from', 'period_to'));
 
   const recentPaymentsQuerySchema = z.object({
     tenantId: z.string().uuid().optional(),

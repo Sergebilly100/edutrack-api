@@ -1,3 +1,4 @@
+import { dateValidationProblem } from '../../shared/utils/date-validation.js';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { ZodError } from 'zod';
 
@@ -21,6 +22,8 @@ import { ParentPortalError, buildParentPortalService } from './parent-portal.ser
 
 const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
   if (error instanceof ZodError) {
+    const dateProblem = dateValidationProblem(error);
+    if (dateProblem) return reply.code(400).send(dateProblem);
     return reply.code(400).send({
       error: 'Validation error',
       code: 'BAD_REQUEST',

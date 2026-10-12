@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError, z } from 'zod';
+import { civilMonthSchema, dateValidationProblem } from '../../shared/utils/date-validation.js';
 
 import { withTenantSchema } from '../../shared/database/db.js';
 import {
@@ -39,6 +40,8 @@ import {
 
 const handleError = (request: FastifyRequest, reply: FastifyReply, error: unknown): FastifyReply => {
   if (error instanceof ZodError) {
+    const dateProblem = dateValidationProblem(error);
+    if (dateProblem) return reply.code(400).send(dateProblem);
     return reply.code(400).send({
       error: 'Validation error',
       code: 'BAD_REQUEST',
@@ -72,11 +75,11 @@ const handleError = (request: FastifyRequest, reply: FastifyReply, error: unknow
 
 const revenueExportBodySchema = z
   .object({
-    periodFrom: z.string().regex(/^\d{4}-\d{2}$/),
-    periodTo: z.string().regex(/^\d{4}-\d{2}$/),
+    periodFrom: civilMonthSchema,
+    periodTo: civilMonthSchema,
   })
   .refine((value) => value.periodFrom <= value.periodTo, {
-    message: 'periodFrom must be before or equal to periodTo',
+    message: 'La date de fin doit être postérieure ou égale à la date de début.',
     path: ['periodFrom'],
   });
 

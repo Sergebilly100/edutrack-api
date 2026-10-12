@@ -1,3 +1,4 @@
+import { civilDateSchema, orderedDateRange } from '../../shared/utils/date-validation.js';
 import { z } from 'zod';
 
 export class TeachersModuleError extends Error {
@@ -137,28 +138,28 @@ export const teacherParamsSchema = z.object({
 });
 
 export const teacherStatsQuerySchema = z.object({
-  date_from: z.string().regex(ISO_DATE_REGEX),
-  date_to: z.string().regex(ISO_DATE_REGEX),
-});
+  date_from: civilDateSchema,
+  date_to: civilDateSchema,
+}).superRefine(orderedDateRange('date_from', 'date_to'));
 
 export const teacherAttendanceStatsQuerySchema = z.object({
-  from: z.string().regex(ISO_DATE_REGEX),
-  to: z.string().regex(ISO_DATE_REGEX),
+  from: civilDateSchema,
+  to: civilDateSchema,
   subject: z.string().trim().min(1).max(100).optional(),
   class_id: z.uuid().optional(),
   teacher_id: z.uuid().optional(),
   status_filter: z.enum(['absent', 'room_mismatch', 'rollcall_missing', 'late']).optional(),
 }).refine((value) => value.to >= value.from, {
-  message: 'to must be >= from',
+  message: 'La date de fin doit être postérieure ou égale à la date de début.',
   path: ['to'],
 });
 
 export const teacherTeachingOptionsQuerySchema = z.object({
-  from: z.string().regex(ISO_DATE_REGEX),
-  to: z.string().regex(ISO_DATE_REGEX),
+  from: civilDateSchema,
+  to: civilDateSchema,
   teacher_id: z.uuid().optional(),
 }).refine((value) => value.to >= value.from, {
-  message: 'to must be >= from',
+  message: 'La date de fin doit être postérieure ou égale à la date de début.',
   path: ['to'],
 });
 

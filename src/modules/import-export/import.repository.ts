@@ -578,7 +578,7 @@ export const defaultImportRepository: ImportRepository = {
         UPDATE students
         SET
           matricule = COALESCE(${row.matricule}, matricule),
-          birth_date = ${row.birthDate},
+          birth_date = COALESCE(${row.birthDate}::date, birth_date),
           parent_name = ${row.parentName},
           parent_phone = ${row.parentPhone},
           parent_email = ${row.parentEmail ?? null},

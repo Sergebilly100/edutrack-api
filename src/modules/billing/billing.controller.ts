@@ -1,3 +1,4 @@
+import { dateValidationProblem } from '../../shared/utils/date-validation.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
@@ -300,6 +301,8 @@ const handleError = (
   error: unknown
 ): FastifyReply => {
   if (error instanceof ZodError) {
+    const dateProblem = dateValidationProblem(error);
+    if (dateProblem) return reply.code(400).send(dateProblem);
     return reply.code(400).send({
       error: 'Validation error',
       code: 'BAD_REQUEST',

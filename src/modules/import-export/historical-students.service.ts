@@ -157,6 +157,9 @@ export class HistoricalStudentsService {
     const profile = await this.getProfile();
     if (!profile) throw new ImportModuleError('Enregistrez les correspondances avant l’import', 409, 'MAPPING_PROFILE_REQUIRED');
     const validation = validateHistoricalRows(workbook, profile.fields);
+    if (validation.errors.length) {
+      throw new ImportModuleError('Corrigez les lignes signalées avant de confirmer l’import.', 400, 'IMPORT_VALIDATION_FAILED');
+    }
     let result;
     try { result = await this.repository.confirmRows(validation.rows, actorUserId, schoolYearLabel); }
     catch (error) {

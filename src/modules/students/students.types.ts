@@ -1,3 +1,4 @@
+import { civilDateSchema, orderedDateRange, studentBirthDateSchema } from '../../shared/utils/date-validation.js';
 import { z } from 'zod';
 
 export const PHONE_CI_REGEX = /^225\d{10}$/;
@@ -42,7 +43,7 @@ export const createStudentBodySchema = z.object({
   first_name: z.string().trim().min(1).max(100),
   last_name: z.string().trim().min(1).max(100),
   matricule: z.string().trim().min(1).max(50).nullable().optional().default(null),
-  birth_date: z.string().regex(ISO_DATE_REGEX).nullable().optional().default(null),
+  birth_date: studentBirthDateSchema.nullable().optional().default(null),
   parent_name: parentNameSchema.optional().default(null),
   parent_phone: parentPhoneSchema.default(null),
   parent_email: z.string().trim().email().nullable().optional().default(null),
@@ -64,7 +65,7 @@ export const updateStudentBodySchema = z
     first_name: z.string().trim().min(1).max(100).optional(),
     last_name: z.string().trim().min(1).max(100).optional(),
     matricule: z.string().trim().min(1).max(50).nullable().optional(),
-    birth_date: z.string().regex(ISO_DATE_REGEX).nullable().optional(),
+    birth_date: studentBirthDateSchema.nullable().optional(),
     parent_name: parentNameSchema.optional(),
     parent_phone: parentPhoneSchema.optional(),
     parent_email: z.string().trim().email().nullable().optional(),
@@ -83,7 +84,7 @@ export const updateStudentBodySchema = z
 
 export const bulkAttendanceBodySchema = z.object({
   scheduleId: z.uuid(),
-  date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format'),
+  date: civilDateSchema,
   absences: z.array(z.uuid()).default([]),
 });
 
@@ -93,9 +94,9 @@ export const attendanceHistoryQuerySchema = z.object({
   class_id: z.uuid().optional(),
   student_id: z.uuid().optional(),
   schedule_id: z.uuid().optional(),
-  date_from: z.string().regex(ISO_DATE_REGEX).optional(),
-  date_to: z.string().regex(ISO_DATE_REGEX).optional(),
-});
+  date_from: civilDateSchema.optional(),
+  date_to: civilDateSchema.optional(),
+}).superRefine(orderedDateRange('date_from', 'date_to'));
 
 // ─── Excuse ───────────────────────────────────────────────────────────────────
 
@@ -110,26 +111,26 @@ export const excuseAbsenceBodySchema = z.object({
 // ─── Stats ────────────────────────────────────────────────────────────────────
 
 export const absenceStatsQuerySchema = z.object({
-  from: z.string().regex(ISO_DATE_REGEX),
-  to: z.string().regex(ISO_DATE_REGEX),
+  from: civilDateSchema,
+  to: civilDateSchema,
   class_id: z.string().uuid().optional(),
   level_id: z.string().uuid().optional(),
   subject: z.string().trim().min(1).optional(),
   sms_status: z.enum(['sent', 'not_sent', 'failed']).optional(),
   min_absences: z.coerce.number().int().min(1).default(1),
-});
+}).superRefine(orderedDateRange('from', 'to'));
 
 export const studentAbsencesParamsSchema = z.object({
   studentId: z.string().uuid(),
 });
 
 export const studentAbsencesQuerySchema = z.object({
-  from: z.string().regex(ISO_DATE_REGEX),
-  to: z.string().regex(ISO_DATE_REGEX),
+  from: civilDateSchema,
+  to: civilDateSchema,
   subject: z.string().trim().min(1).optional(),
   class_id: z.string().uuid().optional(),
   level_id: z.string().uuid().optional(),
-});
+}).superRefine(orderedDateRange('from', 'to'));
 
 // ─── Domain types ─────────────────────────────────────────────────────────────
 

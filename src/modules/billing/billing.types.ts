@@ -1,9 +1,8 @@
+import { civilMonthSchema } from '../../shared/utils/date-validation.js';
 import { z } from 'zod';
 
-const monthRegex = /^\d{4}-\d{2}$/;
-
 export const monthQuerySchema = z.object({
-  month: z.string().regex(monthRegex),
+  month: civilMonthSchema,
 });
 
 export const teacherParamsSchema = z.object({
@@ -31,14 +30,14 @@ export const updateSalaryStatusBodySchema = z.object({
 
 export const salarySingleExportBodySchema = z.object({
   teacherId: z.string().uuid(),
-  periodMonth: z.string().regex(monthRegex),
+  periodMonth: civilMonthSchema,
 });
 
 export const salaryBulkExportBodySchema = z
   .object({
     teacherId: z.string().uuid().optional().nullable(),
-    periodFrom: z.string().regex(monthRegex),
-    periodTo: z.string().regex(monthRegex),
+    periodFrom: civilMonthSchema,
+    periodTo: civilMonthSchema,
   })
   .refine((value) => value.periodFrom <= value.periodTo, {
     message: 'periodFrom must be before or equal to periodTo',
@@ -48,8 +47,8 @@ export const salaryBulkExportBodySchema = z
 export const paymentHistoryExportBodySchema = z
   .object({
     teacherId: z.string().uuid(),
-    periodFrom: z.string().regex(monthRegex),
-    periodTo: z.string().regex(monthRegex),
+    periodFrom: civilMonthSchema,
+    periodTo: civilMonthSchema,
   })
   .refine((value) => value.periodFrom <= value.periodTo, {
     message: 'periodFrom must be before or equal to periodTo',
@@ -74,7 +73,7 @@ export type PaymentHistoryExportBody = z.infer<typeof paymentHistoryExportBodySc
 export type JobDownloadQuery = z.infer<typeof jobDownloadQuerySchema>;
 
 export const recalculateSalaryBodySchema = z.object({
-  month: z.string().regex(monthRegex),
+  month: civilMonthSchema,
   teacher_id: z.string().uuid().optional(),
 });
 

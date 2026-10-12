@@ -1,3 +1,5 @@
+import { dateValidationProblem } from '../../shared/utils/date-validation.js';
+import { civilDateSchema } from '../../shared/utils/date-validation.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError, z } from 'zod';
 
@@ -57,10 +59,10 @@ const paramsIdSchema = z.object({
  * Sans ce schéma, `request.query` est typé `unknown` et la valeur ignorée.
  */
 const dateQuerySchema = z.object({
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  date: civilDateSchema.optional(),
 });
 const effectiveFromQuerySchema = z.object({
-  effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  effective_from: civilDateSchema.optional(),
   delete_scope: z.enum(['this', 'this_and_following']).optional(),
 });
 
@@ -91,6 +93,8 @@ const handleError = (
   error: unknown
 ): FastifyReply => {
   if (error instanceof ZodError) {
+    const dateProblem = dateValidationProblem(error);
+    if (dateProblem) return reply.code(400).send(dateProblem);
     return reply.code(400).send({
       error: error.issues[0]?.message ?? 'Validation error',
       code: 'BAD_REQUEST',

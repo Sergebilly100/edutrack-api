@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import ExcelJS from 'exceljs';
 
 import { weeklyPeriodSchema } from '../../shared/utils/schedule-period.js';
+import { birthDateIssue, isCivilDate } from '../../shared/utils/date-validation.js';
 import { isValidScheduleInterval, parseScheduleTime } from '../../shared/utils/schedule-time.js';
 import { emit } from '../../shared/events/event-bus.js';
 import { generateUsername } from '../../shared/utils/username.js';
@@ -359,7 +360,7 @@ const parseDateToIso = (value: string): string | null => {
   }
 
   if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
-    return normalized;
+    return isCivilDate(normalized) ? normalized : null;
   }
 
   const slashMatch = normalized.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
@@ -367,15 +368,12 @@ const parseDateToIso = (value: string): string | null => {
     const day = slashMatch[1].padStart(2, '0');
     const month = slashMatch[2].padStart(2, '0');
     const year = slashMatch[3];
-    return `${year}-${month}-${day}`;
+    const iso = `${year}-${month}-${day}`;
+    return isCivilDate(iso) ? iso : null;
   }
 
-  const parsed = new Date(normalized);
-  if (Number.isNaN(parsed.getTime())) {
-    return null;
-  }
-
-  return parsed.toISOString().slice(0, 10);
+  // Avoid Date.parse normalising impossible civil dates or ambiguous local formats.
+  return null;
 };
 
 const validateSchedulePeriodInput = (period?: SchedulePeriodInput): SchedulePeriodInput => {
@@ -557,12 +555,12 @@ const validateStudentRow = (
     });
   }
 
-  if (birthDateRaw && !birthDate) {
+  if (birthDateRaw && (!birthDate || birthDateIssue(birthDate))) {
     errors.push({
       ...makeError({
         row: line,
         column: 'Date de naissance',
-        message: 'Date invalide (formats acceptés: YYYY-MM-DD ou JJ/MM/AAAA)',
+        message: birthDate ? birthDateIssue(birthDate)! : 'Date de naissance invalide (formats acceptés : YYYY-MM-DD ou JJ/MM/AAAA)',
         value: birthDateRaw,
       }),
       sheet: sheetRow.sheetName,
@@ -806,7 +804,7 @@ export class ImportService {
       if ((existing.matricule ?? null) !== (fields.matricule ?? null)) {
         changes.matricule = { before: existing.matricule, after: fields.matricule };
       }
-      if ((existing.birthDate ?? null) !== (fields.birthDate ?? null)) {
+      if (fields.birthDate !== null && (existing.birthDate ?? null) !== fields.birthDate) {
         changes.birthDate = { before: existing.birthDate ?? null, after: fields.birthDate ?? null };
       }
       if ((existing.parentName ?? null) !== (fields.parentName ?? null)) {

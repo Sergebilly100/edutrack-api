@@ -1,3 +1,4 @@
+import { optionalStudentBirthDateSchema } from '../../shared/utils/date-validation.js';
 import { z } from 'zod';
 import { IMPORT_PHONE_REGEX } from './import.types.js';
 
@@ -37,7 +38,7 @@ export const historicalStudentRowSchema = z.object({
   nom: z.string().trim().min(1, 'Nom requis').max(100, 'Nom trop long'),
   prenom: z.string().trim().min(1, 'Prénom requis').max(100, 'Prénom trop long'),
   historical_class: z.string().trim().max(100, 'Classe historique trop longue').default(''),
-  birth_date: z.iso.date('Date invalide : utilisez YYYY-MM-DD ou JJ/MM/AAAA').or(z.literal('')).default(''),
+  birth_date: optionalStudentBirthDateSchema.default(''),
   parent_name: optionalName,
   parent_phone: optionalPhone,
   parent_email: z.string().trim().max(255, 'Email parent trop long').email('Email parent invalide').or(z.literal('')).default(''),

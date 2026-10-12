@@ -1,3 +1,4 @@
+import { civilMonthSchema } from '../../shared/utils/date-validation.js';
 import { z } from 'zod';
 
 export const riskRuleUpsertSchema = z.object({
@@ -32,7 +33,7 @@ export const riskStudentsQuerySchema = z.object({
 export const riskTeachersQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(50).default(10),
-  month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional(),
+  month: civilMonthSchema.optional(),
   atRisk: queryBooleanSchema,
 });
 

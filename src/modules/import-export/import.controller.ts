@@ -1,3 +1,5 @@
+import { civilMonthSchema } from '../../shared/utils/date-validation.js';
+import { dateValidationProblem } from '../../shared/utils/date-validation.js';
 import { createReadStream, existsSync } from 'node:fs';
 import path from 'node:path';
 
@@ -21,6 +23,8 @@ import { importTypeParamsSchema, type ImportType } from './import.types.js';
 
 const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
   if (error instanceof ZodError) {
+    const dateProblem = dateValidationProblem(error);
+    if (dateProblem) return reply.code(400).send(dateProblem);
     return reply.code(400).send({
       error: 'Validation error',
       code: 'BAD_REQUEST',
@@ -121,7 +125,7 @@ const ensureTenantDb = (request: FastifyRequest) => {
 const importHistoryQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   page: z.coerce.number().int().min(1).default(1),
-  month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional(),
+  month: civilMonthSchema.optional(),
   type: z.enum(['students', 'teachers', 'schedule']).optional(),
 });
 

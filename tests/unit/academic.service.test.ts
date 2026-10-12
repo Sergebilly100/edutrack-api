@@ -82,7 +82,7 @@ describe('academic school year validation', () => {
         startDate: '2027-09-01',
         endDate: '2027-06-30',
       })
-    ).toBe('School year start date must be before end date');
+    ).toBe('La date de fin doit être postérieure à la date de début.');
   });
 
   it('refuse un libellé qui ne correspond pas aux mois des dates', () => {

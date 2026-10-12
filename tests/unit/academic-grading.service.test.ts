@@ -147,6 +147,13 @@ describe('AcademicGradingService.updateGradingPeriod', () => {
     })).rejects.toMatchObject({ code: 'GRADING_PERIOD_SEQUENCE_INVALID', statusCode: 409 });
     expect(repository.updateGradingPeriod).not.toHaveBeenCalled();
   });
+
+  it('refuse une revue hors de la période avec un 400 avant toute écriture', async () => {
+    await expect(service.updateGradingPeriod(ids.period, {
+      reviewStartDate: '2026-12-16',
+    })).rejects.toMatchObject({ code: 'INVALID_GRADING_PERIOD_DATES', statusCode: 400 });
+    expect(repository.updateGradingPeriod).not.toHaveBeenCalled();
+  });
 });
 
 describe('AcademicGradingService.updateCompletion', () => {

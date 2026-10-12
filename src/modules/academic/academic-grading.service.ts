@@ -332,7 +332,10 @@ export class AcademicGradingService {
       endDate: input.endDate ?? current.endDate,
     };
     if (merged.startDate > merged.endDate) {
-      throw new AcademicGradingError('Period start date must be before or equal to end date', 400, 'INVALID_GRADING_PERIOD_DATES');
+      throw new AcademicGradingError('La date de fin doit être postérieure ou égale à la date de début.', 400, 'INVALID_GRADING_PERIOD_DATES');
+    }
+    if (merged.reviewStartDate < merged.startDate || merged.reviewStartDate > merged.endDate) {
+      throw new AcademicGradingError('Le début de revue doit se situer entre le début et la fin de la période.', 400, 'INVALID_GRADING_PERIOD_DATES');
     }
     assertPeriodOrder(merged.type, merged.orderIndex);
     const schoolYear = await this.repository.getSchoolYear(merged.schoolYearId);

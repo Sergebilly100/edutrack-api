@@ -1,3 +1,4 @@
+import { isCivilDate } from '../../shared/utils/date-validation.js';
 import {
   resolveMappingByHeaders,
   translateMappedValue,
@@ -33,14 +34,14 @@ const parseAmount = (value: string | number | undefined): number | null => {
 const parsePaymentDate = (value: string | number | undefined): string | null => {
   if (typeof value === 'number' && Number.isFinite(value)) {
     const date = new Date(Date.UTC(1899, 11, 30) + Math.round(value) * 86_400_000);
-    return date.toISOString().slice(0, 10);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
   }
   const text = stringValue(value);
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text) && !Number.isNaN(Date.parse(`${text}T00:00:00Z`))) return text;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text) && isCivilDate(text)) return text;
   const french = /^(\d{2})[/-](\d{2})[/-](\d{4})$/.exec(text);
   if (french) {
     const candidate = `${french[3]}-${french[2]}-${french[1]}`;
-    return Number.isNaN(Date.parse(`${candidate}T00:00:00Z`)) ? null : candidate;
+    return !isCivilDate(candidate) ? null : candidate;
   }
   return null;
 };

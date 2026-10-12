@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import ExcelJS from 'exceljs';
 import { createStudentBodySchema } from '../../src/modules/students/students.types.js';
 import { createEnrollmentBodySchema } from '../../src/modules/enrollments/enrollments.types.js';
 import { HistoricalStudentsService, validateHistoricalMapping, validateHistoricalRows, resolveInitialImportAccess, resolveHistoricalFields } from '../../src/modules/import-export/historical-students.service.js';
@@ -15,6 +16,25 @@ const workbook = (values: Record<string, string | number>[]) => ({
 });
 
 describe('historical student profile rules', () => {
+  it('reports a future birth on its row and refuses to confirm any row', async () => {
+    const mapping = ['nom', 'prenom', 'birth_date'].map((targetField) => ({
+      targetField, sourceColumnLabel: targetField, isRequired: targetField !== 'birth_date', translations: [],
+    }));
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Historique');
+    sheet.addRow(['nom', 'prenom', 'birth_date']);
+    sheet.addRow(['Kone', 'Aya', '2010-03-04']);
+    sheet.addRow(['Bamba', 'Ali', '9999-12-31']);
+    const file = Buffer.from(await workbook.xlsx.writeBuffer());
+    const confirmRows = vi.fn();
+    const repository = { getActiveProfile: vi.fn().mockResolvedValue({ fields: mapping }), confirmRows } as unknown as HistoricalStudentsRepository;
+    const service = new HistoricalStudentsService(repository);
+    const preview = await service.analyze(file, '2024-2025');
+    expect(preview.errors).toEqual([expect.objectContaining({ rowNumber: 3, field: 'birth_date', reason: expect.stringContaining('antérieure') })]);
+    expect(preview.validCount).toBe(1);
+    await expect(service.confirm(file, 'user-id', '2024-2025')).rejects.toMatchObject({ code: 'IMPORT_VALIDATION_FAILED' });
+    expect(confirmRows).not.toHaveBeenCalled();
+  });
   it('allows a profile without class while an enrollment requires class/year', () => {
     expect(createStudentBodySchema.parse({ first_name: 'Aya', last_name: 'Kone' }).class_id).toBeNull();
     expect(createEnrollmentBodySchema.safeParse({ studentId: 'e6473c31-16f3-4d08-96e6-a347df3278c2', type: 'new_registration' }).success).toBe(false);

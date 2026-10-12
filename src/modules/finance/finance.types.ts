@@ -1,3 +1,4 @@
+import { civilDateSchema } from '../../shared/utils/date-validation.js';
 import { z } from 'zod';
 
 export const paymentMethodSchema = z.enum(['mobile_money', 'cash', 'bank_transfer']);
@@ -16,12 +17,12 @@ export const subscriptionPlanParamsSchema = z.object({ id: uuidSchema }).strict(
 export const schoolYearQuerySchema = z.object({ school_year_id: uuidSchema });
 const cashJournalFiltersSchema = z.object({
   school_year_id: uuidSchema.optional(),
-  from: z.iso.date().optional(),
-  to: z.iso.date().optional(),
+  from: civilDateSchema.optional(),
+  to: civilDateSchema.optional(),
   class_id: uuidSchema.optional(),
   method: paymentMethodSchema.optional(),
 }).refine((value) => !value.from || !value.to || value.from <= value.to, {
-  message: 'from must be before or equal to to', path: ['from'],
+  message: 'La date de fin doit être postérieure ou égale à la date de début.', path: ['from'],
 });
 
 export const cashJournalQuerySchema = cashJournalFiltersSchema.extend({
@@ -35,15 +36,15 @@ export const cashJournalExportQuerySchema = cashJournalFiltersSchema.extend({
 
 export const paymentHistoryQuerySchema = z.object({
   school_year_id: uuidSchema,
-  from: z.iso.date().optional(),
-  to: z.iso.date().optional(),
+  from: civilDateSchema.optional(),
+  to: civilDateSchema.optional(),
   level_id: uuidSchema.optional(),
   class_id: uuidSchema.optional(),
   status: z.enum(['up_to_date', 'late', 'waived']).optional(),
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 }).refine((value) => !value.from || !value.to || value.from <= value.to, {
-  message: 'from must be before or equal to to', path: ['from'],
+  message: 'La date de fin doit être postérieure ou égale à la date de début.', path: ['from'],
 });
 
 export const financialAlertLogsQuerySchema = z.object({
@@ -107,7 +108,7 @@ export const upsertTuitionPlanBodySchema = z.object({
   totalAmount: moneySchema,
   currency: z.string().trim().min(3).max(10).default('FCFA'),
   scheduleSteps: z.array(z.object({
-    dueDate: z.iso.date(),
+    dueDate: civilDateSchema,
     cumulativeAmountExpected: moneySchema,
   }).strict()).default([]),
 }).strict();
@@ -115,7 +116,7 @@ export const upsertTuitionPlanBodySchema = z.object({
 export const upsertStudentTuitionScheduleBodySchema = z.object({
   schoolYearId: uuidSchema,
   scheduleSteps: z.array(z.object({
-    dueDate: z.iso.date(),
+    dueDate: civilDateSchema,
     cumulativeAmountExpected: moneySchema,
   }).strict()).min(1),
 }).strict();

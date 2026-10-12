@@ -1,3 +1,4 @@
+import { civilDateSchema, civilMonthSchema, dateValidationProblem } from '../../shared/utils/date-validation.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError, z } from 'zod';
 import type { Queue } from 'bullmq';
@@ -29,6 +30,8 @@ const handleError = (
   error: unknown
 ): FastifyReply => {
   if (error instanceof ZodError) {
+    const dateProblem = dateValidationProblem(error);
+    if (dateProblem) return reply.code(400).send(dateProblem);
     return reply.code(400).send({
       error: 'Validation error',
       code: 'BAD_REQUEST',
@@ -143,34 +146,30 @@ const attendanceHistoryQuerySchema = z.object({
 });
 
 const historyDetailQuerySchema = z.object({
-  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  from: civilDateSchema,
+  to: civilDateSchema,
 }).refine((value) => value.to >= value.from, {
-  message: 'to must be >= from',
+  message: 'La date de fin doit être postérieure ou égale à la date de début.',
   path: ['to'],
 });
 
 const historyExportQuerySchema = z.object({
   teacherId: z.string().uuid(),
-  date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  date_from: civilDateSchema,
+  date_to: civilDateSchema,
   format: z.enum(['xlsx', 'csv']).default('xlsx').optional(),
 }).refine((value) => value.date_to >= value.date_from, {
-  message: 'date_to must be >= date_from',
+  message: 'La date de fin doit être postérieure ou égale à la date de début.',
   path: ['date_to'],
 });
 
 const weekScheduleQuerySchema = z.object({
-  date: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, 'date must use YYYY-MM-DD format')
+  date: civilDateSchema
     .default(() => new Date().toISOString().slice(0, 10)),
 })
 
 const monthQuerySchema = z.object({
-  month: z
-    .string()
-    .regex(/^\d{4}-\d{2}$/)
+  month: civilMonthSchema
     .default(() => new Date().toISOString().slice(0, 7)),
 });
 
@@ -180,7 +179,7 @@ const teacherComplianceQuerySchema = monthQuerySchema.extend({
 
 const rollCallQuerySchema = z.object({
   schedule_id: z.string().uuid(),
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must use YYYY-MM-DD format'),
+  date: civilDateSchema,
 });
 
 const teacherMonthlyParamsSchema = z.object({

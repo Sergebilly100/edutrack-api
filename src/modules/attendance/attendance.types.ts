@@ -1,3 +1,4 @@
+import { civilDateSchema } from '../../shared/utils/date-validation.js';
 import { z } from 'zod';
 
 export const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
@@ -14,7 +15,7 @@ export const clientTimestampSchema = z
 
 export const checkInBodySchema = z.object({
   schedule_id: z.string().uuid(),
-  date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format').optional(),
+  date: civilDateSchema.optional(),
   latitude: z.number().min(-90).max(90).optional(),
   longitude: z.number().min(-180).max(180).optional(),
   accuracy: z.number().min(0).max(10000).optional(),
@@ -26,7 +27,7 @@ export const checkOutBodySchema = z.object({
   latitude: z.number().min(-90).max(90).optional(),
   longitude: z.number().min(-180).max(180).optional(),
   accuracy: z.number().min(0).max(10000).optional(),
-  date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format').optional(),
+  date: civilDateSchema.optional(),
   client_timestamp: clientTimestampSchema,
 });
 
@@ -34,27 +35,27 @@ export const qrScanBodySchema = z.object({
   qr_token: z.string().trim().length(64),
   scan_type: z.enum(['start', 'end']),
   schedule_id: z.string().uuid(),
-  date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format').optional(),
+  date: civilDateSchema.optional(),
   client_timestamp: clientTimestampSchema,
 });
 
 export const qrSkipBodySchema = z.object({
   scan_type: z.enum(['start', 'end']),
   schedule_id: z.string().uuid(),
-  date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format').optional(),
+  date: civilDateSchema.optional(),
   client_timestamp: clientTimestampSchema,
 });
 
 // ── NOUVEAU ──────────────────────────────────────────────────────────────────
 export const bulkStudentsBodySchema = z.object({
   schedule_id: z.string().uuid(),
-  date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format'),
+  date: civilDateSchema,
   absent_student_ids: z.array(z.string().uuid()),
   client_timestamp: clientTimestampSchema,
 });
 
 export const teacherAttendanceDateQuerySchema = z.object({
-  date: z.string().regex(ISO_DATE_REGEX, 'date must use YYYY-MM-DD format'),
+  date: civilDateSchema,
 });
 // ─────────────────────────────────────────────────────────────────────────────
 

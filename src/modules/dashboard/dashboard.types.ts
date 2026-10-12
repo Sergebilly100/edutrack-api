@@ -1,14 +1,11 @@
+import { civilMonthSchema, civilDateSchema } from '../../shared/utils/date-validation.js';
 import { z } from 'zod';
 
 export const dashboardStatsQuerySchema = z.object({
-  date: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
+  date: civilDateSchema
     .optional()
     .default(() => new Date().toISOString().slice(0, 10)),
-  month: z
-    .string()
-    .regex(/^\d{4}-\d{2}$/)
+  month: civilMonthSchema
     .optional()
     .default(() => new Date().toISOString().slice(0, 7)),
 });

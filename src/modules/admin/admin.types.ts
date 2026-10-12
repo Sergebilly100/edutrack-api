@@ -1,3 +1,4 @@
+import { civilDateSchema, civilMonthSchema, orderedDateRange } from '../../shared/utils/date-validation.js';
 import { z } from 'zod';
 
 const TENANT_PLAN_VALUES = ['essential', 'pro', 'establishment'] as const;
@@ -140,11 +141,11 @@ export const smsFeatureConfigBodySchema = z
   );
 
 export const smsFeatureMonthQuerySchema = z.object({
-  month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+  month: civilMonthSchema.optional(),
 });
 
 export const smsFeatureCommissionPaymentBodySchema = z.object({
-  period_month: z.string().regex(/^\d{4}-\d{2}$/),
+  period_month: civilMonthSchema,
   amount_fcfa: z.coerce.number().int().min(1),
   payment_method: z.enum(['cash', 'momo_mtn', 'momo_orange', 'bank_transfer']).optional(),
   notes: z.string().trim().max(1000).optional(),
@@ -575,15 +576,14 @@ export type SmsPlatformAuditItem = {
 
 // ── Année scolaire (action super admin) ─────────────────────────────────────
 
-const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
-
 export const openSchoolYearBodySchema = z.object({
   label: z.string().trim().min(1).max(25),
-  start_date: z.string().regex(ISO_DATE_REGEX, 'Format attendu : AAAA-MM-JJ'),
-  end_date: z.string().regex(ISO_DATE_REGEX, 'Format attendu : AAAA-MM-JJ'),
-  end_of_year_review_start_date: z.string().regex(ISO_DATE_REGEX, 'Format attendu : AAAA-MM-JJ').optional(),
+  start_date: civilDateSchema,
+  end_date: civilDateSchema,
+  end_of_year_review_start_date: civilDateSchema.optional(),
   period_type: z.enum(['trimester', 'semester']).default('trimester'),
-});
+}).superRefine(orderedDateRange('start_date', 'end_date', false))
+  .superRefine(orderedDateRange('end_of_year_review_start_date', 'end_date', false));
 
 export type OpenSchoolYearBody = z.infer<typeof openSchoolYearBodySchema>;
 

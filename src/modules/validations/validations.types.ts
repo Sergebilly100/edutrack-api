@@ -1,3 +1,4 @@
+import { civilMonthSchema } from '../../shared/utils/date-validation.js';
 import { z } from 'zod';
 
 export const attendanceIdParamsSchema = z.object({
@@ -56,12 +57,12 @@ export type PendingValidationCount = {
 // ── Missing end-scan types ──────────────────────────────────────────────────
 
 export const missingEndScansQuerySchema = z.object({
-  month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+  month: civilMonthSchema.optional(),
 });
 
 export const bulkWarnEndScansBodySchema = z.object({
   teacher_ids: z.array(z.string().uuid()).min(1).max(200),
-  month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+  month: civilMonthSchema.optional(),
 });
 
 export const invalidateSessionBodySchema = z.object({
@@ -116,7 +117,7 @@ export const notificationIdParamsSchema = z.object({
 
 export const validationHistoryQuerySchema = z.object({
   kind: z.enum(['short_hours', 'gps_suspicious']).optional(),
-  month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+  month: civilMonthSchema.optional(),
   status: z.enum(['approved', 'rejected']).optional(),
   approvalType: z.enum(['planned', 'actual']).optional(),
   search: z.string().trim().max(100).optional(),

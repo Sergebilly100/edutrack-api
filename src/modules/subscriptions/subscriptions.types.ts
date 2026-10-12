@@ -1,3 +1,4 @@
+import { civilMonthSchema } from '../../shared/utils/date-validation.js';
 import { z } from 'zod';
 
 export type SubscriptionStatus = 'active' | 'expired' | 'cancelled';
@@ -31,7 +32,7 @@ export const listParentsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   search: z.string().trim().min(1).max(255).optional(),
   status: z.enum(['active', 'expired', 'cancelled']).optional(),
-  month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+  month: civilMonthSchema.optional(),
   created_by: z.string().uuid().optional(),
 });
 
@@ -90,14 +91,14 @@ export const cancelSubscriptionBodySchema = z.object({
 });
 
 export const revenueSummaryQuerySchema = z.object({
-  month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+  month: civilMonthSchema.optional(),
 });
 
 export const revenueHistoryQuerySchema = z.object({
   months: z.coerce.number().int().min(1).max(24).default(12),
 });
 export const revenuePaymentsQuerySchema = z.object({
-  month: z.string().regex(/^\d{4}-\d{2}$/),
+  month: civilMonthSchema,
 });
 
 export const updateSmsPriceBodySchema = z.object({

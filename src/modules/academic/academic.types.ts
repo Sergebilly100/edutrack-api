@@ -1,23 +1,12 @@
 import { z } from 'zod';
+import { civilDateSchema, isCivilDate } from '../../shared/utils/date-validation.js';
 
 export const schoolYearStatusSchema = z.enum(['draft', 'active', 'closed']);
 export type SchoolYearStatus = z.infer<typeof schoolYearStatusSchema>;
 
 const SCHOOL_YEAR_LABEL_REGEX = /^(0[1-9]|1[0-2])\/\d{4} - (0[1-9]|1[0-2])\/\d{4}$/;
-const ISO_DATE_REGEX = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
-
-const isValidIsoDate = (value: string): boolean => {
-  if (!ISO_DATE_REGEX.test(value)) {
-    return false;
-  }
-
-  const parsed = new Date(`${value}T00:00:00.000Z`);
-  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
-};
-
-const isoDateSchema = z.string().refine(isValidIsoDate, {
-  message: 'Expected a valid date in YYYY-MM-DD format',
-});
+const isValidIsoDate = isCivilDate;
+const isoDateSchema = civilDateSchema;
 
 export type SchoolYearConsistencyInput = {
   label: string;
@@ -44,14 +33,14 @@ export const getSchoolYearConsistencyIssue = (
   }
 
   if (input.startDate >= input.endDate) {
-    return 'School year start date must be before end date';
+    return 'La date de fin doit être postérieure à la date de début.';
   }
 
   if (
     input.endOfYearReviewStartDate !== undefined &&
     (!isValidIsoDate(input.endOfYearReviewStartDate) || input.endOfYearReviewStartDate >= input.endDate)
   ) {
-    return 'End-of-year review start date must be before school year end date';
+    return 'Le début de revue doit se situer avant la fin de l’année scolaire.';
   }
 
   const expectedLabel = `${input.startDate.slice(5, 7)}/${input.startDate.slice(0, 4)} - ${input.endDate.slice(5, 7)}/${input.endDate.slice(0, 4)}`;
