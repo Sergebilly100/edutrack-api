@@ -60,6 +60,7 @@ export type NotificationSmsJobData = {
   parentAccessSentUpdate?: {
     parentId: string;
   };
+  parentAccessRotationId?: string;
 };
 
 export type NotificationEmailJobData = {
@@ -73,6 +74,8 @@ export type NotificationEmailJobData = {
   recipientPhone: string;
   recipientEmail: string;
   queueRef: string;
+  parentAccessSentUpdate?: { parentId: string };
+  parentAccessRotationId?: string;
 };
 
 export type TeacherDailySummaryJobData = {
@@ -440,7 +443,9 @@ const processValidationDailySummaryJob = async (
 
 export const processNotificationJob = async (
   data: NotificationJobData,
-  deps: NotificationsWorkerDeps
+  deps: NotificationsWorkerDeps,
+  attempt = 1,
+  maxAttempts = 1
 ): Promise<void> => {
   if (data.type === 'teacher-daily-summary-all') {
     await processTeacherDailySummaryJob(data, deps);
@@ -457,6 +462,69 @@ export const processNotificationJob = async (
     return;
   }
 
+  if (data.parentAccessSentUpdate) {
+    try {
+      const failed = await withTenantSchema(data.schemaName, (tenantDb) =>
+        tenantDb.transaction(async (tx) => {
+          // Le verrou sérialise la livraison et toute nouvelle rotation du même parent.
+          const parent = await tx.execute<{ id: string; phone: string; email: string | null }>(sql`
+            SELECT id::text AS id, phone, email FROM parents
+            WHERE id = ${data.parentAccessSentUpdate!.parentId}::uuid FOR UPDATE
+          `);
+          if (!parent.rows[0]) return false;
+          const addressStillCurrent = data.type === 'send-sms'
+            ? parent.rows[0].phone === data.to
+            : parent.rows[0].email === data.to;
+          if (!addressStillCurrent) {
+            await deps.repository.updateNotificationLogStatus(tx, { queueRef: data.queueRef, status: 'failed' });
+            return false;
+          }
+
+          if (data.parentAccessRotationId) {
+            const current = await tx.execute<{ rotation_id: string }>(sql`
+              SELECT metadata->>'rotationId' AS rotation_id FROM notifications_log
+              WHERE type = 'parent_access_credentials' AND channel = 'in_app'
+                AND related_id = ${data.parentAccessSentUpdate!.parentId}::uuid
+              ORDER BY created_at DESC, id DESC LIMIT 1
+            `);
+            if (current.rows[0]?.rotation_id !== data.parentAccessRotationId) {
+              await deps.repository.updateNotificationLogStatus(tx, { queueRef: data.queueRef, status: 'failed' });
+              return false;
+            }
+          }
+
+          let result: SmsResult | EmailResult;
+          try {
+            result = data.type === 'send-sms'
+              ? await deps.smsSender({ to: data.to, message: data.message, type: data.notificationType, schemaName: data.schemaName })
+              : await deps.emailSender({ to: data.to, subject: data.subject, text: data.text, type: data.notificationType, schemaName: data.schemaName });
+          } catch {
+            result = { status: 'failed' };
+          }
+          if (result.status !== 'sent') {
+            if (attempt >= maxAttempts) {
+              await deps.repository.updateNotificationLogStatus(tx, { queueRef: data.queueRef, status: 'failed' });
+            }
+            return true;
+          }
+
+          await deps.repository.updateNotificationLogStatus(tx, {
+            queueRef: data.queueRef, status: 'sent', providerRef: result.providerRef, sentAt: new Date(),
+          });
+          await tx.execute(sql`
+            UPDATE parents SET access_sent_at = NOW()
+            WHERE id = ${data.parentAccessSentUpdate!.parentId}::uuid
+          `);
+          return false;
+        })
+      );
+      if (failed) throw new Error('Parent access delivery failed');
+    } catch {
+      throw new Error('Parent access delivery failed');
+    }
+    return;
+  }
+
   await withTenantSchema(data.schemaName, async (tenantDb) => {
     try {
       if (data.type === 'send-sms') {
@@ -468,10 +536,7 @@ export const processNotificationJob = async (
         });
 
         if (smsResult.status !== 'sent') {
-          await deps.repository.updateNotificationLogStatus(tenantDb, {
-            queueRef: data.queueRef,
-            status: 'failed',
-          });
+          await deps.repository.updateNotificationLogStatus(tenantDb, { queueRef: data.queueRef, status: 'failed' });
           return;
         }
 
@@ -485,22 +550,6 @@ export const processNotificationJob = async (
         if (data.qrAlertSentUpdate) {
           await deps.repository.markQrAlertSent(tenantDb, data.qrAlertSentUpdate);
         }
-        if (data.parentAccessSentUpdate) {
-          await tenantDb.execute(sql`
-            UPDATE parents
-            SET access_sent_at = NOW()
-            WHERE id = ${data.parentAccessSentUpdate.parentId}::uuid
-          `);
-          // Le SMS doit contenir le secret le temps de son traitement/retry,
-          // mais il n'a plus à rester en clair dans l'historique après succès.
-          await tenantDb.execute(sql`
-            UPDATE notifications_log
-            SET message = '[Identifiants parent envoyes]'
-            WHERE provider_ref = ${smsResult.providerRef ?? data.queueRef}
-              AND related_id = ${data.parentAccessSentUpdate.parentId}::uuid
-              AND type = 'parent_access_credentials'
-          `);
-        }
         return;
       }
 
@@ -512,10 +561,7 @@ export const processNotificationJob = async (
         schemaName: data.schemaName,
       });
       if (emailResult.status !== 'sent') {
-        await deps.repository.updateNotificationLogStatus(tenantDb, {
-          queueRef: data.queueRef,
-          status: 'failed',
-        });
+        await deps.repository.updateNotificationLogStatus(tenantDb, { queueRef: data.queueRef, status: 'failed' });
         return;
       }
 
@@ -526,10 +572,7 @@ export const processNotificationJob = async (
         sentAt: new Date(),
       });
     } catch (error) {
-      await deps.repository.updateNotificationLogStatus(tenantDb, {
-        queueRef: data.queueRef,
-        status: 'failed',
-      });
+      await deps.repository.updateNotificationLogStatus(tenantDb, { queueRef: data.queueRef, status: 'failed' });
       throw error;
     }
   });
@@ -551,7 +594,7 @@ export const createNotificationsWorker = (
   return new Worker<NotificationJobData>(
     NOTIFICATIONS_QUEUE_NAME,
     async (job: Job<NotificationJobData>) => {
-      await processNotificationJob(job.data, deps);
+      await processNotificationJob(job.data, deps, job.attemptsMade + 1, job.opts.attempts ?? 1);
     },
     {
       connection,

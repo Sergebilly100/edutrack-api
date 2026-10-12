@@ -693,18 +693,22 @@ describe('parent access delivery', () => {
           id: '11111111-1111-4111-8111-111111111111',
           fullName: 'Parent Pending',
           phone: '2250700000001',
+          email: null,
           accessSentAt: null,
         },
         {
           id: '22222222-2222-4222-8222-222222222222',
           fullName: 'Parent Sent',
           phone: '2250700000002',
+          email: null,
           accessSentAt: '2026-08-18T10:00:00.000Z',
         },
       ]),
       updateTemporaryPassword: vi.fn(),
+      getTenantSubdomain: vi.fn().mockResolvedValue('sainte-marie'),
+      recordRotation: vi.fn(),
+      transaction: vi.fn(async (callback: (repository: unknown) => Promise<unknown>) => callback(parentAccountsRepository)),
       insertAccessNotification: vi.fn(),
-      markAccessNotificationFailed: vi.fn(),
     };
     const smsQueue = { add: vi.fn().mockResolvedValue({ id: 'job-1' }) };
     const service = new ParentAccountsService(

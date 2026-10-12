@@ -32,7 +32,7 @@ const [registrationClass] = await queryTenant<{ id: string }>(
 const [klass] = await queryTenant<{ id: string }>("SELECT id FROM classes WHERE name='Classe QA'");
 const [subject] = await queryTenant<{ id: string }>("INSERT INTO subjects (level_id, name, coefficient) VALUES ($1, 'Mathematiques', 4) RETURNING id", [level!.id]);
 const [period] = await queryTenant<{ id: string }>(`INSERT INTO grading_periods (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
- VALUES ($1, 'trimester', 1, 'Période QA', $2, $3, $3) RETURNING id`, [schoolYear!.id, `${year}-01-01`, `${year}-12-31`]);
+ VALUES ($1, 'trimester', 1, 'Période QA', $2, $3, $4) RETURNING id`, [schoolYear!.id, `${year}-01-01`, today, `${year}-12-31`]);
 const director = await getAuthHeaders('director');
 const teacher = await getAuthHeaders('teacher');
 const assertOk = (response: { status: number; body: unknown }) => {
@@ -75,6 +75,8 @@ for (const [state, phone, firstName, daysRemaining] of [
     class_id: registrationClass!.id, first_name: firstName, last_name: 'C16', matricule: `QA-C16-${state}`,
   });
   assertOk(student);
+  await queryTenant(`INSERT INTO enrollments (student_id, class_id, school_year_id, type, status)
+    VALUES ($1, $2, $3, 'new_registration', 'confirmed')`, [student.body.data.id, registrationClass!.id, schoolYear!.id]);
   const [parent] = await queryTenant<{ id: string }>(
     `INSERT INTO parents (full_name, phone, password_hash, is_active, must_change_password)
      VALUES ($1, $2, $3, true, false) RETURNING id`,

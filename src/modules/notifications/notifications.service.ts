@@ -507,14 +507,18 @@ const sendBrevoEmail = async (params: {
   return { status: 'sent', providerRef: payload.messageId ?? randomUUID() };
 };
 
-export const defaultEmailSender: EmailSender = async ({ to, subject, text }) => {
+export const defaultEmailSender: EmailSender = async ({ to, subject, text, type }) => {
   const provider = (process.env.EMAIL_PROVIDER ?? 'mock').trim().toLowerCase();
   const mockEnabled = (process.env.EMAIL_MOCK ?? 'false').toLowerCase() === 'true';
   if ((provider === 'mock' || mockEnabled) && process.env.NODE_ENV === 'production') {
     logger.warn('[notifications] Email provider is mock in production - set EMAIL_PROVIDER env var');
   }
   if (provider === 'mock' || mockEnabled) {
-    logger.info({ to }, '[email][mock] message captured');
+    if (type === 'parent_access_credentials') {
+      logger.info({ type }, '[email][mock] parent access message captured');
+    } else {
+      logger.info({ to }, '[email][mock] message captured');
+    }
     return { status: 'sent', providerRef: 'mock-email' };
   }
   if (provider === 'brevo') {

@@ -60,6 +60,17 @@ export const resetPasswordParamsSchema = z.object({
   parentId: z.string().uuid(),
 });
 
+export const resetParentAccessBodySchema = z.object({
+  channels: z.array(z.enum(['sms', 'email'])).max(2),
+  manual_only: z.boolean().optional(),
+}).refine((value) => value.channels.length > 0 || value.manual_only === true, {
+  message: 'Select a channel or explicit manual delivery',
+});
+
+export const parentAccessStatusParamsSchema = resetPasswordParamsSchema.extend({
+  rotationId: z.string().uuid(),
+});
+
 export const parentIdParamsSchema = z.object({
   parentId: z.string().uuid(),
 });

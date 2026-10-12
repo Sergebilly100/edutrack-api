@@ -254,6 +254,13 @@ describe('critical path E2E integration', () => {
       .send({ reviewStartDate: shiftDays(0) });
     expect(beginReview.status, JSON.stringify(beginReview.body)).toBe(200);
 
+    const conductPolicy = await request().put(`/api/v1/conduct/policy/${schoolYearId}`)
+      .set(directorHeaders).send({ mode: 'direction', coefficient: 2 });
+    expect(conductPolicy.status, JSON.stringify(conductPolicy.body)).toBe(200);
+    const conductDecision = await request().put('/api/v1/conduct/grades')
+      .set(directorHeaders).send({ student_id: studentId, grading_period_id: gradingPeriodId, note: 16 });
+    expect(conductDecision.status, JSON.stringify(conductDecision.body)).toBe(200);
+
     const generated = await request()
       .post('/api/v1/report-cards/generate')
       .set(directorHeaders)

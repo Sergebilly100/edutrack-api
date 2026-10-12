@@ -17,7 +17,7 @@ import {
   buildDeferredAbsentJobId,
 } from '../../src/modules/notifications/notifications.queue.js';
 
-const tenantDb = { execute: vi.fn() };
+const tenantDb = { execute: vi.fn(), transaction: vi.fn() };
 
 const repository = {
   getLateAlertContext: vi.fn(),
@@ -35,6 +35,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.dbExecute.mockResolvedValue({ rows: [] });
   mocks.withTenantSchema.mockImplementation(async (_schemaName, callback) => callback(tenantDb));
+  tenantDb.execute.mockResolvedValue({ rows: [{ id: '11111111-1111-4111-8111-111111111111', phone: '2250700000001', email: 'parent@example.ci' }] });
+  tenantDb.transaction.mockImplementation(async (callback) => callback(tenantDb));
   smsSender.mockResolvedValue({ status: 'sent', providerRef: 'provider-1' });
   emailSender.mockResolvedValue({ status: 'sent', providerRef: 'email-provider-1' });
 });
@@ -129,6 +131,70 @@ describe('notifications.queue', () => {
       tenantDb,
       expect.objectContaining({ queueRef: 'parent-access-ref', status: 'sent' })
     );
+  });
+
+  it('envoie l’accès parent par e-mail puis date la remise sans persister le texte', async () => {
+    await processNotificationJob(
+      {
+        type: 'send-email', to: 'parent@example.ci', recipientEmail: 'parent@example.ci',
+        recipientPhone: '2250700000001', subject: 'Accès parent', text: 'Secret temporaire',
+        notificationType: 'parent_access_credentials', schemaName: 'school_sainte_marie',
+        queueRef: 'parent-email-ref', parentAccessSentUpdate: { parentId: '11111111-1111-4111-8111-111111111111' },
+      },
+      { repository, smsSender, emailSender }
+    );
+    expect(emailSender).toHaveBeenCalledOnce();
+    expect(repository.updateNotificationLogStatus).toHaveBeenCalledWith(tenantDb, expect.objectContaining({ status: 'sent' }));
+    expect(tenantDb.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('garde le statut en attente pendant les retries puis marque l’échec final', async () => {
+    smsSender.mockResolvedValue({ status: 'failed' });
+    const job = {
+      type: 'send-sms' as const, to: '2250700000001', recipientPhone: '2250700000001', message: 'Secret',
+      notificationType: 'parent_access_credentials' as const, schemaName: 'school_sainte_marie',
+      queueRef: 'parent-retry-ref', parentAccessSentUpdate: { parentId: '11111111-1111-4111-8111-111111111111' },
+    };
+    await expect(processNotificationJob(job, { repository, smsSender, emailSender }, 1, 3))
+      .rejects.toThrow('Parent access delivery failed');
+    expect(repository.updateNotificationLogStatus).not.toHaveBeenCalled();
+    await expect(processNotificationJob(job, { repository, smsSender, emailSender }, 3, 3))
+      .rejects.toThrow('Parent access delivery failed');
+    expect(repository.updateNotificationLogStatus).toHaveBeenCalledWith(tenantDb, { queueRef: job.queueRef, status: 'failed' });
+  });
+
+  it('ne livre pas un ancien mot de passe après une nouvelle rotation', async () => {
+    tenantDb.execute
+      .mockResolvedValueOnce({ rows: [{ id: '11111111-1111-4111-8111-111111111111', phone: '2250700000001', email: 'parent@example.ci' }] })
+      .mockResolvedValueOnce({ rows: [{ rotation_id: 'new-rotation' }] });
+    await processNotificationJob(
+      {
+        type: 'send-sms', to: '2250700000001', recipientPhone: '2250700000001', message: 'Ancien secret',
+        notificationType: 'parent_access_credentials', schemaName: 'school_sainte_marie',
+        queueRef: 'old-ref', parentAccessSentUpdate: { parentId: '11111111-1111-4111-8111-111111111111' },
+        parentAccessRotationId: 'old-rotation',
+      },
+      { repository, smsSender, emailSender }
+    );
+    expect(smsSender).not.toHaveBeenCalled();
+    expect(repository.updateNotificationLogStatus).toHaveBeenCalledWith(tenantDb, { queueRef: 'old-ref', status: 'failed' });
+  });
+
+  it('ne livre pas le secret à une ancienne adresse après modification du contact', async () => {
+    tenantDb.execute.mockResolvedValueOnce({ rows: [{
+      id: '11111111-1111-4111-8111-111111111111', phone: '2250700000001', email: 'nouvelle@example.ci',
+    }] });
+    await processNotificationJob(
+      {
+        type: 'send-email', to: 'ancienne@example.ci', recipientEmail: 'ancienne@example.ci',
+        recipientPhone: '2250700000001', subject: 'Accès parent', text: 'Secret temporaire',
+        notificationType: 'parent_access_credentials', schemaName: 'school_sainte_marie',
+        queueRef: 'old-contact-ref', parentAccessSentUpdate: { parentId: '11111111-1111-4111-8111-111111111111' },
+      },
+      { repository, smsSender, emailSender }
+    );
+    expect(emailSender).not.toHaveBeenCalled();
+    expect(repository.updateNotificationLogStatus).toHaveBeenCalledWith(tenantDb, { queueRef: 'old-contact-ref', status: 'failed' });
   });
 
   it('envoie le résumé quotidien profs aux directeurs des écoles actives (email uniquement)', async () => {

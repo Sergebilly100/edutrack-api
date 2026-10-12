@@ -171,6 +171,14 @@ export default async function notificationsController(
           return reply.code(404).send({ error: 'Notification not found', code: 'NOT_FOUND', statusCode: 404 });
         }
 
+        if (row.type === 'parent_access_credentials') {
+          return reply.code(409).send({
+            error: 'Generate new parent access instead of retrying old credentials',
+            code: 'PARENT_ACCESS_REQUIRES_NEW_ROTATION',
+            statusCode: 409,
+          });
+        }
+
         if (row.status !== 'failed') {
           return reply.code(409).send({ error: 'Only failed notifications can be retried', code: 'INVALID_STATUS', statusCode: 409 });
         }
@@ -197,9 +205,6 @@ export default async function notificationsController(
           schemaName: claims.schemaName,
           recipientPhone: row.recipient_phone,
           queueRef,
-          ...(row.type === 'parent_access_credentials' && row.related_id
-            ? { parentAccessSentUpdate: { parentId: row.related_id } }
-            : {}),
         });
 
         return reply.send({ success: true, queueRef });

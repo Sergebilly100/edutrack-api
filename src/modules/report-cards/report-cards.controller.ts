@@ -135,7 +135,7 @@ export default async function reportCardsController(
       const { id } = claimIdParamsSchema.parse(request.params ?? {});
       const body = decideReportCardClaimBodySchema.parse(request.body ?? {});
       const claim = await withTenantSchema(request.claims!.schemaName, db => buildReportCardsService(db).decideClaim({
-        claimId: id, ...body, userId: request.user!.userId, role: request.claims!.role,
+        claimId: id, ...body, userId: request.user!.userId,
         canPublish: request.permissions?.has('report_cards.publish') ?? false,
         canCorrectPublished: request.permissions?.has('report_cards.published_correction') ?? false,
       }));
@@ -145,9 +145,6 @@ export default async function reportCardsController(
 
   app.get('/api/v1/report-cards/versions', { preHandler: requirePermission('report_cards.published_correction') }, async (request, reply) => {
     try {
-      if (!['director', 'super_admin'].includes(request.claims!.role)) {
-        return reply.code(403).send({ error: 'Accès à l’audit refusé', code: 'FORBIDDEN', statusCode: 403 });
-      }
       const query = z.object({ classId: z.string().uuid(), gradingPeriodId: z.string().uuid() }).parse(request.query ?? {});
       const versions = await withTenantSchema(request.claims!.schemaName, db => buildReportCardsService(db).listVersions(query.classId, query.gradingPeriodId));
       return reply.send({ versions });
@@ -155,9 +152,6 @@ export default async function reportCardsController(
   });
   app.get('/api/v1/report-cards/audit', { preHandler: requirePermission('report_cards.published_correction') }, async (request, reply) => {
     try {
-      if (!['director', 'super_admin'].includes(request.claims!.role)) {
-        return reply.code(403).send({ error: 'Accès à l’audit refusé', code: 'FORBIDDEN', statusCode: 403 });
-      }
       const query = z.object({ classId: z.string().uuid(), gradingPeriodId: z.string().uuid() }).parse(request.query ?? {});
       const entries = await withTenantSchema(request.claims!.schemaName, db => buildReportCardsService(db).listAcademicAudit(query.classId, query.gradingPeriodId));
       return reply.send({ entries });
@@ -225,7 +219,7 @@ export default async function reportCardsController(
     }
   );
 
-  // ── Génération / publication (direction) ─────────────────────────────────
+  // ── Génération / publication (permission dédiée) ─────────────────────────
   app.post(
     '/api/v1/report-cards/generate',
     { preHandler: requirePermission('report_cards.publish') },

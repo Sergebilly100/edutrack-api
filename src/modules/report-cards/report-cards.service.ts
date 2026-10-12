@@ -118,7 +118,7 @@ export class ReportCardsService {
     });
   }
 
-  async decideClaim(input: { claimId: string; decision: 'approved' | 'refused'; userId: string; role: string; reason: string; canPublish: boolean; canCorrectPublished: boolean }) {
+  async decideClaim(input: { claimId: string; decision: 'approved' | 'refused'; userId: string; reason: string; canPublish: boolean; canCorrectPublished: boolean }) {
     return this.repository.transaction(async (repository) => {
       const claim = await repository.findClaim(input.claimId, true);
       if (!claim) throw new ReportCardsModuleError('Réclamation introuvable', 404, 'CLAIM_NOT_FOUND');
@@ -131,8 +131,8 @@ export class ReportCardsService {
       }
       if (!input.canPublish) throw new ReportCardsModuleError('Autorisation de publication requise', 403, 'FORBIDDEN');
       const phase = await repository.getCardsPhase(claim.class_id, claim.grading_period_id);
-      if (input.decision === 'approved' && phase === 'published' && (!input.canCorrectPublished || !['director', 'super_admin'].includes(input.role))) {
-        throw new ReportCardsModuleError('Autorisation exceptionnelle de direction requise', 403, 'PUBLISHED_CORRECTION_FORBIDDEN');
+      if (input.decision === 'approved' && phase === 'published' && !input.canCorrectPublished) {
+        throw new ReportCardsModuleError('Autorisation de correction après publication requise', 403, 'PUBLISHED_CORRECTION_FORBIDDEN');
       }
       await repository.setClaimDecision(claim.id, { status: input.decision, phase, userId: input.userId, reason: input.reason, oldStatus: claim.status });
       if (input.decision === 'approved') {

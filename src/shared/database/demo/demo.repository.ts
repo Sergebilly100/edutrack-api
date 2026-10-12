@@ -142,6 +142,10 @@ export class DemoRepository {
     `);
   }
 
+  async closeSchoolYear(yearId: string): Promise<void> {
+    await this.db.execute(sql`UPDATE school_years SET status = 'closed' WHERE id = ${yearId}::uuid`);
+  }
+
   async verify(seeded: boolean) {
     const result = await this.db.execute<{
       students: number; classes: number; years: number; rooms: number; slots: number; cards: number; teachers: number; parents: number;

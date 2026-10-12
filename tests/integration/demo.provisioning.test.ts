@@ -78,7 +78,10 @@ describe('demo creation: isolated critical path', () => {
     const token = await signAccessToken({ sub: result.directorId, role: 'director', schemaName: result.schemaName });
     const periods = await request().get('/api/v1/grading-periods').set('authorization', `Bearer ${token}`);
     expect(periods.status).toBe(200);
-    expect(periods.body.gradingPeriods.map((p: { isCompleted: boolean; isCurrent: boolean }) => [p.isCompleted, p.isCurrent]))
+    const [activeYear] = await queryPublic<{ id: string }>(
+      `SELECT id::text FROM "${result.schemaName}".school_years WHERE status='active'`);
+    expect(periods.body.gradingPeriods.filter((p: { schoolYearId: string }) => p.schoolYearId === activeYear.id)
+      .map((p: { isCompleted: boolean; isCurrent: boolean }) => [p.isCompleted, p.isCurrent]))
       .toEqual([[true, false], [true, false], [false, true]]);
     const query = (statement: string) => queryPublic(statement.replaceAll('DEMO_SCHEMA', `"${result.schemaName}"`));
     expect(await query("SELECT 1 FROM DEMO_SCHEMA.payments WHERE status='waived_by_school'")).toHaveLength(9);

@@ -35,6 +35,10 @@ export const attachFailedHandler = <T = unknown>(
   deps: FailedHandlerDeps
 ): void => {
   worker.on('failed', async (job: Job<T> | undefined, err: Error) => {
+    const parentAccess = queueName === 'notifications-sms' &&
+      typeof job?.data === 'object' && job.data !== null &&
+      'notificationType' in job.data && job.data.notificationType === 'parent_access_credentials';
+    const safeError = parentAccess ? new Error('Parent access delivery failed') : err;
     deps.logger.error(
       {
         jobId: job?.id,
@@ -42,11 +46,11 @@ export const attachFailedHandler = <T = unknown>(
         queue: queueName,
         attemptsMade: job?.attemptsMade,
         maxAttempts: job?.opts.attempts,
-        err: err.message,
+        err: safeError.message,
       },
       'job_failed'
     );
-    captureException(err, { route: `queue:${queueName}` });
+    captureException(safeError, { route: `queue:${queueName}` });
 
     if (!job) return;
     const maxAttempts = job.opts.attempts ?? 1;
@@ -57,8 +61,10 @@ export const attachFailedHandler = <T = unknown>(
         originalQueue: queueName,
         originalJobId: job.id,
         originalJobName: job.name,
-        data: job.data,
-        failedReason: err.message,
+        data: parentAccess
+          ? { notificationType: 'parent_access_credentials', redacted: true }
+          : job.data,
+        failedReason: safeError.message,
         attemptsMade: job.attemptsMade,
         failedAt: new Date().toISOString(),
       });
@@ -67,7 +73,7 @@ export const attachFailedHandler = <T = unknown>(
         {
           jobId: job.id,
           queue: queueName,
-          dlqError: dlqError instanceof Error ? dlqError.message : 'unknown',
+          dlqError: parentAccess ? 'Parent access dead letter enqueue failed' : dlqError instanceof Error ? dlqError.message : 'unknown',
         },
         'dlq_enqueue_failed'
       );

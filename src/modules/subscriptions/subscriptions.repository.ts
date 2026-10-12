@@ -1188,28 +1188,6 @@ export class SubscriptionsRepository {
     }
   }
 
-  async updateParentPassword(parentId: string, passwordHash: string): Promise<void> {
-    try {
-      await this.tenantDb.execute(sql`
-        UPDATE parents
-        SET password_hash = ${passwordHash},
-            must_change_password = true
-        WHERE id = ${parentId}::uuid
-      `);
-    } catch {
-      await this.tenantDb.execute(sql`
-        ALTER TABLE parents
-        ADD COLUMN IF NOT EXISTS must_change_password boolean NOT NULL DEFAULT false
-      `);
-      await this.tenantDb.execute(sql`
-        UPDATE parents
-        SET password_hash = ${passwordHash}
-          , must_change_password = true
-        WHERE id = ${parentId}::uuid
-      `);
-    }
-  }
-
   async computeMonthlyRevenue(month: string): Promise<{ total_subscriptions_fcfa: number; subscription_count: number }> {
     const monthDate = firstDayOfMonth(month);
     const result = await this.tenantDb.execute<{ total: string | number; count: number }>(sql`

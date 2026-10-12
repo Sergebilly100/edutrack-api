@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
+import argon2 from 'argon2';
 
 import {
   getAuthHeaders,
@@ -284,17 +285,91 @@ describe('subscriptions integration (real db)', () => {
     const response = await request()
       .post(`/api/v1/subscriptions/parents/${createdParentId}/reset-password`)
       .set(headers)
-      .send({});
+      .send({ channels: [], manual_only: true });
 
     expect(response.status).toBe(200);
     expect(typeof response.body.new_temp_password).toBe('string');
     expect(response.body.new_temp_password.length).toBe(10);
 
-    const state = await queryTenant<{ must_change_password: boolean }>(
-      `SELECT must_change_password FROM ${tenantTable('parents')} WHERE id = $1::uuid`,
+    const state = await queryTenant<{ must_change_password: boolean; password_hash: string }>(
+      `SELECT must_change_password, password_hash FROM ${tenantTable('parents')} WHERE id = $1::uuid`,
       [createdParentId]
     );
     expect(state[0]?.must_change_password).toBe(true);
+    expect(state[0]?.password_hash).not.toBe(response.body.new_temp_password);
+    expect(await argon2.verify(state[0]!.password_hash, response.body.new_temp_password)).toBe(true);
+    const audit = await queryTenant<{ message: string; metadata: { actorUserId: string; rotationId: string } }>(
+      `SELECT message, metadata FROM ${tenantTable('notifications_log')}
+       WHERE related_id = $1::uuid AND type = 'parent_access_credentials' AND channel = 'in_app'
+       ORDER BY created_at DESC LIMIT 1`, [createdParentId]
+    );
+    expect(audit[0]?.message).not.toContain(response.body.new_temp_password);
+    expect(audit[0]?.metadata.rotationId).toBe(response.body.rotation_id);
+    const status = await request()
+      .get(`/api/v1/subscriptions/parents/${createdParentId}/access/${response.body.rotation_id}/status`)
+      .set(headers);
+    expect(status.status).toBe(200);
+    expect(status.body.channels).toEqual([]);
+  });
+
+  it('met SMS et e-mail en file avec une seule rotation et aucun secret dans les journaux', async () => {
+    const headers = await getAuthHeaders('director');
+    const response = await request()
+      .post(`/api/v1/subscriptions/parents/${createdParentId}/reset-password`)
+      .set(headers)
+      .send({ channels: ['sms', 'email'] });
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.body.channels).toEqual([
+      { channel: 'sms', status: 'queued' }, { channel: 'email', status: 'queued' },
+    ]);
+    const rows = await queryTenant<{ channel: string; message: string; metadata: { rotationId: string } }>(
+      `SELECT channel, message, metadata FROM ${tenantTable('notifications_log')}
+       WHERE related_id = $1::uuid AND type = 'parent_access_credentials'
+         AND metadata->>'rotationId' = $2 AND channel IN ('sms', 'email')
+       ORDER BY channel`, [createdParentId, response.body.rotation_id]
+    );
+    expect(rows.map((row) => row.channel)).toEqual(['email', 'sms']);
+    expect(rows.every((row) => !row.message.includes(response.body.new_temp_password))).toBe(true);
+    const status = await request()
+      .get(`/api/v1/subscriptions/parents/${createdParentId}/access/${response.body.rotation_id}/status`)
+      .set(headers);
+    expect(status.body.channels).toEqual([
+      { channel: 'sms', status: 'queued' }, { channel: 'email', status: 'queued' },
+    ]);
+  });
+
+  it('refuse uniquement le canal dont la coordonnée est indisponible', async () => {
+    await queryTenant(`UPDATE ${tenantTable('parents')} SET email = NULL WHERE id = $1::uuid`, [createdParentId]);
+    const headers = await getAuthHeaders('director');
+    const response = await request()
+      .post(`/api/v1/subscriptions/parents/${createdParentId}/reset-password`)
+      .set(headers)
+      .send({ channels: ['email'] });
+    expect(response.status).toBe(422);
+    expect(response.body.code).toBe('PARENT_EMAIL_UNAVAILABLE');
+    const sms = await request()
+      .post(`/api/v1/subscriptions/parents/${createdParentId}/reset-password`)
+      .set(headers)
+      .send({ channels: ['sms'] });
+    expect(sms.status).toBe(200);
+    await queryTenant(`UPDATE ${tenantTable('parents')} SET email = 'parent.enabled@test.ci' WHERE id = $1::uuid`, [createdParentId]);
+  });
+
+  it('refuse une réinitialisation sans canal ni remise manuelle', async () => {
+    const response = await request()
+      .post(`/api/v1/subscriptions/parents/${createdParentId}/reset-password`)
+      .set(await getAuthHeaders('director'))
+      .send({ channels: [] });
+    expect(response.status).toBe(400);
+  });
+
+  it('refuse la réinitialisation au personnel sans permission', async () => {
+    const response = await request()
+      .post(`/api/v1/subscriptions/parents/${createdParentId}/reset-password`)
+      .set(await getAuthHeaders('staff'))
+      .send({ channels: [], manual_only: true });
+    expect(response.status).toBe(403);
   });
 
   it('GET /api/v1/subscriptions/revenue/summary retourne les agrégats', async () => {

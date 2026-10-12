@@ -167,7 +167,7 @@ async function seedArchivedSchoolRecords(repo: DemoRepository, currentClasses: D
   const importedHistoryLabel = `${archiveStartYear - 1}-${archiveStartYear}`;
   const archiveYearId = await repo.insert('school_years', {
     label: archiveLabel, start_date: archiveStart, end_date: archiveEnd,
-    end_of_year_review_start_date: shiftDate(archiveEnd, -30), status: 'closed', grading_period_type: 'trimester', created_at: archiveStart,
+    end_of_year_review_start_date: shiftDate(archiveEnd, -30), status: 'draft', grading_period_type: 'trimester', created_at: archiveStart,
   });
   const archivePeriods = [
     { label: 'Trimestre 1', start: archiveStart, reviewStart: shiftDate(archiveStart, 92), end: shiftDate(archiveStart, 107) },
@@ -253,6 +253,7 @@ async function seedArchivedSchoolRecords(repo: DemoRepository, currentClasses: D
     });
   }
   await repo.archiveClasses(archiveClasses.map((klass) => klass.id));
+  await repo.closeSchoolYear(archiveYearId);
 }
 
 async function seedAttendance(repo: DemoRepository, classes: DemoClass[], teachers: DemoTeacher[],

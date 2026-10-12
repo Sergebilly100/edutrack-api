@@ -24,6 +24,8 @@ import {
   listParentsQuerySchema,
   parentIdParamsSchema,
   resetPasswordParamsSchema,
+  resetParentAccessBodySchema,
+  parentAccessStatusParamsSchema,
   revenuePaymentsQuerySchema,
   revenueHistoryQuerySchema,
   revenueSummaryQuerySchema,
@@ -259,6 +261,7 @@ export default async function subscriptionsController(
           return service.sendPendingAccess({
             schemaName: claims.schemaName,
             parentIds: body.parent_ids,
+            actorUserId: claims.sub,
           });
         });
         return reply.send(result);
@@ -367,12 +370,33 @@ export default async function subscriptionsController(
     async (request, reply) => {
       try {
         const { parentId } = resetPasswordParamsSchema.parse(request.params ?? {});
+        const body = resetParentAccessBodySchema.parse(request.body ?? {});
         const claims = request.claims!;
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-          const service = new SubscriptionsService(new SubscriptionsRepository(tenantDb));
-          return service.resetParentPassword(parentId);
+          const service = new ParentAccountsService(new ParentAccountsRepository(tenantDb), { smsQueue: options.smsQueue });
+          return service.resetAccess({
+            schemaName: claims.schemaName, parentId, actorUserId: claims.sub,
+            channels: body.channels, manualOnly: body.manual_only,
+          });
         });
-        return reply.send(result);
+        return reply.header('Cache-Control', 'no-store').header('Pragma', 'no-cache').send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.get(
+    '/api/v1/subscriptions/parents/:parentId/access/:rotationId/status',
+    { preHandler: requirePermission('subscriptions.password.reset') },
+    async (request, reply) => {
+      try {
+        const { parentId, rotationId } = parentAccessStatusParamsSchema.parse(request.params ?? {});
+        const claims = request.claims!;
+        const channels = await withTenantSchema(claims.schemaName, (tenantDb) =>
+          new ParentAccountsService(new ParentAccountsRepository(tenantDb)).getRotationStatuses(parentId, rotationId)
+        );
+        return reply.send({ channels });
       } catch (error) {
         return handleError(request, reply, error);
       }

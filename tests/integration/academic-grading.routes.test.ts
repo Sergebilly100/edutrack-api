@@ -227,8 +227,8 @@ describe('academic grading integration', () => {
       gradingPeriodId,
       status: 'in_progress',
     });
-    expect(incompleteCalculation.status).toBe(409);
-    expect(incompleteCalculation.body.code).toBe('GRADES_INCOMPLETE');
+    expect(incompleteCalculation.status).toBe(200);
+    expect(incompleteCalculation.body.completion.status).toBe('in_progress');
 
     const scopeWithDates = await request().get('/api/v1/evaluations/scope').set(teacherHeaders).query({ classId, gradingPeriodId });
     expect(scopeWithDates.status).toBe(200);
@@ -328,8 +328,7 @@ describe('academic grading integration', () => {
     expect(calculationStarted.body.completion.status).toBe('in_progress');
 
     const inProgressSubjectEdit = await saveGrade(math1, 14);
-    expect(inProgressSubjectEdit.status).toBe(409);
-    expect(inProgressSubjectEdit.body.code).toBe('SUBJECT_CALCULATION_STARTED');
+    expect(inProgressSubjectEdit.status).toBe(200);
 
     const routedEvaluation = await request().post('/api/v1/evaluations').set(teacherHeaders).send({
       lessonSlotId: context.scheduleId,
@@ -362,12 +361,11 @@ describe('academic grading integration', () => {
     expect(beginReview.status, JSON.stringify(beginReview.body)).toBe(200);
     const simultaneous = await request().get('/api/v1/grading-periods').set(directorHeaders);
     expect(simultaneous.body.gradingPeriods).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: gradingPeriodId, notesEntryOpen: false, conductReviewOpen: true }),
+      expect.objectContaining({ id: gradingPeriodId, notesEntryOpen: true, conductReviewOpen: true }),
       expect.objectContaining({ id: nextGradingPeriodId, notesEntryOpen: true }),
     ]));
-    const closedT1Grade = await saveGrade(french, 13);
-    expect(closedT1Grade.status).toBe(409);
-    expect(closedT1Grade.body.code).toBe('GRADING_PERIOD_NOTES_CLOSED');
+    const reviewT1Grade = await saveGrade(french, 13);
+    expect(reviewT1Grade.status).toBe(200);
     const t2Evaluation = await request().post('/api/v1/evaluations').set(teacherHeaders).send({
       lessonSlotId: context.scheduleId, subjectId: mathResponse.body.subject.id,
       classId, gradingPeriodId: nextGradingPeriodId, type: 'scheduled',

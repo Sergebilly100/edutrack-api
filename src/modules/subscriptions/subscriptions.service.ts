@@ -529,17 +529,6 @@ export class SubscriptionsService {
     };
   }
 
-  async resetParentPassword(parentId: string): Promise<{ phone: string; new_temp_password: string }> {
-    const parent = await this.repository.getParentById(parentId);
-    if (!parent) {
-      throw new SubscriptionsModuleError('Parent not found', 404, 'PARENT_NOT_FOUND');
-    }
-    const temp = generateInitialPassword(10);
-    const hash = await argon2.hash(temp);
-    await this.repository.updateParentPassword(parentId, hash);
-    return { phone: parent.phone, new_temp_password: temp };
-  }
-
   async revenueSummary(schemaName: string, month?: string) {
     const targetMonth = month ?? monthKeyInBusinessTimezone();
     const tenantId = await this.repository.getTenantIdBySchemaName(schemaName);

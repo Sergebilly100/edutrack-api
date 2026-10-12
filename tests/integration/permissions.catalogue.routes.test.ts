@@ -124,6 +124,86 @@ describe('C14 catalogue distribué et parcours de sauvegarde', () => {
     await request().patch('/api/v1/permissions/config/school').set(staffHeaders).send({ name: 'Interdit' }).expect(403);
   });
 
+  it('délègue la correction publiée à un censeur et retire aussitôt son accès après révocation', async () => {
+    const directorHeaders = await getAuthHeaders('director');
+    const permissions = ['report_cards.view', 'report_cards.publish', 'report_cards.published_correction'];
+    const catalogue = await request().get('/api/v1/permissions/catalogue').set(directorHeaders).expect(200);
+    expect(catalogue.body.permissions.find((entry: { key: string }) => entry.key === 'report_cards.published_correction'))
+      .toMatchObject({ available: true, requiredPermissions: ['report_cards.view', 'report_cards.publish'] });
+    const position = await request().post('/api/v1/permissions/positions').set(directorHeaders)
+      .send({ name: 'Censeur délégué', permissions: permissions.slice(0, 2) }).expect(201);
+    await request().post(`/api/v1/permissions/positions/${position.body.position.id}/assign`).set(directorHeaders)
+      .send({ userId: getSeedContext().staffUserId }).expect(200);
+
+    const staffHeaders = await getAuthHeaders('staff');
+    const me = await request().get('/api/v1/permissions/me').set(staffHeaders).expect(200);
+    expect(me.body.permissions).not.toContain('report_cards.published_correction');
+    const [year] = await queryTenant<{ id: string }>(`
+      INSERT INTO school_years (label, start_date, end_date, status)
+      VALUES ('Délégation bulletins', '2026-09-01', '2027-06-30', 'active') RETURNING id::text
+    `);
+    const [level] = await queryTenant<{ id: string }>(`
+      INSERT INTO levels (name, order_index) VALUES ('Niveau délégation', 991) RETURNING id::text
+    `);
+    const [schoolClass] = await queryTenant<{ id: string }>(`
+      UPDATE classes SET school_year_id=$1, level_id=$2 WHERE name=$3 RETURNING id::text
+    `, [year.id, level.id, getSeedContext().className]);
+    const [subject] = await queryTenant<{ id: string }>(`
+      INSERT INTO subjects (level_id, name, coefficient)
+      VALUES ($1, 'Mathématiques déléguées', 4) RETURNING id::text
+    `, [level.id]);
+    const [period] = await queryTenant<{ id: string }>(`
+      INSERT INTO grading_periods (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+      VALUES ($1, 'trimester', 1, 'Trimestre 1', '2026-09-01', '2026-11-20', '2026-12-20') RETURNING id::text
+    `, [year.id]);
+    await queryTenant(`INSERT INTO teacher_subject_assignments (teacher_id, subject_id, class_id)
+      VALUES ($1, $2, $3)`, [getSeedContext().teacherId, subject.id, schoolClass.id]);
+    await queryTenant(`INSERT INTO class_subject_completion (class_id, subject_id, grading_period_id, status, completed_at)
+      VALUES ($1, $2, $3, 'completed', now())`, [schoolClass.id, subject.id, period.id]);
+    const [student] = await queryTenant<{ id: string }>(`
+      INSERT INTO students (class_id, first_name, last_name)
+      VALUES ($1, 'Élève', 'Délégué') RETURNING id::text
+    `, [schoolClass.id]);
+    await queryTenant(`INSERT INTO enrollments (student_id, class_id, school_year_id, type, status)
+      VALUES ($1, $2, $3, 'new_registration', 'confirmed')`, [student.id, schoolClass.id, year.id]);
+    await queryTenant(`INSERT INTO report_cards (student_id, class_id, grading_period_id,
+      general_average, rank, class_average, class_min_average, class_max_average, class_headcount,
+      status, published_at, published_by_user_id)
+      VALUES ($1, $2, $3, 12, 1, 12, 12, 12, 1, 'published', now(), $4)`,
+    [student.id, schoolClass.id, period.id, getSeedContext().directorUserId]);
+    const scope = `?classId=${schoolClass.id}&gradingPeriodId=${period.id}`;
+    const created = await request().post('/api/v1/report-cards/claims').set(staffHeaders).send({
+      classId: schoolClass.id, studentId: student.id, subjectId: subject.id,
+      gradingPeriodId: period.id, reason: 'La note publiée doit être corrigée',
+    }).expect(201);
+    expect(created.body.claim).toMatchObject({ id: expect.any(String) });
+    const decisionPath = `/api/v1/report-cards/claims/${created.body.claim.id}/decision`;
+    const decision = { decision: 'approved', reason: 'Erreur confirmée après vérification' };
+    const refused = await request().post(decisionPath).set(staffHeaders).send(decision).expect(403);
+    expect(refused.body.code).toBe('PUBLISHED_CORRECTION_FORBIDDEN');
+    await request().put(`/api/v1/permissions/positions/${position.body.position.id}`).set(directorHeaders)
+      .send({ permissions }).expect(200);
+    expect((await request().get('/api/v1/permissions/me').set(staffHeaders).expect(200)).body.permissions)
+      .toEqual(expect.arrayContaining(permissions));
+    const approved = await request().post(decisionPath).set(staffHeaders).send(decision).expect(200);
+    expect(approved.body.claim).toMatchObject({ status: 'approved', phase: 'published' });
+    const versions = await request().get(`/api/v1/report-cards/versions${scope}`).set(staffHeaders).expect(200);
+    expect(versions.body.versions).toHaveLength(1);
+    expect(versions.body.versions[0].invalidation_reason).toBe(decision.reason);
+    expect(await queryTenant(`SELECT id FROM report_cards WHERE class_id=$1 AND grading_period_id=$2`,
+      [schoolClass.id, period.id])).toEqual([]);
+    const audit = await request().get(`/api/v1/report-cards/audit${scope}`).set(staffHeaders).expect(200);
+    expect(audit.body.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ actor_user_id: getSeedContext().staffUserId, operation: 'claim_approved' }),
+    ]));
+
+    await request().put(`/api/v1/permissions/positions/${position.body.position.id}`).set(directorHeaders)
+      .send({ permissions: ['report_cards.view', 'report_cards.publish'] }).expect(200);
+    const afterRevocation = await request().get('/api/v1/permissions/me').set(staffHeaders).expect(200);
+    expect(afterRevocation.body.permissions).not.toContain('report_cards.published_correction');
+    await request().get(`/api/v1/report-cards/audit${scope}`).set(staffHeaders).expect(403);
+  });
+
   it('refuse une clé inventée sans créer de poste', async () => {
     await request().post('/api/v1/permissions/positions').set(await getAuthHeaders('director'))
       .send({ name: 'Droit forgé', permissions: ['permissions.root'] }).expect(400);

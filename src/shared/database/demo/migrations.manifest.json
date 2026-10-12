@@ -86,5 +86,7 @@
   "0081_grading_period_class_closures.sql": "282df66742ce08d86d71f7c4475c44e938a31e0ea607c094cb8fba8d9cf9cd85",
   "0082_conduct_policy_and_audit.sql": "e671f761cb0ceb02896d5378c15d52007ce17f87645e14d750b7a3c30b0b6717",
   "0083_report_card_corrections.sql": "2c161183ba4a0724fd2679ef48f8c1c9dc0e0350c5cb35b832652d7aff12fd08",
-  "0084_student_report_card_claims.sql": "0bbb9507f5e024e540374f0bff6c2d424800cc625e89789b9dd0e9ee36fcaeac"
+  "0084_student_report_card_claims.sql": "0bbb9507f5e024e540374f0bff6c2d424800cc625e89789b9dd0e9ee36fcaeac",
+  "0085_subjects_abbreviation.sql": "2c08d0750f8ffefd9676df83196f36ff3e557eba35dc0e2e80d5e2c121a574ec",
+  "0086_parent_access_log_redaction.sql": "8f39dd0cd89a65e5880d5a91e48b0b50824a2cd18cb674e123ccbaa7534157ef"
 }

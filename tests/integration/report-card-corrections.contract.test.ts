@@ -62,6 +62,9 @@ describe('C30 tenant migration', () => {
         const director = (await tx.execute<{ id: string }>(sql`
           INSERT INTO users (role, name, password_hash) VALUES ('director', 'Direction', 'test') RETURNING id::text
         `)).rows[0]!.id;
+        const delegatedStaff = (await tx.execute<{ id: string }>(sql`
+          INSERT INTO users (role, name, password_hash) VALUES ('staff', 'Censeur délégué', 'test') RETURNING id::text
+        `)).rows[0]!.id;
         const teacherUser = (await tx.execute<{ id: string }>(sql`
           INSERT INTO users (role, name, password_hash) VALUES ('teacher', 'Professeur', 'test') RETURNING id::text
         `)).rows[0]!.id;
@@ -133,10 +136,10 @@ describe('C30 tenant migration', () => {
         expect(await cards.listClaims({ classId: klass, studentId: students[0] })).toMatchObject([
           { id: claimId, student_id: students[0], student_name: 'Awa Test' },
         ]);
-        await expect(cards.decideClaim({ claimId, decision: 'approved', userId: director, role: 'staff',
-          reason: 'Erreur confirmée après vérification', canPublish: true, canCorrectPublished: true }))
+        await expect(cards.decideClaim({ claimId, decision: 'approved', userId: delegatedStaff,
+          reason: 'Erreur confirmée après vérification', canPublish: true, canCorrectPublished: false }))
           .rejects.toMatchObject({ code: 'PUBLISHED_CORRECTION_FORBIDDEN' });
-        await cards.decideClaim({ claimId, decision: 'approved', userId: director, role: 'director',
+        await cards.decideClaim({ claimId, decision: 'approved', userId: delegatedStaff,
           reason: 'Erreur confirmée après vérification', canPublish: true, canCorrectPublished: true });
         const remaining = await tx.execute<{ count: number }>(sql`SELECT count(*)::int AS count FROM report_cards`);
         expect(remaining.rows[0]!.count).toBe(0);

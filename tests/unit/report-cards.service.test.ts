@@ -421,20 +421,20 @@ describe('réclamations et autorisation de correction', () => {
     expect(scopedRepository.createClaim).not.toHaveBeenCalled();
   });
 
-  it('réserve la correction publiée au directeur autorisé', async () => {
+  it('exige le droit de correction publiée sans imposer le rôle directeur', async () => {
     scopedRepository.getCardsPhase.mockResolvedValue('published');
     const input = { claimId: 'claim-1', decision: 'approved' as const, userId: 'user-1', reason: 'Erreur confirmée', canPublish: true, canCorrectPublished: true };
-    await expect(service.decideClaim({ ...input, role: 'staff' })).rejects.toMatchObject({ code: 'PUBLISHED_CORRECTION_FORBIDDEN' });
-    await expect(service.decideClaim({ ...input, role: 'director', canCorrectPublished: false })).rejects.toMatchObject({ code: 'PUBLISHED_CORRECTION_FORBIDDEN' });
+    await expect(service.decideClaim({ ...input, canCorrectPublished: false })).rejects.toMatchObject({ code: 'PUBLISHED_CORRECTION_FORBIDDEN' });
+    await expect(service.decideClaim({ ...input, canPublish: false })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(scopedRepository.invalidateClassCards).not.toHaveBeenCalled();
-    await expect(service.decideClaim({ ...input, role: 'director' })).resolves.toMatchObject({ status: 'approved', phase: 'published' });
+    await expect(service.decideClaim(input)).resolves.toMatchObject({ status: 'approved', phase: 'published' });
     expect(scopedRepository.invalidateClassCards).toHaveBeenCalledWith(expect.objectContaining({ claimId: 'claim-1', classId: 'class-1', reason: 'Erreur confirmée' }));
   });
 
   it('ouvre la seule matière avant génération avec le droit de publication', async () => {
     scopedRepository.findClaim.mockResolvedValue({ ...claim, status: 'open' });
     await service.decideClaim({ claimId: 'claim-1', decision: 'approved', userId: 'user-1',
-      role: 'staff', reason: 'Erreur confirmée', canPublish: true, canCorrectPublished: false });
+      reason: 'Erreur confirmée', canPublish: true, canCorrectPublished: false });
     expect(scopedRepository.reopenSubject).toHaveBeenCalledWith(expect.objectContaining({
       classId: 'class-1', subjectId: 'subject-1', claimId: 'claim-1',
     }));
@@ -445,13 +445,13 @@ describe('réclamations et autorisation de correction', () => {
     scopedRepository.findClaim.mockResolvedValue({ ...claim, status: 'open' });
     scopedRepository.getCardsPhase.mockResolvedValue('generated');
     await service.decideClaim({ claimId: 'claim-1', decision: 'approved', userId: 'user-1',
-      role: 'staff', reason: 'Erreur confirmée', canPublish: true, canCorrectPublished: false });
+      reason: 'Erreur confirmée', canPublish: true, canCorrectPublished: false });
     expect(scopedRepository.invalidateClassCards).toHaveBeenCalledOnce();
   });
 
   it('refuse une réclamation avant toute réouverture', async () => {
     scopedRepository.findClaim.mockResolvedValue({ ...claim, status: 'open' });
-    await expect(service.decideClaim({ claimId: 'claim-1', decision: 'refused', userId: 'user-1', role: 'director', reason: 'Note vérifiée', canPublish: true, canCorrectPublished: false }))
+    await expect(service.decideClaim({ claimId: 'claim-1', decision: 'refused', userId: 'user-1', reason: 'Note vérifiée', canPublish: true, canCorrectPublished: false }))
       .resolves.toMatchObject({ status: 'refused' });
     expect(scopedRepository.setClaimDecision).toHaveBeenCalled();
     expect(scopedRepository.reopenSubject).not.toHaveBeenCalled();

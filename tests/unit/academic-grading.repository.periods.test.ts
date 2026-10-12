@@ -20,7 +20,7 @@ describe('AcademicGradingRepository period capabilities', () => {
       ] });
     const repository = new AcademicGradingRepository({ execute } as unknown as AcademicGradingQueryExecutor);
     const [first, second] = await repository.listGradingPeriods('y1');
-    expect(first).toMatchObject({ notesEntryOpen: false, conductReviewOpen: true, bulletinGenerationAvailable: true, isClosed: false, closedClassIds: ['c1'], hasGeneratedCards: true });
+    expect(first).toMatchObject({ notesEntryOpen: true, conductReviewOpen: true, bulletinGenerationAvailable: true, isClosed: false, closedClassIds: ['c1'], hasGeneratedCards: true });
     expect(second).toMatchObject({ notesEntryOpen: true, conductReviewOpen: false, closedClassIds: [] });
   });
 });

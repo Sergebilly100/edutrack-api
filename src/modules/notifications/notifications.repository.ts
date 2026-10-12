@@ -332,7 +332,7 @@ export const defaultRepository: NotificationsRepository = {
         provider_ref = COALESCE(${params.providerRef ?? null}, provider_ref),
         sent_at = COALESCE(${params.sentAt ?? null}, sent_at)
       WHERE provider_ref = ${params.queueRef}
-        AND status = 'queued'
+        AND status IN ('queued', 'failed')
     `);
   },
 

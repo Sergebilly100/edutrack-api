@@ -129,10 +129,9 @@ export const buildPermissionCatalogue = (features: ActivationFeatures) => ({
       feature, label: ACTIVATION_LABELS[feature], enabled: features[feature],
     }));
     const unavailable = activationDependencies.filter((dependency) => !dependency.enabled);
-    const sensitive = key === 'report_cards.published_correction';
     const [category, ...action] = key.split('.');
     const viewKey = `${category}.view`;
-    const requiredPermissions: CatalogueKey[] = sensitive
+    const requiredPermissions: CatalogueKey[] = key === 'report_cards.published_correction'
       ? ['report_cards.view', 'report_cards.publish']
       : VIEW_ACTIONS.has(action.join('.'))
         ? PERMISSION_KEYS.filter((candidate) => candidate === viewKey) : [];
@@ -143,9 +142,8 @@ export const buildPermissionCatalogue = (features: ActivationFeatures) => ({
       label: definition.label,
       requiredPermissions,
       activationDependencies,
-      available: unavailable.length === 0 && !sensitive,
-      unavailableReason: sensitive ? 'Réservée au directeur ou au super administrateur délégué au tenant.'
-        : unavailable.length ? unavailable.map((dependency) => ACTIVATION_REASONS[dependency.feature]).join(' ') : null,
+      available: unavailable.length === 0,
+      unavailableReason: unavailable.length ? unavailable.map((dependency) => ACTIVATION_REASONS[dependency.feature]).join(' ') : null,
     };
   }),
 });

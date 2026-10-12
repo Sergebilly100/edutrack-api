@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import type { TenantDb } from '../../shared/database/db.js';
 
 export type ParentAccountsQueryExecutor = {
   execute: (query: ReturnType<typeof sql>) => Promise<unknown>;
@@ -122,11 +123,51 @@ export type ParentAccessRecord = {
   id: string;
   fullName: string;
   phone: string;
+  email: string | null;
   accessSentAt: string | null;
 };
 
 export class ParentAccountsRepository {
   constructor(private readonly db: ParentAccountsQueryExecutor) {}
+
+  async getTenantSubdomain(schemaName: string): Promise<string | null> {
+    const result = await this.db.execute(sql`
+      SELECT subdomain FROM public.tenants WHERE schema_name = ${schemaName} LIMIT 1
+    `);
+    return getRows<{ subdomain: string }>(result)[0]?.subdomain ?? null;
+  }
+
+  async getPasswordHashForUpdate(parentId: string): Promise<string | null> {
+    const result = await this.db.execute(sql`
+      SELECT password_hash FROM parents WHERE id = ${parentId}::uuid FOR UPDATE
+    `);
+    return getRows<{ password_hash: string }>(result)[0]?.password_hash ?? null;
+  }
+
+  async transaction<T>(callback: (repository: ParentAccountsRepository) => Promise<T>): Promise<T> {
+    return (this.db as TenantDb).transaction(async (tx) =>
+      callback(new ParentAccountsRepository(tx as unknown as ParentAccountsQueryExecutor))
+    );
+  }
+
+  async recordRotation(input: { parentId: string; phone: string; actorUserId: string | null; rotationId: string; action?: 'reset' | 'prepared' }): Promise<void> {
+    await this.db.execute(sql`
+      INSERT INTO notifications_log (type, channel, recipient_phone, message, status, related_id, metadata, created_at)
+      VALUES ('parent_access_credentials', 'in_app', ${input.phone}, ${input.action === 'prepared' ? '[Accès parent préparé]' : '[Accès parent réinitialisé]'}, 'sent',
+        ${input.parentId}::uuid, ${JSON.stringify({ actorUserId: input.actorUserId, rotationId: input.rotationId, action: input.action ?? 'reset' })}::jsonb,
+        clock_timestamp())
+    `);
+  }
+
+  async getRotationStatuses(parentId: string, rotationId: string): Promise<Array<{ channel: 'sms' | 'email'; status: string }>> {
+    const result = await this.db.execute(sql`
+      SELECT channel, status FROM notifications_log
+      WHERE related_id = ${parentId}::uuid AND type = 'parent_access_credentials'
+        AND metadata->>'rotationId' = ${rotationId} AND channel IN ('sms', 'email')
+      ORDER BY CASE channel WHEN 'sms' THEN 0 ELSE 1 END
+    `);
+    return getRows<{ channel: 'sms' | 'email'; status: string }>(result);
+  }
 
   async listByIds(parentIds: string[]): Promise<ParentAccessRecord[]> {
     if (parentIds.length === 0) return [];
@@ -136,6 +177,7 @@ export class ParentAccountsRepository {
         id::text AS id,
         full_name,
         phone,
+        email,
         access_sent_at::text AS access_sent_at
       FROM parents
       WHERE id IN (${sql.join(parentIds.map((id) => sql`${id}::uuid`), sql`, `)})
@@ -146,11 +188,13 @@ export class ParentAccountsRepository {
       id: string;
       full_name: string;
       phone: string;
+      email: string | null;
       access_sent_at: string | null;
     }>(result).map((row) => ({
       id: row.id,
       fullName: row.full_name,
       phone: row.phone,
+      email: row.email,
       accessSentAt: row.access_sent_at,
     }));
   }
@@ -169,7 +213,10 @@ export class ParentAccountsRepository {
   async insertAccessNotification(input: {
     parentId: string;
     phone: string;
-    message: string;
+    email?: string | null;
+    channel?: 'sms' | 'email';
+    actorUserId?: string | null;
+    rotationId?: string;
     queueRef: string;
   }): Promise<void> {
     await this.db.execute(sql`
@@ -177,29 +224,25 @@ export class ParentAccountsRepository {
         type,
         channel,
         recipient_phone,
+        recipient_email,
         message,
         status,
         provider_ref,
-        related_id
+        related_id,
+        metadata
       )
       VALUES (
         'parent_access_credentials',
-        'sms',
+        ${input.channel ?? 'sms'},
         ${input.phone},
-        ${input.message},
+        ${input.email ?? null},
+        '[Identifiants parent : envoi demandé]',
         'queued',
         ${input.queueRef},
-        ${input.parentId}::uuid
+        ${input.parentId}::uuid,
+        ${JSON.stringify({ actorUserId: input.actorUserId ?? null, rotationId: input.rotationId ?? null })}::jsonb
       )
     `);
   }
 
-  async markAccessNotificationFailed(queueRef: string): Promise<void> {
-    await this.db.execute(sql`
-      UPDATE notifications_log
-      SET status = 'failed'
-      WHERE provider_ref = ${queueRef}
-        AND status = 'queued'
-    `);
-  }
 }
