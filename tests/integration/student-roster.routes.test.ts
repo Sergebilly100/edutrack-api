@@ -224,7 +224,8 @@ describe('school roster and reusable profiles', () => {
       confirmedInActiveYear: false,
     });
     const noHistoricalProfile = await request().get(`/api/v1/students/${students.get('confirmed')}/historical-profile`).set(headers);
-    expect(noHistoricalProfile.status).toBe(404);
+    expect(noHistoricalProfile.status).toBe(200);
+    expect(noHistoricalProfile.body.data.latestConfirmedSchoolYear).toBeNull();
     const oldClassList = await request().get(`/api/v1/students?class_id=${previousClass}`).set(headers);
     expect(oldClassList.body.data).toEqual([]);
     const former = (await queryTenant<{ id: string }>(`INSERT INTO students (first_name,last_name,matricule)
@@ -248,7 +249,10 @@ describe('school roster and reusable profiles', () => {
     expect(archivedProfile.body.data).toMatchObject({
       id: former, isActive: false, latestConfirmedSchoolYear: { id: previousYear },
     });
-    const candidates = await request().get('/api/v1/enrollments/re-enrollment/candidates?search=ROSTER-former').set(headers);
+    const historyDirectory = await request().get('/api/v1/students/history-directory?search=ROSTER-former').set(headers);
+    expect(historyDirectory.status).toBe(200);
+    expect(historyDirectory.body.data).toEqual(expect.arrayContaining([expect.objectContaining({ id: former })]));
+    const candidates = await request().get(`/api/v1/enrollments/re-enrollment/candidates?school_year_id=${yearId}&search=ROSTER-former`).set(headers);
     expect(candidates.status).toBe(200);
     expect(candidates.body.candidates).toEqual(expect.arrayContaining([expect.objectContaining({ studentId: former })]));
   });

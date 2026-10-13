@@ -310,6 +310,13 @@ describe('enrollments integration', () => {
       levelId: academic.targetLevelId, name: 'Photo identité', isMandatory: true,
     });
 
+    const campaignPath = `/api/v1/enrollments/re-enrollment/candidates?school_year_id=${academic.targetYearId}&source_school_year_id=${academic.previousYearId}&level_id=${academic.currentLevelId}&class_id=${academic.currentClassId}`;
+    const untreated = await request().get(campaignPath).set(headers);
+    expect(untreated.status).toBe(200);
+    expect(untreated.body.candidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ studentId, enrollment: null }),
+    ]));
+
     const creation = await request().post('/api/v1/enrollments').set(headers).send({
       studentId, classId: academic.targetClassId, schoolYearId: academic.targetYearId,
       type: 're_registration', hasPreviousYearUnpaid: false,
@@ -318,12 +325,19 @@ describe('enrollments integration', () => {
     expect(creation.body.enrollment.status).toBe('pending_cashier');
     expect(creation.body.documentWarning).toContain('paiement reste autorisé');
 
-    const candidates = await request()
-      .get(`/api/v1/enrollments/re-enrollment/candidates?school_year_id=${academic.targetYearId}&source_school_year_id=${academic.previousYearId}&level_id=${academic.currentLevelId}&class_id=${academic.currentClassId}`)
-      .set(headers);
+    const untreatedAfterCreation = await request().get(campaignPath).set(headers);
+    expect(untreatedAfterCreation.body.candidates).not.toEqual(expect.arrayContaining([expect.objectContaining({ studentId })]));
+    const candidates = await request().get(`${campaignPath}&campaign_status=awaiting_cashier`).set(headers);
     expect(candidates.status).toBe(200);
     expect(candidates.body.candidates).toEqual(expect.arrayContaining([
       expect.objectContaining({ studentId, enrollment: expect.objectContaining({ status: 'pending_cashier' }) }),
+    ]));
+    expect(candidates.body.counts).toMatchObject({ toProcess: 0, awaitingCashier: 1 });
+
+    const dossiers = await request().get(`/api/v1/enrollments?school_year_id=${academic.targetYearId}&type=re_registration&status=pending_cashier`).set(headers);
+    expect(dossiers.status).toBe(200);
+    expect(dossiers.body.enrollments).toEqual(expect.arrayContaining([
+      expect.objectContaining({ studentId, schoolYearId: academic.targetYearId, classId: academic.targetClassId, type: 're_registration', status: 'pending_cashier' }),
     ]));
 
     const summary = await request()
@@ -334,6 +348,18 @@ describe('enrollments integration', () => {
       expect.objectContaining({ schoolYearId: academic.previousYearId, className: 'enrollment-renew-current-class', enrollmentStatus: 'confirmed' }),
       expect.objectContaining({ schoolYearId: academic.targetYearId, className: 'enrollment-renew-target-class', enrollmentStatus: 'pending_cashier' }),
     ]));
+    const history = await request().get(`/api/v1/students/${studentId}/academic-history`).set(headers);
+    expect(history.status).toBe(200);
+    expect(history.body.years).toEqual(expect.arrayContaining([
+      expect.objectContaining({ schoolYearId: academic.previousYearId, enrollmentStatus: 'confirmed' }),
+      expect.objectContaining({ schoolYearId: academic.targetYearId, enrollmentStatus: 'pending_cashier' }),
+    ]));
+    const annualResults = await request().get(`/api/v1/students/${studentId}/academic-years/${academic.previousYearId}/results`).set(headers);
+    expect(annualResults.status).toBe(200);
+    expect(annualResults.body).toMatchObject({ studentId, schoolYearId: academic.previousYearId, evaluations: expect.any(Array), averages: expect.any(Array), conduct: expect.any(Array) });
+    const unknownYearResults = await request().get(`/api/v1/students/${studentId}/academic-years/99999999-9999-4999-8999-999999999999/results`).set(headers);
+    expect(unknownYearResults.status).toBe(404);
+    expect(unknownYearResults.body.code).toBe('STUDENT_YEAR_NOT_FOUND');
 
     const verification = await request()
       .post(`/api/v1/students/${studentId}/enrollment-documents/verify`)
@@ -348,6 +374,11 @@ describe('enrollments integration', () => {
       .send({ amount: 30000, method: 'mobile_money', schoolReceiptReference: 'RC-ENROLL-002' });
     expect(confirmation.status).toBe(200);
     expect(confirmation.body.enrollment.status).toBe('confirmed');
+    const confirmedCampaign = await request().get(`${campaignPath}&campaign_status=confirmed`).set(headers);
+    expect(confirmedCampaign.status).toBe(200);
+    expect(confirmedCampaign.body.candidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ studentId, enrollment: expect.objectContaining({ status: 'confirmed' }) }),
+    ]));
     expect(confirmation.body.missingMandatoryDocuments).toHaveLength(1);
     expect(confirmation.body.documentWarning).toContain('Paiement confirmé');
     const movedStudent = await queryTenant<{ class_id: string }>(`
@@ -402,6 +433,11 @@ describe('enrollments integration', () => {
     });
     expect(creation.status).toBe(201);
     expect(creation.body.enrollment.status).toBe('blocked_unpaid');
+    const blockedCampaign = await request().get(`/api/v1/enrollments/re-enrollment/candidates?school_year_id=${academic.targetYearId}&campaign_status=blocked_unpaid&search=ENR-UNPAID-001`).set(headers);
+    expect(blockedCampaign.status).toBe(200);
+    expect(blockedCampaign.body.candidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ studentId, enrollment: expect.objectContaining({ status: 'blocked_unpaid' }) }),
+    ]));
 
     await queryTenant(`WITH position AS (
       INSERT INTO admin_positions (name,permissions,created_by)

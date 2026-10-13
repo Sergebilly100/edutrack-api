@@ -230,7 +230,7 @@ export type CurrentStudentProfile = StudentDetailRecord & {
 
 export type HistoricalStudentProfile = StudentDetailRecord & {
   activeSchoolYear: { id: string; label: string } | null;
-  latestConfirmedSchoolYear: { id: string; label: string; className: string };
+  latestConfirmedSchoolYear: { id: string; label: string; className: string } | null;
   confirmedInActiveYear: boolean;
 };
 

@@ -25,13 +25,15 @@ export const enrollmentListQuerySchema = z.object({
   class_id: z.string().uuid().optional(),
   status: enrollmentStatusSchema.optional(),
   type: enrollmentTypeSchema.optional(),
+  search: z.string().trim().min(1).max(100).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
 export const reEnrollmentCandidatesQuerySchema = z.object({
-  school_year_id: z.string().uuid().optional(),
+  school_year_id: z.string().uuid(),
   source_school_year_id: z.string().uuid().optional(),
+  campaign_status: z.enum(['to_process', 'awaiting_cashier', 'blocked_unpaid', 'confirmed', 'all']).default('to_process'),
   level_id: z.string().uuid().optional(),
   class_id: z.string().uuid().optional(),
   search: z.string().trim().min(1).max(100).optional(),

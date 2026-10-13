@@ -55,6 +55,7 @@ export default async function enrollmentsController(
         ...(query.class_id ? { classId: query.class_id } : {}),
         ...(query.status ? { status: query.status } : {}),
         ...(query.type ? { type: query.type } : {}),
+        ...(query.search ? { search: query.search } : {}),
         page: query.page,
         limit: query.limit,
       })));
@@ -65,7 +66,8 @@ export default async function enrollmentsController(
     try {
       const query = reEnrollmentCandidatesQuerySchema.parse(request.query ?? {});
       return reply.send(await withService(request, (service) => service.listReEnrollmentCandidates({
-        ...(query.school_year_id ? { schoolYearId: query.school_year_id } : {}),
+        schoolYearId: query.school_year_id,
+        campaignStatus: query.campaign_status,
         ...(query.source_school_year_id ? { sourceSchoolYearId: query.source_school_year_id } : {}),
         ...(query.level_id ? { levelId: query.level_id } : {}),
         ...(query.class_id ? { classId: query.class_id } : {}),
@@ -79,8 +81,37 @@ export default async function enrollmentsController(
   app.get('/api/v1/enrollments/re-enrollment/students/:studentId/summary', { preHandler: requirePermission('enrollments.view') }, async (request, reply) => {
     try {
       const { studentId } = studentParamsSchema.parse(request.params);
-      return reply.send(await withService(request, (service) => service.getStudentAcademicSummary(studentId)));
+      const canViewFinance = Boolean(request.permissions?.has('tuition.view') || request.permissions?.has('payments.view') || request.permissions?.has('payments.record'));
+      return reply.send(await withService(request, (service) => service.getStudentAcademicSummary(studentId, canViewFinance)));
     } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.get('/api/v1/students/:studentId/academic-history', { preHandler: requirePermission('students.view') }, async (request, reply) => {
+    try {
+      const { studentId } = studentParamsSchema.parse(request.params);
+      const canViewFinance = Boolean(request.permissions?.has('tuition.view') || request.permissions?.has('payments.view') || request.permissions?.has('payments.record'));
+      return reply.send(await withService(request, (service) => service.getStudentAcademicSummary(studentId, canViewFinance)));
+    } catch (error) {
+      if (error instanceof EnrollmentsModuleError && error.statusCode === 404) {
+        request.log.warn({ code: error.code, studentId: (request.params as { studentId?: string }).studentId }, '[students] Academic history unavailable');
+      }
+      return handleError(request, reply, error);
+    }
+  });
+
+  app.get('/api/v1/students/:studentId/academic-years/:schoolYearId/results', { preHandler: requirePermission('evaluations.view') }, async (request, reply) => {
+    if (!request.permissions?.has('students.view')) {
+      return reply.code(403).send({ error: 'Student dossier access required', code: 'FORBIDDEN', statusCode: 403 });
+    }
+    try {
+      const { studentId, schoolYearId } = z.object({ studentId: z.uuid(), schoolYearId: z.uuid() }).parse(request.params);
+      return reply.send(await withService(request, (service) => service.getStudentYearResults(studentId, schoolYearId)));
+    } catch (error) {
+      if (error instanceof EnrollmentsModuleError && error.statusCode === 404) {
+        request.log.warn({ code: error.code, studentId: (request.params as { studentId?: string }).studentId, schoolYearId: (request.params as { schoolYearId?: string }).schoolYearId }, '[students] Student year results unavailable');
+      }
+      return handleError(request, reply, error);
+    }
   });
 
   app.get('/api/v1/enrollments/:id', { preHandler: requirePermission('enrollments.view') }, async (request, reply) => {

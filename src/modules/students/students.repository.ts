@@ -322,12 +322,12 @@ const toRecentSmsStatus = (
   return 'not_sent';
 };
 
-type StudentListScope = 'enrolled' | 'financial';
+type StudentListScope = 'enrolled' | 'financial' | 'history';
 
 const buildStudentsWhere = (query: StudentsListQuery, scope: StudentListScope): SQL[] => {
   // La liste scolaire exige une inscription confirmée, indépendamment de la classe
   // conservée sur le profil. Une réinscription en attente ne suffit pas.
-  const membership = scope === 'financial' ? sql`(
+  const membership = scope === 'history' ? sql`true` : scope === 'financial' ? sql`(
     EXISTS (SELECT 1 FROM enrollments e WHERE e.student_id = s.id)
     OR EXISTS (SELECT 1 FROM student_financial_status financial WHERE financial.student_id = s.id)
     OR EXISTS (SELECT 1 FROM payments payment WHERE payment.student_id = s.id)
@@ -912,16 +912,16 @@ export class StudentsRepository {
     };
   }
 
-  async findCurrentConfirmedSchoolYear(studentId: string): Promise<{ id: string; label: string } | null> {
+  async findCurrentConfirmedSchoolYear(studentId: string): Promise<{ id: string; label: string; startDate: string; endDate: string } | null> {
     const result = await this.db.execute(sql`
-      SELECT school_year.id::text AS id, school_year.label
+      SELECT school_year.id::text AS id, school_year.label, school_year.start_date::text AS "startDate", school_year.end_date::text AS "endDate"
       FROM school_years school_year
       WHERE school_year.status = 'active'
         AND ${confirmedSchoolStudent(sql`${studentId}::uuid`, sql`school_year.id`)}
       ORDER BY school_year.start_date DESC
       LIMIT 1
     `);
-    return getRows<{ id: string; label: string }>(result)[0] ?? null;
+    return getRows<{ id: string; label: string; startDate: string; endDate: string }>(result)[0] ?? null;
   }
 
   async findLatestHistoricalConfirmedSchoolYear(studentId: string): Promise<{ id: string; label: string; className: string } | null> {
@@ -939,12 +939,12 @@ export class StudentsRepository {
     return getRows<{ id: string; label: string; className: string }>(result)[0] ?? null;
   }
 
-  async findActiveSchoolYear(): Promise<{ id: string; label: string } | null> {
+  async findActiveSchoolYear(): Promise<{ id: string; label: string; startDate: string; endDate: string } | null> {
     const result = await this.db.execute(sql`
-      SELECT id::text AS id, label FROM school_years
+      SELECT id::text AS id, label, start_date::text AS "startDate", end_date::text AS "endDate" FROM school_years
       WHERE status = 'active' ORDER BY start_date DESC LIMIT 1
     `);
-    return getRows<{ id: string; label: string }>(result)[0] ?? null;
+    return getRows<{ id: string; label: string; startDate: string; endDate: string }>(result)[0] ?? null;
   }
 
   async hasConfirmedEnrollmentInActiveSchoolYear(studentId: string): Promise<boolean> {

@@ -62,14 +62,35 @@ describe('getCurrentStudentProfile()', () => {
     await expect(buildService().getCurrentStudentProfile('student-1'))
       .resolves.toMatchObject({ id: 'student-1', activeSchoolYear });
   });
+
+  it('ne livre pas les absences ni les pièces privées avec le seul droit de lire l’identité', async () => {
+    repository.findCurrentConfirmedSchoolYear.mockResolvedValue({ id: 'year-1', label: '2026-2027' });
+    repository.findStudentDetailById.mockResolvedValue({
+      id: 'student-1', absenceSummary: { total: 4, excused: 0, thisMonth: 1, thisWeek: 1 },
+      recentAbsences: [{ id: 'absence-1' }], parentSms: [{ id: 'sms-1' }], documents: [{ id: 'document-1' }],
+    });
+    await expect(buildService().getCurrentStudentProfile('student-1', { attendance: false, documents: false }))
+      .resolves.toMatchObject({ absenceSummary: { total: 0, excused: 0, thisMonth: 0, thisWeek: 0 }, recentAbsences: [], parentSms: [], documents: [] });
+  });
+});
+
+describe('getStudentDetail()', () => {
+  it('applique les mêmes droits aux champs annexes de la fiche générique', async () => {
+    repository.findStudentDetailById.mockResolvedValue({
+      id: 'student-1', absenceSummary: { total: 1, excused: 0, thisMonth: 1, thisWeek: 0 },
+      recentAbsences: [{ id: 'absence-1' }], parentSms: [{ id: 'sms-1' }], documents: [{ id: 'document-1' }],
+    });
+    await expect(buildService().getStudentDetail('student-1', { attendance: false, documents: false }))
+      .resolves.toMatchObject({ recentAbsences: [], parentSms: [], documents: [], absenceSummary: { total: 0 } });
+  });
 });
 
 describe('getHistoricalStudentProfile()', () => {
-  it('refuse un profil sans inscription antérieure confirmée', async () => {
+  it('garde accessible un dossier même sans inscription antérieure confirmée', async () => {
     repository.findLatestHistoricalConfirmedSchoolYear.mockResolvedValue(null);
     await expect(buildService().getHistoricalStudentProfile('student-1'))
-      .rejects.toMatchObject({ statusCode: 404, code: 'HISTORICAL_STUDENT_PROFILE_NOT_FOUND' });
-    expect(repository.findStudentDetailById).not.toHaveBeenCalled();
+      .resolves.toMatchObject({ id: 'student-1', latestConfirmedSchoolYear: null });
+    expect(repository.findStudentDetailById).toHaveBeenCalledWith('student-1');
   });
 
   it('ouvre le dossier passé même si une réinscription en cours reste non confirmée', async () => {
@@ -92,11 +113,29 @@ describe('getHistoricalStudentProfile()', () => {
     await expect(buildService().getHistoricalStudentProfile('student-1'))
       .resolves.toMatchObject({ confirmedInActiveYear: true, isActive: false });
   });
+
+  it('masque les absences, SMS et documents sans les droits de ces domaines', async () => {
+    repository.findStudentDetailById.mockResolvedValue({
+      id: 'student-1',
+      absenceSummary: { total: 2, excused: 1, thisMonth: 1, thisWeek: 0 },
+      recentAbsences: [{ id: 'absence-1' }],
+      parentSms: [{ id: 'sms-1' }],
+      documents: [{ id: 'document-1' }],
+    });
+    const profile = await buildService().getHistoricalStudentProfile('student-1', { attendance: false, documents: false });
+    expect(profile).toMatchObject({ absenceSummary: { total: 0, excused: 0, thisMonth: 0, thisWeek: 0 }, recentAbsences: [], parentSms: [], documents: [] });
+  });
 });
 
 // ─── listStudents ─────────────────────────────────────────────────────────────
 
 describe('listStudents()', () => {
+  it('liste les profils durables sans exiger une inscription active', async () => {
+    repository.listStudents.mockResolvedValue({ rows: [{ id: 'former-student' }], total: 1 });
+    await expect(buildService().listHistoryProfiles({ page: 1, limit: 20 } as never))
+      .resolves.toMatchObject({ data: [{ id: 'former-student' }], pagination: { total: 1 } });
+    expect(repository.listStudents).toHaveBeenCalledWith({ page: 1, limit: 20 }, 'history');
+  });
   it('retourne une pagination correcte', async () => {
     repository.listStudents.mockResolvedValue({
       rows: [

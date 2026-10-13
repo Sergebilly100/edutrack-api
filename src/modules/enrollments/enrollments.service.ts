@@ -123,7 +123,7 @@ export class EnrollmentsService {
     }
   ) {}
 
-  async listEnrollments(filters: { schoolYearId?: string; levelId?: string; classId?: string; status?: EnrollmentStatus; type?: EnrollmentType; page: number; limit: number }) {
+  async listEnrollments(filters: { schoolYearId?: string; levelId?: string; classId?: string; status?: EnrollmentStatus; type?: EnrollmentType; search?: string; page: number; limit: number }) {
     const result = await this.repository.listEnrollments(filters);
     return {
       enrollments: result.rows.map(mapEnrollment),
@@ -136,10 +136,11 @@ export class EnrollmentsService {
     };
   }
 
-  async listReEnrollmentCandidates(input: { schoolYearId?: string; sourceSchoolYearId?: string; levelId?: string; classId?: string; search?: string; page: number; limit: number }) {
+  async listReEnrollmentCandidates(input: { schoolYearId: string; campaignStatus: 'to_process' | 'awaiting_cashier' | 'blocked_unpaid' | 'confirmed' | 'all'; sourceSchoolYearId?: string; levelId?: string; classId?: string; search?: string; page: number; limit: number }) {
     const result = await this.repository.listReEnrollmentCandidates(input);
     return {
       candidates: result.rows.map(mapReEnrollmentCandidate),
+      counts: result.counts,
       pagination: {
         page: input.page,
         limit: input.limit,
@@ -149,15 +150,16 @@ export class EnrollmentsService {
     };
   }
 
-  async getStudentAcademicSummary(studentId: string) {
+  async getStudentAcademicSummary(studentId: string, includeFinance = true) {
     const profile = await this.repository.getStudentSummaryProfile(studentId);
     if (!profile) throw new EnrollmentsModuleError('Student not found', 404, 'STUDENT_NOT_FOUND');
     const history = await this.repository.listStudentAcademicSummary(studentId);
     const years = await Promise.all(history.map(async (row) => {
-      if (!this.finance) {
+      if (!includeFinance || !this.finance) {
         return {
           schoolYearId: row.school_year_id,
           schoolYearLabel: row.school_year_label,
+          schoolYearStatus: row.school_year_status,
           startDate: row.school_year_start_date,
           endDate: row.school_year_end_date,
           className: row.class_name,
@@ -178,6 +180,7 @@ export class EnrollmentsService {
         return {
           schoolYearId: row.school_year_id,
           schoolYearLabel: row.school_year_label,
+          schoolYearStatus: row.school_year_status,
           startDate: row.school_year_start_date,
           endDate: row.school_year_end_date,
           className: row.class_name,
@@ -195,6 +198,7 @@ export class EnrollmentsService {
           return {
             schoolYearId: row.school_year_id,
             schoolYearLabel: row.school_year_label,
+            schoolYearStatus: row.school_year_status,
             startDate: row.school_year_start_date,
             endDate: row.school_year_end_date,
             className: row.class_name,
@@ -212,6 +216,7 @@ export class EnrollmentsService {
           return {
             schoolYearId: row.school_year_id,
             schoolYearLabel: row.school_year_label,
+            schoolYearStatus: row.school_year_status,
             startDate: row.school_year_start_date,
             endDate: row.school_year_end_date,
             className: row.class_name,
@@ -231,6 +236,22 @@ export class EnrollmentsService {
     return {
       student: { id: profile.id, firstName: profile.first_name, lastName: profile.last_name, matricule: profile.matricule },
       years,
+    };
+  }
+
+  async getStudentYearResults(studentId: string, schoolYearId: string) {
+    const profile = await this.repository.getStudentSummaryProfile(studentId);
+    if (!profile) throw new EnrollmentsModuleError('Student not found', 404, 'STUDENT_NOT_FOUND');
+    const history = await this.repository.listStudentAcademicSummary(studentId);
+    if (!history.some((row) => row.school_year_id === schoolYearId)) {
+      throw new EnrollmentsModuleError('School year is not part of this student history', 404, 'STUDENT_YEAR_NOT_FOUND');
+    }
+    const result = await this.repository.listStudentYearResults(studentId, schoolYearId);
+    return {
+      studentId, schoolYearId,
+      evaluations: result.evaluations.map((row) => ({ id: row.id, periodLabel: row.period_label, subjectName: row.subject_name, label: row.label, score: row.score, maxScore: row.max_score, coefficient: row.coefficient })),
+      averages: result.averages.map((row) => ({ id: row.id, periodLabel: row.period_label, subjectName: row.subject_name, average: row.average, rank: row.rank })),
+      conduct: result.conduct.map((row) => ({ id: row.id, periodLabel: row.period_label, note: row.note, coefficient: row.coefficient })),
     };
   }
 

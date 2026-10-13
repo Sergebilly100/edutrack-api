@@ -8,8 +8,53 @@ import {
   EnrollmentsModuleError,
   resolveInitialEnrollmentStatus,
 } from '../../src/modules/enrollments/enrollments.service.js';
+import { enrollmentListQuerySchema } from '../../src/modules/enrollments/enrollments.types.js';
 
 describe('enrollment workflow rules', () => {
+  it('valide puis transmet la recherche des inscriptions avec les filtres annuels', async () => {
+    const repository = { listEnrollments: vi.fn().mockResolvedValue({ rows: [], total: 0 }) };
+    const filters = enrollmentListQuerySchema.parse({ school_year_id: '11f746a0-1222-4444-8888-8a0aba160c29', search: '  Koné Aya  ' });
+    await new EnrollmentsService(repository as never).listEnrollments({
+      schoolYearId: filters.school_year_id,
+      search: filters.search,
+      page: filters.page,
+      limit: filters.limit,
+    });
+    expect(repository.listEnrollments).toHaveBeenCalledWith(expect.objectContaining({ search: 'Koné Aya' }));
+    expect(() => enrollmentListQuerySchema.parse({ search: ' '.repeat(101) })).toThrow();
+  });
+  it('masque les montants de chaque année sans permission finance', async () => {
+    const repository = {
+      getStudentSummaryProfile: vi.fn().mockResolvedValue({ id: 'student', first_name: 'Awa', last_name: 'Koné', matricule: 'MAT-1' }),
+      listStudentAcademicSummary: vi.fn().mockResolvedValue([{ school_year_id: 'year-1', school_year_label: '2025-2026', school_year_start_date: '2025-09-01', school_year_end_date: '2026-06-30', school_year_status: 'closed', class_name: '6e A', final_decision: 'promoted', enrollment_status: 'confirmed' }]),
+    };
+    const finance = { getFinancialStatus: vi.fn(), getHistoricalFinancialStatus: vi.fn() };
+    const summary = await new EnrollmentsService(repository as never, finance as never).getStudentAcademicSummary('student', false);
+    expect(summary.years).toEqual([expect.objectContaining({ schoolYearId: 'year-1', financialStatus: 'unavailable', remainingDue: null, totalDue: null, confirmedPaid: null, waivedAmount: null })]);
+    expect(finance.getFinancialStatus).not.toHaveBeenCalled();
+    expect(finance.getHistoricalFinancialStatus).not.toHaveBeenCalled();
+  });
+
+  it('borne les résultats à une année présente dans le dossier', async () => {
+    const repository = {
+      getStudentSummaryProfile: vi.fn().mockResolvedValue({ id: 'student' }),
+      listStudentAcademicSummary: vi.fn().mockResolvedValue([{ school_year_id: 'year-1' }]),
+      listStudentYearResults: vi.fn().mockResolvedValue({
+        evaluations: [{ id: 'grade-1', period_label: 'Trimestre 1', subject_name: 'Mathématiques', label: 'Devoir', score: 15, max_score: 20, coefficient: 2 }],
+        averages: [{ id: 'average-1', period_label: 'Trimestre 1', subject_name: null, average: 14, rank: 3 }],
+        conduct: [{ id: 'conduct-1', period_label: 'Trimestre 1', note: 16, coefficient: 1 }],
+      }),
+    };
+    const service = new EnrollmentsService(repository as never);
+    await expect(service.getStudentYearResults('student', 'year-2')).rejects.toMatchObject({ code: 'STUDENT_YEAR_NOT_FOUND', statusCode: 404 });
+    expect(repository.listStudentYearResults).not.toHaveBeenCalled();
+    await expect(service.getStudentYearResults('student', 'year-1')).resolves.toMatchObject({
+      schoolYearId: 'year-1', evaluations: [{ periodLabel: 'Trimestre 1', score: 15 }],
+      averages: [{ periodLabel: 'Trimestre 1', average: 14 }], conduct: [{ note: 16 }],
+    });
+    expect(repository.listStudentYearResults).toHaveBeenCalledWith('student', 'year-1');
+  });
+
   it('distingue l’année confirmée du dossier courant dans la fiche de réinscription', async () => {
     const repository = {
       getStudentSummaryProfile: vi.fn().mockResolvedValue({ id: 'student', first_name: 'Awa', last_name: 'Koné', matricule: 'MAT-1' }),

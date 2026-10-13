@@ -62,11 +62,16 @@ export type StudentSummaryProfile = {
   matricule: string | null;
 };
 
+type StudentYearEvaluationRow = { id: string; period_label: string; subject_name: string | null; label: string; score: string; max_score: string; coefficient: string };
+type StudentYearAverageRow = { id: string; period_label: string; subject_name: string | null; average: string; rank: number | null };
+type StudentYearConductRow = { id: string; period_label: string; note: string; coefficient: string };
+
 export class EnrollmentsRepository {
   constructor(private readonly db: Db) {}
 
-  async listEnrollments(filters: { schoolYearId?: string; levelId?: string; classId?: string; status?: EnrollmentStatus; type?: EnrollmentType; page: number; limit: number }) {
+  async listEnrollments(filters: { schoolYearId?: string; levelId?: string; classId?: string; status?: EnrollmentStatus; type?: EnrollmentType; search?: string; page: number; limit: number }) {
     const offset = (filters.page - 1) * filters.limit;
+    const search = filters.search ? `%${filters.search}%` : null;
     const [result, totalResult] = await Promise.all([
       this.db.execute<EnrollmentRow>(sql`
       SELECT e.*, c.name AS class_name, sy.label AS school_year_label,
@@ -86,6 +91,9 @@ export class EnrollmentsRepository {
         AND (${filters.classId ?? null}::uuid IS NULL OR e.class_id = ${filters.classId ?? null}::uuid)
         AND (${filters.status ?? null}::text IS NULL OR e.status::text = ${filters.status ?? null})
         AND (${filters.type ?? null}::text IS NULL OR e.type::text = ${filters.type ?? null})
+        AND (${search}::text IS NULL OR s.first_name ILIKE ${search} OR s.last_name ILIKE ${search}
+          OR s.matricule ILIKE ${search} OR concat_ws(' ', s.last_name, s.first_name) ILIKE ${search}
+          OR concat_ws(' ', s.first_name, s.last_name) ILIKE ${search})
       GROUP BY e.id, c.name, sy.label, s.first_name, s.last_name
       ORDER BY e.enrolled_at DESC
       LIMIT ${filters.limit}
@@ -101,13 +109,21 @@ export class EnrollmentsRepository {
           AND (${filters.classId ?? null}::uuid IS NULL OR e.class_id = ${filters.classId ?? null}::uuid)
           AND (${filters.status ?? null}::text IS NULL OR e.status::text = ${filters.status ?? null})
           AND (${filters.type ?? null}::text IS NULL OR e.type::text = ${filters.type ?? null})
+          AND (${search}::text IS NULL OR EXISTS (
+            SELECT 1 FROM students s WHERE s.id = e.student_id AND (
+              s.first_name ILIKE ${search} OR s.last_name ILIKE ${search} OR s.matricule ILIKE ${search}
+              OR concat_ws(' ', s.last_name, s.first_name) ILIKE ${search}
+              OR concat_ws(' ', s.first_name, s.last_name) ILIKE ${search}
+            )
+          ))
       `),
     ]);
     return { rows: rows<EnrollmentRow>(result), total: Number(rows<{ total: string | number }>(totalResult)[0]?.total ?? 0) };
   }
 
   async listReEnrollmentCandidates(input: {
-    schoolYearId?: string;
+    schoolYearId: string;
+    campaignStatus: 'to_process' | 'awaiting_cashier' | 'blocked_unpaid' | 'confirmed' | 'all';
     sourceSchoolYearId?: string;
     levelId?: string;
     classId?: string;
@@ -145,7 +161,7 @@ export class EnrollmentsRepository {
       ) latest_confirmed ON true
       INNER JOIN classes current_class ON current_class.id = latest_confirmed.class_id
       INNER JOIN school_years source_year ON source_year.id = current_class.school_year_id
-      LEFT JOIN school_years target_year ON target_year.id = ${input.schoolYearId ?? null}::uuid
+      INNER JOIN school_years target_year ON target_year.id = ${input.schoolYearId}::uuid
       LEFT JOIN class_decisions decision
         ON decision.student_id = s.id
        AND decision.school_year_id = source_year.id
@@ -154,11 +170,9 @@ export class EnrollmentsRepository {
         ON enrollment.student_id = s.id
        AND enrollment.school_year_id = target_year.id
       LEFT JOIN classes enrollment_class ON enrollment_class.id = enrollment.class_id
-      WHERE (${input.schoolYearId ?? null}::uuid IS NULL OR (
-          target_year.status = 'active'
-          AND source_year.status = 'closed'
-          AND target_year.start_date > source_year.end_date
-        ))
+      WHERE target_year.status = 'active'
+        AND source_year.status = 'closed'
+        AND target_year.start_date > source_year.end_date
         AND (${input.sourceSchoolYearId ?? null}::uuid IS NULL OR source_year.id = ${input.sourceSchoolYearId ?? null}::uuid)
         AND (${input.levelId ?? null}::uuid IS NULL OR current_class.level_id = ${input.levelId ?? null}::uuid)
         AND (${input.classId ?? null}::uuid IS NULL OR current_class.id = ${input.classId ?? null}::uuid)
@@ -169,13 +183,36 @@ export class EnrollmentsRepository {
         ))
       ORDER BY s.last_name ASC, s.first_name ASC, s.created_at ASC
     `;
-    const [result, totalResult] = await Promise.all([
-      this.db.execute<ReEnrollmentCandidateRow>(sql`${candidatesQuery} LIMIT ${input.limit} OFFSET ${offset}`),
-      this.db.execute<{ total: string | number }>(sql`SELECT COUNT(*) AS total FROM (${candidatesQuery}) candidates`),
+    const campaignFilter = sql`
+      (${input.campaignStatus} = 'all'
+        OR (${input.campaignStatus} = 'to_process' AND enrollment_status IS NULL)
+        OR (${input.campaignStatus} = 'awaiting_cashier' AND enrollment_status IN ('pending_cashier', 'pending_dossier'))
+        OR (${input.campaignStatus} = 'blocked_unpaid' AND enrollment_status = 'blocked_unpaid')
+        OR (${input.campaignStatus} = 'confirmed' AND enrollment_status = 'confirmed'))
+    `;
+    const [result, totalResult, countsResult] = await Promise.all([
+      this.db.execute<ReEnrollmentCandidateRow>(sql`SELECT * FROM (${candidatesQuery}) candidates WHERE ${campaignFilter} ORDER BY student_last_name, student_first_name, student_id LIMIT ${input.limit} OFFSET ${offset}`),
+      this.db.execute<{ total: string | number }>(sql`SELECT COUNT(*) AS total FROM (${candidatesQuery}) candidates WHERE ${campaignFilter}`),
+      this.db.execute<{ to_process: string | number; awaiting_cashier: string | number; blocked_unpaid: string | number; confirmed: string | number; all_count: string | number }>(sql`
+        SELECT COUNT(*) FILTER (WHERE enrollment_status IS NULL) AS to_process,
+               COUNT(*) FILTER (WHERE enrollment_status IN ('pending_cashier', 'pending_dossier')) AS awaiting_cashier,
+               COUNT(*) FILTER (WHERE enrollment_status = 'blocked_unpaid') AS blocked_unpaid,
+               COUNT(*) FILTER (WHERE enrollment_status = 'confirmed') AS confirmed,
+               COUNT(*) AS all_count
+        FROM (${candidatesQuery}) candidates
+      `),
     ]);
+    const counts = rows<{ to_process: string | number; awaiting_cashier: string | number; blocked_unpaid: string | number; confirmed: string | number; all_count: string | number }>(countsResult)[0];
     return {
       rows: rows<ReEnrollmentCandidateRow>(result),
       total: Number(rows<{ total: string | number }>(totalResult)[0]?.total ?? 0),
+      counts: {
+        toProcess: Number(counts?.to_process ?? 0),
+        awaitingCashier: Number(counts?.awaiting_cashier ?? 0),
+        blockedUnpaid: Number(counts?.blocked_unpaid ?? 0),
+        confirmed: Number(counts?.confirmed ?? 0),
+        all: Number(counts?.all_count ?? 0),
+      },
     };
   }
 
@@ -239,6 +276,42 @@ export class EnrollmentsRepository {
       ORDER BY school_year_start_date DESC
     `);
     return rows<StudentAcademicSummaryRow>(result);
+  }
+
+  async listStudentYearResults(studentId: string, schoolYearId: string) {
+    const [evaluationResult, averageResult, conductResult] = await Promise.all([
+      this.db.execute<StudentYearEvaluationRow>(sql`
+        SELECT e.id::text, gp.label AS period_label, sub.name AS subject_name, e.label,
+               eg.score::text, eg.max_score::text, e.coefficient::text
+        FROM evaluation_grades eg
+        INNER JOIN evaluations e ON e.id = eg.evaluation_id
+        INNER JOIN grading_periods gp ON gp.id = e.grading_period_id
+        LEFT JOIN subjects sub ON sub.id = e.subject_id
+        WHERE eg.student_id = ${studentId}::uuid AND gp.school_year_id = ${schoolYearId}::uuid
+        ORDER BY gp.order_index, e.created_at, e.id
+      `),
+      this.db.execute<StudentYearAverageRow>(sql`
+        SELECT spa.id::text, gp.label AS period_label, sub.name AS subject_name,
+               spa.average::text, spa.rank
+        FROM student_period_averages spa
+        INNER JOIN grading_periods gp ON gp.id = spa.grading_period_id
+        LEFT JOIN subjects sub ON sub.id = spa.subject_id
+        WHERE spa.student_id = ${studentId}::uuid AND gp.school_year_id = ${schoolYearId}::uuid
+        ORDER BY gp.order_index, sub.name NULLS FIRST
+      `),
+      this.db.execute<StudentYearConductRow>(sql`
+        SELECT cg.id::text, gp.label AS period_label, cg.note::text, cg.coefficient::text
+        FROM conduct_grades cg
+        INNER JOIN grading_periods gp ON gp.id = cg.grading_period_id
+        WHERE cg.student_id = ${studentId}::uuid AND gp.school_year_id = ${schoolYearId}::uuid
+        ORDER BY gp.order_index
+      `),
+    ]);
+    return {
+      evaluations: rows<StudentYearEvaluationRow>(evaluationResult).map((row) => ({ ...row, score: Number(row.score), max_score: Number(row.max_score), coefficient: Number(row.coefficient) })),
+      averages: rows<StudentYearAverageRow>(averageResult).map((row) => ({ ...row, average: Number(row.average) })),
+      conduct: rows<StudentYearConductRow>(conductResult).map((row) => ({ ...row, note: Number(row.note), coefficient: Number(row.coefficient) })),
+    };
   }
 
   async findEnrollment(id: string) {

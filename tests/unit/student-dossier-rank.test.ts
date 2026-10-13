@@ -15,7 +15,7 @@ describe('StudentDossierRepository.listEvents', () => {
     ] });
     const repository = new StudentDossierRepository({ execute } as unknown as TenantDb);
 
-    expect(await repository.listEvents('student-1', null)).toEqual([
+    expect(await repository.listEvents('student-1', null, { enrollments: true, payments: true, reportCards: true, enrollmentDocuments: true, profileDocuments: true })).toEqual([
       { type: 'report_card', date: '2026-07-18', label: 'Bulletin publié · T1',
         detail: 'Moyenne 16/20, rang 1er / 30', schoolYearId: 'year-1' },
       { type: 'report_card', date: '2026-07-17', label: 'Bulletin publié · T2',

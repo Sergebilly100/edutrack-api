@@ -74,7 +74,7 @@ const studentCardParamsSchema = z.object({
 const requireStudentReportAccess = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
   await authenticateRequest(request, reply);
   if (reply.sent) return;
-  if (!request.permissions?.has('report_cards.view') && !request.permissions?.has('enrollments.view')) {
+  if (!request.permissions?.has('report_cards.view')) {
     reply.code(403).send({ error: 'Accès aux bulletins refusé', code: 'FORBIDDEN', statusCode: 403 });
   }
 };

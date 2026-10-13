@@ -88,7 +88,13 @@ export class StudentDossierRepository {
     return result.rows?.[0]?.has_access ?? false;
   }
 
-  async listEvents(studentId: string, teacherId: string | null): Promise<DossierEvent[]> {
+  async listEvents(studentId: string, teacherId: string | null, visibility: {
+    enrollments: boolean;
+    payments: boolean;
+    reportCards: boolean;
+    enrollmentDocuments: boolean;
+    profileDocuments: boolean;
+  }): Promise<DossierEvent[]> {
     const result = await this.db.execute<{
       type: DossierEvent['type']; date: string; label: string; detail: string | null;
       schoolYearId: string | null; rank: number | null; classHeadcount: number | null;
@@ -103,6 +109,7 @@ export class StudentDossierRepository {
         FROM enrollments e
         LEFT JOIN school_years sy ON sy.id = e.school_year_id
         WHERE e.student_id = ${studentId}::uuid
+          AND ${visibility.enrollments}
           AND (${teacherId}::uuid IS NULL)
 
         UNION ALL
@@ -114,6 +121,7 @@ export class StudentDossierRepository {
                NULL::integer, NULL::integer
         FROM payments p
         WHERE p.student_id = ${studentId}::uuid AND p.status = 'confirmed'
+          AND ${visibility.payments}
           AND (${teacherId}::uuid IS NULL)
 
         UNION ALL
@@ -126,6 +134,7 @@ export class StudentDossierRepository {
         FROM report_cards rc
         INNER JOIN grading_periods gp ON gp.id = rc.grading_period_id
         WHERE rc.student_id = ${studentId}::uuid AND rc.status = 'published'
+          AND ${visibility.reportCards}
           AND (${teacherId}::uuid IS NULL)
 
         UNION ALL
@@ -138,6 +147,7 @@ export class StudentDossierRepository {
         FROM student_documents sd
         LEFT JOIN required_document_types rdt ON rdt.id = sd.document_type_id
         WHERE sd.student_id = ${studentId}::uuid
+          AND ${visibility.enrollmentDocuments}
           AND (${teacherId}::uuid IS NULL)
 
         UNION ALL
@@ -150,6 +160,7 @@ export class StudentDossierRepository {
         FROM documents d
         WHERE d.entity_type = 'student'::document_entity_type
           AND d.entity_id = ${studentId}::uuid
+          AND ${visibility.profileDocuments}
           AND (${teacherId}::uuid IS NULL)
       )
       SELECT type, date::text, label, detail, "schoolYearId", rank, "classHeadcount"

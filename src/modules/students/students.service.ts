@@ -76,6 +76,15 @@ const isDbConstraintError = (error: unknown, code: string): boolean => {
   return (error as { code?: string }).code === code;
 };
 
+type StudentProfileVisibility = { attendance: boolean; documents: boolean };
+const fullStudentProfileVisibility: StudentProfileVisibility = { attendance: true, documents: true };
+
+const visibleStudentDetail = (student: StudentDetailRecord, visibility: StudentProfileVisibility): StudentDetailRecord => ({
+  ...student,
+  ...(!visibility.attendance ? { absenceSummary: { total: 0, excused: 0, thisMonth: 0, thisWeek: 0 }, recentAbsences: [], parentSms: [] } : {}),
+  ...(!visibility.documents ? { documents: [] } : {}),
+});
+
 const deduplicateAbsences = (ids: string[]): string[] => Array.from(new Set(ids));
 
 export class StudentsService {
@@ -101,6 +110,14 @@ export class StudentsService {
     pagination: PaginationMeta;
   }> {
     const { rows, total } = await this.repository.listStudents(query, 'financial');
+    return { data: rows, pagination: toPaginationMeta(query.page, query.limit, total) };
+  }
+
+  async listHistoryProfiles(query: StudentsListQuery): Promise<{
+    data: StudentRecord[];
+    pagination: PaginationMeta;
+  }> {
+    const { rows, total } = await this.repository.listStudents(query, 'history');
     return { data: rows, pagination: toPaginationMeta(query.page, query.limit, total) };
   }
 
@@ -207,34 +224,31 @@ export class StudentsService {
     return student;
   }
 
-  async getStudentDetail(studentId: string): Promise<StudentDetailRecord> {
+  async getStudentDetail(studentId: string, visibility: StudentProfileVisibility = fullStudentProfileVisibility): Promise<StudentDetailRecord> {
     const student = await this.repository.findStudentDetailById(studentId);
     if (!student) throw new StudentsModuleError('Student not found', 404, 'STUDENT_NOT_FOUND');
-    return student;
+    return visibleStudentDetail(student, visibility);
   }
 
-  async getCurrentStudentProfile(studentId: string): Promise<CurrentStudentProfile> {
+  async getCurrentStudentProfile(studentId: string, visibility: StudentProfileVisibility = fullStudentProfileVisibility): Promise<CurrentStudentProfile> {
     const activeSchoolYear = await this.repository.findCurrentConfirmedSchoolYear(studentId);
     if (!activeSchoolYear) {
       throw new StudentsModuleError('Student is not enrolled in the active school year', 404, 'STUDENT_NOT_CURRENTLY_ENROLLED');
     }
     const student = await this.repository.findStudentDetailById(studentId);
     if (!student) throw new StudentsModuleError('Student not found', 404, 'STUDENT_NOT_FOUND');
-    return { ...student, activeSchoolYear };
+    return { ...visibleStudentDetail(student, visibility), activeSchoolYear };
   }
 
-  async getHistoricalStudentProfile(studentId: string): Promise<HistoricalStudentProfile> {
-    const latestConfirmedSchoolYear = await this.repository.findLatestHistoricalConfirmedSchoolYear(studentId);
-    if (!latestConfirmedSchoolYear) {
-      throw new StudentsModuleError('No previous confirmed enrollment', 404, 'HISTORICAL_STUDENT_PROFILE_NOT_FOUND');
-    }
-    const [student, activeSchoolYear, confirmedInActiveYear] = await Promise.all([
+  async getHistoricalStudentProfile(studentId: string, visibility: StudentProfileVisibility = fullStudentProfileVisibility): Promise<HistoricalStudentProfile> {
+    const [student, activeSchoolYear, confirmedInActiveYear, latestConfirmedSchoolYear] = await Promise.all([
       this.repository.findStudentDetailById(studentId),
       this.repository.findActiveSchoolYear(),
       this.repository.hasConfirmedEnrollmentInActiveSchoolYear(studentId),
+      this.repository.findLatestHistoricalConfirmedSchoolYear(studentId),
     ]);
     if (!student) throw new StudentsModuleError('Student not found', 404, 'STUDENT_NOT_FOUND');
-    return { ...student, activeSchoolYear, latestConfirmedSchoolYear, confirmedInActiveYear };
+    return { ...visibleStudentDetail(student, visibility), activeSchoolYear, latestConfirmedSchoolYear, confirmedInActiveYear };
   }
 
   async excuseAbsence(

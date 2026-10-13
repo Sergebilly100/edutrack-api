@@ -159,6 +159,20 @@ export default async function studentsController(
   );
 
   app.get(
+    '/api/v1/students/history-directory',
+    { preHandler: requirePermission('students.view') },
+    async (request, reply) => {
+      try {
+        const query = studentsListQuerySchema.parse(request.query ?? {});
+        return reply.send(await withTenantSchema(request.claims!.schemaName, (tenantDb) =>
+          buildStudentsService(tenantDb).listHistoryProfiles(query)));
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.get(
     '/api/v1/students/financial-profiles',
     { preHandler: requireFinancialProfilesAccess },
     async (request, reply) => {
@@ -316,16 +330,22 @@ export default async function studentsController(
 
   app.get(
     '/api/v1/students/:id/historical-profile',
-    { preHandler: requirePermission('enrollments.view') },
+    { preHandler: requirePermission('students.view') },
     async (request, reply) => {
       try {
         const claims = request.claims!;
         const params = updateStudentParamsSchema.parse(request.params ?? {});
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-          return buildStudentsService(tenantDb).getHistoricalStudentProfile(params.id);
+          return buildStudentsService(tenantDb).getHistoricalStudentProfile(params.id, {
+            attendance: Boolean(request.permissions?.has('attendance.view')),
+            documents: Boolean(request.permissions?.has('students.documents')),
+          });
         });
         return reply.send({ data: result });
       } catch (error) {
+        if (error instanceof StudentsModuleError && error.statusCode === 404) {
+          request.log.warn({ code: error.code, studentId: (request.params as { id?: string }).id }, '[students] Historical profile unavailable');
+        }
         return handleError(reply, error);
       }
     }
@@ -339,7 +359,10 @@ export default async function studentsController(
         const claims = request.claims!;
         const params = updateStudentParamsSchema.parse(request.params ?? {});
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-          return buildStudentsService(tenantDb).getCurrentStudentProfile(params.id);
+          return buildStudentsService(tenantDb).getCurrentStudentProfile(params.id, {
+            attendance: Boolean(request.permissions?.has('attendance.view')),
+            documents: Boolean(request.permissions?.has('students.documents')),
+          });
         });
         return reply.send({ data: result });
       } catch (error) {
@@ -357,7 +380,10 @@ export default async function studentsController(
         const params = updateStudentParamsSchema.parse(request.params ?? {});
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-          return buildStudentsService(tenantDb).getStudentDetail(params.id);
+          return buildStudentsService(tenantDb).getStudentDetail(params.id, {
+            attendance: Boolean(request.permissions?.has('attendance.view')),
+            documents: Boolean(request.permissions?.has('students.documents')),
+          });
         });
 
         return reply.send({ data: result });
@@ -520,6 +546,9 @@ export default async function studentsController(
         if (role !== 'director' && role !== 'staff' && role !== 'teacher' && role !== 'super_admin') {
           return forbidden(reply, 'Forbidden');
         }
+        if (role !== 'teacher' && !request.permissions?.has('students.view')) {
+          return forbidden(reply, 'Permission students.view required');
+        }
 
         const result = await withTenantSchema(claims.schemaName, async (tenantDb) =>
           new StudentDossierService(new StudentDossierRepository(tenantDb)).getDossier({
@@ -527,6 +556,13 @@ export default async function studentsController(
             role: role as DossierViewerRole,
             userId: request.user!.userId,
             date: new Date().toISOString().slice(0, 10),
+            visibility: {
+              enrollments: Boolean(request.permissions?.has('enrollments.view')),
+              payments: Boolean(request.permissions?.has('payments.view') || request.permissions?.has('payments.record') || request.permissions?.has('tuition.view')),
+              reportCards: Boolean(request.permissions?.has('report_cards.view')),
+              enrollmentDocuments: Boolean(request.permissions?.has('enrollments.view')),
+              profileDocuments: Boolean(request.permissions?.has('students.documents')),
+            },
           })
         );
         return reply.send(result);

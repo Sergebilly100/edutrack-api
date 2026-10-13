@@ -30,6 +30,7 @@ export class StudentDossierService {
     role: DossierViewerRole;
     userId: string;
     date: string;
+    visibility?: { enrollments: boolean; payments: boolean; reportCards: boolean; enrollmentDocuments: boolean; profileDocuments: boolean };
   }): Promise<StudentDossier> {
     const student = await this.repository.findStudentProfile(input.studentId);
     if (!student) {
@@ -43,13 +44,13 @@ export class StudentDossierService {
       }
       return {
         student,
-        events: await this.repository.listEvents(input.studentId, teacherId),
+        events: await this.repository.listEvents(input.studentId, teacherId, input.visibility ?? { enrollments: false, payments: false, reportCards: false, enrollmentDocuments: false, profileDocuments: false }),
       };
     }
 
     return {
       student,
-      events: await this.repository.listEvents(input.studentId, null),
+      events: await this.repository.listEvents(input.studentId, null, input.visibility ?? { enrollments: true, payments: true, reportCards: true, enrollmentDocuments: true, profileDocuments: true }),
     };
   }
 }
