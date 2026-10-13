@@ -346,6 +346,7 @@ export class EnrollmentsRepository {
       SELECT ${input.studentId}::uuid, c.id, sy.id, ${input.type}::enrollment_type, ${input.status}::enrollment_status
       FROM classes c INNER JOIN school_years sy ON sy.id = c.school_year_id
       WHERE c.id = ${input.classId}::uuid AND sy.id = ${input.schoolYearId}::uuid AND c.is_active
+        AND sy.status = 'active'
         AND (${input.levelId ?? null}::uuid IS NULL OR c.level_id = ${input.levelId ?? null}::uuid)
         AND (${input.expectedActiveSchoolYearId ?? null}::uuid IS NULL
           OR (sy.id = ${input.expectedActiveSchoolYearId ?? null}::uuid AND sy.status = 'active'))
@@ -363,6 +364,7 @@ export class EnrollmentsRepository {
         confirmed_by_user_id = CASE WHEN ${input.confirmedByUserId !== undefined} THEN ${input.confirmedByUserId ?? null}::uuid ELSE confirmed_by_user_id END,
         updated_at = NOW()
       WHERE id = ${id}::uuid
+        AND EXISTS (SELECT 1 FROM school_years sy WHERE sy.id = enrollments.school_year_id AND sy.status = 'active')
         AND ((${input.levelId ?? null}::uuid IS NULL AND ${input.expectedActiveSchoolYearId ?? null}::uuid IS NULL)
           OR EXISTS (
             SELECT 1 FROM classes c INNER JOIN school_years sy ON sy.id = c.school_year_id

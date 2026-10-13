@@ -273,6 +273,9 @@ export class EnrollmentsService {
     if (!targetClass || !targetClass.is_active || !targetClass.level_id || targetClass.school_year_id !== input.schoolYearId) {
       throw new EnrollmentsModuleError('Class does not belong to the selected school year', 400, 'CLASS_YEAR_MISMATCH');
     }
+    if (targetClass.school_year_status !== 'active') {
+      throw new EnrollmentsModuleError('L’année scolaire doit être ouverte par le support avant toute inscription.', 409, 'SCHOOL_YEAR_NOT_OPEN');
+    }
     this.assertClassSelection(targetClass, input);
 
     if (input.type === 're_registration') {
@@ -355,6 +358,10 @@ export class EnrollmentsService {
   async updateEnrollment(id: string, input: { classId?: string; status?: 'pending_cashier' | 'pending_dossier'; levelId?: string; expectedActiveSchoolYearId?: string }) {
     const current = await this.repository.findEnrollment(id);
     if (!current) throw new EnrollmentsModuleError('Enrollment not found', 404, 'ENROLLMENT_NOT_FOUND');
+    const enrollmentClass = await this.repository.getClassContext(current.class_id);
+    if (enrollmentClass?.school_year_status !== 'active') {
+      throw new EnrollmentsModuleError('L’année scolaire doit être ouverte par le support avant toute modification d’inscription.', 409, 'SCHOOL_YEAR_NOT_OPEN');
+    }
     if (current.status === 'confirmed') {
       throw new EnrollmentsModuleError('A confirmed enrollment cannot be edited', 409, 'CONFIRMED_ENROLLMENT_IMMUTABLE');
     }
@@ -366,6 +373,9 @@ export class EnrollmentsService {
       const targetClass = await this.repository.getClassContext(input.classId);
       if (!targetClass || !targetClass.is_active || !targetClass.level_id || targetClass.school_year_id !== current.school_year_id) {
         throw new EnrollmentsModuleError('Class does not belong to the enrollment school year', 400, 'CLASS_YEAR_MISMATCH');
+      }
+      if (targetClass.school_year_status !== 'active') {
+        throw new EnrollmentsModuleError('L’année scolaire doit être ouverte par le support avant toute modification d’inscription.', 409, 'SCHOOL_YEAR_NOT_OPEN');
       }
       this.assertClassSelection(targetClass, input);
       targetLevelId = targetClass.level_id;
@@ -386,6 +396,10 @@ export class EnrollmentsService {
   }) {
     const current = await this.repository.findEnrollment(id);
     if (!current) throw new EnrollmentsModuleError('Enrollment not found', 404, 'ENROLLMENT_NOT_FOUND');
+    const schoolClass = await this.repository.getClassContext(current.class_id);
+    if (schoolClass?.school_year_status !== 'active') {
+      throw new EnrollmentsModuleError('L’année scolaire doit être ouverte par le support avant toute confirmation d’inscription.', 409, 'SCHOOL_YEAR_NOT_OPEN');
+    }
     if (!canTransitionEnrollment(current.status, 'confirmed')) {
       throw new EnrollmentsModuleError('Payment cannot be confirmed for this enrollment', 409, 'PAYMENT_CONFIRMATION_BLOCKED');
     }
@@ -414,6 +428,10 @@ export class EnrollmentsService {
   async deleteEnrollment(id: string) {
     const current = await this.repository.findEnrollment(id);
     if (!current) throw new EnrollmentsModuleError('Enrollment not found', 404, 'ENROLLMENT_NOT_FOUND');
+    const schoolClass = await this.repository.getClassContext(current.class_id);
+    if (schoolClass?.school_year_status !== 'active') {
+      throw new EnrollmentsModuleError('L’année scolaire doit être ouverte par le support avant toute modification d’inscription.', 409, 'SCHOOL_YEAR_NOT_OPEN');
+    }
     if (current.status === 'confirmed') {
       throw new EnrollmentsModuleError('A confirmed enrollment cannot be deleted', 409, 'CONFIRMED_ENROLLMENT_IMMUTABLE');
     }

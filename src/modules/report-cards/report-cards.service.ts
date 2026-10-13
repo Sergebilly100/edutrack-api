@@ -86,8 +86,12 @@ export class ReportCardsService {
   }
 
   private async assertYearEditable(schoolYearId: string): Promise<void> {
-    if (await this.repository.schoolYearStatus(schoolYearId) === 'closed') {
+    const status = await this.repository.schoolYearStatus(schoolYearId);
+    if (status === 'closed') {
       throw new ReportCardsModuleError('L’année scolaire est clôturée', 409, 'SCHOOL_YEAR_CLOSED');
+    }
+    if (status !== 'active') {
+      throw new ReportCardsModuleError('L’année scolaire doit être ouverte par le support.', 409, 'SCHOOL_YEAR_NOT_OPEN');
     }
   }
 

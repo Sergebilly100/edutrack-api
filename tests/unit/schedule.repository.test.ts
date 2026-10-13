@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import {
   findOrCreateTimeSlot,
   findScheduleConflicts,
@@ -142,10 +143,12 @@ describe('Schedule Repository', () => {
     });
 
     it.each([
-      ['daily', () => listSchedulesForPeriodAndDay(mockDb, { periodId: 'p1', date: '2026-10-05', dayOfWeek: 1 })],
-      ['weekly', () => listSchedulesForPeriod(mockDb, { periodId: 'p1', date: '2026-10-05', weekStart: '2026-10-05', weekEnd: '2026-10-10' })],
-    ])('projette le niveau des créneaux %s', async (_label, run) => {
-      mockDb.execute.mockResolvedValue({ rows: [
+      ['daily', false, () => listSchedulesForPeriodAndDay(mockDb, { periodId: 'p1', date: '2026-10-05', dayOfWeek: 1 })],
+      ['weekly', false, () => listSchedulesForPeriod(mockDb, { periodId: 'p1', date: '2026-10-05', weekStart: '2026-10-05', weekEnd: '2026-10-10' })],
+      ['daily', true, () => listSchedulesForPeriodAndDay(mockDb, { periodId: 'p1', date: '2026-10-05', dayOfWeek: 1 })],
+      ['weekly', true, () => listSchedulesForPeriod(mockDb, { periodId: 'p1', date: '2026-10-05', weekStart: '2026-10-05', weekEnd: '2026-10-10' })],
+    ])('projette le niveau des créneaux %s (matière officielle : %s)', async (_label, hasSubjectId, run) => {
+      mockDb.execute.mockResolvedValueOnce({ rows: [{ present: hasSubjectId }] }).mockResolvedValueOnce({ rows: [
         { id: 's1', class_id: 'c1', class_name: '6A', class_level_id: 'l6', class_level_name: '6ème', level_subjects: [] },
         { id: 's2', class_id: 'c2', class_name: 'Ancienne classe', class_level_id: null, class_level_name: null, level_subjects: [] },
       ] });
@@ -154,10 +157,18 @@ describe('Schedule Repository', () => {
         { id: 'c1', name: '6A', levelId: 'l6', levelName: '6ème' },
         { id: 'c2', name: 'Ancienne classe', levelId: null, levelName: null },
       ]);
-      const query = queryText(mockDb.execute.mock.calls[0][0]);
+      const query = queryText(mockDb.execute.mock.calls[1][0]);
       expect(query).toContain('c.level_id::text AS class_level_id');
       expect(query).toContain('l.name AS class_level_name');
       expect(query).toContain('LEFT JOIN levels l ON l.id = c.level_id');
+      const renderedQuery = new PgDialect().sqlToQuery(mockDb.execute.mock.calls[1][0]).sql;
+      if (hasSubjectId) {
+        expect(renderedQuery).toContain('s.subject_id::text AS subject_id');
+        expect(renderedQuery).toContain('LEFT JOIN subjects sub ON sub.id = s.subject_id');
+      } else {
+        expect(renderedQuery).toContain('NULL::text AS subject_id');
+        expect(renderedQuery).not.toContain('s.subject_id');
+      }
     });
   });
 });

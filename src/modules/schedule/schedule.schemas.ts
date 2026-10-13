@@ -70,7 +70,8 @@ export const schedulePayloadSchema = z
     start_time: scheduleTimeSchema.optional(),
     end_time: scheduleTimeSchema.optional(),
     day_of_week: z.number().int().min(1).max(6),
-    subject: z.string().trim().min(1).max(100),
+    subject_id: z.string().uuid(),
+    subject: z.string().trim().min(1).max(100).optional(),
     effective_from: dateStringSchema.optional(),
     // Type de récurrence : 'recurring' (toutes les semaines de la période)
     // ou 'one_shot' (uniquement la date effective_from, ex: rattrapage)

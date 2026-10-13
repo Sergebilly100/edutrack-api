@@ -22,6 +22,7 @@ const repository = {
   findActiveSchoolYear: vi.fn(),
   hasConfirmedEnrollmentInActiveSchoolYear: vi.fn(),
   updateStudent: vi.fn(),
+  classIsInOpenSchoolYear: vi.fn(),
   softDeleteStudent: vi.fn(),
   findScheduleById: vi.fn(),
   findStudentsForAbsence: vi.fn(),
@@ -136,6 +137,12 @@ describe('listStudents()', () => {
 // ─── createStudent ────────────────────────────────────────────────────────────
 
 describe('createStudent()', () => {
+  it('refuse de rattacher un élève à une classe d’année non ouverte', async () => {
+    repository.classIsInOpenSchoolYear.mockResolvedValue(false);
+    await expect(buildService().createStudent({ class_id: 'future-class' } as never))
+      .rejects.toMatchObject({ code: 'SCHOOL_YEAR_NOT_OPEN', statusCode: 409 });
+    expect(repository.createStudent).not.toHaveBeenCalled();
+  });
   it('retourne l’élève et déclenche les accès du nouveau parent', async () => {
     const notifyParentAccess = vi.fn().mockResolvedValue(undefined);
     const createParentCredentials = vi.fn().mockResolvedValue({

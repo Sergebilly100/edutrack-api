@@ -25,6 +25,7 @@ export class RecoveryRepository {
     const result = await this.db.execute<{ id: string; label: string; status: string }>(sql`
       SELECT id::text, label, status::text
       FROM school_years
+      WHERE status <> 'draft'
       ORDER BY start_date DESC, label DESC
     `);
     return rows(result);
@@ -32,7 +33,7 @@ export class RecoveryRepository {
 
   async yearExists(yearId: string): Promise<boolean> {
     const result = await this.db.execute<{ exists: boolean }>(sql`
-      SELECT EXISTS (SELECT 1 FROM school_years WHERE id = ${yearId}::uuid) AS exists
+      SELECT EXISTS (SELECT 1 FROM school_years WHERE id = ${yearId}::uuid AND status <> 'draft') AS exists
     `);
     return rows<{ exists: boolean }>(result)[0]?.exists === true;
   }

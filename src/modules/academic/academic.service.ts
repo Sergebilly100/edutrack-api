@@ -58,7 +58,7 @@ export class AcademicService {
   constructor(private readonly repository: AcademicRepository) {}
 
   async listSchoolYears() {
-    return { schoolYears: await this.repository.listSchoolYears() };
+    return { schoolYears: (await this.repository.listSchoolYears()).filter((year) => year.status !== 'draft') };
   }
 
   async createSchoolYear(input: CreateSchoolYearInput) {
@@ -98,6 +98,9 @@ export class AcademicService {
     const current = await this.repository.findSchoolYearById(id);
     if (!current) {
       throw new AcademicModuleError('School year not found', 404, 'SCHOOL_YEAR_NOT_FOUND');
+    }
+    if (current.status !== 'active') {
+      throw new AcademicModuleError('L’année scolaire doit être ouverte par le support.', 409, 'SCHOOL_YEAR_NOT_OPEN');
     }
 
     assertSchoolYearConsistency({
@@ -268,6 +271,9 @@ export class AcademicService {
 
     if (schoolYearId && !requestedSchoolYear) {
       throw new AcademicModuleError('School year not found', 404, 'SCHOOL_YEAR_NOT_FOUND');
+    }
+    if (requestedSchoolYear?.status === 'draft') {
+      throw new AcademicModuleError('L’année scolaire doit être ouverte par le support.', 409, 'SCHOOL_YEAR_NOT_OPEN');
     }
 
     if (activeSchoolYear) {

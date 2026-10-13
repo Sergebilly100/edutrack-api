@@ -1,6 +1,5 @@
 import { randomBytes } from 'node:crypto';
 import { weeklyPeriodSchema } from '../../shared/utils/schedule-period.js';
-import { resolveScheduleSubjectDisplay } from '../../shared/utils/schedule-subject-display.js';
 
 import {
   createRoom,
@@ -29,8 +28,55 @@ import {
   type TimeSlotCatalogItem,
   findOrCreateTimeSlot,
   hasTeacherSubjectAssignment,
+  findAssignedScheduleSubject,
+  findActiveScheduleSchoolYear,
+  findScheduleSubjectScope,
+  repairScheduleSubject,
   isTeacherBlocked,
 } from './schedule.repository.js';
+
+export class ScheduleSchoolYearError extends Error {
+  constructor(
+    message: string,
+    public readonly code: 'SCHOOL_YEAR_FINISHED' | 'SCHOOL_YEAR_NOT_OPEN' | 'SCHEDULE_PERIOD_OUTSIDE_SCHOOL_YEAR',
+  ) { super(message); }
+}
+
+export const recurringScheduleCrossesSchoolYear = (
+  schoolYearEndDate: string, periodEndDate: string, dayOfWeek: number,
+): boolean => {
+  const firstAfterEnd = new Date(`${schoolYearEndDate}T00:00:00.000Z`);
+  firstAfterEnd.setUTCDate(firstAfterEnd.getUTCDate() + 1);
+  const isoDay = ((firstAfterEnd.getUTCDay() + 6) % 7) + 1;
+  firstAfterEnd.setUTCDate(firstAfterEnd.getUTCDate() + ((dayOfWeek - isoDay + 7) % 7));
+  return firstAfterEnd.toISOString().slice(0, 10) <= periodEndDate;
+};
+
+export const assertScheduleWithinActiveYear = async (
+  db: QueryExecutor,
+  effectiveFrom: string,
+  schedulePeriodId: string,
+  occurrence?: { dayOfWeek: number; oneShot: boolean },
+): Promise<void> => {
+  const [year, period] = await Promise.all([
+    findActiveScheduleSchoolYear(db), findSchedulePeriodById(db, schedulePeriodId),
+  ]);
+  if (!year) throw new ScheduleSchoolYearError('Aucune année scolaire ouverte par le support.', 'SCHOOL_YEAR_NOT_OPEN');
+  if (effectiveFrom > year.endDate || new Date().toISOString().slice(0, 10) > year.endDate
+    || (period && period.valid_from > year.endDate)) {
+    throw new ScheduleSchoolYearError(`Année scolaire ${year.label} terminée.`, 'SCHOOL_YEAR_FINISHED');
+  }
+  if (new Date().toISOString().slice(0, 10) < year.startDate) {
+    throw new ScheduleSchoolYearError('Cette année scolaire n’a pas encore commencé.', 'SCHOOL_YEAR_NOT_OPEN');
+  }
+  if (effectiveFrom < year.startDate || !period || period.valid_to < year.startDate) {
+    throw new ScheduleSchoolYearError(`La période EDT n’appartient pas à l’année scolaire ${year.label}.`, 'SCHEDULE_PERIOD_OUTSIDE_SCHOOL_YEAR');
+  }
+  if (occurrence && !occurrence.oneShot
+    && recurringScheduleCrossesSchoolYear(year.endDate, period.valid_to, occurrence.dayOfWeek)) {
+    throw new ScheduleSchoolYearError(`Année scolaire ${year.label} terminée : ce créneau récurrent dépasserait sa date de fin.`, 'SCHOOL_YEAR_FINISHED');
+  }
+};
 
 export type ActiveSchedulesResult = {
   date: string;
@@ -78,9 +124,9 @@ export type CreateScheduleInput = {
 
 const formatDate = (date: Date): string => date.toISOString().slice(0, 10);
 
-const withSubjectDisplay = ({ subjectReferences, ...schedule }: ScheduleWithSubjectReferences): ActiveSchedule => ({
+const withSubjectDisplay = ({ subjectReferences: _subjectReferences, subjectAbbreviation, ...schedule }: ScheduleWithSubjectReferences): ActiveSchedule => ({
   ...schedule,
-  subjectDisplay: resolveScheduleSubjectDisplay(schedule.subject, subjectReferences),
+  subjectDisplay: schedule.subjectId ? subjectAbbreviation || schedule.subject : schedule.subject,
 });
 
 const parseDateInput = (date: string | Date): Date => {
@@ -275,7 +321,10 @@ export const duplicatePeriod = async (
     const executor = tx as unknown as QueryExecutor;
     const schedules = await listScheduleCopyTargets(executor, sourcePeriodId);
     for (const schedule of schedules) {
-      await assertTeacherCanBeScheduled(executor, { teacherId: schedule.teacherId, classId: schedule.classId, subject: schedule.subject });
+      if (!schedule.subjectId) throw new Error('Historical schedule subject must be resolved before copying');
+      await resolveScheduleSubject(executor, {
+        teacherId: schedule.teacherId, classId: schedule.classId, subjectId: schedule.subjectId,
+      });
     }
     return duplicatePeriodWithSchedules(executor, sourcePeriodId, {
       name: newPeriod.newName,
@@ -355,6 +404,31 @@ export const assertTeacherCanBeScheduled = async (
     throw new Error('Teacher must be assigned to this subject and class before scheduling');
   }
 };
+
+export const resolveScheduleSubject = async (
+  db: QueryExecutor,
+  input: { teacherId: string; classId: string; subjectId: string },
+): Promise<{ id: string; name: string }> => {
+  if (await isTeacherBlocked(db, input.teacherId)) {
+    throw new Error('Teacher is blocked and cannot be scheduled');
+  }
+  const subject = await findAssignedScheduleSubject(db, input);
+  if (!subject) throw new Error('Teacher must be assigned to this subject and class before scheduling');
+  return subject;
+};
+
+export const repairHistoricalScheduleSubject = async (
+  db: QueryExecutor, scheduleId: string, subjectId: string,
+): Promise<boolean> => db.transaction(async (tx) => {
+  const executor = tx as unknown as QueryExecutor;
+  const schedule = await findScheduleSubjectScope(executor, scheduleId);
+  if (!schedule) return false;
+  if (schedule.subjectId) throw new Error('Schedule subject is already resolved');
+  await resolveScheduleSubject(executor, {
+    teacherId: schedule.teacherId, classId: schedule.classId, subjectId,
+  });
+  return repairScheduleSubject(executor, scheduleId, subjectId);
+}, { isolationLevel: 'serializable' });
 
 /** Valide aussi les bornes conservées lors d'une modification partielle. */
 export const updatePeriodFromInput = async (

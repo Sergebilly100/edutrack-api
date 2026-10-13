@@ -89,6 +89,7 @@ export type ScheduleImportRow = {
   teacherName: string;
   className: string;
   subject: string;
+  subjectId: string;
   dayOfWeek: number;
   slotLabel: string;
   roomName: string;

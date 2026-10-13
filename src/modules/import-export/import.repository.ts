@@ -31,7 +31,7 @@ type TeacherDirectoryRow = {
   is_blocked: boolean;
   is_active: boolean;
 };
-type ScheduleAssignmentRow = { teacher_id: string; class_id: string; subject: string; abbreviation: string | null };
+type ScheduleAssignmentRow = { teacher_id: string; class_id: string; subject_id: string; subject: string; abbreviation: string | null };
 type RoomRow = { id: string; name: string; building: string | null; capacity: number | null; is_active: boolean };
 type TimeSlotRow = { id: string; label: string; start_time: string; end_time: string };
 type ImportScheduleConflictRow = {
@@ -176,8 +176,9 @@ export type ImportRepository = {
       timeSlotId: string;
       roomId: string;
       startDate: string | null;
+      subjectId: string;
     }
-  ) => Promise<{ result: 'inserted' | 'updated'; id: string }>;
+  ) => Promise<{ result: 'inserted' | 'updated' | 'history_locked'; id: string }>;
   deactivateSchedulesByPeriodExcluding: (
     db: QueryExecutor,
     schedulePeriodId: string,
@@ -227,7 +228,7 @@ export const defaultImportRepository: ImportRepository = {
 
   async listScheduleAssignments(db) {
     const result = await db.execute(sql`
-      SELECT tsa.teacher_id::text, tsa.class_id::text, s.name AS subject, s.abbreviation
+      SELECT tsa.teacher_id::text, tsa.class_id::text, tsa.subject_id::text, s.name AS subject, s.abbreviation
       FROM teacher_subject_assignments tsa
       INNER JOIN teachers t ON t.id = tsa.teacher_id AND t.is_blocked = false
       INNER JOIN users u ON u.id = t.user_id AND u.is_active = true
@@ -787,12 +788,24 @@ export const defaultImportRepository: ImportRepository = {
     const existing = getRows<ScheduleInsertRow>(existingResult)[0];
 
     if (existing) {
+      const history = await db.execute(sql`
+        SELECT EXISTS (
+          SELECT 1 FROM attendances_teacher WHERE schedule_id = ${existing.id}::uuid
+          UNION ALL
+          SELECT 1 FROM attendances_student WHERE schedule_id = ${existing.id}::uuid
+        ) AS has_history
+      `);
+      if (getRows<{ has_history: boolean }>(history)[0]?.has_history) {
+        return { result: 'history_locked', id: existing.id };
+      }
       await db.execute(sql`
           UPDATE schedules
           SET
             class_id = ${params.classId},
             room_id = ${params.roomId},
-            subject = ${row.subject},
+            subject = CASE WHEN subject_id IS NOT NULL AND subject_id = ${params.subjectId}::uuid
+              THEN subject ELSE ${row.subject} END,
+            subject_id = ${params.subjectId}::uuid,
             is_active = true,
             start_date = ${params.startDate}::date,
             end_date = NULL
@@ -810,6 +823,7 @@ export const defaultImportRepository: ImportRepository = {
           time_slot_id,
           day_of_week,
           subject,
+          subject_id,
           start_date,
           is_active
         )
@@ -821,6 +835,7 @@ export const defaultImportRepository: ImportRepository = {
           ${params.timeSlotId},
           ${row.dayOfWeek},
           ${row.subject},
+          ${params.subjectId}::uuid,
           ${params.startDate}::date,
           true
         )

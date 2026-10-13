@@ -291,6 +291,21 @@ describe('academic grading integration', () => {
     const spontaneousDateIso = spontaneousDate.toISOString().slice(0, 10);
     vi.setSystemTime(new Date(`${spontaneousDateIso}T${seededSchedule[0]!.start_time.slice(0, 5)}:00.000Z`));
     const spontaneousTeacherHeaders = await getAuthHeaders('teacher');
+    const attendanceMissing = await request()
+      .post('/api/v1/evaluations/spontaneous')
+      .set(spontaneousTeacherHeaders)
+      .send({
+        lessonSlotId: context.scheduleId, subjectId: mathResponse.body.subject.id, classId,
+        gradingPeriodId, evaluationDate: spontaneousDateIso, studentId,
+        adjustment: -2, comment: 'Interrompt régulièrement le cours',
+      });
+    expect(attendanceMissing.status).toBe(409);
+    expect(attendanceMissing.body.code).toBe('TEACHER_ATTENDANCE_NOT_VALIDATED');
+    await queryTenant(`INSERT INTO attendances_teacher
+      (teacher_id, schedule_id, date, status, checked_in_at, validation_status)
+      SELECT s.teacher_id, s.id, $2::date, 'present', $2::date + ts.start_time, 'not_required'
+      FROM schedules s INNER JOIN time_slots ts ON ts.id = s.time_slot_id
+      WHERE s.id = $1`, [context.scheduleId, spontaneousDateIso]);
     const spontaneous = await request()
       .post('/api/v1/evaluations/spontaneous')
       .set(spontaneousTeacherHeaders)

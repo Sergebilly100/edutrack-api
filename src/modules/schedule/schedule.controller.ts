@@ -19,6 +19,8 @@ import {
   deleteScheduleById,
   ensureScheduleTemporalColumns,
   findScheduleConflicts,
+  findActiveScheduleSchoolYear,
+  findScheduleDisplaySchoolYear,
   findSchedulePeriodById,
   hasAnyAttendanceForSchedule,
   hasScheduleOccurrenceBeforeDate,
@@ -31,7 +33,7 @@ import {
 } from './schedule.repository.js';
 import {
   computeOneShotEndDate,
-  assertTeacherCanBeScheduled,
+  resolveScheduleSubject,
   createPeriodFromInput,
   updatePeriodFromInput,
   duplicatePeriod,
@@ -39,6 +41,9 @@ import {
   getWeeklySchedulesForDate,
   hasFutureOccurrenceInPeriod,
   resolveTimeSlotId,
+  repairHistoricalScheduleSubject,
+  assertScheduleWithinActiveYear,
+  ScheduleSchoolYearError,
 } from './schedule.service.js';
 import {
   periodDuplicatePayloadSchema,
@@ -46,13 +51,13 @@ import {
   periodUpdatePayloadSchema,
   schedulePayloadSchema,
 } from './schedule.schemas.js';
-import { canonicalizeSubject } from '../../shared/utils/subject-normalization.js';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
 const paramsIdSchema = z.object({
   id: z.string().uuid(),
 });
+const repairSubjectSchema = z.object({ subject_id: z.string().uuid() });
 
 /**
  * BUG 1 - Schéma de validation du querystring `?date=YYYY-MM-DD`.
@@ -101,8 +106,17 @@ const handleError = (
       statusCode: 400,
     });
   }
+  if (error instanceof ScheduleSchoolYearError) {
+    return reply.code(409).send({ error: error.message, code: error.code, statusCode: 409 });
+  }
 
-  const parsedPgError = pgErrorCodeSchema.safeParse(error);
+  let dbError: unknown = error;
+  for (let depth = 0; depth < 5; depth += 1) {
+    if (pgErrorCodeSchema.safeParse(dbError).success) break;
+    dbError = typeof dbError === 'object' && dbError !== null && 'cause' in dbError
+      ? (dbError as { cause?: unknown }).cause : undefined;
+  }
+  const parsedPgError = pgErrorCodeSchema.safeParse(dbError);
   if (parsedPgError.success) {
     const code = parsedPgError.data.code;
     if (code === '23505') {
@@ -117,6 +131,13 @@ const handleError = (
         error: 'Referenced resource does not exist',
         code: 'BAD_REQUEST',
         statusCode: 400,
+      });
+    }
+    if (code === '23514') {
+      return reply.code(409).send({
+        error: 'Le créneau doit garder une matière officielle cohérente avec la classe et l’affectation du professeur.',
+        code: 'SCHEDULE_SUBJECT_SCOPE_CONFLICT',
+        statusCode: 409,
       });
     }
   }
@@ -187,6 +208,19 @@ const handleError = (
       error: 'Affectez ce professeur actif à cette matière et cette classe avant de créer un créneau.',
       code: 'TEACHER_ASSIGNMENT_REQUIRED',
       statusCode: 400,
+    });
+  }
+  if (message === 'Historical schedule subject must be resolved before copying') {
+    return reply.code(409).send({
+      error: 'Corrigez la matière officielle des créneaux historiques avant la copie.',
+      code: 'SCHEDULE_SUBJECT_REPAIR_REQUIRED',
+      statusCode: 409,
+    });
+  }
+  if (message === 'Schedule subject is already resolved') {
+    return reply.code(409).send({
+      error: 'La matière de ce créneau est déjà renseignée.',
+      code: 'SCHEDULE_SUBJECT_ALREADY_RESOLVED', statusCode: 409,
     });
   }
   if (message === 'Room already has a course at the same time') {
@@ -404,9 +438,14 @@ export default async function scheduleController(app: FastifyInstance): Promise<
         // pas pour aujourd'hui. Sans ça, naviguer sur n'importe quelle semaine
         // retournait toujours les créneaux de la période active aujourd'hui.
         const date = resolveDateParam(request.query);
-        const weekly = await getWeeklySchedulesForDate(ensureTenantDb(request), date);
+        const tenantDb = ensureTenantDb(request);
+        const [weekly, schoolYear] = await Promise.all([
+          getWeeklySchedulesForDate(tenantDb, date),
+          findScheduleDisplaySchoolYear(tenantDb),
+        ]);
         return reply.send({
           date: weekly.date,
+          schoolYear,
           period: weekly.period,
           schedules: weekly.schedules,
           teachers: weekly.teachers,
@@ -448,6 +487,22 @@ export default async function scheduleController(app: FastifyInstance): Promise<
     }
   );
 
+  app.patch('/api/v1/schedule/:id/subject', {
+    preHandler: [requireDirectorOrSecretary, attachTenantDb],
+  }, async (request, reply) => {
+    try {
+      const { id } = paramsIdSchema.parse(request.params);
+      const { subject_id: subjectId } = repairSubjectSchema.parse(request.body);
+      const repaired = await repairHistoricalScheduleSubject(ensureTenantDb(request), id, subjectId);
+      if (!repaired) return reply.code(404).send({
+        error: 'Schedule not found', code: 'NOT_FOUND', statusCode: 404,
+      });
+      return reply.send({ id, subjectId });
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
   app.post(
     '/api/v1/schedule',
     { preHandler: [requireDirectorOrSecretary, attachTenantDb] },
@@ -456,10 +511,14 @@ export default async function scheduleController(app: FastifyInstance): Promise<
         const body = schedulePayloadSchema.parse(request.body);
         const db = ensureTenantDb(request);
         await ensureScheduleTemporalColumns(db);
-        await assertTeacherCanBeScheduled(db, { teacherId: body.teacher_id, classId: body.class_id, subject: body.subject });
-        const canonicalSubject = canonicalizeSubject(body.subject);
+        const canonicalSubject = (await resolveScheduleSubject(db, {
+          teacherId: body.teacher_id, classId: body.class_id, subjectId: body.subject_id,
+        })).name;
         const today = getTodayIso();
         const effectiveFrom = body.effective_from ?? today;
+        await assertScheduleWithinActiveYear(db, effectiveFrom, body.schedule_period_id, {
+          dayOfWeek: body.day_of_week, oneShot: body.recurrence === 'one_shot',
+        });
 
         if (isIsoDateBefore(effectiveFrom, today)) {
           throw new Error('Cannot apply schedule changes to a past date');
@@ -501,6 +560,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           timeSlotId,
           dayOfWeek: body.day_of_week,
           subject: canonicalSubject,
+          subjectId: body.subject_id,
           startDate: effectiveFrom,
           isActive: body.is_active,
           referenceDate: effectiveFrom,
@@ -527,6 +587,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           timeSlotId,
           dayOfWeek: body.day_of_week,
           subject: canonicalSubject,
+          subjectId: body.subject_id,
           startDate: effectiveFrom,
           endDate,
           isActive: body.is_active,
@@ -548,10 +609,15 @@ export default async function scheduleController(app: FastifyInstance): Promise<
         const body = schedulePayloadSchema.parse(request.body);
         const db = ensureTenantDb(request);
         await ensureScheduleTemporalColumns(db);
-        await assertTeacherCanBeScheduled(db, { teacherId: body.teacher_id, classId: body.class_id, subject: body.subject });
-        const canonicalSubject = canonicalizeSubject(body.subject);
+        const canonicalSubject = (await resolveScheduleSubject(db, {
+          teacherId: body.teacher_id, classId: body.class_id, subjectId: body.subject_id,
+        })).name;
         const today = getTodayIso();
         const effectiveFrom = body.effective_from ?? today;
+        await assertScheduleWithinActiveYear(db, effectiveFrom, body.schedule_period_id, {
+          dayOfWeek: body.day_of_week,
+          oneShot: body.recurrence === 'one_shot' || body.update_scope === 'this',
+        });
 
         if (isIsoDateBefore(effectiveFrom, today)) {
           throw new Error('Cannot apply schedule changes to a past date');
@@ -597,6 +663,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           timeSlotId,
           dayOfWeek: body.day_of_week,
           subject: canonicalSubject,
+          subjectId: body.subject_id,
           startDate: effectiveFrom,
           isActive: body.is_active,
           excludeScheduleId: id,
@@ -636,6 +703,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
               timeSlotId,
               dayOfWeek: body.day_of_week,
               subject: canonicalSubject,
+              subjectId: body.subject_id,
               startDate: effectiveFrom,
               endDate: oneShotEndDate,
               isActive: body.is_active,
@@ -667,6 +735,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
             timeSlotId,
             dayOfWeek: body.day_of_week,
             subject: canonicalSubject,
+            subjectId: body.subject_id,
             isActive: body.is_active,
           });
 
@@ -699,6 +768,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
               timeSlotId,
               dayOfWeek: body.day_of_week,
               subject: canonicalSubject,
+              subjectId: body.subject_id,
               startDate: effectiveFrom,
               isActive: body.is_active,
             });
@@ -729,6 +799,7 @@ export default async function scheduleController(app: FastifyInstance): Promise<
           timeSlotId,
           dayOfWeek: body.day_of_week,
           subject: canonicalSubject,
+          subjectId: body.subject_id,
           startDate: effectiveFrom,
           isActive: body.is_active,
         });

@@ -151,10 +151,12 @@ export class DemoRepository {
       students: number; classes: number; years: number; rooms: number; slots: number; cards: number; teachers: number; parents: number;
       historical_cards: number; historical_sources: number; risky_students: number; risky_teachers: number; teacher_absences: number;
       financial_late: number; active_parent_subscriptions: number; future_evaluations: number; partially_graded_evaluations: number;
+      unresolved_schedule_subjects: number;
     }>(sql`
       SELECT (SELECT COUNT(*)::int FROM students) AS students, (SELECT COUNT(*)::int FROM classes) AS classes,
         (SELECT COUNT(*)::int FROM school_years) AS years, (SELECT COUNT(*)::int FROM rooms) AS rooms,
         (SELECT COUNT(*)::int FROM time_slots) AS slots, (SELECT COUNT(*)::int FROM report_cards WHERE status = 'published') AS cards,
+        (SELECT COUNT(*)::int FROM schedules WHERE subject_id IS NULL) AS unresolved_schedule_subjects,
         (SELECT COUNT(*)::int FROM teachers) AS teachers, (SELECT COUNT(*)::int FROM parents) AS parents,
         (SELECT COUNT(*)::int FROM report_cards rc INNER JOIN grading_periods gp ON gp.id = rc.grading_period_id
           INNER JOIN school_years sy ON sy.id = gp.school_year_id WHERE rc.status = 'published' AND sy.status = 'closed') AS historical_cards,
@@ -181,6 +183,7 @@ export class DemoRepository {
       || counts.historical_cards !== 18 || counts.historical_sources !== 6 || counts.risky_students < 1
       || counts.risky_teachers < 1 || counts.teacher_absences < 1 || counts.financial_late < 1
       || counts.active_parent_subscriptions < 1 || counts.future_evaluations < 1 || counts.partially_graded_evaluations < 1
+      || counts.unresolved_schedule_subjects !== 0
       : Object.values(counts).some((value) => value !== 0)) throw new Error('DEMO_INVARIANT_FAILED');
     return counts;
   }

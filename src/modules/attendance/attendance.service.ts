@@ -642,6 +642,8 @@ export class AttendanceService {
     checked_out_at: string | null;
     actual_minutes: number | null;
     geo_status: 'verified' | 'suspicious' | 'unavailable' | 'not_checked' | null;
+    validation_status: 'not_required' | 'pending' | 'approved' | 'rejected';
+    checked_in_at: string | null;
   }>> {
     const teacher = await this.repository.findTeacherByUserId(context.userId);
     if (!teacher) {
@@ -662,6 +664,7 @@ export class AttendanceService {
     class_id: string;
     class_name: string;
     subject: string;
+    subject_id: string | null;
     subjectDisplay: string;
     room_id: string;
     room_name: string;

@@ -38,6 +38,8 @@ type ActiveScheduleRow = {
   sort_order: number;
   day_of_week: number;
   subject: string;
+  subject_id: string | null;
+  subject_abbreviation: string | null;
   level_subjects: ScheduleSubjectReference[];
   start_date: string | null;
   end_date: string | null;
@@ -52,6 +54,7 @@ export type ActiveSchedule = {
   schedulePeriodId: string;
   dayOfWeek: number;
   subject: string;
+  subjectId: string | null;
   subjectDisplay: string;
   startDate: string | null;
   endDate: string | null;
@@ -89,6 +92,7 @@ export type ActiveSchedule = {
 
 export type ScheduleWithSubjectReferences = Omit<ActiveSchedule, 'subjectDisplay'> & {
   subjectReferences: ScheduleSubjectReference[];
+  subjectAbbreviation: string | null;
 };
 
 type RoomRow = {
@@ -187,6 +191,7 @@ export type ScheduleMutationInput = {
   timeSlotId: string;
   dayOfWeek: number;
   subject: string;
+  subjectId: string;
   startDate?: string | null;
   endDate?: string | null;
   isActive?: boolean;
@@ -217,6 +222,16 @@ type DuplicatePeriodRow = SchedulePeriodRow & { copied_count: string | number };
 
 const getRows = <TRow extends QueryResultRow>(result: QueryResult<TRow>): TRow[] =>
   result.rows;
+
+const hasScheduleSubjectColumn = async (db: QueryExecutor): Promise<boolean> => {
+  const result = await db.execute<{ present: boolean }>(sql`
+    SELECT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = current_schema() AND table_name = 'schedules' AND column_name = 'subject_id'
+    ) AS present
+  `);
+  return getRows(result)[0]?.present === true;
+};
 
 const mapPeriod = (row: SchedulePeriodRow): SchedulePeriod => ({
   id: row.id,
@@ -267,6 +282,8 @@ const mapActiveSchedule = (row: ActiveScheduleRow): ScheduleWithSubjectReference
   schedulePeriodId: row.schedule_period_id,
   dayOfWeek: row.day_of_week,
   subject: row.subject,
+  subjectId: row.subject_id,
+  subjectAbbreviation: row.subject_abbreviation,
   subjectReferences: row.level_subjects ?? [],
   startDate: row.start_date,
   endDate: row.end_date,
@@ -482,11 +499,12 @@ export const findActiveSchedulePeriodByWeek = async (
 };
 
 export const listScheduleCopyTargets = async (db: QueryExecutor, periodId: string) => {
-  const result = await db.execute<{ teacherId: string; classId: string; subject: string }>(sql`
-    SELECT teacher_id::text AS "teacherId", class_id::text AS "classId", subject
+  const result = await db.execute<{ teacherId: string; classId: string; subject: string; subjectId: string | null }>(sql`
+    SELECT teacher_id::text AS "teacherId", class_id::text AS "classId", subject,
+           subject_id::text AS "subjectId"
     FROM schedules WHERE schedule_period_id = ${periodId}::uuid
   `);
-  return getRows<{ teacherId: string; classId: string; subject: string }>(result);
+  return getRows<{ teacherId: string; classId: string; subject: string; subjectId: string | null }>(result);
 };
 
 export const duplicatePeriodWithSchedules = async (
@@ -515,6 +533,7 @@ export const duplicatePeriodWithSchedules = async (
         time_slot_id,
         day_of_week,
         subject,
+        subject_id,
         end_date,
         is_active
       )
@@ -526,6 +545,7 @@ export const duplicatePeriodWithSchedules = async (
         s.time_slot_id,
         s.day_of_week,
         s.subject,
+        s.subject_id,
         s.end_date,
         s.is_active
       FROM schedules s
@@ -565,6 +585,7 @@ export const listSchedulesForPeriodAndDay = async (
     teacherId?: string;
   }
 ): Promise<ScheduleWithSubjectReferences[]> => {
+  const hasSubjectId = await hasScheduleSubjectColumn(db);
   const teacherFilter = params.teacherId
     ? sql`AND s.teacher_id = ${params.teacherId}`
     : sql``;
@@ -590,6 +611,8 @@ export const listSchedulesForPeriodAndDay = async (
       ts.sort_order,
       s.day_of_week,
       s.subject,
+      ${hasSubjectId ? sql`s.subject_id::text` : sql`NULL::text`} AS subject_id,
+      ${hasSubjectId ? sql`sub.abbreviation` : sql`NULL::text`} AS subject_abbreviation,
       COALESCE((
         SELECT json_agg(json_build_object('name', sub.name, 'abbreviation', sub.abbreviation) ORDER BY sub.id)
         FROM subjects sub WHERE sub.level_id = c.level_id
@@ -604,6 +627,8 @@ export const listSchedulesForPeriodAndDay = async (
     INNER JOIN teachers t ON t.id = s.teacher_id
     INNER JOIN users u ON u.id = t.user_id
     INNER JOIN classes c ON c.id = s.class_id
+    INNER JOIN school_years sy ON sy.id = c.school_year_id
+    ${hasSubjectId ? sql`LEFT JOIN subjects sub ON sub.id = s.subject_id` : sql``}
     LEFT JOIN levels l ON l.id = c.level_id
     INNER JOIN rooms r ON r.id = s.room_id
     INNER JOIN time_slots ts ON ts.id = s.time_slot_id
@@ -616,6 +641,7 @@ export const listSchedulesForPeriodAndDay = async (
     ) history ON true
     WHERE s.schedule_period_id = ${params.periodId}
       AND s.day_of_week = ${params.dayOfWeek}
+      AND ${params.date}::date BETWEEN sy.start_date AND sy.end_date
       AND ${buildActiveScheduleClause({ date: params.date })}
       AND NOT EXISTS (
         SELECT 1 FROM schedule_exceptions se
@@ -637,6 +663,7 @@ export const listSchedulesForPeriod = async (
     weekEnd?: string;
   }
 ): Promise<ScheduleWithSubjectReferences[]> => {
+  const hasSubjectId = await hasScheduleSubjectColumn(db);
   const dayFilter =
     params.weekStart && params.weekEnd // Si on a une plage de semaine, on filtre les créneaux pour ne récupérer que ceux qui ont un jour de semaine correspondant à au moins une date de la plage (pour éviter de récupérer des créneaux qui ne sont pas actifs du tout sur la plage, même s'ils sont actifs à la date ciblée).
       ? sql`
@@ -678,6 +705,10 @@ export const listSchedulesForPeriod = async (
       )
     `;
 
+  const schoolYearDateFilter = params.weekStart
+    ? sql`(${params.weekStart}::date + ((s.day_of_week - 1) * INTERVAL '1 day'))::date BETWEEN sy.start_date AND sy.end_date`
+    : sql`${params.date}::date BETWEEN sy.start_date AND sy.end_date`;
+
   // la logique de filtrage temporel est un peu complexe pour gérer à la fois le cas où on veut récupérer les créneaux actifs à une date donnée (dans ce cas on vérifie que le créneau est actif à cette date) et le cas où on veut récupérer les créneaux actifs sur une semaine donnée (dans ce cas on vérifie que le créneau est actif sur au moins une date de la semaine, et on exclut les créneaux qui ont une exception sur au moins une date de la semaine).
   const result = await db.execute<ActiveScheduleRow>(sql`
     SELECT
@@ -700,6 +731,8 @@ export const listSchedulesForPeriod = async (
       ts.sort_order,
       s.day_of_week,
       s.subject,
+      ${hasSubjectId ? sql`s.subject_id::text` : sql`NULL::text`} AS subject_id,
+      ${hasSubjectId ? sql`sub.abbreviation` : sql`NULL::text`} AS subject_abbreviation,
       COALESCE((
         SELECT json_agg(json_build_object('name', sub.name, 'abbreviation', sub.abbreviation) ORDER BY sub.id)
         FROM subjects sub WHERE sub.level_id = c.level_id
@@ -714,6 +747,8 @@ export const listSchedulesForPeriod = async (
     INNER JOIN teachers t ON t.id = s.teacher_id
     INNER JOIN users u ON u.id = t.user_id
     INNER JOIN classes c ON c.id = s.class_id
+    INNER JOIN school_years sy ON sy.id = c.school_year_id
+    ${hasSubjectId ? sql`LEFT JOIN subjects sub ON sub.id = s.subject_id` : sql``}
     LEFT JOIN levels l ON l.id = c.level_id
     INNER JOIN rooms r ON r.id = s.room_id
     INNER JOIN time_slots ts ON ts.id = s.time_slot_id
@@ -727,6 +762,7 @@ export const listSchedulesForPeriod = async (
     ) history ON true
     WHERE s.schedule_period_id = ${params.periodId}
       AND s.day_of_week BETWEEN 1 AND 6
+      AND ${schoolYearDateFilter}
       AND ${temporalFilter}
       ${exceptionFilter}
       ${dayFilter}
@@ -836,6 +872,7 @@ export const createSchedule = async (
         time_slot_id,
         day_of_week,
         subject,
+        subject_id,
         start_date,
         end_date,
         is_active
@@ -848,6 +885,7 @@ export const createSchedule = async (
         ${input.timeSlotId},
         ${input.dayOfWeek},
         ${input.subject},
+        ${input.subjectId}::uuid,
         ${input.startDate ?? null}::date,
         ${input.endDate ?? null}::date,
         ${input.isActive ?? true}
@@ -877,7 +915,9 @@ export const updateSchedule = async (
         room_id = ${input.roomId},
         time_slot_id = ${input.timeSlotId},
         day_of_week = ${input.dayOfWeek},
-        subject = ${input.subject},
+        subject = CASE WHEN subject_id IS NOT NULL AND subject_id IS DISTINCT FROM ${input.subjectId}::uuid
+          THEN ${input.subject} ELSE subject END,
+        subject_id = ${input.subjectId}::uuid,
         start_date = CASE
           WHEN ${input.startDate !== undefined}
             THEN ${input.startDate ?? null}::date
@@ -965,6 +1005,82 @@ export const hasTeacherSubjectAssignment = async (
   `);
   return getRows<{ subject: string }>(result).some((row) =>
     normalizeSubjectKey(row.subject) === normalizeSubjectKey(input.subject));
+};
+
+export const findAssignedScheduleSubject = async (
+  db: QueryExecutor,
+  input: { teacherId: string; classId: string; subjectId: string },
+): Promise<{ id: string; name: string } | null> => {
+  const result = await db.execute<{ id: string; name: string }>(sql`
+    SELECT subject.id::text, subject.name
+    FROM subjects subject
+    INNER JOIN classes c ON c.id = ${input.classId}::uuid
+      AND c.level_id = subject.level_id AND c.is_active = true
+    INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
+    INNER JOIN teacher_subject_assignments tsa ON tsa.subject_id = subject.id
+      AND tsa.class_id = c.id AND tsa.teacher_id = ${input.teacherId}::uuid
+    INNER JOIN teachers t ON t.id = tsa.teacher_id AND t.is_blocked = false
+    INNER JOIN users u ON u.id = t.user_id AND u.is_active = true
+    WHERE subject.id = ${input.subjectId}::uuid
+    LIMIT 1
+  `);
+  return getRows(result)[0] ?? null;
+};
+
+export const findActiveScheduleSchoolYear = async (
+  db: QueryExecutor,
+): Promise<{ id: string; label: string; startDate: string; endDate: string } | null> => {
+  const result = await db.execute<{
+    id: string; label: string; start_date: string; end_date: string;
+  }>(sql`
+    SELECT id::text, label, start_date::text, end_date::text
+    FROM school_years WHERE status = 'active' LIMIT 1
+  `);
+  const row = getRows(result)[0];
+  return row ? { id: row.id, label: row.label, startDate: row.start_date, endDate: row.end_date } : null;
+};
+
+export const findScheduleDisplaySchoolYear = async (
+  db: QueryExecutor,
+): Promise<{ id: string; label: string; startDate: string; endDate: string; status: 'active' | 'closed' } | null> => {
+  const result = await db.execute<{
+    id: string; label: string; start_date: string; end_date: string; status: 'active' | 'closed';
+  }>(sql`
+    SELECT id::text, label, start_date::text, end_date::text, status::text
+    FROM school_years
+    WHERE status IN ('active', 'closed')
+    ORDER BY (status = 'active') DESC, end_date DESC
+    LIMIT 1
+  `);
+  const row = getRows(result)[0];
+  return row ? { id: row.id, label: row.label, startDate: row.start_date, endDate: row.end_date, status: row.status } : null;
+};
+
+export const findScheduleSubjectScope = async (
+  db: QueryExecutor, scheduleId: string,
+): Promise<{ teacherId: string; classId: string; subjectId: string | null; subject: string } | null> => {
+  const result = await db.execute<{
+    teacher_id: string; class_id: string; subject_id: string | null; subject: string;
+  }>(sql`
+    SELECT teacher_id::text, class_id::text, subject_id::text, subject
+    FROM schedules WHERE id = ${scheduleId}::uuid LIMIT 1
+  `);
+  const row = getRows(result)[0];
+  return row ? {
+    teacherId: row.teacher_id, classId: row.class_id,
+    subjectId: row.subject_id, subject: row.subject,
+  } : null;
+};
+
+export const repairScheduleSubject = async (
+  db: QueryExecutor, scheduleId: string, subjectId: string,
+): Promise<boolean> => {
+  const result = await db.execute<{ id: string }>(sql`
+    UPDATE schedules SET subject_id = ${subjectId}::uuid
+    WHERE id = ${scheduleId}::uuid AND subject_id IS NULL
+    RETURNING id
+  `);
+  return getRows(result).length > 0;
 };
 
 export const findScheduleConflicts = async (

@@ -542,6 +542,17 @@ export class StudentsRepository {
     return row?.has_access ?? false;
   }
 
+  async classIsInOpenSchoolYear(classId: string): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      SELECT EXISTS (
+        SELECT 1 FROM classes c
+        INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
+        WHERE c.id = ${classId}::uuid AND c.is_active = true
+      ) AS is_open
+    `);
+    return getRows<{ is_open: boolean }>(result)[0]?.is_open ?? false;
+  }
+
   async createStudent(
     input: CreateStudentInput,
     createCredentials: () => Promise<TemporaryCredentials>

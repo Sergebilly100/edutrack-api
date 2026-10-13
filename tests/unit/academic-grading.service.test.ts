@@ -40,6 +40,9 @@ const repository = {
   listCorrectionStatuses: vi.fn(),
   getScheduledGradeProgress: vi.fn(),
   getLessonSlotScope: vi.fn(),
+  repairUnambiguousLessonSubject: vi.fn(),
+  isLessonSlotOccurrence: vi.fn(),
+  hasValidatedTeacherAttendance: vi.fn(),
   hasTeacherSubjectAssignment: vi.fn(),
   getSubjectCompletion: vi.fn(),
   countScheduledEvaluations: vi.fn(),
@@ -88,7 +91,25 @@ beforeEach(() => {
     endDate: '2026-12-20',
   });
   repository.findNextGradingPeriod.mockResolvedValue(null);
-  repository.getSchoolYear.mockResolvedValue({ startDate: '2026-09-01', endDate: '2027-06-30' });
+  repository.listGradingPeriods.mockResolvedValue([
+    {
+      id: ids.period, schoolYearId: ids.schoolYear, type: 'trimester', orderIndex: 1,
+      label: 'T1', startDate: '2026-09-01', reviewStartDate: '2026-12-01', endDate: '2026-12-20',
+      isCompleted: false, closedClassIds: [],
+    },
+    {
+      id: ids.nextPeriod, schoolYearId: ids.schoolYear, type: 'trimester', orderIndex: 2,
+      label: 'T2', startDate: '2026-12-01', reviewStartDate: '2027-03-01', endDate: '2027-03-31',
+      isCompleted: false, closedClassIds: [],
+    },
+    {
+      id: '550e8400-e29b-41d4-a716-446655440009', schoolYearId: ids.schoolYear,
+      type: 'trimester', orderIndex: 3, label: 'T3',
+      startDate: '2027-03-01', reviewStartDate: '2027-05-31', endDate: '2027-06-30',
+      isCompleted: false, closedClassIds: [],
+    },
+  ]);
+  repository.getSchoolYear.mockResolvedValue({ startDate: '2026-09-01', endDate: '2027-06-30', status: 'active' });
   repository.hasGeneratedCards.mockResolvedValue(false);
   repository.getClassScope.mockResolvedValue({
     id: ids.schoolClass,
@@ -107,6 +128,9 @@ beforeEach(() => {
   repository.listCorrectionStatuses.mockResolvedValue([]);
   repository.getScheduledGradeProgress.mockResolvedValue([]);
   repository.hasTeacherSubjectAssignment.mockResolvedValue(true);
+  repository.isLessonSlotOccurrence.mockResolvedValue(true);
+  repository.hasValidatedTeacherAttendance.mockResolvedValue(true);
+  repository.repairUnambiguousLessonSubject.mockResolvedValue(true);
   repository.getSubjectCompletion.mockResolvedValue(null);
   repository.countScheduledEvaluations.mockResolvedValue(1);
   repository.countMissingScheduledGrades.mockResolvedValue(0);
@@ -222,7 +246,50 @@ describe('AcademicGradingService.listEvaluationsForTeacher', () => {
 });
 
 describe('AcademicGradingService.createEvaluation', () => {
-  it('autorise une évaluation T1 pendant la revue', async () => {
+  it('refuse une évaluation pour une année active qui n’a pas encore commencé', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-15T09:00:00.000Z'));
+    try {
+      await expect(service.createEvaluation({
+        classId: ids.schoolClass, subjectId: ids.subject, gradingPeriodId: ids.period,
+        type: 'scheduled', coefficient: 1, label: 'Devoir futur', evaluationDate: '2026-09-21',
+      }, ids.user)).rejects.toMatchObject({ code: 'SCHOOL_YEAR_NOT_STARTED', statusCode: 409 });
+      expect(repository.createEvaluation).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('refuse toute nouvelle évaluation après le début du calcul de la dernière période, même antidatée', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2027-05-31T09:00:00.000Z'));
+    try {
+      const lastPeriodId = '550e8400-e29b-41d4-a716-446655440009';
+      repository.findGradingPeriod.mockResolvedValue({
+        id: lastPeriodId, schoolYearId: ids.schoolYear, startDate: '2027-03-01',
+        reviewStartDate: '2027-05-31', endDate: '2027-06-30',
+        isCompleted: false, closedClassIds: [],
+      });
+      await expect(service.createEvaluation({
+        classId: ids.schoolClass, subjectId: ids.subject, gradingPeriodId: lastPeriodId,
+        type: 'scheduled', coefficient: 1, label: 'Devoir tardif', evaluationDate: '2027-05-30',
+      }, ids.user)).rejects.toMatchObject({ code: 'FINAL_PERIOD_CALCULATION_STARTED', statusCode: 409 });
+      expect(repository.createEvaluation).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refuse une évaluation pour une année préparée mais non ouverte par le support', async () => {
+    repository.getClassScope.mockResolvedValue({
+      levelId: ids.level, schoolYearId: ids.schoolYear, schoolYearStatus: 'draft', isActive: true,
+    });
+    await expect(service.createEvaluation({
+      classId: ids.schoolClass, subjectId: ids.subject, gradingPeriodId: ids.period,
+      type: 'scheduled', coefficient: 1, label: 'Devoir futur', evaluationDate: '2026-09-21',
+    }, ids.user)).rejects.toMatchObject({ code: 'CLASS_OR_YEAR_NOT_OPEN', statusCode: 409 });
+    expect(repository.createEvaluation).not.toHaveBeenCalled();
+  });
+
+  it('autorise une évaluation T1 datée avant la revue', async () => {
     repository.findGradingPeriod.mockResolvedValue({
       id: ids.period, schoolYearId: ids.schoolYear, startDate: '2026-09-01',
       reviewStartDate: '2026-11-15', endDate: '2026-12-20',
@@ -350,5 +417,116 @@ describe('AcademicGradingService.createEvaluation', () => {
       statusCode: 400,
     });
     expect(repository.createEvaluation).not.toHaveBeenCalled();
+  });
+});
+
+describe('AcademicGradingService.createSpontaneousGrade', () => {
+  it('refuse de deviner une matière historique ambiguë', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-07T10:30:00.000Z'));
+    try {
+      const lessonSlotId = '550e8400-e29b-41d4-a716-446655440010';
+      repository.getLessonSlotScope.mockResolvedValue({
+        id: lessonSlotId, teacherId: ids.teacher, classId: ids.schoolClass,
+        dayOfWeek: 1, startTime: '10:00', endTime: '11:00', subjectId: null,
+      });
+      repository.repairUnambiguousLessonSubject.mockResolvedValue(false);
+      await expect(service.createSpontaneousGrade({
+        lessonSlotId, classId: ids.schoolClass, subjectId: ids.subject,
+        gradingPeriodId: ids.period, evaluationDate: '2026-09-07',
+        studentId: ids.user, adjustment: 1, comment: 'Participation',
+      }, ids.user)).rejects.toMatchObject({ code: 'SCHEDULE_SUBJECT_REPAIR_REQUIRED' });
+      expect(repository.createEvaluation).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('rattache une ancienne matière unique après présence validée, sans appel des élèves', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-07T10:30:00.000Z'));
+    try {
+      const lessonSlotId = '550e8400-e29b-41d4-a716-446655440010';
+      const slot = { id: lessonSlotId, teacherId: ids.teacher, classId: ids.schoolClass,
+        dayOfWeek: 1, startTime: '10:00', endTime: '11:00' };
+      repository.getLessonSlotScope
+        .mockResolvedValueOnce({ ...slot, subjectId: null })
+        .mockResolvedValueOnce({ ...slot, subjectId: null })
+        .mockResolvedValue({ ...slot, subjectId: ids.subject });
+      repository.studentBelongsToClass.mockResolvedValue(false);
+      await expect(service.createSpontaneousGrade({
+        lessonSlotId, classId: ids.schoolClass, subjectId: ids.subject,
+        gradingPeriodId: ids.period, evaluationDate: '2026-09-07',
+        studentId: ids.user, adjustment: 1, comment: 'Participation',
+      }, ids.user)).rejects.toMatchObject({ code: 'STUDENT_CLASS_MISMATCH' });
+      expect(repository.repairUnambiguousLessonSubject).toHaveBeenCalledWith(
+        lessonSlotId, ids.teacher, ids.schoolClass, ids.subject,
+      );
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('refuse aussi la grâce de 24 heures si le professeur était absent de ce cours', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-08T10:59:00.000Z'));
+    try {
+      const lessonSlotId = '550e8400-e29b-41d4-a716-446655440010';
+      repository.getLessonSlotScope.mockResolvedValue({
+        id: lessonSlotId, teacherId: ids.teacher, classId: ids.schoolClass,
+        dayOfWeek: 1, startTime: '10:00', endTime: '11:00', subjectId: ids.subject,
+      });
+      repository.hasValidatedTeacherAttendance.mockResolvedValue(false);
+      await expect(service.createSpontaneousGrade({
+        lessonSlotId, classId: ids.schoolClass, subjectId: ids.subject,
+        gradingPeriodId: ids.period, evaluationDate: '2026-09-07',
+        studentId: ids.user, adjustment: 1, comment: 'Participation',
+      }, ids.user)).rejects.toMatchObject({ code: 'TEACHER_ATTENDANCE_NOT_VALIDATED' });
+      expect(repository.createEvaluation).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('refuse une note pendant le cours sans présence confirmée et validée', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-07T10:30:00.000Z'));
+    try {
+      const lessonSlotId = '550e8400-e29b-41d4-a716-446655440010';
+      repository.getLessonSlotScope.mockResolvedValue({
+        id: lessonSlotId, teacherId: ids.teacher, classId: ids.schoolClass,
+        dayOfWeek: 1, startTime: '10:00', endTime: '11:00', subjectId: ids.subject,
+      });
+      repository.hasValidatedTeacherAttendance.mockResolvedValue(false);
+      await expect(service.createSpontaneousGrade({
+        lessonSlotId, classId: ids.schoolClass, subjectId: ids.subject,
+        gradingPeriodId: ids.period, evaluationDate: '2026-09-07',
+        studentId: ids.user, adjustment: 1, comment: 'Participation',
+      }, ids.user)).rejects.toMatchObject({ code: 'TEACHER_ATTENDANCE_NOT_VALIDATED', statusCode: 409 });
+      expect(repository.hasValidatedTeacherAttendance).toHaveBeenCalledWith(lessonSlotId, ids.teacher, '2026-09-07');
+      expect(repository.createEvaluation).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refuse une note spontanée dès le début du calcul de la dernière période', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2027-05-31T10:30:00.000Z'));
+    try {
+      const lastPeriodId = '550e8400-e29b-41d4-a716-446655440009';
+      const lessonSlotId = '550e8400-e29b-41d4-a716-446655440010';
+      repository.getLessonSlotScope.mockResolvedValue({
+        id: lessonSlotId, teacherId: ids.teacher, classId: ids.schoolClass,
+        dayOfWeek: 1, startTime: '10:00', endTime: '11:00', subjectId: ids.subject,
+      });
+      repository.findGradingPeriod.mockResolvedValue({
+        id: lastPeriodId, schoolYearId: ids.schoolYear, startDate: '2027-03-01',
+        reviewStartDate: '2027-05-31', endDate: '2027-06-30',
+        isCompleted: false, closedClassIds: [],
+      });
+      await expect(service.createSpontaneousGrade({
+        lessonSlotId, classId: ids.schoolClass, subjectId: ids.subject,
+        gradingPeriodId: lastPeriodId, evaluationDate: '2027-05-31',
+        studentId: ids.user, adjustment: 1, comment: 'Participation',
+      }, ids.user)).rejects.toMatchObject({ code: 'FINAL_PERIOD_CALCULATION_STARTED', statusCode: 409 });
+      expect(repository.createEvaluation).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

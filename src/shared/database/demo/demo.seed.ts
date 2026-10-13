@@ -266,6 +266,7 @@ async function seedAttendance(repo: DemoRepository, classes: DemoClass[], teache
         const scheduleId = await repo.insert('schedules', { schedule_period_id: schedulePeriodId,
           teacher_id: teacher.id, class_id: klass.id, room_id: klass.roomId,
           time_slot_id: slotIds[slot]!, day_of_week: day, subject: subjects[subjectIndex]!,
+          subject_id: klass.subjectIds[subjectIndex]!,
           start_date: calendar.start, end_date: calendar.end, created_at: calendar.start });
         for (let offset = -42; offset < 0; offset++) {
           const date = shiftDate(calendar.today, offset);

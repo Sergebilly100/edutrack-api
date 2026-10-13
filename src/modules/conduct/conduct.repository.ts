@@ -59,11 +59,14 @@ export class ConductRepository {
   async updatePolicy(schoolYearId: string, mode: ConductPolicyMode, coefficient: number, actorId: string): Promise<boolean> {
     return this.db.transaction(async (tx) => {
       const result = await tx.execute<{ mode: string; coefficient: string }>(sql`
-        SELECT conduct_decision_mode AS mode, conduct_coefficient::text AS coefficient
+        SELECT conduct_decision_mode AS mode, conduct_coefficient::text AS coefficient, status::text AS status
         FROM school_years WHERE id = ${schoolYearId}::uuid FOR UPDATE
       `);
-      const old = getRows<{ mode: string; coefficient: string }>(result)[0];
+      const old = getRows<{ mode: string; coefficient: string; status: string }>(result)[0];
       if (!old) return false;
+      if (old.status !== 'active') {
+        throw Object.assign(new Error('L’année scolaire doit être ouverte par le support.'), { statusCode: 409, code: 'SCHOOL_YEAR_NOT_OPEN' });
+      }
       if (old.mode === mode && Number(old.coefficient) === coefficient) return true;
       if (Number(old.coefficient) !== coefficient) {
         const cards = await tx.execute(sql`
@@ -316,6 +319,7 @@ export class ConductRepository {
              c.level_id::text AS level_id
       FROM students s
       INNER JOIN grading_periods gp ON gp.id = ${gradingPeriodId}::uuid
+      INNER JOIN school_years sy ON sy.id = gp.school_year_id AND sy.status = 'active'
       INNER JOIN classes c ON c.school_year_id = gp.school_year_id
       WHERE s.id = ${studentId}::uuid
         AND ${confirmedSchoolStudent(sql`s.id`, sql`gp.school_year_id`, sql`c.id`)}
@@ -459,7 +463,9 @@ export class ConductRepository {
   async isConductReviewOpen(gradingPeriodId: string): Promise<boolean> {
     const result = await this.db.execute<{ open: boolean }>(sql`
       SELECT review_start_date <= CURRENT_DATE AS open
-      FROM grading_periods WHERE id = ${gradingPeriodId}::uuid LIMIT 1
+      FROM grading_periods gp
+      INNER JOIN school_years sy ON sy.id = gp.school_year_id AND sy.status = 'active'
+      WHERE gp.id = ${gradingPeriodId}::uuid LIMIT 1
     `);
     return getRows<{ open: boolean }>(result)[0]?.open ?? false;
   }

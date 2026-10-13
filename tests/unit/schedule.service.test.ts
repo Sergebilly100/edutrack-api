@@ -6,8 +6,10 @@ const repositoryMocks = vi.hoisted(() => ({
   listScheduleCopyTargets: vi.fn().mockResolvedValue([]),
   isTeacherBlocked: vi.fn().mockResolvedValue(false),
   hasTeacherSubjectAssignment: vi.fn().mockResolvedValue(true),
+  findAssignedScheduleSubject: vi.fn().mockResolvedValue({ id: 'subject-1', name: 'Maths' }),
   findActiveSchedulePeriodByDate: vi.fn(),
   findSchedulePeriodById: vi.fn(),
+  findActiveScheduleSchoolYear: vi.fn(),
   listSchedulesForPeriodAndDay: vi.fn(),
   createRoom: vi.fn(),
 }));
@@ -18,8 +20,10 @@ vi.mock('../../src/modules/schedule/schedule.repository.js', () => ({
   listScheduleCopyTargets: repositoryMocks.listScheduleCopyTargets,
   isTeacherBlocked: repositoryMocks.isTeacherBlocked,
   hasTeacherSubjectAssignment: repositoryMocks.hasTeacherSubjectAssignment,
+  findAssignedScheduleSubject: repositoryMocks.findAssignedScheduleSubject,
   findActiveSchedulePeriodByDate: repositoryMocks.findActiveSchedulePeriodByDate,
   findSchedulePeriodById: repositoryMocks.findSchedulePeriodById,
+  findActiveScheduleSchoolYear: repositoryMocks.findActiveScheduleSchoolYear,
   listSchedulesForPeriodAndDay: repositoryMocks.listSchedulesForPeriodAndDay,
   createRoom: repositoryMocks.createRoom,
 }));
@@ -30,6 +34,8 @@ import {
   duplicatePeriod,
   getActiveSchedulesForDate,
   hasFutureOccurrenceInPeriod,
+  assertScheduleWithinActiveYear,
+  recurringScheduleCrossesSchoolYear,
 } from '../../src/modules/schedule/schedule.service.js';
 
 const db = { transaction: async (run: (tx: unknown) => Promise<unknown>) => run(db) } as never;
@@ -39,6 +45,38 @@ beforeEach(() => {
 });
 
 describe('schedule.service', () => {
+  it('bloque un créneau pour une année ouverte mais encore future', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-15T08:00:00.000Z'));
+    try {
+      repositoryMocks.findActiveScheduleSchoolYear.mockResolvedValue({
+        id: 'year-1', label: '2026-2027', startDate: '2026-09-01', endDate: '2027-06-30',
+      });
+      repositoryMocks.findSchedulePeriodById.mockResolvedValue({ valid_from: '2026-09-01', valid_to: '2027-06-30' });
+      await expect(assertScheduleWithinActiveYear(db, '2026-09-07', 'period-1')).rejects.toMatchObject({
+        code: 'SCHOOL_YEAR_NOT_OPEN',
+      });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('bloque un créneau après la fin de l’année active', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2027-07-01T08:00:00.000Z'));
+    try {
+      repositoryMocks.findActiveScheduleSchoolYear.mockResolvedValue({
+        id: 'year-1', label: '2026-2027', startDate: '2026-09-01', endDate: '2027-06-30',
+      });
+      repositoryMocks.findSchedulePeriodById.mockResolvedValue({ valid_from: '2026-09-01', valid_to: '2027-06-30' });
+      await expect(assertScheduleWithinActiveYear(db, '2027-06-29', 'period-1')).rejects.toMatchObject({
+        code: 'SCHOOL_YEAR_FINISHED', message: 'Année scolaire 2026-2027 terminée.',
+      });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('refuse un créneau récurrent qui aurait une occurrence après la fin de l’année', () => {
+    expect(recurringScheduleCrossesSchoolYear('2027-06-30', '2027-07-10', 1)).toBe(true);
+    expect(recurringScheduleCrossesSchoolYear('2027-06-30', '2027-07-03', 1)).toBe(false);
+  });
   it('dayOfWeekFromDate() mappe dimanche JS (0) vers 7', () => {
     const sunday = new Date('2026-04-12T00:00:00.000Z');
     expect(dayOfWeekFromDate(sunday)).toBe(7);
@@ -96,7 +134,7 @@ describe('schedule.service', () => {
       created_at: '2026-04-10T08:00:00.000Z',
     });
     repositoryMocks.listSchedulesForPeriodAndDay.mockResolvedValue([{
-      id: 'sched-1', subject: 'Mathématiques',
+      id: 'sched-1', subject: 'Mathématiques', subjectId: 'subject-1', subjectAbbreviation: 'Maths',
       subjectReferences: [{ name: 'Mathématiques', abbreviation: 'Maths' }],
     }]);
 
@@ -109,7 +147,7 @@ describe('schedule.service', () => {
       teacherId: undefined,
     });
     expect(result.schedules).toEqual([{
-      id: 'sched-1', subject: 'Mathématiques', subjectDisplay: 'Maths',
+      id: 'sched-1', subject: 'Mathématiques', subjectId: 'subject-1', subjectDisplay: 'Maths',
     }]);
   });
 
@@ -242,9 +280,9 @@ describe('schedule.service', () => {
 describe('C10 schedule duplication', () => {
   it.each(['blocked', 'unassigned'])('rejects %s teachers before copying any schedule', async (state) => {
     repositoryMocks.findSchedulePeriodById.mockResolvedValue({ id: 'period-1' });
-    repositoryMocks.listScheduleCopyTargets.mockResolvedValue([{ teacherId: 'teacher', classId: 'class', subject: 'Maths' }]);
+    repositoryMocks.listScheduleCopyTargets.mockResolvedValue([{ teacherId: 'teacher', classId: 'class', subject: 'Maths', subjectId: 'subject-1' }]);
     repositoryMocks.isTeacherBlocked.mockResolvedValue(state === 'blocked');
-    repositoryMocks.hasTeacherSubjectAssignment.mockResolvedValue(false);
+    repositoryMocks.findAssignedScheduleSubject.mockResolvedValue(state === 'blocked' ? { id: 'subject-1', name: 'Maths' } : null);
     await expect(duplicatePeriod(db, 'period-1', { newName: 'Copie', newValidFrom: '2026-10-05', newValidTo: '2026-11-01', createdBy: 'user' })).rejects.toThrow(state === 'blocked' ? 'Teacher is blocked' : 'Teacher must be assigned');
     expect(repositoryMocks.duplicatePeriodWithSchedules).not.toHaveBeenCalled();
   });

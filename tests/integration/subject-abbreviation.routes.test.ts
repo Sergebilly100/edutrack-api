@@ -128,6 +128,10 @@ describe('subject abbreviation integration', () => {
     expect(teacherWeek.body).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: scheduleId, subject: 'Mathematiques', subjectDisplay: 'Maths' }),
     ]));
+    const [storedSubject] = await queryTenant<{ subject_id: string | null }>(
+      `SELECT subject_id FROM ${tenantTable('schedules')} WHERE id = $1`, [scheduleId]
+    );
+    expect(teacherWeek.body.find((slot: { id: string }) => slot.id === scheduleId)).toHaveProperty('subject_id', storedSubject?.subject_id ?? null);
     const [scheduledClass] = await queryTenant<{ class_id: string }>(
       `SELECT class_id FROM ${tenantTable('schedules')} WHERE id = $1`, [scheduleId]
     );

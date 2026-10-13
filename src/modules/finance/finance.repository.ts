@@ -153,6 +153,8 @@ export class FinanceRepository {
       INNER JOIN classes c
         ON c.id = e.class_id
        AND c.school_year_id = ${schoolYearId}::uuid ${allowHistorical ? sql`` : sql`AND c.is_active = true`}
+      INNER JOIN school_years sy ON sy.id = c.school_year_id
+        ${allowHistorical ? sql`` : sql`AND sy.status = 'active'`}
       INNER JOIN tuition_plans tp
         ON tp.level_id = c.level_id
        AND tp.school_year_id = ${schoolYearId}::uuid
@@ -186,6 +188,7 @@ export class FinanceRepository {
         AND ${allowPending ? sql`e.status IN ('pending_cashier', 'pending_dossier')` : sql`e.status = 'confirmed'`}
       INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = ${schoolYearId}::uuid ${allowHistorical ? sql`` : sql`AND c.is_active = true`}
       INNER JOIN school_years y ON y.id = c.school_year_id
+        ${allowHistorical ? sql`` : sql`AND y.status = 'active'`}
       INNER JOIN levels l ON l.id = c.level_id
       WHERE s.id = ${studentId}::uuid ${allowHistorical ? sql`` : sql`AND s.is_active = true`}
       ORDER BY e.enrolled_at DESC NULLS LAST
@@ -673,6 +676,12 @@ export class FinanceRepository {
   async upsertTuitionPlan(levelId: string, input: UpsertTuitionPlanInput) {
     return this.db.transaction(async (tx) => {
       const repository = new FinanceRepository(tx as FinanceDb);
+      const schoolYear = await repository.db.execute<{ status: string }>(sql`
+        SELECT status FROM school_years WHERE id = ${input.schoolYearId}::uuid FOR SHARE
+      `);
+      if (rows<{ status: string }>(schoolYear)[0]?.status !== 'active') {
+        throw Object.assign(new Error('L’année scolaire doit être ouverte par le support.'), { code: 'SCHOOL_YEAR_NOT_OPEN' });
+      }
       const result = await repository.db.execute<{ id: string }>(sql`
         INSERT INTO tuition_plans (level_id, school_year_id, total_amount, currency)
         VALUES (${levelId}::uuid, ${input.schoolYearId}::uuid, ${input.totalAmount}, ${input.currency})

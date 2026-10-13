@@ -1296,7 +1296,7 @@ export class ImportService {
             && assignment.class_id === classesByName.get(normalizeKey(className))
             && normalizeSubjectKey(assignment.subject) === normalizeSubjectKey(subject)
           );
-          if (matchingAssignments.length === 0) {
+          if (matchingAssignments.length !== 1) {
             errors.push(makeError({ row: line, column: 'Matière*', message: "Le professeur doit être affecté à cette matière dans cette classe de l'année active" }));
           } else if (matchingAssignments.some((assignment) =>
             assignment.abbreviation
@@ -1399,6 +1399,10 @@ export class ImportService {
       const teacherId = teacherMatches[0];
       const classId = classesByName.get(normalizeKey(className));
       if (!teacherId || !classId) return;
+      const assignment = assignments.find((item) => item.teacher_id === teacherId
+        && item.class_id === classId
+        && normalizeSubjectKey(item.subject) === normalizeSubjectKey(subject));
+      if (!assignment) return;
       const overlap = validatedSlots.find((previous) =>
         previous.dayOfWeek === DAY_MAP[day]
         && previous.start < end && start < previous.end
@@ -1442,7 +1446,8 @@ export class ImportService {
       validRows.push({
         teacherName,
         className,
-        subject,
+        subject: assignment.subject,
+        subjectId: assignment.subject_id,
         dayOfWeek: DAY_MAP[day],
         slotLabel,
         roomName,
@@ -1837,7 +1842,8 @@ export class ImportService {
 
         if (!assignments.some((assignment) => assignment.teacher_id === teacherId
           && assignment.class_id === classId
-          && normalizeSubjectKey(assignment.subject) === normalizeSubjectKey(row.subject))) {
+          && assignment.subject_id === row.subjectId
+          && assignment.subject === row.subject)) {
           throw new ImportModuleError(
             `Le professeur ${row.teacherName} n'est pas affecté à ${row.subject} pour la classe ${row.className}`,
             400,
@@ -1854,7 +1860,16 @@ export class ImportService {
           timeSlotId,
           roomId,
           startDate: row.startDate,
+          subjectId: row.subjectId,
         });
+
+        if (result === 'history_locked') {
+          throw new ImportModuleError(
+            'Ce créneau possède des présences. Corrigez les cours futurs sans réécrire son historique.',
+            409,
+            'IMPORT_SCHEDULE_HISTORY_LOCKED',
+          );
+        }
 
         upsertedScheduleIds.push(scheduleId);
 

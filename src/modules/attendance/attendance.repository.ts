@@ -103,6 +103,8 @@ type TeacherAttendanceByDateRow = {
   checked_out_at: string | null;
   actual_minutes: number | null;
   geo_status: 'verified' | 'suspicious' | 'unavailable' | 'not_checked' | null;
+  validation_status: 'not_required' | 'pending' | 'approved' | 'rejected';
+  checked_in_at: string | null;
   student_rollcall_done: boolean;
   student_present_count: number;
   student_absent_count: number;
@@ -199,6 +201,7 @@ type WeekScheduleRow = {
   class_id: string;
   class_name: string;
   subject: string;
+  subject_id: string | null;
   level_subjects: Array<{ name: string; abbreviation: string | null }>;
   room_id: string;
   room_name: string;
@@ -620,6 +623,8 @@ export class AttendanceRepository {
         at.checked_out_at::text AS checked_out_at,
         at.actual_minutes,
         at.geo_status,
+        at.validation_status::text AS validation_status,
+        at.checked_in_at::text AS checked_in_at,
         CASE WHEN COUNT(ast.id) > 0 THEN true ELSE false END AS student_rollcall_done,
         COUNT(CASE WHEN ast.status = 'present' THEN 1 END)::int AS student_present_count,
         COUNT(CASE WHEN ast.status = 'absent' THEN 1 END)::int AS student_absent_count,
@@ -1192,6 +1197,13 @@ export class AttendanceRepository {
   }
 
   async getWeekScheduleForTeacher(userId: string, date: string): Promise<WeekScheduleRow[]> {
+    const subjectColumn = await this.db.execute<{ present: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'schedules' AND column_name = 'subject_id'
+      ) AS present
+    `);
+    const hasOfficialSubjectColumn = subjectColumn.rows[0]?.present === true;
     const result = await this.db.execute<WeekScheduleRow>(sql`
           WITH week_ctx AS (
             SELECT (
@@ -1216,6 +1228,7 @@ export class AttendanceRepository {
             s.class_id::text    AS class_id,
             c.name              AS class_name,
             s.subject,
+            ${hasOfficialSubjectColumn ? sql`COALESCE(s.subject_id, inferred_subject.id)::text` : sql`NULL::text`} AS subject_id,
             COALESCE((
               SELECT json_agg(json_build_object('name', sub.name, 'abbreviation', sub.abbreviation) ORDER BY sub.id)
               FROM subjects sub WHERE sub.level_id = c.level_id
@@ -1229,6 +1242,13 @@ export class AttendanceRepository {
           INNER JOIN active_period ap ON ap.id = s.schedule_period_id
           INNER JOIN teachers t  ON t.id  = s.teacher_id
           INNER JOIN classes  c  ON c.id  = s.class_id
+          LEFT JOIN LATERAL (
+            SELECT CASE WHEN COUNT(DISTINCT sub.id) = 1 THEN MIN(sub.id::text)::uuid END AS id
+            FROM teacher_subject_assignments tsa
+            INNER JOIN subjects sub ON sub.id = tsa.subject_id AND sub.level_id = c.level_id
+            WHERE tsa.teacher_id = s.teacher_id AND tsa.class_id = s.class_id
+              AND sub.name = s.subject
+          ) inferred_subject ON ${hasOfficialSubjectColumn ? sql`s.subject_id IS NULL` : sql`false`}
           INNER JOIN rooms    r  ON r.id  = s.room_id
           INNER JOIN time_slots ts ON ts.id = s.time_slot_id
           CROSS JOIN week_ctx wc
@@ -1255,6 +1275,7 @@ export class AttendanceRepository {
       class_id: row.class_id,
       class_name: row.class_name,
       subject: row.subject,
+      subject_id: row.subject_id,
       level_subjects: row.level_subjects ?? [],
       room_id: row.room_id,
       room_name: row.room_name,

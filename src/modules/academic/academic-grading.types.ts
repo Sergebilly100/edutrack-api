@@ -200,6 +200,11 @@ export type GradingPeriodItem = {
 export const evaluationsScopeQuerySchema = z.object({
   classId: z.string().uuid(),
   gradingPeriodId: z.string().uuid(),
+  date: isoDateSchema.optional(),
+});
+export const entryPeriodQuerySchema = z.object({
+  classId: z.string().uuid(),
+  date: isoDateSchema,
 });
 export type EvaluationsScopeQuery = z.infer<typeof evaluationsScopeQuerySchema>;
 

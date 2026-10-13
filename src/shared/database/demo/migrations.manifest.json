@@ -88,5 +88,6 @@
   "0083_report_card_corrections.sql": "2c161183ba4a0724fd2679ef48f8c1c9dc0e0350c5cb35b832652d7aff12fd08",
   "0084_student_report_card_claims.sql": "0bbb9507f5e024e540374f0bff6c2d424800cc625e89789b9dd0e9ee36fcaeac",
   "0085_subjects_abbreviation.sql": "2c08d0750f8ffefd9676df83196f36ff3e557eba35dc0e2e80d5e2c121a574ec",
-  "0086_parent_access_log_redaction.sql": "1a968e5b2d05336fa1fb62790a5985305aaa358c12832e3b79ad45886a055ac3"
+  "0086_parent_access_log_redaction.sql": "1a968e5b2d05336fa1fb62790a5985305aaa358c12832e3b79ad45886a055ac3",
+  "0087_schedule_subject_id.sql": "e1b374d7b5b5ccae555c14c13982e653b3df9c796d5c9df223708e1d9d47b20c"
 }

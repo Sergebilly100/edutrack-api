@@ -10,6 +10,7 @@ import path from 'node:path';
 import { Pool } from 'pg';
 import { findMatriculeCollisions } from './matricule-collisions.js';
 import { verifyConductMigrationContract } from './conduct-migration-contract.js';
+import { unresolvedScheduleSubjects } from './schedule-subject-migration-report.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
@@ -76,6 +77,10 @@ const runMigrationsForSchema = async (pool: Pool, schemaName: string): Promise<v
       }
     }
     await verifyConductMigrationContract(client, schemaName);
+    const unresolved = await unresolvedScheduleSubjects(client, schemaName);
+    if (unresolved.length > 0) {
+      console.warn(JSON.stringify({ tenant: schemaName, unresolvedSchedules: unresolved }));
+    }
     console.log(`Conduct migration contract verified: ${schemaName}`);
   } finally {
     client.release();

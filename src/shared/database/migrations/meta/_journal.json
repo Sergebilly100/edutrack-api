@@ -239,6 +239,13 @@
       "when": 1791111410235,
       "tag": "0085_subjects_abbreviation",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1791883767672,
+      "tag": "0087_schedule_subject_id",
+      "breakpoints": true
     }
   ]
 }

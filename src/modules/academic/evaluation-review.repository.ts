@@ -31,7 +31,8 @@ export class EvaluationReviewRepository {
     const subject = query.subjectId ?? null;
     const [years, periods, levels, classes, subjects, teachers] = await Promise.all([
       this.db.execute<{ id: string; label: string; active: boolean }>(sql`
-        SELECT id::text, label, status = 'active' AS active FROM school_years ORDER BY start_date DESC`),
+        SELECT id::text, label, status = 'active' AS active FROM school_years
+        WHERE status <> 'draft' ORDER BY start_date DESC`),
       this.db.execute<{ id: string; label: string; school_year_id: string; is_current: boolean; notes_entry_open: boolean; is_future: boolean; has_evaluations: boolean }>(sql`
         SELECT gp.id::text, gp.label, gp.school_year_id::text,
           CURRENT_DATE BETWEEN gp.start_date AND gp.end_date AS is_current,

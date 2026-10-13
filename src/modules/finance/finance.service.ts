@@ -675,6 +675,9 @@ export class FinanceService {
     try {
       return await this.repository.upsertTuitionPlan(levelId, input);
     } catch (error) {
+      if ((error as { code?: string }).code === 'SCHOOL_YEAR_NOT_OPEN') {
+        throw new FinanceModuleError('L’année scolaire doit être ouverte par le support.', 409, 'SCHOOL_YEAR_NOT_OPEN');
+      }
       if ((error as { code?: string }).code === '23503') {
         throw new FinanceModuleError('Level or school year not found', 404, 'TUITION_SCOPE_NOT_FOUND');
       }

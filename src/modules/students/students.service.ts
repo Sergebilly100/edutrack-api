@@ -112,6 +112,9 @@ export class StudentsService {
   }
 
   async createStudent(input: CreateStudentInput): Promise<StudentRecord> {
+    if (input.class_id && !(await this.repository.classIsInOpenSchoolYear(input.class_id))) {
+      throw new StudentsModuleError('L’année scolaire de la classe doit être ouverte par le support.', 409, 'SCHOOL_YEAR_NOT_OPEN');
+    }
     if (input.is_assigned !== null && this.deps.schemaName && !(await this.repository.isStudentAssignmentEnabled(this.deps.schemaName))) {
       throw new StudentsModuleError('Le statut affecté est désactivé pour cette école', 409, 'STUDENT_ASSIGNMENT_DISABLED');
     }
@@ -153,6 +156,9 @@ export class StudentsService {
   }
 
   async updateStudent(studentId: string, input: UpdateStudentInput): Promise<StudentRecord> {
+    if (input.class_id && !(await this.repository.classIsInOpenSchoolYear(input.class_id))) {
+      throw new StudentsModuleError('L’année scolaire de la classe doit être ouverte par le support.', 409, 'SCHOOL_YEAR_NOT_OPEN');
+    }
     if (input.is_assigned !== undefined && input.is_assigned !== null && this.deps.schemaName && !(await this.repository.isStudentAssignmentEnabled(this.deps.schemaName))) {
       throw new StudentsModuleError('Le statut affecté est désactivé pour cette école', 409, 'STUDENT_ASSIGNMENT_DISABLED');
     }

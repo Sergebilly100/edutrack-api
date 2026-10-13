@@ -260,10 +260,12 @@ export class AcademicGradingRepository {
 
   async listGradingPeriods(schoolYearId?: string): Promise<GradingPeriodItem[]> {
     const result = await this.db.execute<PeriodRow>(sql`
-      SELECT id, school_year_id, type, order_index, label, start_date::text, review_start_date::text, end_date::text
-      FROM grading_periods
-      WHERE (${schoolYearId ?? null}::uuid IS NULL OR school_year_id = ${schoolYearId ?? null}::uuid)
-      ORDER BY school_year_id, order_index
+      SELECT gp.id, gp.school_year_id, gp.type, gp.order_index, gp.label,
+        gp.start_date::text, gp.review_start_date::text, gp.end_date::text
+      FROM grading_periods gp
+      INNER JOIN school_years sy ON sy.id = gp.school_year_id AND sy.status <> 'draft'
+      WHERE (${schoolYearId ?? null}::uuid IS NULL OR gp.school_year_id = ${schoolYearId ?? null}::uuid)
+      ORDER BY gp.school_year_id, gp.order_index
     `);
     return this.withPeriodStates(rows(result));
   }
@@ -314,12 +316,12 @@ export class AcademicGradingRepository {
     return rows(result)[0]?.exists ?? false;
   }
 
-  async getSchoolYear(id: string): Promise<{ id: string; startDate: string; endDate: string; gradingPeriodType: 'trimester' | 'semester' } | null> {
-    const result = await this.db.execute<{ id: string; start_date: string; end_date: string; grading_period_type: 'trimester' | 'semester' }>(sql`
-      SELECT id, start_date::text, end_date::text, grading_period_type FROM school_years WHERE id = ${id}::uuid LIMIT 1
+  async getSchoolYear(id: string): Promise<{ id: string; startDate: string; endDate: string; gradingPeriodType: 'trimester' | 'semester'; status: 'draft' | 'active' | 'closed' } | null> {
+    const result = await this.db.execute<{ id: string; start_date: string; end_date: string; grading_period_type: 'trimester' | 'semester'; status: 'draft' | 'active' | 'closed' }>(sql`
+      SELECT id, start_date::text, end_date::text, grading_period_type, status FROM school_years WHERE id = ${id}::uuid LIMIT 1
     `);
     const row = rows(result)[0];
-    return row ? { id: row.id, startDate: row.start_date, endDate: row.end_date, gradingPeriodType: row.grading_period_type } : null;
+    return row ? { id: row.id, startDate: row.start_date, endDate: row.end_date, gradingPeriodType: row.grading_period_type, status: row.status } : null;
   }
 
   async getPeriodTypeForYear(schoolYearId: string, excludedId?: string): Promise<'trimester' | 'semester' | null> {
@@ -391,7 +393,7 @@ export class AcademicGradingRepository {
              c.homeroom_teacher_id::text
       FROM classes c
       INNER JOIN levels l ON l.id = c.level_id
-      INNER JOIN school_years sy ON sy.id = c.school_year_id
+      INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status <> 'draft'
       WHERE c.is_active = true AND ${teacherClassRelation(sql`${teacherId}::uuid`, sql`c.id`)}
       ORDER BY sy.label DESC, l.name, c.name
     `);
@@ -411,6 +413,7 @@ export class AcademicGradingRepository {
       SELECT DISTINCT gp.id, gp.school_year_id, gp.type, gp.order_index, gp.label,
              gp.start_date::text, gp.review_start_date::text, gp.end_date::text
       FROM grading_periods gp
+      INNER JOIN school_years sy ON sy.id = gp.school_year_id AND sy.status <> 'draft'
       WHERE EXISTS (
         SELECT 1
         FROM classes c
@@ -429,15 +432,16 @@ export class AcademicGradingRepository {
     classLevelId: string | null;
     classSchoolYearId: string | null;
     dayOfWeek: number;
+    subjectId: string | null;
     subjectName: string;
     startTime: string;
     endTime: string;
   } | null> {
     const result = await this.db.execute<{
       id: string; teacher_id: string; class_id: string; day_of_week: number; level_id: string | null;
-      school_year_id: string | null; subject: string; start_time: string; end_time: string;
+      school_year_id: string | null; subject: string; subject_id: string | null; start_time: string; end_time: string;
     }>(sql`
-      SELECT s.id, s.teacher_id, s.class_id, s.day_of_week, c.level_id, c.school_year_id, s.subject,
+      SELECT s.id, s.teacher_id, s.class_id, s.day_of_week, c.level_id, c.school_year_id, s.subject, s.subject_id,
              ts.start_time::text, ts.end_time::text
       FROM schedules s
       INNER JOIN classes c ON c.id = s.class_id
@@ -447,9 +451,36 @@ export class AcademicGradingRepository {
     const row = rows(result)[0];
     return row ? {
       id: row.id, teacherId: row.teacher_id, classId: row.class_id,
-      classLevelId: row.level_id, classSchoolYearId: row.school_year_id, dayOfWeek: row.day_of_week, subjectName: row.subject,
+      classLevelId: row.level_id, classSchoolYearId: row.school_year_id, dayOfWeek: row.day_of_week,
+      subjectId: row.subject_id, subjectName: row.subject,
       startTime: row.start_time, endTime: row.end_time,
     } : null;
+  }
+
+  /** Renseigne un ancien créneau uniquement si son libellé désigne une unique matière déjà affectée. */
+  async repairUnambiguousLessonSubject(slotId: string, teacherId: string, classId: string, subjectId: string): Promise<boolean> {
+    const result = await this.db.execute<{ id: string }>(sql`
+      UPDATE schedules sch SET subject_id = ${subjectId}::uuid
+      WHERE sch.id = ${slotId}::uuid AND sch.subject_id IS NULL
+        AND sch.teacher_id = ${teacherId}::uuid AND sch.class_id = ${classId}::uuid
+        AND (
+          SELECT COUNT(DISTINCT sub.id)
+          FROM teacher_subject_assignments tsa
+          INNER JOIN subjects sub ON sub.id = tsa.subject_id
+          INNER JOIN classes c ON c.id = tsa.class_id AND c.level_id = sub.level_id
+          WHERE tsa.teacher_id = sch.teacher_id AND tsa.class_id = sch.class_id
+            AND sub.name = sch.subject
+        ) = 1
+        AND EXISTS (
+          SELECT 1 FROM teacher_subject_assignments tsa
+          INNER JOIN subjects sub ON sub.id = tsa.subject_id
+          INNER JOIN classes c ON c.id = tsa.class_id AND c.level_id = sub.level_id
+          WHERE tsa.teacher_id = sch.teacher_id AND tsa.class_id = sch.class_id
+            AND sub.name = sch.subject AND sub.id = ${subjectId}::uuid
+        )
+      RETURNING sch.id::text
+    `);
+    return rows(result).length > 0;
   }
 
   async getClassScope(id: string): Promise<{ levelId: string | null; schoolYearId: string | null; schoolYearStatus: 'draft' | 'active' | 'closed' | null; isActive: boolean } | null> {
@@ -460,6 +491,44 @@ export class AcademicGradingRepository {
     `);
     const row = rows(result)[0];
     return row ? { levelId: row.level_id, schoolYearId: row.school_year_id, schoolYearStatus: row.school_year_status, isActive: row.is_active } : null;
+  }
+
+  async isLessonSlotOccurrence(slotId: string, date: string): Promise<boolean> {
+    const result = await this.db.execute<{ exists: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1 FROM schedules s
+        INNER JOIN schedule_periods sp ON sp.id = s.schedule_period_id
+        INNER JOIN classes c ON c.id = s.class_id
+        INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
+        WHERE s.id = ${slotId}::uuid
+          AND s.is_active = true
+          AND sy.start_date <= ${date}::date AND sy.end_date >= ${date}::date
+          AND sp.valid_from <= ${date}::date AND sp.valid_to >= ${date}::date
+          AND s.day_of_week = EXTRACT(ISODOW FROM ${date}::date)::int
+          AND (s.start_date IS NULL OR s.start_date <= ${date}::date)
+          AND (s.end_date IS NULL OR s.end_date > ${date}::date)
+          AND NOT EXISTS (
+            SELECT 1 FROM schedule_exceptions se
+            WHERE se.schedule_id = s.id AND se.exception_date = ${date}::date
+          )
+      ) AS exists
+    `);
+    return rows(result)[0]?.exists ?? false;
+  }
+
+  async hasValidatedTeacherAttendance(slotId: string, teacherId: string, date: string): Promise<boolean> {
+    const result = await this.db.execute<{ exists: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1 FROM attendances_teacher at
+        WHERE at.schedule_id = ${slotId}::uuid
+          AND at.teacher_id = ${teacherId}::uuid
+          AND at.date = ${date}::date
+          AND at.status IN ('present', 'late')
+          AND at.checked_in_at IS NOT NULL
+          AND at.validation_status IN ('not_required', 'approved')
+      ) AS exists
+    `);
+    return rows(result)[0]?.exists ?? false;
   }
 
   async ensureTeacherSubjectAssignment(teacherId: string, subjectId: string, classId: string): Promise<void> {
@@ -861,20 +930,21 @@ export class AcademicGradingRepository {
   }
 
   /** Créneaux de cours du prof pour une classe (base des évaluations rattachées). */
-  async listTeacherLessonSlotsForClass(teacherId: string, classId: string): Promise<
+  async listTeacherLessonSlotsForClass(teacherId: string, classId: string, date?: string): Promise<
     Array<{
       id: string;
       dayOfWeek: number;
       startTime: string;
       endTime: string;
+      subjectId: string | null;
       subjectName: string;
       roomName: string;
     }>
   > {
     const result = await this.db.execute<{
-      id: string; day_of_week: number; start_time: string; end_time: string; subject: string; room_name: string;
+      id: string; day_of_week: number; start_time: string; end_time: string; subject: string; subject_id: string | null; room_name: string;
     }>(sql`
-      SELECT sch.id::text, sch.day_of_week, ts.start_time::text, ts.end_time::text, sch.subject,
+      SELECT sch.id::text, sch.day_of_week, ts.start_time::text, ts.end_time::text, sch.subject, sch.subject_id::text,
              r.name AS room_name
       FROM schedules sch
       INNER JOIN time_slots ts ON ts.id = sch.time_slot_id
@@ -884,10 +954,10 @@ export class AcademicGradingRepository {
         AND sch.class_id = ${classId}::uuid
         AND sch.is_active = true
         AND sp.is_active = true
-        AND sp.valid_from <= CURRENT_DATE
-        AND sp.valid_to >= CURRENT_DATE
-        AND (sch.start_date IS NULL OR sch.start_date <= CURRENT_DATE)
-        AND (sch.end_date IS NULL OR sch.end_date > CURRENT_DATE)
+        AND sp.valid_from <= COALESCE(${date ?? null}::date, CURRENT_DATE)
+        AND sp.valid_to >= COALESCE(${date ?? null}::date, CURRENT_DATE)
+        AND (sch.start_date IS NULL OR sch.start_date <= COALESCE(${date ?? null}::date, CURRENT_DATE))
+        AND (sch.end_date IS NULL OR sch.end_date > COALESCE(${date ?? null}::date, CURRENT_DATE))
       ORDER BY sch.day_of_week, ts.start_time
     `);
     return rows(result).map((row) => ({
@@ -896,6 +966,7 @@ export class AcademicGradingRepository {
       startTime: row.start_time.slice(0, 5),
       endTime: row.end_time.slice(0, 5),
       subjectName: row.subject,
+      subjectId: row.subject_id,
       roomName: row.room_name,
     }));
   }

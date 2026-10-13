@@ -32,16 +32,32 @@ describe('enrollment workflow rules', () => {
 
   it.each([
     [{ levelId: 'other-level' }, 'CLASS_LEVEL_MISMATCH'],
-    [{ expectedActiveSchoolYearId: 'year' }, 'ACTIVE_SCHOOL_YEAR_CHANGED'],
+    [{ expectedActiveSchoolYearId: 'other-year' }, 'ACTIVE_SCHOOL_YEAR_CHANGED'],
   ])('valide le contexte de sélection avant toute inscription', async (selection, code) => {
     const repository = {
       getStudentContext: vi.fn().mockResolvedValue({ id: 'student', is_active: true, lifecycle_status: 'active' }),
-      getClassContext: vi.fn().mockResolvedValue({ id: 'class', is_active: true, level_id: 'level', school_year_id: 'year', school_year_status: 'closed' }),
+      getClassContext: vi.fn().mockResolvedValue({ id: 'class', is_active: true, level_id: 'level', school_year_id: 'year', school_year_status: 'active' }),
       createEnrollment: vi.fn(),
     };
     const service = new EnrollmentsService(repository as never);
     await expect(service.createEnrollment({ studentId: 'student', classId: 'class', schoolYearId: 'year', type: 'new_registration', hasPreviousYearUnpaid: false, ...selection })).rejects.toMatchObject({ code });
     expect(repository.createEnrollment).not.toHaveBeenCalled();
+  });
+
+  it('refuse une inscription et une modification sur une année non ouverte par le support', async () => {
+    const repository = {
+      getStudentContext: vi.fn().mockResolvedValue({ id: 'student', is_active: true, lifecycle_status: 'active' }),
+      getClassContext: vi.fn().mockResolvedValue({ id: 'class', is_active: true, level_id: 'level', school_year_id: 'year', school_year_status: 'draft' }),
+      findEnrollment: vi.fn().mockResolvedValue({ id: 'enrollment', class_id: 'class', school_year_id: 'year', status: 'pending_cashier' }),
+      createEnrollment: vi.fn(), updateEnrollment: vi.fn(),
+    };
+    const service = new EnrollmentsService(repository as never);
+    await expect(service.createEnrollment({ studentId: 'student', classId: 'class', schoolYearId: 'year', type: 'new_registration', hasPreviousYearUnpaid: false }))
+      .rejects.toMatchObject({ code: 'SCHOOL_YEAR_NOT_OPEN' });
+    await expect(service.updateEnrollment('enrollment', { status: 'pending_dossier' }))
+      .rejects.toMatchObject({ code: 'SCHOOL_YEAR_NOT_OPEN' });
+    expect(repository.createEnrollment).not.toHaveBeenCalled();
+    expect(repository.updateEnrollment).not.toHaveBeenCalled();
   });
 
   it('refuse un niveau modifié pendant le retour au dossier existant', async () => {
@@ -73,7 +89,7 @@ describe('enrollment workflow rules', () => {
         id: 'student', is_active: true, lifecycle_status: 'active', current_school_year_id: 'year-current',
         current_level_id: 'level-current', final_decision: 'promoted', next_level_id: 'level-target',
       }),
-      getClassContext: vi.fn().mockResolvedValue({ id: 'class-target', level_id: 'level-target', school_year_id: 'year-target', is_active: true }),
+      getClassContext: vi.fn().mockResolvedValue({ id: 'class-target', level_id: 'level-target', school_year_id: 'year-target', school_year_status: 'active', is_active: true }),
       getReEnrollmentYearContext: vi.fn().mockResolvedValue({
         source_school_year_id: 'year-current', source_school_year_status: 'active', source_school_year_end_date: '2027-06-30',
         target_school_year_id: 'year-target', target_school_year_status: 'draft', target_school_year_start_date: '2027-09-01',
@@ -115,6 +131,7 @@ describe('enrollment workflow rules', () => {
       findEnrollment: vi.fn()
         .mockResolvedValueOnce(enrollment)
         .mockResolvedValueOnce({ ...enrollment, status: 'confirmed', confirmed_by_user_id: 'user' }),
+      getClassContext: vi.fn().mockResolvedValue({ id: 'class', school_year_status: 'active' }),
       listStudentDocuments: vi.fn().mockResolvedValue([{
         id: 'document', student_id: 'student', document_type_id: 'photo', document_type_name: 'Photo',
         is_mandatory: true, is_active: true, status: 'missing', file_url: null, r2_key: null, provided_at: null, notes: null,

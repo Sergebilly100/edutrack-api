@@ -8,6 +8,7 @@ import { Pool } from 'pg';
 import { logger } from '../observability/logger.js';
 import { databaseUrl, db } from './db.js';
 import { findMatriculeCollisions } from './matricule-collisions.js';
+import { unresolvedScheduleSubjects } from './schedule-subject-migration-report.js';
 
 const DEFAULT_ROOMS = ['Salle A1', 'Salle A2', 'Labo Sciences', 'Salle Langues'] as const;
 
@@ -104,6 +105,10 @@ const runTenantMigrations = async (
       }
     }
 
+    const unresolved = await unresolvedScheduleSubjects(client, schemaName);
+    if (unresolved.length > 0) {
+      logger.warn({ schemaName, unresolvedSchedules: unresolved }, '[tenant-init] Unresolved schedule subjects');
+    }
     logger.info({ schemaName }, '[tenant-init] Tenant migrations completed');
   } finally {
     client.release();

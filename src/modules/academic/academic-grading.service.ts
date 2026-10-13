@@ -5,6 +5,7 @@ import {
 } from './academic-grading.calculations.js';
 import { AcademicGradingRepository } from './academic-grading.repository.js';
 import { validatePeriodChange, validatePeriodSequence } from './grading-period-capabilities.js';
+import { resolvePedagogicalEntryPeriod } from './pedagogical-entry-period.js';
 import type {
   CompletionInput,
   CreateEvaluationInput,
@@ -293,6 +294,12 @@ export class AcademicGradingService {
     if (!schoolYear) {
       throw new AcademicGradingError('School year not found', 400, 'GRADING_PERIOD_SCHOOL_YEAR_NOT_FOUND');
     }
+    if (schoolYear.status !== 'active') {
+      throw new AcademicGradingError('L’année scolaire doit être ouverte par le support.', 409, 'SCHOOL_YEAR_NOT_OPEN');
+    }
+    if (schoolYear.startDate > new Date().toISOString().slice(0, 10)) {
+      throw new AcademicGradingError('Cette année scolaire n’a pas encore commencé.', 409, 'SCHOOL_YEAR_NOT_STARTED');
+    }
     if (input.startDate < schoolYear.startDate || input.endDate > schoolYear.endDate) {
       throw new AcademicGradingError('Grading period must be within its school year', 400, 'GRADING_PERIOD_OUTSIDE_SCHOOL_YEAR');
     }
@@ -342,6 +349,9 @@ export class AcademicGradingService {
     if (!schoolYear || merged.startDate < schoolYear.startDate || merged.endDate > schoolYear.endDate) {
       throw new AcademicGradingError('Grading period must be within its school year', 400, 'GRADING_PERIOD_OUTSIDE_SCHOOL_YEAR');
     }
+    if (schoolYear.status !== 'active') {
+      throw new AcademicGradingError('L’année scolaire doit être ouverte par le support.', 409, 'SCHOOL_YEAR_NOT_OPEN');
+    }
     const periods = await this.repository.listGradingPeriods(merged.schoolYearId);
     const error = validatePeriodChange([...periods.filter((period) => period.id !== id), merged], merged.orderIndex);
     if (error) throw new AcademicGradingError(error, 409, 'GRADING_PERIOD_SEQUENCE_INVALID');
@@ -357,6 +367,13 @@ export class AcademicGradingService {
 
   async deleteGradingPeriod(id: string) {
     try {
+      const period = await this.repository.findGradingPeriod(id);
+      if (period) {
+        const schoolYear = await this.repository.getSchoolYear(period.schoolYearId);
+        if (schoolYear?.status !== 'active') {
+          throw new AcademicGradingError('L’année scolaire doit être ouverte par le support.', 409, 'SCHOOL_YEAR_NOT_OPEN');
+        }
+      }
       if (!(await this.repository.deleteGradingPeriod(id))) {
         throw new AcademicGradingError('Grading period not found', 404, 'GRADING_PERIOD_NOT_FOUND');
       }
@@ -391,6 +408,14 @@ export class AcademicGradingService {
     if (schoolClass?.schoolYearStatus === 'closed') {
       throw new AcademicGradingError('L’année scolaire est clôturée', 409, 'SCHOOL_YEAR_CLOSED');
     }
+    if (schoolClass?.schoolYearStatus !== 'active') {
+      throw new AcademicGradingError('L’année scolaire doit être ouverte par le support.', 409, 'SCHOOL_YEAR_NOT_OPEN');
+    }
+    const schoolYear = schoolClass.schoolYearId
+      ? await this.repository.getSchoolYear(schoolClass.schoolYearId) : null;
+    if (!schoolYear || schoolYear.startDate > new Date().toISOString().slice(0, 10)) {
+      throw new AcademicGradingError('Cette année scolaire n’a pas encore commencé.', 409, 'SCHOOL_YEAR_NOT_STARTED');
+    }
     if (schoolClass?.isActive === false) {
       throw new AcademicGradingError('La classe est inactive', 409, 'CLASS_INACTIVE');
     }
@@ -420,8 +445,30 @@ export class AcademicGradingService {
     return { classes, gradingPeriods };
   }
 
+  async getEntryPeriod(classId: string, date: string, userId: string) {
+    const teacherId = await this.teacherIdForUser(userId);
+    if (!(await this.repository.findTeacherClassScope(teacherId, classId))) {
+      throw new AcademicGradingError('Class is outside the teacher scope', 403, 'EVALUATION_SCOPE_FORBIDDEN');
+    }
+    return this.resolveEntryPeriodForClass(classId, date);
+  }
+
+  private async resolveEntryPeriodForClass(classId: string, date: string) {
+    const schoolClass = await this.repository.getClassScope(classId);
+    if (!schoolClass?.schoolYearId || !schoolClass.isActive || schoolClass.schoolYearStatus !== 'active') {
+      return { period: null, state: 'unavailable' as const, code: 'CLASS_OR_YEAR_NOT_OPEN' as const };
+    }
+    const schoolYear = await this.repository.getSchoolYear(schoolClass.schoolYearId);
+    if (!schoolYear || schoolYear.startDate > new Date().toISOString().slice(0, 10)) {
+      return { period: null, state: 'unavailable' as const, code: 'SCHOOL_YEAR_NOT_STARTED' as const };
+    }
+    return resolvePedagogicalEntryPeriod(
+      await this.repository.listGradingPeriods(schoolClass.schoolYearId), date, classId,
+    );
+  }
+
   /** Espace de saisie prof : créneaux, matières et évaluations d'une classe/période. */
-  async listEvaluationsForTeacher(classId: string, gradingPeriodId: string, userId: string) {
+  async listEvaluationsForTeacher(classId: string, gradingPeriodId: string, userId: string, date?: string) {
     const teacherId = await this.teacherIdForUser(userId);
     const scope = await this.repository.findTeacherClassScope(teacherId, classId);
     if (!scope) {
@@ -434,8 +481,11 @@ export class AcademicGradingService {
     if (!schoolClass || !period || schoolClass.schoolYearId !== period.schoolYearId) {
       throw new AcademicGradingError('Period is outside the teacher class scope', 403, 'EVALUATION_PERIOD_FORBIDDEN');
     }
+    if (schoolClass.schoolYearStatus === 'draft') {
+      throw new AcademicGradingError('L’année scolaire doit être ouverte par le support.', 409, 'SCHOOL_YEAR_NOT_OPEN');
+    }
     const [rawLessonSlots, assignedSubjects, scheduledSubjectNames, levelSubjects, evaluations, completion, correctionStatuses, gradeProgress] = await Promise.all([
-      this.repository.listTeacherLessonSlotsForClass(teacherId, classId),
+      this.repository.listTeacherLessonSlotsForClass(teacherId, classId, date),
       this.repository.listTeacherAssignedSubjectsForClass(teacherId, classId),
       this.repository.listTeacherScheduleSubjects(teacherId, classId),
       scope.levelId ? this.repository.listSubjects(scope.levelId) : Promise.resolve([]),
@@ -451,9 +501,7 @@ export class AcademicGradingService {
     );
     const lessonSlots = rawLessonSlots.map((slot) => ({
       ...slot,
-      subjectId: subjects.find(
-        (subject) => normalizeSubjectKey(subject.name) === normalizeSubjectKey(slot.subjectName)
-      )?.id ?? null,
+      subjectId: slot.subjectId,
     }));
     const subjectIds = new Set(subjects.map((subject) => subject.id));
     const progressBySubject = new Map(gradeProgress.map((item) => [item.subjectId, item]));
@@ -503,12 +551,13 @@ export class AcademicGradingService {
     input: CreateEvaluationInput,
     teacherId: string,
   ): Promise<void> {
-    const [slot, subject, period, schoolClass] = await Promise.all([
+    const [initialSlot, subject, period, schoolClass] = await Promise.all([
       input.lessonSlotId ? this.repository.getLessonSlotScope(input.lessonSlotId) : Promise.resolve(null),
       this.repository.findSubject(input.subjectId),
       this.repository.findGradingPeriod(input.gradingPeriodId),
       this.repository.getClassScope(input.classId),
     ]);
+    let slot = initialSlot;
     if (!subject) throw new AcademicGradingError('Subject not found', 400, 'SUBJECT_NOT_FOUND');
     if (!period) throw new AcademicGradingError('Grading period not found', 400, 'GRADING_PERIOD_NOT_FOUND');
     if (!schoolClass) throw new AcademicGradingError('Class not found', 400, 'CLASS_NOT_FOUND');
@@ -518,16 +567,19 @@ export class AcademicGradingService {
     if (schoolClass.levelId !== subject.levelId || schoolClass.schoolYearId !== period.schoolYearId) {
       throw new AcademicGradingError('Subject or period does not match the lesson class', 400, 'EVALUATION_SCOPE_MISMATCH');
     }
-    let assigned = await this.repository.hasTeacherSubjectAssignment(teacherId, subject.id, input.classId);
-    if (!assigned) {
-      const scheduledSubjectNames = await this.repository.listTeacherScheduleSubjects(teacherId, input.classId);
-      assigned = scheduledSubjectNames.some(
-        (scheduledSubject) => normalizeSubjectKey(scheduledSubject) === normalizeSubjectKey(subject.name)
+    const entry = await this.resolveEntryPeriodForClass(input.classId, input.evaluationDate ?? '');
+    if (!entry.period || entry.period.id !== input.gradingPeriodId) {
+      throw new AcademicGradingError(
+        entry.code === 'FINAL_PERIOD_CALCULATION_STARTED'
+          ? 'Le calcul des moyennes de la dernière période a commencé : aucune nouvelle évaluation ni note spontanée ne peut être créée pour cette année.'
+          : entry.code === 'SCHOOL_YEAR_NOT_STARTED'
+            ? 'Cette année scolaire n’a pas encore commencé.'
+          : 'La période de saisie pour cette date est indisponible ou différente. Vérifiez le calendrier auprès de la direction.',
+        409,
+        entry.code ?? 'ENTRY_PERIOD_MISMATCH',
       );
-      if (assigned) {
-        await this.repository.ensureTeacherSubjectAssignment(teacherId, subject.id, input.classId);
-      }
     }
+    const assigned = await this.repository.hasTeacherSubjectAssignment(teacherId, subject.id, input.classId);
     if (!assigned) {
       throw new AcademicGradingError('Subject is outside the teacher scope', 403, 'EVALUATION_SCOPE_FORBIDDEN');
     }
@@ -535,7 +587,16 @@ export class AcademicGradingService {
     if (slot && (slot.teacherId !== teacherId || slot.classId !== input.classId)) {
       throw new AcademicGradingError('Lesson slot is outside the teacher scope', 403, 'EVALUATION_SCOPE_FORBIDDEN');
     }
-    if (slot && normalizeSubjectKey(slot.subjectName) !== normalizeSubjectKey(subject.name)) {
+    if (input.type === 'spontaneous' && slot && !slot.subjectId && input.lessonSlotId) {
+      const repaired = await this.repository.repairUnambiguousLessonSubject(
+        input.lessonSlotId, teacherId, input.classId, input.subjectId,
+      );
+      if (repaired) slot = await this.repository.getLessonSlotScope(input.lessonSlotId);
+    }
+    if (slot && !slot.subjectId) {
+      throw new AcademicGradingError('Corrigez la matière officielle de ce créneau auprès de la direction', 409, 'SCHEDULE_SUBJECT_REPAIR_REQUIRED');
+    }
+    if (slot && slot.subjectId !== subject.id) {
       throw new AcademicGradingError('Subject does not match the lesson slot', 400, 'EVALUATION_SUBJECT_MISMATCH');
     }
 
@@ -610,6 +671,9 @@ export class AcademicGradingService {
     if (!slot || slot.teacherId !== teacherId || slot.classId !== input.classId) {
       throw new AcademicGradingError('Lesson slot is outside the teacher scope', 403, 'EVALUATION_SCOPE_FORBIDDEN');
     }
+    if (!(await this.repository.isLessonSlotOccurrence(input.lessonSlotId, input.evaluationDate))) {
+      throw new AcademicGradingError('Aucun cours réel ne correspond à ce créneau et à cette date.', 409, 'LESSON_OCCURRENCE_UNAVAILABLE');
+    }
     if (
       dayOfWeekFromIsoDate(input.evaluationDate) !== slot.dayOfWeek ||
       !isWithinSpontaneousGradeWindow(input.evaluationDate, slot.startTime, slot.endTime)
@@ -618,6 +682,13 @@ export class AcademicGradingService {
         'La note spontanée est disponible pendant le cours et pendant les 24 heures qui suivent',
         409,
         'SPONTANEOUS_GRADE_WINDOW_CLOSED'
+      );
+    }
+    if (!(await this.repository.hasValidatedTeacherAttendance(input.lessonSlotId, teacherId, input.evaluationDate))) {
+      throw new AcademicGradingError(
+        'La présence du professeur à ce cours doit être confirmée et validée avant toute note spontanée.',
+        409,
+        'TEACHER_ATTENDANCE_NOT_VALIDATED'
       );
     }
     await this.assertEvaluationScope({
@@ -726,6 +797,9 @@ export class AcademicGradingService {
     if (schoolClass.schoolYearStatus === 'closed') {
       throw new AcademicGradingError('L’année scolaire est clôturée', 409, 'SCHOOL_YEAR_CLOSED');
     }
+    if (schoolClass.schoolYearStatus !== 'active') {
+      throw new AcademicGradingError('L’année scolaire doit être ouverte par le support.', 409, 'SCHOOL_YEAR_NOT_OPEN');
+    }
     if (schoolClass.isActive === false) {
       throw new AcademicGradingError('La classe est inactive', 409, 'CLASS_INACTIVE');
     }
@@ -737,16 +811,7 @@ export class AcademicGradingService {
         'GRADING_PERIOD_COMPLETED'
       );
     }
-    let assigned = await this.repository.hasTeacherSubjectAssignment(teacherId, input.subjectId, input.classId);
-    if (!assigned) {
-      const scheduledSubjects = await this.repository.listTeacherScheduleSubjects(teacherId, input.classId);
-      assigned = scheduledSubjects.some(
-        (scheduledSubject) => normalizeSubjectKey(scheduledSubject) === normalizeSubjectKey(subject.name)
-      );
-      if (assigned) {
-        await this.repository.ensureTeacherSubjectAssignment(teacherId, input.subjectId, input.classId);
-      }
-    }
+    const assigned = await this.repository.hasTeacherSubjectAssignment(teacherId, input.subjectId, input.classId);
     if (!assigned) {
       throw new AcademicGradingError('Subject is outside the teacher scope', 403, 'COMPLETION_SCOPE_FORBIDDEN');
     }
