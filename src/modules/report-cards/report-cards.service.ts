@@ -15,18 +15,20 @@ export class ReportCardsModuleError extends Error {
 
 // ── Fonctions pures de calcul (snapshot) ────────────────────────────────────
 
-/** Rangs en classement compétitif : ex aequo partagent le même rang. */
+/** Rangs denses sur la moyenne visible à deux décimales du bulletin. */
 export const computeRankMap = (entries: Array<{ key: string; value: number }>): Map<string, number> => {
-  const sorted = [...entries].sort((a, b) => b.value - a.value);
+  const sorted = entries
+    .map((entry) => ({ ...entry, displayedValue: Number(entry.value.toFixed(2)) }))
+    .sort((a, b) => b.displayedValue - a.displayedValue);
   const ranks = new Map<string, number>();
   let currentRank = 1;
   let previousValue: number | null = null;
-  for (const [index, entry] of sorted.entries()) {
-    if (previousValue !== null && entry.value !== previousValue) {
-      currentRank = index + 1;
+  for (const entry of sorted) {
+    if (previousValue !== null && entry.displayedValue !== previousValue) {
+      currentRank += 1;
     }
     ranks.set(entry.key, currentRank);
-    previousValue = entry.value;
+    previousValue = entry.displayedValue;
   }
   return ranks;
 };

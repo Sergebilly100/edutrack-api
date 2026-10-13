@@ -107,8 +107,8 @@ export class ConductRepository {
         `);
         await tx.execute(sql`
           WITH ranked AS (
-            SELECT spa.id, RANK() OVER (
-              PARTITION BY e.class_id, spa.grading_period_id ORDER BY spa.average DESC
+            SELECT spa.id, DENSE_RANK() OVER (
+              PARTITION BY e.class_id, spa.grading_period_id ORDER BY ROUND(spa.average, 2) DESC
             )::int AS position
             FROM student_period_averages spa
             INNER JOIN grading_periods gp ON gp.id = spa.grading_period_id AND gp.school_year_id = ${schoolYearId}::uuid
@@ -805,7 +805,7 @@ export class ConductRepository {
               AND e2.school_year_id = gp.school_year_id AND e2.status = 'confirmed' LIMIT 1
           ) AND e.status = 'confirmed'
         ), ranked AS (
-          SELECT spa.id, RANK() OVER (ORDER BY spa.average DESC)::int AS position
+          SELECT spa.id, DENSE_RANK() OVER (ORDER BY ROUND(spa.average, 2) DESC)::int AS position
           FROM student_period_averages spa INNER JOIN class_students cs ON cs.student_id = spa.student_id
           WHERE spa.grading_period_id = ${input.grading_period_id}::uuid AND spa.subject_id IS NULL
         )

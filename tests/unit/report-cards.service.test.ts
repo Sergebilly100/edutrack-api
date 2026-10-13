@@ -42,8 +42,8 @@ const repository = {
 
 vi.mocked(repository.transaction).mockImplementation(async (work) => work(repository));
 
-describe('computeRankMap (rang compétitif)', () => {
-  it('partage le rang des ex aequo et saute les rangs suivants', () => {
+describe('computeRankMap (rang dense)', () => {
+  it('partage le rang des ex aequo puis donne le rang suivant', () => {
     const ranks = computeRankMap([
       { key: 'a', value: 15 },
       { key: 'b', value: 12 },
@@ -53,7 +53,14 @@ describe('computeRankMap (rang compétitif)', () => {
     expect(ranks.get('a')).toBe(1);
     expect(ranks.get('b')).toBe(2);
     expect(ranks.get('c')).toBe(2);
-    expect(ranks.get('d')).toBe(4);
+    expect(ranks.get('d')).toBe(3);
+  });
+
+  it('classe 6e, 6e, 6e, 7e quand les moyennes affichées sont ex aequo', () => {
+    const values = [19, 18, 17, 16, 15, 14.201, 14.203, 14.204, 13];
+    const ranks = computeRankMap(values.map((value, index) => ({ key: String(index), value })));
+    expect(values.slice(5, 8).map((value) => value.toFixed(2))).toEqual(['14.20', '14.20', '14.20']);
+    expect(values.map((_, index) => ranks.get(String(index)))).toEqual([1, 2, 3, 4, 5, 6, 6, 6, 7]);
   });
 });
 
@@ -163,6 +170,27 @@ describe('ReportCardsService.generateForClass', () => {
     expect(secondCall.rank).toBe(2);
     expect((secondCall.lines as unknown[])).toHaveLength(3);
     expect(repository.upsertGeneralAverage).toHaveBeenCalledWith('student-a', 'period-1', 15.286, 1);
+  });
+
+  it('fige les rangs denses 6, 6, 6, 7 au général et par matière', async () => {
+    baseRepo();
+    const values = [19, 18, 17, 16, 15, 14.201, 14.203, 14.204, 13];
+    const students = values.map((_, index) => ({ id: `student-${index}`, fullName: `Élève ${index}` }));
+    repository.listClassStudents.mockResolvedValue(students);
+    repository.listLevelSubjects.mockResolvedValue([{ id: 'subject-1', name: 'Maths', coefficient: 1 }]);
+    repository.listSubjectAverages.mockResolvedValue(values.map((average, index) => ({
+      studentId: students[index]!.id, subjectId: 'subject-1', average,
+    })));
+    repository.findConductGrade.mockResolvedValue({ note: 20, coefficient: 1 });
+
+    const result = await new ReportCardsService(repository).generateForClass('class-1', 'period-1');
+    expect(result.generatedCount).toBe(9);
+    const savedCards = repository.replaceGeneratedCard.mock.calls.map(([card]) => card);
+    expect(savedCards.map((card) => card.rank)).toEqual([1, 2, 3, 4, 5, 6, 6, 6, 7]);
+    expect(savedCards.map((card) => card.lines[0]?.rank)).toEqual([1, 2, 3, 4, 5, 6, 6, 6, 7]);
+    expect(savedCards.slice(5, 8).map((card) => card.generalAverage)).toEqual([17.101, 17.102, 17.102]);
+    expect(repository.upsertGeneralAverage.mock.calls.map((call) => call[3]))
+      .toEqual([1, 2, 3, 4, 5, 6, 6, 6, 7]);
   });
 
   it("n'attache la décision de fin d'année que sur la dernière période", async () => {

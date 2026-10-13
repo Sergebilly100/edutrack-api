@@ -1,5 +1,6 @@
 import { PdfBuilder, type DocumentBranding, type LoadedLogo } from '../builder.js';
 import { formatDateTime } from '../format.js';
+import { formatStudentRank, formatStudentRankWithHeadcount } from '../../utils/format-student-rank.js';
 
 export type ReportCardLinePayload = {
   label: string;
@@ -49,7 +50,7 @@ export const renderReportCard = async (
     },
     {
       label: 'Rang',
-      value: `${payload.generalRank} / ${payload.classHeadcount}`,
+      value: formatStudentRankWithHeadcount(payload.generalRank, payload.classHeadcount) ?? '-',
     },
   ]);
 
@@ -69,7 +70,7 @@ export const renderReportCard = async (
       { text: line.average.toFixed(2), font: builder.f.regular },
       { text: `×${line.coefficient.toFixed(2).replace(/\.00$/, '')}`, font: builder.f.regular },
       {
-        text: line.rank !== null ? `${line.rank}${line.isConduct ? '' : 'e'}` : '-',
+        text: formatStudentRank(line.rank) ?? '-',
         font: builder.f.regular,
       },
     ]),

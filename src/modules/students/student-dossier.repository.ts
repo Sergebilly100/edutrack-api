@@ -1,5 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
+import { visibleReportCardRank } from '../../shared/database/report-card-visible-rank.js';
+import { formatStudentRankWithHeadcount } from '../../shared/utils/format-student-rank.js';
 
 import type { TenantDb } from '../../shared/database/db.js';
 
@@ -88,14 +90,16 @@ export class StudentDossierRepository {
 
   async listEvents(studentId: string, teacherId: string | null): Promise<DossierEvent[]> {
     const result = await this.db.execute<{
-      type: string; date: string; label: string; detail: string | null; schoolYearId: string | null;
+      type: DossierEvent['type']; date: string; label: string; detail: string | null;
+      schoolYearId: string | null; rank: number | null; classHeadcount: number | null;
     }>(sql`
       WITH events AS (
         SELECT e.enrolled_at::date AS date,
                'enrollment' AS type,
                concat('Inscription ', COALESCE(e.status::text, ''), ' · ', COALESCE(sy.label, '')) AS label,
                NULL::text AS detail,
-               e.school_year_id::text AS "schoolYearId"
+               e.school_year_id::text AS "schoolYearId",
+               NULL::integer AS rank, NULL::integer AS "classHeadcount"
         FROM enrollments e
         LEFT JOIN school_years sy ON sy.id = e.school_year_id
         WHERE e.student_id = ${studentId}::uuid
@@ -106,7 +110,8 @@ export class StudentDossierRepository {
                'payment',
                concat('Paiement ', p.amount::text, ' FCFA'),
                concat_ws(' - ', p.method::text, p.provider_reference),
-               p.school_year_id::text
+               p.school_year_id::text,
+               NULL::integer, NULL::integer
         FROM payments p
         WHERE p.student_id = ${studentId}::uuid AND p.status = 'confirmed'
           AND (${teacherId}::uuid IS NULL)
@@ -115,8 +120,9 @@ export class StudentDossierRepository {
         SELECT rc.published_at::date,
                'report_card',
                concat('Bulletin publié · ', gp.label),
-               concat('Moyenne ', rc.general_average::text, '/20, rang ', rc.rank::text, '/', rc.class_headcount::text),
-               gp.school_year_id::text
+               concat('Moyenne ', rc.general_average::text, '/20'),
+               gp.school_year_id::text,
+               ${visibleReportCardRank}, rc.class_headcount
         FROM report_cards rc
         INNER JOIN grading_periods gp ON gp.id = rc.grading_period_id
         WHERE rc.student_id = ${studentId}::uuid AND rc.status = 'published'
@@ -127,7 +133,8 @@ export class StudentDossierRepository {
                'document',
                COALESCE(rdt.name, 'Document'),
                CASE WHEN sd.file_url IS NOT NULL THEN 'fourni' ELSE 'manquant' END,
-               NULL::text
+               NULL::text,
+               NULL::integer, NULL::integer
         FROM student_documents sd
         LEFT JOIN required_document_types rdt ON rdt.id = sd.document_type_id
         WHERE sd.student_id = ${studentId}::uuid
@@ -138,14 +145,20 @@ export class StudentDossierRepository {
                'document',
                d.name,
                'fourni',
-               NULL::text
+               NULL::text,
+               NULL::integer, NULL::integer
         FROM documents d
         WHERE d.entity_type = 'student'::document_entity_type
           AND d.entity_id = ${studentId}::uuid
           AND (${teacherId}::uuid IS NULL)
       )
-      SELECT type, date::text, label, detail, "schoolYearId" FROM events ORDER BY date DESC LIMIT 200
+      SELECT type, date::text, label, detail, "schoolYearId", rank, "classHeadcount"
+      FROM events ORDER BY date DESC LIMIT 200
     `);
-    return (result.rows ?? []) as DossierEvent[];
+    return (result.rows ?? []).map(({ rank, classHeadcount, ...event }) => {
+      if (event.type !== 'report_card') return event;
+      const rankLabel = formatStudentRankWithHeadcount(rank, classHeadcount);
+      return { ...event, detail: `${event.detail ?? ''}, rang ${rankLabel ?? 'non renseigné'}` };
+    });
   }
 }

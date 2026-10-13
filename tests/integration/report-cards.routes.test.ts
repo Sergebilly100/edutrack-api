@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { signAccessToken } from '../../src/modules/auth/auth.service.js';
+import { ParentPortalRepository } from '../../src/modules/parent-portal/parent-portal.repository.js';
 import { ReportCardsRepository } from '../../src/modules/report-cards/report-cards.repository.js';
 import { buildReportCardsService } from '../../src/modules/report-cards/report-cards.service.js';
 import { withTenantSchema } from '../../src/shared/database/db.js';
@@ -324,6 +325,11 @@ describe('report-cards routes (5c)', () => {
       expect(list.body.reportCards).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: cardId, className: `RC class ${suffix}`, periodLabel: 'T1 rc' }),
       ]));
+      const dossier = await request().get(`/api/v1/students/${studentAId}/dossier`).set(directorHeaders);
+      expect(dossier.status, JSON.stringify(dossier.body)).toBe(200);
+      expect(dossier.body.events).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: 'report_card', detail: expect.stringContaining('rang 1er / 2') }),
+      ]));
       const detail = await request().get(`/api/v1/students/${studentAId}/report-cards/${cardId}`).set(directorHeaders);
       expect(detail.status).toBe(200);
       expect(detail.body.reportCard).toMatchObject({ id: cardId, status: 'published' });
@@ -341,6 +347,112 @@ describe('report-cards routes (5c)', () => {
     } finally {
       await queryTenant(`UPDATE ${tenantTable('classes')} SET is_active=true WHERE id=$1::uuid`, [classId]);
       await queryTenant(`UPDATE ${tenantTable('students')} SET is_active=true WHERE id=$1::uuid`, [studentAId]);
+    }
+  });
+
+  it('affiche les rangs denses des bulletins déjà publiés sans modifier leurs snapshots', async () => {
+    const cards = await queryTenant<{ id: string; student_id: string; rank: number; general_average: string }>(
+      `SELECT id::text, student_id::text, rank, general_average::text
+       FROM ${tenantTable('report_cards')}
+       WHERE class_id=$1::uuid AND grading_period_id=$2::uuid`,
+      [classId, periodT1]
+    );
+    const cardA = cards.find((card) => card.student_id === studentAId)!;
+    const cardB = cards.find((card) => card.student_id === studentBId)!;
+    const mathsLines = await queryTenant<{ id: string; report_card_id: string; subject_rank: number | null; subject_average: string }>(
+      `SELECT id::text, report_card_id::text, subject_rank, subject_average::text
+       FROM ${tenantTable('report_card_lines')}
+       WHERE report_card_id IN ($1::uuid, $2::uuid) AND subject_id=$3::uuid`,
+      [cardA.id, cardB.id, subjectMathsId]
+    );
+    const lineA = mathsLines.find((line) => line.report_card_id === cardA.id)!;
+    const lineB = mathsLines.find((line) => line.report_card_id === cardB.id)!;
+
+    try {
+      // Simule deux anciens bulletins publiés ex aequo, dont les rangs stockés sont erronés.
+      await queryTenant(`UPDATE ${tenantTable('report_cards')} SET rank=99 WHERE id IN ($1::uuid, $2::uuid)`,
+        [cardA.id, cardB.id]);
+      await queryTenant(`UPDATE ${tenantTable('report_cards')} SET general_average=$2 WHERE id=$1::uuid`,
+        [cardB.id, cardA.general_average]);
+      await queryTenant(`UPDATE ${tenantTable('report_card_lines')} SET subject_rank=99 WHERE id IN ($1::uuid, $2::uuid)`,
+        [lineA.id, lineB.id]);
+      await queryTenant(`UPDATE ${tenantTable('report_card_lines')} SET subject_average=$2 WHERE id=$1::uuid`,
+        [lineB.id, lineA.subject_average]);
+
+      const directorList = await request().get(`/api/v1/report-cards/class/${classId}?grading_period_id=${periodT1}`)
+        .set(directorHeaders);
+      expect(directorList.status, JSON.stringify(directorList.body)).toBe(200);
+      expect(directorList.body.reportCards.map((card: { rank: number }) => card.rank)).toEqual([1, 1]);
+
+      const studentList = await request().get(`/api/v1/students/${studentAId}/report-cards`).set(directorHeaders);
+      expect(studentList.status, JSON.stringify(studentList.body)).toBe(200);
+      expect(studentList.body.reportCards).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: cardA.id, rank: 1 }),
+      ]));
+      const studentDetail = await request().get(`/api/v1/students/${studentAId}/report-cards/${cardA.id}`)
+        .set(directorHeaders);
+      expect(studentDetail.status, JSON.stringify(studentDetail.body)).toBe(200);
+      expect(studentDetail.body.reportCard.rank).toBe(1);
+      expect(studentDetail.body.reportCard.lines).toEqual(expect.arrayContaining([
+        expect.objectContaining({ subjectId: subjectMathsId, rank: 1 }),
+      ]));
+      const tiedDetail = await request().get(`/api/v1/students/${studentBId}/report-cards/${cardB.id}`)
+        .set(directorHeaders);
+      expect(tiedDetail.status, JSON.stringify(tiedDetail.body)).toBe(200);
+      expect(tiedDetail.body.reportCard.rank).toBe(1);
+      expect(tiedDetail.body.reportCard.lines).toEqual(expect.arrayContaining([
+        expect.objectContaining({ subjectId: subjectMathsId, rank: 1 }),
+      ]));
+
+      const parentList = await request().get(`/api/v1/parent/students/${studentAId}/report-cards`)
+        .set(parentHeaders);
+      expect(parentList.status, JSON.stringify(parentList.body)).toBe(200);
+      expect(parentList.body.reportCards[0].rank).toBe(1);
+      const parentDetail = await request().get(`/api/v1/parent/students/${studentAId}/report-cards/${cardA.id}`)
+        .set(parentHeaders);
+      expect(parentDetail.status, JSON.stringify(parentDetail.body)).toBe(200);
+      expect(parentDetail.body.reportCard.rank).toBe(1);
+      expect(parentDetail.body.reportCard.lines).toEqual(expect.arrayContaining([
+        expect.objectContaining({ subjectId: subjectMathsId, rank: 1 }),
+      ]));
+
+      const dossier = await request().get(`/api/v1/students/${studentAId}/dossier`).set(directorHeaders);
+      expect(dossier.status, JSON.stringify(dossier.body)).toBe(200);
+      expect(dossier.body.events).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: 'report_card', detail: expect.stringContaining('rang 1er / 2') }),
+      ]));
+      await withTenantSchema(TEST_SCHEMA_NAME, async (db) => {
+        const pdf = await buildReportCardsService(db).getPdfPayload(cardA.id);
+        expect(pdf.generalRank).toBe(1);
+        expect(pdf.lines).toEqual(expect.arrayContaining([
+          expect.objectContaining({ label: 'Maths RC', rank: 1 }),
+        ]));
+        const overview = await new ParentPortalRepository(db).getParentOverview(studentAId);
+        expect(overview.latestPublishedReportCard).toMatchObject({ id: cardA.id, rank: 1 });
+      });
+
+      const stored = await queryTenant<{ rank: number }>(
+        `SELECT rank FROM ${tenantTable('report_cards')} WHERE id=$1::uuid`, [cardA.id]
+      );
+      expect(stored[0]?.rank).toBe(99);
+      const storedLine = await queryTenant<{ subject_rank: number | null }>(
+        `SELECT subject_rank FROM ${tenantTable('report_card_lines')} WHERE id=$1::uuid`, [lineA.id]
+      );
+      expect(storedLine[0]?.subject_rank).toBe(99);
+      const archivedVersion = await queryTenant<{ rank: number }>(
+        `SELECT (snapshot->'card'->>'rank')::int AS rank
+         FROM ${tenantTable('report_card_versions')} WHERE card_id=$1::uuid`, [cardA.id]
+      );
+      expect(archivedVersion[0]?.rank).toBe(cardA.rank);
+    } finally {
+      await queryTenant(`UPDATE ${tenantTable('report_cards')} SET rank=$2 WHERE id=$1::uuid`,
+        [cardA.id, cardA.rank]);
+      await queryTenant(`UPDATE ${tenantTable('report_cards')} SET rank=$2, general_average=$3 WHERE id=$1::uuid`,
+        [cardB.id, cardB.rank, cardB.general_average]);
+      await queryTenant(`UPDATE ${tenantTable('report_card_lines')} SET subject_rank=$2 WHERE id=$1::uuid`,
+        [lineA.id, lineA.subject_rank]);
+      await queryTenant(`UPDATE ${tenantTable('report_card_lines')} SET subject_rank=$2, subject_average=$3 WHERE id=$1::uuid`,
+        [lineB.id, lineB.subject_rank, lineB.subject_average]);
     }
   });
 

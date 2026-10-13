@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
+import { visibleReportCardRank, visibleReportCardSubjectRank } from '../../shared/database/report-card-visible-rank.js';
 
 import type { TenantDb } from '../../shared/database/db.js';
 
@@ -691,7 +692,7 @@ export class ReportCardsRepository {
     }>(sql`
       SELECT rc.id::text,
              concat_ws(' ', s.first_name, s.last_name) AS student_name,
-             rc.general_average::text, rc.rank, rc.status::text
+             rc.general_average::text, ${visibleReportCardRank} AS rank, rc.status::text
       FROM report_cards rc
       INNER JOIN students s ON s.id = rc.student_id
       INNER JOIN classes c ON c.id = rc.class_id
@@ -700,7 +701,7 @@ export class ReportCardsRepository {
         AND EXISTS (SELECT 1 FROM enrollments e
           WHERE e.student_id = rc.student_id AND e.class_id = rc.class_id
             AND e.school_year_id = c.school_year_id AND e.status = 'confirmed')
-      ORDER BY rc.rank ASC
+      ORDER BY rank ASC, rc.general_average DESC, rc.id
     `);
     return getRows<{
       id: string;
@@ -847,7 +848,7 @@ export class ReportCardsRepository {
     }>(sql`
       SELECT rc.id::text, gp.label AS period_label, sy.id::text AS school_year_id,
              sy.label AS school_year_label, c.name AS class_name,
-             rc.general_average::text, rc.rank, rc.class_headcount, rc.published_at::text
+             rc.general_average::text, ${visibleReportCardRank} AS rank, rc.class_headcount, rc.published_at::text
       FROM report_cards rc
       INNER JOIN grading_periods gp ON gp.id = rc.grading_period_id
       INNER JOIN school_years sy ON sy.id = gp.school_year_id
@@ -909,7 +910,7 @@ export class ReportCardsRepository {
              concat_ws(' ', s.first_name, s.last_name) AS student_name,
              rc.class_id::text, c.name AS class_name,
              rc.grading_period_id::text, gp.label AS period_label, sy.label AS school_year_label,
-             rc.general_average::text, rc.rank,
+             rc.general_average::text, ${visibleReportCardRank} AS rank,
              rc.class_average::text, rc.class_min_average::text, rc.class_max_average::text,
              rc.class_headcount, rc.status::text, rc.generated_at::text, rc.published_at::text,
              cd.final_decision::text AS decision
@@ -963,8 +964,9 @@ export class ReportCardsRepository {
     }>(sql`
       SELECT rcl.id::text, rcl.subject_id::text, sub.name AS subject_name,
              rcl.line_type::text, rcl.subject_average::text, rcl.subject_coefficient::text,
-             rcl.subject_rank
+             ${visibleReportCardSubjectRank} AS subject_rank
       FROM report_card_lines rcl
+      INNER JOIN report_cards rc ON rc.id = rcl.report_card_id
       LEFT JOIN subjects sub ON sub.id = rcl.subject_id
       WHERE rcl.report_card_id = ${cardId}::uuid
       ORDER BY CASE WHEN rcl.line_type = 'conduct' THEN 1 ELSE 0 END, COALESCE(sub.name, '')

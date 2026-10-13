@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { visibleReportCardRank } from '../../shared/database/report-card-visible-rank.js';
 import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { todayInBusinessTimezone } from '../../shared/utils/business-time.js';
@@ -462,7 +463,7 @@ export class ParentPortalRepository {
       published_at: string;
     }>(sql`
       SELECT rc.id::text, gp.label AS period_label, sy.label AS school_year_label,
-             rc.general_average::text, rc.rank, rc.class_headcount, rc.published_at::text
+             rc.general_average::text, ${visibleReportCardRank} AS rank, rc.class_headcount, rc.published_at::text
       FROM report_cards rc
       INNER JOIN grading_periods gp ON gp.id = rc.grading_period_id
       INNER JOIN school_years sy ON sy.id = gp.school_year_id

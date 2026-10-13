@@ -1,7 +1,7 @@
 import { PDFDocument } from 'pdf-lib';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import type { DocumentBranding } from '../../src/shared/pdf/builder.js';
+import { PdfBuilder, type DocumentBranding } from '../../src/shared/pdf/builder.js';
 import {
   renderPaymentHistory,
   renderSchoolSalaryBilan,
@@ -71,6 +71,33 @@ describe('pdf/templates - bulletin avec conduite pondérée', () => {
       ],
     }));
     expect(pages).toBeGreaterThanOrEqual(1);
+  });
+
+  it('dessine les rangs français au général et par matière', async () => {
+    const kpiSpy = vi.spyOn(PdfBuilder.prototype, 'kpiRow');
+    const tableSpy = vi.spyOn(PdfBuilder.prototype, 'table');
+    try {
+      await renderReportCard(branding, {
+        studentName: 'Awa Bulletin', className: '3ème A', periodLabel: 'Trimestre 1',
+        schoolYearLabel: '2026-2027', generalAverage: 15, generalRank: 1,
+        classHeadcount: 30, classAverage: 12, classMinAverage: 8,
+        classMaxAverage: 18, yearEndDecisionLabel: null,
+        lines: [
+          { label: 'Maths', average: 16, coefficient: 4, rank: 1 },
+          { label: 'Français', average: 14, coefficient: 2, rank: 2 },
+          { label: 'Conduite', average: 17, coefficient: 2, rank: null, isConduct: true },
+        ],
+      });
+      expect(kpiSpy.mock.calls[0]?.[0]).toEqual(expect.arrayContaining([
+        expect.objectContaining({ label: 'Rang', value: '1er / 30' }),
+      ]));
+      const subjectTable = tableSpy.mock.calls.find(([options]) => options.title === 'Détail par matière')?.[0];
+      expect(subjectTable?.rows.map((row) => row[3]?.text)).toEqual(['1er', '2ème', '-']);
+      expect(subjectTable?.rows.flat().some((cell) => cell.text === '1e')).toBe(false);
+    } finally {
+      kpiSpy.mockRestore();
+      tableSpy.mockRestore();
+    }
   });
 });
 
