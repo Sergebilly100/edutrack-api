@@ -30,4 +30,20 @@ describe('recherche des dossiers annuels', () => {
       expect(query.sql).toContain("concat_ws(' ', s.last_name, s.first_name) ILIKE");
     }
   });
+
+  it('liste les candidats de l’année d’origine active sans année cible', async () => {
+    const dialect = new PgDialect();
+    const executed: Array<{ sql: string; params: unknown[] }> = [];
+    const execute = vi.fn(async (query: Parameters<PgDialect['sqlToQuery']>[0]) => {
+      executed.push(dialect.sqlToQuery(query));
+      return { rows: [] };
+    });
+    const repository = new EnrollmentsRepository({ execute } as never);
+    await repository.listReEnrollmentCandidates({ sourceSchoolYearId: '11f746a0-1222-4444-8888-8a0aba160c29', search: 'MAT-25' });
+    expect(executed).toHaveLength(1);
+    expect(executed[0].sql).toContain("confirmed_year.status IN ('active', 'closed')");
+    expect(executed[0].sql).toContain('target_year.id IS NULL');
+    expect(executed[0].params).toContain('%MAT-25%');
+    expect(executed[0].params).toContain(null);
+  });
 });

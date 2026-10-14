@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { StudentDocumentRow } from '../../src/modules/enrollments/enrollments.repository.js';
+import type { ReEnrollmentCandidateRow, StudentDocumentRow } from '../../src/modules/enrollments/enrollments.repository.js';
+import { FinanceService } from '../../src/modules/finance/finance.service.js';
 import {
   canTransitionEnrollment,
   deduplicateRequiredDocuments,
@@ -128,6 +129,55 @@ describe('enrollment workflow rules', () => {
     expect(resolveInitialEnrollmentStatus('new_registration', true)).toBe('pending_cashier');
   });
 
+  it('calcule le solde de campagne avec remises, abonnements obligatoires et paiements validés', async () => {
+    const repository = {
+      listReEnrollmentBalanceContexts: vi.fn().mockResolvedValue([
+        { student_id: 'student-paid', plan_total_amount: '100000', override_total_amount: null, discount_amount: '10000', confirmed_paid: '85000', waived_amount: '10000' },
+        { student_id: 'student-unpaid', plan_total_amount: '100000', override_total_amount: null, discount_amount: null, confirmed_paid: '50000', waived_amount: '0' },
+        { student_id: 'student-no-plan', plan_total_amount: null, override_total_amount: null, discount_amount: null, confirmed_paid: '0', waived_amount: '0' },
+      ]),
+      listMandatorySubscriptionPlans: vi.fn().mockResolvedValue([{ amount: '5000', period: 'annual', imposed_duration: 'annual' }]),
+    };
+    const balances = await new FinanceService(repository as never).listReEnrollmentBalances('origin-year');
+    expect(balances.get('student-paid')).toBe(0);
+    expect(balances.get('student-unpaid')).toBe(55000);
+    expect(balances.get('student-no-plan')).toBeNull();
+  });
+
+  it('dérive chaque statut avant création et garde les compteurs cohérents avec les filtres', async () => {
+    const candidate = (studentId: string, overrides: Partial<ReEnrollmentCandidateRow> = {}): ReEnrollmentCandidateRow => ({
+      student_id: studentId, student_first_name: studentId, student_last_name: 'Koné', student_matricule: studentId,
+      current_class_name: '6e A', current_school_year_id: 'origin-year', current_school_year_label: '2025-2026',
+      source_school_year_status: 'active', final_decision: 'promoted', next_level_id: 'level-2', next_level_name: '5e',
+      enrollment_id: null, enrollment_status: null, enrollment_class_name: null, ...overrides,
+    });
+    const repository = { getFollowingSchoolYear: vi.fn().mockResolvedValue(null), listReEnrollmentCandidates: vi.fn().mockResolvedValue([
+      candidate('pending', { final_decision: null, next_level_id: null }),
+      candidate('ready'), candidate('unpaid'),
+      candidate('awaiting', { enrollment_id: 'e-1', enrollment_status: 'pending_cashier' }),
+      candidate('documents', { enrollment_id: 'e-3', enrollment_status: 'pending_dossier' }),
+      candidate('confirmed', { enrollment_id: 'e-2', enrollment_status: 'confirmed' }),
+      candidate('excluded', { final_decision: 'expelled', next_level_id: null }),
+      candidate('unknown'),
+    ]) };
+    const finance = { listReEnrollmentBalances: vi.fn().mockResolvedValue(new Map([
+      ['pending', 0], ['ready', 0], ['unpaid', 1000], ['awaiting', 0], ['documents', 0], ['confirmed', 0], ['excluded', 0], ['unknown', null],
+    ])) };
+    const service = new EnrollmentsService(repository as never, finance as never);
+    const input = { sourceSchoolYearId: 'origin-year', campaignStatus: 'all' as const, page: 1, limit: 20 };
+    const all = await service.listReEnrollmentCandidates(input);
+    expect(all.candidates.map((item) => item.status)).toEqual([
+      'decision_pending', 'ready', 'blocked_unpaid', 'awaiting_cashier', 'awaiting_documents', 're_enrolled', 'excluded', 'financial_unavailable',
+    ]);
+    expect(all.counts).toMatchObject({ decisionPending: 1, ready: 1, blockedUnpaid: 1, awaitingCashier: 1, awaitingDocuments: 1, reEnrolled: 1, excluded: 1, financialUnavailable: 1, all: 8 });
+    const blocked = await service.listReEnrollmentCandidates({ ...input, campaignStatus: 'blocked_unpaid' });
+    expect(blocked.candidates.map((item) => item.studentId)).toEqual(['unpaid']);
+    expect(blocked.counts).toEqual(all.counts);
+    const documents = await service.listReEnrollmentCandidates({ ...input, campaignStatus: 'awaiting_documents' });
+    expect(documents.candidates.map((item) => item.studentId)).toEqual(['documents']);
+    expect(finance.listReEnrollmentBalances).toHaveBeenCalledWith('origin-year');
+  });
+
   it('refuse une réinscription tant que l’année source n’est pas clôturée et la cible active', async () => {
     const repository = {
       getStudentContext: vi.fn().mockResolvedValue({
@@ -147,6 +197,32 @@ describe('enrollment workflow rules', () => {
     })).rejects.toEqual(expect.objectContaining<Partial<EnrollmentsModuleError>>({
       code: 'RE_ENROLLMENT_YEAR_TRANSITION_REQUIRED', statusCode: 409,
     }));
+  });
+
+  it('vérifie la première année suivante et relit le solde historique lors de la création', async () => {
+    const enrollment = {
+      id: 'enrollment', student_id: 'student', class_id: 'class-target', school_year_id: 'year-target',
+      type: 're_registration' as const, status: 'pending_cashier' as const,
+      enrolled_at: new Date('2027-09-01T00:00:00Z'), confirmed_by_user_id: null,
+      class_name: '5e A', school_year_label: '2027-2028', student_first_name: 'Aya', student_last_name: 'Koné',
+      required_document_count: 0, missing_mandatory_document_count: 0,
+    };
+    const repository = {
+      getStudentContext: vi.fn().mockResolvedValue({ id: 'student', is_active: true, lifecycle_status: 'active', current_school_year_id: 'year-source', current_level_id: 'level-source', final_decision: 'promoted', next_level_id: 'level-target' }),
+      getClassContext: vi.fn().mockResolvedValue({ id: 'class-target', is_active: true, level_id: 'level-target', school_year_id: 'year-target', school_year_status: 'active' }),
+      getReEnrollmentYearContext: vi.fn().mockResolvedValue({ source_school_year_id: 'year-source', source_school_year_status: 'closed', source_school_year_end_date: '2027-06-30', target_school_year_id: 'year-target', target_school_year_status: 'active', target_school_year_start_date: '2027-09-01' }),
+      getFollowingSchoolYear: vi.fn().mockResolvedValue({ id: 'year-target', status: 'active' }),
+      createEnrollment: vi.fn().mockResolvedValue(enrollment), ensureRequiredDocuments: vi.fn(),
+      findEnrollment: vi.fn().mockResolvedValue(enrollment), listStudentDocuments: vi.fn().mockResolvedValue([]),
+    };
+    const finance = { getFinancialStatus: vi.fn(), getHistoricalFinancialStatus: vi.fn().mockResolvedValue({ remainingDue: 0 }) };
+    const service = new EnrollmentsService(repository as never, finance as never);
+    await service.createEnrollment({ studentId: 'student', classId: 'class-target', schoolYearId: 'year-target', type: 're_registration', hasPreviousYearUnpaid: false });
+    expect(finance.getHistoricalFinancialStatus).toHaveBeenCalledWith('student', 'year-source');
+    expect(finance.getFinancialStatus).not.toHaveBeenCalled();
+    repository.getFollowingSchoolYear.mockResolvedValue({ id: 'year-other', status: 'closed' });
+    await expect(service.createEnrollment({ studentId: 'student', classId: 'class-target', schoolYearId: 'year-target', type: 're_registration', hasPreviousYearUnpaid: false }))
+      .rejects.toMatchObject({ code: 'RE_ENROLLMENT_NEXT_YEAR_REQUIRED' });
   });
 
   it('dédoublonne les documents requis par type pour un niveau', () => {

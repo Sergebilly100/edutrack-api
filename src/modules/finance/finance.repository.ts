@@ -179,6 +179,42 @@ export class FinanceRepository {
     return rows<MandatorySubscriptionPlanRow>(result);
   }
 
+  /** The same tuition and payment inputs as getAmountDueContext, for a whole origin year. */
+  async listReEnrollmentBalanceContexts(schoolYearId: string): Promise<Array<{
+    student_id: string;
+    plan_total_amount: string | number | null;
+    override_total_amount: string | number | null;
+    discount_amount: string | number | null;
+    confirmed_paid: string | number;
+    waived_amount: string | number;
+  }>> {
+    const result = await this.db.execute<{
+      student_id: string; plan_total_amount: string | number | null;
+      override_total_amount: string | number | null; discount_amount: string | number | null;
+      confirmed_paid: string | number; waived_amount: string | number;
+    }>(sql`
+      SELECT e.student_id::text,
+             tp.total_amount AS plan_total_amount,
+             sto.override_total_amount,
+             sto.discount_amount,
+             COALESCE(coverage.confirmed_paid, 0) AS confirmed_paid,
+             COALESCE(coverage.waived_amount, 0) AS waived_amount
+      FROM enrollments e
+      INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = e.school_year_id
+      LEFT JOIN tuition_plans tp ON tp.level_id = c.level_id AND tp.school_year_id = e.school_year_id
+      LEFT JOIN student_tuition_overrides sto ON sto.student_id = e.student_id AND sto.school_year_id = e.school_year_id
+      LEFT JOIN LATERAL (
+        SELECT SUM(p.amount) FILTER (WHERE p.status = 'confirmed') AS confirmed_paid,
+               SUM(p.amount) FILTER (WHERE p.status = 'waived_by_school') AS waived_amount
+        FROM payments p
+        WHERE p.student_id = e.student_id AND p.school_year_id = e.school_year_id
+          AND p.status IN ('confirmed', 'waived_by_school')
+      ) coverage ON true
+      WHERE e.school_year_id = ${schoolYearId}::uuid AND e.status = 'confirmed'
+    `);
+    return rows(result);
+  }
+
   async getTuitionPlanRequiredContext(studentId: string, schoolYearId: string, allowPending = false, allowHistorical = false): Promise<TuitionPlanRequiredContext | null> {
     const result = await this.db.execute<TuitionPlanRequiredContext>(sql`
       SELECT y.id::text AS "schoolYearId", y.label AS "schoolYearLabel",

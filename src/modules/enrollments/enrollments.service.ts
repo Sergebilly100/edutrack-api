@@ -55,6 +55,7 @@ const mapReEnrollmentCandidate = (row: ReEnrollmentCandidateRow) => ({
   finalDecision: row.final_decision,
   nextLevelId: row.next_level_id,
   nextLevelName: row.next_level_name,
+  sourceSchoolYearStatus: row.source_school_year_status,
   enrollment: row.enrollment_id && row.enrollment_status
     ? {
         id: row.enrollment_id,
@@ -117,6 +118,7 @@ export class EnrollmentsService {
         confirmedPaid?: number;
         waivedAmount?: number;
       }>;
+      listReEnrollmentBalances?(schoolYearId: string): Promise<Map<string, number | null>>;
       getEnrollmentPaymentPreview(studentId: string, schoolYearId: string): Promise<{
         remainingDue: number; currency: string; totalDue: number; confirmedPaid: number;
       }>;
@@ -136,16 +138,56 @@ export class EnrollmentsService {
     };
   }
 
-  async listReEnrollmentCandidates(input: { schoolYearId: string; campaignStatus: 'to_process' | 'awaiting_cashier' | 'blocked_unpaid' | 'confirmed' | 'all'; sourceSchoolYearId?: string; levelId?: string; classId?: string; search?: string; page: number; limit: number }) {
-    const result = await this.repository.listReEnrollmentCandidates(input);
+  async listReEnrollmentCandidates(input: { schoolYearId?: string; campaignStatus: 'decision_pending' | 'ready' | 'to_process' | 'awaiting_cashier' | 'awaiting_documents' | 'blocked_unpaid' | 'confirmed' | 're_enrolled' | 'excluded' | 'financial_unavailable' | 'all'; sourceSchoolYearId?: string; levelId?: string; classId?: string; search?: string; page: number; limit: number }) {
+    if (!this.finance?.listReEnrollmentBalances) {
+      throw new EnrollmentsModuleError('Financial module is unavailable', 503, 'FINANCE_MODULE_UNAVAILABLE');
+    }
+    const rows = await this.repository.listReEnrollmentCandidates(input);
+    const sourceYearId = input.sourceSchoolYearId ?? rows[0]?.current_school_year_id;
+    const targetSchoolYear = sourceYearId ? await this.repository.getFollowingSchoolYear(sourceYearId) : null;
+    const balancesByYear = new Map<string, Map<string, number | null>>();
+    for (const yearId of new Set(rows.map((row) => row.current_school_year_id))) {
+      balancesByYear.set(yearId, await this.finance.listReEnrollmentBalances(yearId));
+    }
+    const candidates = rows.map((row) => {
+      const remainingDue = balancesByYear.get(row.current_school_year_id)?.get(row.student_id);
+      const status = row.enrollment_status === 'confirmed' ? 're_enrolled'
+        : row.enrollment_status === 'blocked_unpaid' ? 'blocked_unpaid'
+        : row.enrollment_status === 'pending_dossier' ? 'awaiting_documents'
+        : row.enrollment_status === 'pending_cashier' ? 'awaiting_cashier'
+        : row.final_decision === 'expelled' ? 'excluded'
+        : !row.final_decision || !row.next_level_id ? 'decision_pending'
+        : remainingDue === undefined || remainingDue === null ? 'financial_unavailable'
+        : remainingDue > 0 ? 'blocked_unpaid' : 'ready';
+      return { ...mapReEnrollmentCandidate(row), status };
+    });
+    const counts = {
+      decisionPending: candidates.filter((candidate) => candidate.status === 'decision_pending').length,
+      ready: candidates.filter((candidate) => candidate.status === 'ready').length,
+      awaitingCashier: candidates.filter((candidate) => candidate.status === 'awaiting_cashier').length,
+      awaitingDocuments: candidates.filter((candidate) => candidate.status === 'awaiting_documents').length,
+      blockedUnpaid: candidates.filter((candidate) => candidate.status === 'blocked_unpaid').length,
+      reEnrolled: candidates.filter((candidate) => candidate.status === 're_enrolled').length,
+      excluded: candidates.filter((candidate) => candidate.status === 'excluded').length,
+      financialUnavailable: candidates.filter((candidate) => candidate.status === 'financial_unavailable').length,
+      toProcess: candidates.filter((candidate) => !candidate.enrollment).length,
+      confirmed: candidates.filter((candidate) => candidate.status === 're_enrolled').length,
+      all: candidates.length,
+    };
+    const matching = candidates.filter((candidate) => input.campaignStatus === 'all'
+      || (input.campaignStatus === 'to_process' && !candidate.enrollment)
+      || (input.campaignStatus === 'confirmed' && candidate.status === 're_enrolled')
+      || candidate.status === input.campaignStatus);
+    const offset = (input.page - 1) * input.limit;
     return {
-      candidates: result.rows.map(mapReEnrollmentCandidate),
-      counts: result.counts,
+      candidates: matching.slice(offset, offset + input.limit),
+      targetSchoolYear,
+      counts,
       pagination: {
         page: input.page,
         limit: input.limit,
-        total: result.total,
-        totalPages: Math.max(1, Math.ceil(result.total / input.limit)),
+        total: matching.length,
+        totalPages: Math.max(1, Math.ceil(matching.length / input.limit)),
       },
     };
   }
@@ -314,6 +356,10 @@ export class EnrollmentsService {
           'RE_ENROLLMENT_YEAR_TRANSITION_REQUIRED'
         );
       }
+      const followingYear = await this.repository.getFollowingSchoolYear(yearContext.source_school_year_id);
+      if (followingYear?.id !== input.schoolYearId) {
+        throw new EnrollmentsModuleError('Re-enrollment must target the next school year', 409, 'RE_ENROLLMENT_NEXT_YEAR_REQUIRED');
+      }
       if (!student.final_decision) {
         throw new EnrollmentsModuleError('A validated class decision is required', 409, 'CLASS_DECISION_REQUIRED');
       }
@@ -337,10 +383,9 @@ export class EnrollmentsService {
           'PREVIOUS_FINANCIAL_STATUS_UNAVAILABLE'
         );
       }
-      const financialStatus = await this.finance.getFinancialStatus(
-        input.studentId,
-        student.current_school_year_id
-      );
+      const financialStatus = this.finance.getHistoricalFinancialStatus
+        ? await this.finance.getHistoricalFinancialStatus(input.studentId, student.current_school_year_id)
+        : await this.finance.getFinancialStatus(input.studentId, student.current_school_year_id);
       hasPreviousYearUnpaid = financialStatus.remainingDue > 0;
     }
     const status = resolveInitialEnrollmentStatus(input.type, hasPreviousYearUnpaid);

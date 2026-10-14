@@ -42,6 +42,7 @@ export type ReEnrollmentCandidateRow = {
   enrollment_id: string | null;
   enrollment_status: EnrollmentStatus | null;
   enrollment_class_name: string | null;
+  source_school_year_status: 'active' | 'closed';
 };
 
 export type StudentAcademicSummaryRow = {
@@ -122,18 +123,14 @@ export class EnrollmentsRepository {
   }
 
   async listReEnrollmentCandidates(input: {
-    schoolYearId: string;
-    campaignStatus: 'to_process' | 'awaiting_cashier' | 'blocked_unpaid' | 'confirmed' | 'all';
+    schoolYearId?: string;
     sourceSchoolYearId?: string;
     levelId?: string;
     classId?: string;
     search?: string;
-    page: number;
-    limit: number;
-  }) {
-    const offset = (input.page - 1) * input.limit;
+  }): Promise<ReEnrollmentCandidateRow[]> {
     const search = input.search ? `%${input.search}%` : null;
-    const candidatesQuery = sql`
+    const result = await this.db.execute<ReEnrollmentCandidateRow>(sql`
       SELECT
         s.id::text AS student_id,
         s.first_name AS student_first_name,
@@ -142,8 +139,9 @@ export class EnrollmentsRepository {
         current_class.name AS current_class_name,
         source_year.id::text AS current_school_year_id,
         source_year.label AS current_school_year_label,
+        source_year.status::text AS source_school_year_status,
         decision.final_decision::text AS final_decision,
-        decision.next_level_id::text AS next_level_id,
+        COALESCE(decision.next_level_id, CASE WHEN decision.final_decision = 'repeat' THEN current_class.level_id END)::text AS next_level_id,
         next_level.name AS next_level_name,
         enrollment.id::text AS enrollment_id,
         enrollment.status::text AS enrollment_status,
@@ -155,24 +153,27 @@ export class EnrollmentsRepository {
         INNER JOIN school_years confirmed_year ON confirmed_year.id = confirmed.school_year_id
         WHERE confirmed.student_id = s.id
           AND confirmed.status = 'confirmed'
-          AND confirmed_year.status = 'closed'
+          AND confirmed_year.status IN ('active', 'closed')
+          AND (${input.sourceSchoolYearId ?? null}::uuid IS NULL OR confirmed_year.id = ${input.sourceSchoolYearId ?? null}::uuid)
+          AND (${input.schoolYearId ?? null}::uuid IS NULL OR confirmed_year.start_date < (
+            SELECT start_date FROM school_years WHERE id = ${input.schoolYearId ?? null}::uuid
+          ))
         ORDER BY confirmed_year.start_date DESC, confirmed.enrolled_at DESC
         LIMIT 1
       ) latest_confirmed ON true
       INNER JOIN classes current_class ON current_class.id = latest_confirmed.class_id
       INNER JOIN school_years source_year ON source_year.id = current_class.school_year_id
-      INNER JOIN school_years target_year ON target_year.id = ${input.schoolYearId}::uuid
+      LEFT JOIN school_years target_year ON target_year.id = ${input.schoolYearId ?? null}::uuid
       LEFT JOIN class_decisions decision
         ON decision.student_id = s.id
        AND decision.school_year_id = source_year.id
-      LEFT JOIN levels next_level ON next_level.id = decision.next_level_id
+      LEFT JOIN levels next_level ON next_level.id = COALESCE(decision.next_level_id, CASE WHEN decision.final_decision = 'repeat' THEN current_class.level_id END)
       LEFT JOIN enrollments enrollment
         ON enrollment.student_id = s.id
        AND enrollment.school_year_id = target_year.id
       LEFT JOIN classes enrollment_class ON enrollment_class.id = enrollment.class_id
-      WHERE target_year.status = 'active'
-        AND source_year.status = 'closed'
-        AND target_year.start_date > source_year.end_date
+      WHERE (target_year.id IS NULL OR (target_year.status IN ('active', 'closed') AND source_year.status = 'closed' AND target_year.start_date > source_year.end_date))
+        AND (${input.schoolYearId ?? null}::uuid IS NULL OR target_year.id IS NOT NULL)
         AND (${input.sourceSchoolYearId ?? null}::uuid IS NULL OR source_year.id = ${input.sourceSchoolYearId ?? null}::uuid)
         AND (${input.levelId ?? null}::uuid IS NULL OR current_class.level_id = ${input.levelId ?? null}::uuid)
         AND (${input.classId ?? null}::uuid IS NULL OR current_class.id = ${input.classId ?? null}::uuid)
@@ -182,38 +183,20 @@ export class EnrollmentsRepository {
           OR s.matricule ILIKE ${search}
         ))
       ORDER BY s.last_name ASC, s.first_name ASC, s.created_at ASC
-    `;
-    const campaignFilter = sql`
-      (${input.campaignStatus} = 'all'
-        OR (${input.campaignStatus} = 'to_process' AND enrollment_status IS NULL)
-        OR (${input.campaignStatus} = 'awaiting_cashier' AND enrollment_status IN ('pending_cashier', 'pending_dossier'))
-        OR (${input.campaignStatus} = 'blocked_unpaid' AND enrollment_status = 'blocked_unpaid')
-        OR (${input.campaignStatus} = 'confirmed' AND enrollment_status = 'confirmed'))
-    `;
-    const [result, totalResult, countsResult] = await Promise.all([
-      this.db.execute<ReEnrollmentCandidateRow>(sql`SELECT * FROM (${candidatesQuery}) candidates WHERE ${campaignFilter} ORDER BY student_last_name, student_first_name, student_id LIMIT ${input.limit} OFFSET ${offset}`),
-      this.db.execute<{ total: string | number }>(sql`SELECT COUNT(*) AS total FROM (${candidatesQuery}) candidates WHERE ${campaignFilter}`),
-      this.db.execute<{ to_process: string | number; awaiting_cashier: string | number; blocked_unpaid: string | number; confirmed: string | number; all_count: string | number }>(sql`
-        SELECT COUNT(*) FILTER (WHERE enrollment_status IS NULL) AS to_process,
-               COUNT(*) FILTER (WHERE enrollment_status IN ('pending_cashier', 'pending_dossier')) AS awaiting_cashier,
-               COUNT(*) FILTER (WHERE enrollment_status = 'blocked_unpaid') AS blocked_unpaid,
-               COUNT(*) FILTER (WHERE enrollment_status = 'confirmed') AS confirmed,
-               COUNT(*) AS all_count
-        FROM (${candidatesQuery}) candidates
-      `),
-    ]);
-    const counts = rows<{ to_process: string | number; awaiting_cashier: string | number; blocked_unpaid: string | number; confirmed: string | number; all_count: string | number }>(countsResult)[0];
-    return {
-      rows: rows<ReEnrollmentCandidateRow>(result),
-      total: Number(rows<{ total: string | number }>(totalResult)[0]?.total ?? 0),
-      counts: {
-        toProcess: Number(counts?.to_process ?? 0),
-        awaitingCashier: Number(counts?.awaiting_cashier ?? 0),
-        blockedUnpaid: Number(counts?.blocked_unpaid ?? 0),
-        confirmed: Number(counts?.confirmed ?? 0),
-        all: Number(counts?.all_count ?? 0),
-      },
-    };
+    `);
+    return rows<ReEnrollmentCandidateRow>(result);
+  }
+
+  async getFollowingSchoolYear(sourceSchoolYearId: string) {
+    const result = await this.db.execute<{ id: string; label: string; status: 'draft' | 'active' | 'closed' }>(sql`
+      SELECT target.id::text, target.label, target.status::text
+      FROM school_years source
+      JOIN school_years target ON target.start_date > source.end_date
+      WHERE source.id = ${sourceSchoolYearId}::uuid
+      ORDER BY target.start_date ASC, CASE WHEN target.status = 'active' THEN 0 ELSE 1 END, target.id
+      LIMIT 1
+    `);
+    return rows<{ id: string; label: string; status: 'draft' | 'active' | 'closed' }>(result)[0] ?? null;
   }
 
   async getStudentSummaryProfile(studentId: string): Promise<StudentSummaryProfile | null> {

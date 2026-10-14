@@ -66,7 +66,7 @@ export default async function enrollmentsController(
     try {
       const query = reEnrollmentCandidatesQuerySchema.parse(request.query ?? {});
       return reply.send(await withService(request, (service) => service.listReEnrollmentCandidates({
-        schoolYearId: query.school_year_id,
+        ...(query.school_year_id ? { schoolYearId: query.school_year_id } : {}),
         campaignStatus: query.campaign_status,
         ...(query.source_school_year_id ? { sourceSchoolYearId: query.source_school_year_id } : {}),
         ...(query.level_id ? { levelId: query.level_id } : {}),

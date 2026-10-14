@@ -227,6 +227,32 @@ export class FinanceService {
     return this.financialStatusWith(studentId, schoolYearId, asOfDate, true);
   }
 
+  async listReEnrollmentBalances(schoolYearId: string): Promise<Map<string, number | null>> {
+    const [contexts, subscriptions] = await Promise.all([
+      this.repository.listReEnrollmentBalanceContexts(schoolYearId),
+      this.repository.listMandatorySubscriptionPlans(),
+    ]);
+    const mandatorySubscriptionAmounts = subscriptions.map((plan) => prorateSubscriptionAmount(
+      FinanceRepository.toNumber(plan.amount), plan.period, plan.imposed_duration
+    ));
+    return new Map(contexts.map((context) => {
+      if (context.plan_total_amount === null) return [context.student_id, null];
+      const totalDue = calculateStudentTotalDue({
+        planTotalAmount: FinanceRepository.toNumber(context.plan_total_amount),
+        overrideTotalAmount: context.override_total_amount === null ? null : FinanceRepository.toNumber(context.override_total_amount),
+        discountAmount: context.discount_amount === null ? null : FinanceRepository.toNumber(context.discount_amount),
+        mandatorySubscriptionAmounts,
+      });
+      const status = resolveIndividualFinancialStatus({
+        totalDue,
+        cumulativeExpectedAtDate: 0,
+        confirmedPaid: FinanceRepository.toNumber(context.confirmed_paid),
+        waivedAmount: FinanceRepository.toNumber(context.waived_amount),
+      });
+      return [context.student_id, status.remainingDue];
+    }));
+  }
+
   private async financialStatusWith(studentId: string, schoolYearId: string, asOfDate: string, allowHistorical: boolean) {
     const due = allowHistorical
       ? await this.amountDueWith(this.repository, studentId, schoolYearId, false, true)

@@ -31,14 +31,16 @@ export const enrollmentListQuerySchema = z.object({
 });
 
 export const reEnrollmentCandidatesQuerySchema = z.object({
-  school_year_id: z.string().uuid(),
+  school_year_id: z.string().uuid().optional(),
   source_school_year_id: z.string().uuid().optional(),
-  campaign_status: z.enum(['to_process', 'awaiting_cashier', 'blocked_unpaid', 'confirmed', 'all']).default('to_process'),
+  campaign_status: z.enum(['decision_pending', 'ready', 'to_process', 'awaiting_cashier', 'awaiting_documents', 'blocked_unpaid', 'confirmed', 're_enrolled', 'excluded', 'financial_unavailable', 'all']).default('all'),
   level_id: z.string().uuid().optional(),
   class_id: z.string().uuid().optional(),
   search: z.string().trim().min(1).max(100).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
+}).refine((value) => Boolean(value.school_year_id || value.source_school_year_id), {
+  message: 'A source or target school year is required',
 });
 
 export const createEnrollmentBodySchema = z
