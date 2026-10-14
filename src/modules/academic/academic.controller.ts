@@ -87,7 +87,9 @@ const requireSchoolYearListAccess = async (request: FastifyRequest, reply: Fasti
   await authenticateRequest(request, reply);
   if (reply.sent) return;
   const permissions = request.permissions;
-  if (!permissions?.has('school_years.view') && !permissions?.has('school_years.edit') && !permissions?.has('settings.positions')) {
+  if (!permissions?.has('school_years.view') && !permissions?.has('school_years.edit')
+    && !permissions?.has('students.view') && !permissions?.has('enrollments.view')
+    && !permissions?.has('settings.positions')) {
     reply.code(403).send({ error: 'Permission required', code: 'FORBIDDEN', statusCode: 403 });
   }
 };

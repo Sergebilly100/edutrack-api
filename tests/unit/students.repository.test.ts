@@ -82,6 +82,31 @@ describe('StudentsRepository.getStudentAbsenceDetails()', () => {
 });
 
 describe('StudentsRepository.listStudents()', () => {
+  it('filtre le répertoire historique sur la classe de l’inscription annuelle, dans la liste et le total', async () => {
+    const queries: string[] = [];
+    const db = { execute: vi.fn(async (query: ReturnType<typeof sql>) => {
+      queries.push(renderSql(query));
+      return { rows: [] };
+    }) };
+    await new StudentsRepository(db, { execute: vi.fn() }).listStudents({
+      page: 1, limit: 20,
+      school_year_id: '66f048d8-d053-48e2-b4a8-7fce3ebc3ed8',
+      level_id: '66f048d8-d053-48e2-b4a8-7fce3ebc3ed9',
+      search: 'Aya',
+    }, 'history');
+    expect(queries).toHaveLength(2);
+    for (const query of queries) {
+      expect(query).toContain('INNER JOIN LATERAL');
+      expect(query).toContain('FROM enrollments e');
+      expect(query).toContain('e.school_year_id = ');
+      expect(query).toContain('c.level_id = ');
+      expect(query).toContain('c.school_year_id = e.school_year_id');
+      expect(query).toContain('e.student_id = s.id');
+      expect(query).not.toContain('s.class_id = ');
+    }
+    expect(queries[0]).toContain('matched.class_name');
+  });
+
   it('exige une inscription confirmée dans la requête de liste et de total', async () => {
     const queries: string[] = [];
     const db = { execute: vi.fn(async (query: ReturnType<typeof sql>) => {

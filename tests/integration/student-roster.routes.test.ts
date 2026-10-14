@@ -207,6 +207,7 @@ describe('school roster and reusable profiles', () => {
       VALUES ('Roster previous','2092-09-01','2093-06-30','closed') RETURNING id`))[0]!.id;
     const previousClass = (await queryTenant<{ id: string }>(`INSERT INTO classes (name,school_year_id)
       VALUES ('Roster previous class',$1) RETURNING id`, [previousYear]))[0]!.id;
+    await queryTenant('UPDATE classes SET level_id = $1 WHERE id = $2', [levelId, previousClass]);
     const studentId = students.get('pending_cashier')!;
     await queryTenant(`INSERT INTO enrollments (student_id,class_id,school_year_id,type,status)
       VALUES ($1,$2,$3,'new_registration','confirmed')`, [studentId, previousClass, previousYear]);
@@ -252,6 +253,17 @@ describe('school roster and reusable profiles', () => {
     const historyDirectory = await request().get('/api/v1/students/history-directory?search=ROSTER-former').set(headers);
     expect(historyDirectory.status).toBe(200);
     expect(historyDirectory.body.data).toEqual(expect.arrayContaining([expect.objectContaining({ id: former })]));
+    const yearAndLevel = await request().get(`/api/v1/students/history-directory?search=ROSTER-former&school_year_id=${previousYear}&level_id=${levelId}`).set(headers);
+    expect(yearAndLevel.status, JSON.stringify(yearAndLevel.body)).toBe(200);
+    expect(yearAndLevel.body.data).toEqual([expect.objectContaining({
+      id: former, classId: previousClass, className: 'Roster previous class',
+      schoolYearId: previousYear,
+    })]);
+    expect(yearAndLevel.body.pagination.total).toBe(1);
+    const wrongLevel = await request().get(`/api/v1/students/history-directory?search=ROSTER-former&school_year_id=${previousYear}&level_id=${otherLevelId}`).set(headers);
+    expect(wrongLevel.body.data).toEqual([]);
+    const currentPending = await request().get(`/api/v1/students/history-directory?search=ROSTER-pending_cashier&school_year_id=${yearId}&level_id=${levelId}`).set(headers);
+    expect(currentPending.body.data).toEqual([expect.objectContaining({ id: studentId, classId })]);
     const candidates = await request().get(`/api/v1/enrollments/re-enrollment/candidates?school_year_id=${yearId}&search=ROSTER-former`).set(headers);
     expect(candidates.status).toBe(200);
     expect(candidates.body.candidates).toEqual(expect.arrayContaining([expect.objectContaining({ studentId: former })]));

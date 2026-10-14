@@ -47,6 +47,8 @@ type StudentRow = {
   id: string;
   class_id: string | null;
   class_name: string | null;
+  school_year_id?: string;
+  school_year_label?: string;
   first_name: string;
   last_name: string;
   matricule: string | null;
@@ -237,6 +239,7 @@ const mapStudent = (row: StudentRow): StudentRecord => ({
   id: row.id,
   classId: row.class_id,
   className: row.class_name,
+  ...(row.school_year_id ? { schoolYearId: row.school_year_id, schoolYearLabel: row.school_year_label } : {}),
   firstName: row.first_name,
   lastName: row.last_name,
   matricule: row.matricule,
@@ -405,6 +408,7 @@ export class StudentsRepository {
 
   async listStudents(query: StudentsListQuery, scope: StudentListScope = 'enrolled'): Promise<{ rows: StudentRecord[]; total: number }> {
     if (scope === 'financial' && query.school_year_id) return this.listFinancialProfilesForYear(query);
+    if (scope === 'history' && (query.school_year_id || query.level_id)) return this.listHistoryProfilesForFilters(query);
     const offset = (query.page - 1) * query.limit;
     const where = makeWhereClause(buildStudentsWhere(query, scope));
 
@@ -443,6 +447,55 @@ export class StudentsRepository {
       `),
     ]);
 
+    return {
+      rows: getRows<StudentRow>(items).map(mapStudent),
+      total: toTotal(getRows<TotalRow>(total)[0]),
+    };
+  }
+
+  private async listHistoryProfilesForFilters(query: StudentsListQuery): Promise<{ rows: StudentRecord[]; total: number }> {
+    const offset = (query.page - 1) * query.limit;
+    const enrollmentFilters: SQL[] = [];
+    if (query.school_year_id) enrollmentFilters.push(sql`e.school_year_id = ${query.school_year_id}::uuid`);
+    if (query.level_id) enrollmentFilters.push(sql`c.level_id = ${query.level_id}::uuid`);
+    if (query.class_id) enrollmentFilters.push(sql`c.id = ${query.class_id}::uuid`);
+    const profileFilters: SQL[] = [];
+    if (typeof query.is_active === 'boolean') profileFilters.push(sql`s.is_active = ${query.is_active}`);
+    if (query.search) {
+      const search = `%${query.search}%`;
+      profileFilters.push(sql`(s.first_name ILIKE ${search} OR s.last_name ILIKE ${search}
+        OR s.matricule ILIKE ${search}
+        OR concat_ws(' ', s.last_name, s.first_name) ILIKE ${search}
+        OR concat_ws(' ', s.first_name, s.last_name) ILIKE ${search})`);
+    }
+    const source = sql`
+      FROM students s
+      INNER JOIN LATERAL (
+        SELECT c.id AS class_id, c.name AS class_name,
+          school_year.id AS school_year_id, school_year.label AS school_year_label
+        FROM enrollments e
+        INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = e.school_year_id
+        INNER JOIN school_years school_year ON school_year.id = e.school_year_id
+        WHERE e.student_id = s.id AND ${sql.join(enrollmentFilters, sql` AND `)}
+        ORDER BY school_year.start_date DESC, e.enrolled_at DESC, e.id DESC
+        LIMIT 1
+      ) matched ON true
+      ${makeWhereClause(profileFilters)}
+    `;
+    const [items, total] = await Promise.all([
+      this.db.execute(sql`
+        SELECT s.id, matched.class_id, matched.class_name,
+          matched.school_year_id, matched.school_year_label,
+          s.first_name, s.last_name, s.matricule, s.birth_date::text AS birth_date,
+          s.parent_name, s.parent_phone, s.parent_email, s.parent_name_2,
+          s.parent_phone_2, s.notes, s.is_active, s.is_assigned,
+          s.lifecycle_status, s.created_at
+        ${source}
+        ORDER BY s.created_at DESC, s.id DESC
+        LIMIT ${query.limit} OFFSET ${offset}
+      `),
+      this.db.execute(sql`SELECT COUNT(*) AS total ${source}`),
+    ]);
     return {
       rows: getRows<StudentRow>(items).map(mapStudent),
       total: toTotal(getRows<TotalRow>(total)[0]),

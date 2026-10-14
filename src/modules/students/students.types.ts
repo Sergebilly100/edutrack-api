@@ -147,6 +147,8 @@ export type StudentRecord = {
   id: string;
   classId: string | null;
   className: string | null;
+  schoolYearId?: string;
+  schoolYearLabel?: string;
   firstName: string;
   lastName: string;
   matricule: string | null;
