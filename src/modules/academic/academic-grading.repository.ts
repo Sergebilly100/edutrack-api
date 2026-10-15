@@ -970,6 +970,7 @@ export class AcademicGradingRepository {
         AND sp.valid_to >= COALESCE(${date ?? null}::date, CURRENT_DATE)
         AND (sch.start_date IS NULL OR sch.start_date <= COALESCE(${date ?? null}::date, CURRENT_DATE))
         AND (sch.end_date IS NULL OR sch.end_date > COALESCE(${date ?? null}::date, CURRENT_DATE))
+        ${date ? sql`AND sch.day_of_week = EXTRACT(ISODOW FROM ${date}::date)::int` : sql``}
       ORDER BY sch.day_of_week, ts.start_time
     `);
     return rows(result).map((row) => ({

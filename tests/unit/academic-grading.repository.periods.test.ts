@@ -1,3 +1,5 @@
+import { sql } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AcademicGradingRepository, type AcademicGradingQueryExecutor } from '../../src/modules/academic/academic-grading.repository.js';
 
@@ -22,5 +24,23 @@ describe('AcademicGradingRepository period capabilities', () => {
     const [first, second] = await repository.listGradingPeriods('y1');
     expect(first).toMatchObject({ notesEntryOpen: true, conductReviewOpen: true, bulletinGenerationAvailable: true, isClosed: false, closedClassIds: ['c1'], hasGeneratedCards: true });
     expect(second).toMatchObject({ notesEntryOpen: true, conductReviewOpen: false, closedClassIds: [] });
+  });
+});
+
+describe('AcademicGradingRepository lesson slots', () => {
+  it('limite les créneaux au jour ISO de la date fournie', async () => {
+    const queries: string[] = [];
+    const dialect = new PgDialect();
+    const execute = vi.fn(async (query: ReturnType<typeof sql>) => {
+      queries.push(dialect.sqlToQuery(query).sql);
+      return { rows: [] };
+    });
+    const repository = new AcademicGradingRepository({ execute } as unknown as AcademicGradingQueryExecutor);
+
+    await repository.listTeacherLessonSlotsForClass('teacher-id', 'class-id', '2026-10-15');
+    await repository.listTeacherLessonSlotsForClass('teacher-id', 'class-id');
+
+    expect(queries[0]).toMatch(/sch\.day_of_week = EXTRACT\(ISODOW FROM \$\d+::date\)::int/);
+    expect(queries[1]).not.toContain('sch.day_of_week = EXTRACT(ISODOW');
   });
 });
