@@ -42,21 +42,21 @@ export default async function conductReviewController(app: FastifyInstance): Pro
     const context = { userId, canFinalize: request.permissions?.has('conduct.finalize') === true };
     try {
       if (request.claims!.role === 'teacher') {
-        const { teacherActions } = await withTenantSchema(schema, (db) =>
+        const { teacherActions, teacherOpenScopes } = await withTenantSchema(schema, (db) =>
           buildConductReviewService(db).getTeacherActions(userId));
         try {
           const decisions = await withReadyConductTenant(schema, (db) =>
             buildConductReviewService(db).getDecisionWorkspace(context));
-          return reply.send({ teacherActions, ...decisions });
+          return reply.send({ teacherActions, teacherOpenScopes, ...decisions });
         } catch (error) {
           request.log.error({ err: error }, '[conduct-review] Legacy decision read error');
-          return reply.send({ teacherActions, decisionScopes: [], decisionActions: [],
+          return reply.send({ teacherActions, teacherOpenScopes, decisionScopes: [], decisionActions: [],
             decisionError: { code: isMissingConductMigration(error) ? 'CONDUCT_MIGRATION_REQUIRED' : 'INTERNAL_ERROR' } });
         }
       }
       const decisions = await withReadyConductTenant(schema, (db) =>
         buildConductReviewService(db).getDecisionWorkspace(context));
-      return reply.send({ teacherActions: [], ...decisions });
+      return reply.send({ teacherActions: [], teacherOpenScopes: [], ...decisions });
     } catch (error) {
       request.log.error({ err: error }, '[conduct-review] Legacy workspace error');
       if (isMissingConductMigration(error)) {

@@ -1,3 +1,5 @@
+import { todayInBusinessTimezone } from '../../shared/utils/business-time.js';
+
 export type PeriodDates = {
   startDate: string;
   reviewStartDate: string;
@@ -8,16 +10,18 @@ export const getPeriodCapabilities = (
   period: PeriodDates,
   previousReviewStartDate: string | null,
   isCompleted: boolean,
-  today: string = new Date().toISOString().slice(0, 10),
+  today: string = todayInBusinessTimezone(),
+  schoolYearActive = true,
 ) => {
   // Le début de revue organise la conduite et les bulletins ; seul l'état de
   // la matière et la clôture de la classe verrouillent les notes.
   const notesEntryOpen = !isCompleted;
-  const conductReviewOpen = !isCompleted && today >= period.reviewStartDate;
+  const conductReviewOpen = schoolYearActive && !isCompleted
+    && today >= period.reviewStartDate && today <= period.endDate;
   return {
     notesEntryOpen,
     conductReviewOpen,
-    bulletinGenerationAvailable: conductReviewOpen,
+    bulletinGenerationAvailable: schoolYearActive && !isCompleted && today >= period.reviewStartDate,
     isClosed: isCompleted,
   };
 };
@@ -47,3 +51,4 @@ export const validatePeriodChange = (
   if (index < 0) return 'Période introuvable dans le calendrier';
   return validatePeriodSequence(ordered.slice(Math.max(0, index - 1), index + 2));
 };
+

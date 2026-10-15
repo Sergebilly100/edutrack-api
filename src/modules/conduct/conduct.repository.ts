@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { BUSINESS_DATE_SQL } from '../../shared/database/business-date.js';
 import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
 import { authorizedConductClass } from '../../shared/database/conduct-decision-scope.js';
 
@@ -154,9 +155,11 @@ export class ConductRepository {
     const ids = sql.join(classIds.map(id => sql`${id}::uuid`), sql`, `);
     const result = await this.db.execute<{ id: string; label: string; school_year_id: string; review_open: boolean; closed_class_ids: string[] }>(sql`
       SELECT gp.id::text, gp.label, gp.school_year_id::text,
-        gp.review_start_date <= CURRENT_DATE AS review_open,
+        sy.status = 'active' AND gp.review_start_date <= ${BUSINESS_DATE_SQL}
+          AND ${BUSINESS_DATE_SQL} <= gp.end_date AS review_open,
         COALESCE(array_agg(DISTINCT gcc.class_id::text) FILTER (WHERE gcc.class_id IS NOT NULL), ARRAY[]::text[]) AS closed_class_ids
       FROM grading_periods gp INNER JOIN classes c ON c.school_year_id = gp.school_year_id AND c.id IN (${ids})
+      INNER JOIN school_years sy ON sy.id = gp.school_year_id
       LEFT JOIN grading_period_class_closures gcc ON gcc.grading_period_id = gp.id AND gcc.class_id = c.id
       GROUP BY gp.id ORDER BY gp.review_start_date DESC
     `);
@@ -460,14 +463,17 @@ export class ConductRepository {
     return getRows<{ is_completed: boolean }>(result)[0]?.is_completed ?? false;
   }
 
-  async isConductReviewOpen(gradingPeriodId: string): Promise<boolean> {
-    const result = await this.db.execute<{ open: boolean }>(sql`
-      SELECT review_start_date <= CURRENT_DATE AS open
+  async getConductReviewState(gradingPeriodId: string): Promise<'open' | 'before' | 'closed'> {
+    const result = await this.db.execute<{ state: 'open' | 'before' | 'closed' }>(sql`
+      SELECT CASE
+        WHEN sy.status <> 'active' OR ${BUSINESS_DATE_SQL} > gp.end_date THEN 'closed'
+        WHEN ${BUSINESS_DATE_SQL} < gp.review_start_date THEN 'before'
+        ELSE 'open' END AS state
       FROM grading_periods gp
-      INNER JOIN school_years sy ON sy.id = gp.school_year_id AND sy.status = 'active'
+      INNER JOIN school_years sy ON sy.id = gp.school_year_id
       WHERE gp.id = ${gradingPeriodId}::uuid LIMIT 1
     `);
-    return getRows<{ open: boolean }>(result)[0]?.open ?? false;
+    return getRows<{ state: 'open' | 'before' | 'closed' }>(result)[0]?.state ?? 'closed';
   }
 
   async gradingPeriodMatchesClass(gradingPeriodId: string, classId: string): Promise<boolean> {
@@ -559,17 +565,25 @@ export class ConductRepository {
         ${input.note},
         ${input.observation ?? null}
       FROM classes c INNER JOIN grading_periods gp ON gp.school_year_id = c.school_year_id
+      INNER JOIN school_years sy ON sy.id = gp.school_year_id AND sy.status = 'active'
       WHERE gp.id = ${input.grading_period_id}::uuid
-        AND gp.review_start_date <= CURRENT_DATE
+        AND gp.review_start_date <= ${BUSINESS_DATE_SQL} AND ${BUSINESS_DATE_SQL} <= gp.end_date
         AND ${confirmedSchoolStudent(sql`${input.student_id}::uuid`, sql`gp.school_year_id`, sql`c.id`)}
         AND NOT EXISTS (SELECT 1 FROM conduct_grades cg WHERE cg.student_id = ${input.student_id}::uuid AND cg.grading_period_id = gp.id)
         AND NOT EXISTS (SELECT 1 FROM report_cards rc WHERE rc.class_id = c.id AND rc.grading_period_id = gp.id)
+        AND NOT EXISTS (SELECT 1 FROM grading_period_class_closures gcc WHERE gcc.class_id = c.id AND gcc.grading_period_id = gp.id)
       ON CONFLICT ON CONSTRAINT teacher_conduct_inputs_once_per_period
       DO UPDATE SET note = EXCLUDED.note, observation = EXCLUDED.observation, updated_at = now()
       RETURNING id::text
       `);
     });
     if (getRows(result).length === 0) {
+      if (await this.getConductReviewState(input.grading_period_id) !== 'open') {
+        const error = new Error('La fenêtre de revue de conduite est terminée') as Error & { statusCode: number; code: string };
+        error.statusCode = 409;
+        error.code = 'CONDUCT_REVIEW_CLOSED';
+        throw error;
+      }
       const error = new Error('Cet avis est verrouillé par la note finale ou par les bulletins') as Error & { statusCode: number; code: string };
       error.statusCode = 409;
       error.code = 'CONDUCT_INPUT_LOCKED';
@@ -751,11 +765,13 @@ export class ConductRepository {
       `);
       const previous = getRows<{ id: string; note: string }>(existing)[0];
       const writable = await tx.execute<{ allowed: boolean }>(sql`
-        SELECT gp.review_start_date <= CURRENT_DATE
+        SELECT sy.status = 'active' AND gp.review_start_date <= ${BUSINESS_DATE_SQL}
+          AND ${BUSINESS_DATE_SQL} <= gp.end_date
           AND NOT EXISTS (SELECT 1 FROM report_cards rc WHERE rc.grading_period_id = gp.id AND rc.class_id = c.id)
           AND NOT EXISTS (SELECT 1 FROM grading_period_class_closures gcc WHERE gcc.grading_period_id = gp.id AND gcc.class_id = c.id)
           AS allowed
-        FROM grading_periods gp INNER JOIN classes c ON c.school_year_id = gp.school_year_id
+        FROM grading_periods gp INNER JOIN school_years sy ON sy.id = gp.school_year_id
+          INNER JOIN classes c ON c.school_year_id = gp.school_year_id
         WHERE gp.id = ${input.grading_period_id}::uuid
           AND ${confirmedSchoolStudent(sql`${input.student_id}::uuid`, sql`gp.school_year_id`, sql`c.id`)}
         LIMIT 1

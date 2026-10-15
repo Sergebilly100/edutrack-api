@@ -19,10 +19,11 @@ describe('actions de revue de conduite C28', () => {
 
   beforeAll(async () => {
     directorHeaders = await getAuthHeaders('director');
+    await queryTenant(`UPDATE ${tenantTable('school_years')} SET status = 'closed' WHERE status = 'active'`);
     const year = await queryTenant<IdRow>(`
       INSERT INTO ${tenantTable('school_years')}
         (label, start_date, end_date, end_of_year_review_start_date, status)
-      VALUES ($1, CURRENT_DATE - 40, CURRENT_DATE + 100, CURRENT_DATE + 90, 'draft')
+      VALUES ($1, CURRENT_DATE - 40, CURRENT_DATE + 100, CURRENT_DATE + 90, 'active')
       RETURNING id::text`, [`c28-${suffix}`]);
     schoolYearId = year[0]!.id;
     const periods = await queryTenant<IdRow>(`
@@ -85,6 +86,9 @@ describe('actions de revue de conduite C28', () => {
     expect(first.body.teacherActions).toEqual([expect.objectContaining({
       classId, gradingPeriodId: periodId, pendingCount: 1,
     })]);
+    expect(first.body.teacherOpenScopes).toEqual([expect.objectContaining({
+      classId, gradingPeriodId: periodId, pendingCount: 1,
+    })]);
     expect(second.body.teacherActions).toEqual(first.body.teacherActions);
     expect(first.body.teacherActions.some((action: { gradingPeriodId: string }) => action.gradingPeriodId === futurePeriodId)).toBe(false);
 
@@ -135,7 +139,7 @@ describe('actions de revue de conduite C28', () => {
     expect(configured.status, JSON.stringify(configured.body)).toBe(200);
     const opened = await request().get('/api/v1/conduct/decision-workspace').set(directorHeaders);
     expect(opened.body.decisionActions).toEqual(expect.arrayContaining([expect.objectContaining({
-      classId, gradingPeriodId: periodId, pendingCount: 1, studentCount: 1, schoolYearStatus: 'draft',
+      classId, gradingPeriodId: periodId, pendingCount: 1, studentCount: 1, schoolYearStatus: 'active',
     })]));
     expect(opened.body.decisionActions.filter((action: { classId: string; gradingPeriodId: string }) =>
       action.classId === classId && action.gradingPeriodId === periodId)).toHaveLength(1);
@@ -150,6 +154,9 @@ describe('actions de revue de conduite C28', () => {
     expect(opinion.status, JSON.stringify(opinion.body)).toBe(201);
     const teacherResolved = await request().get('/api/v1/conduct/teacher-actions').set(teacherHeaders);
     expect(teacherResolved.body.teacherActions).toEqual([]);
+    expect(teacherResolved.body.teacherOpenScopes).toEqual([expect.objectContaining({
+      classId, gradingPeriodId: periodId, pendingCount: 0,
+    })]);
     const decision = await request().put('/api/v1/conduct/grades').set(directorHeaders)
       .send({ student_id: studentId, grading_period_id: periodId, note: 16 });
     expect(decision.status, JSON.stringify(decision.body)).toBe(200);
@@ -225,5 +232,56 @@ describe('actions de revue de conduite C28', () => {
       FROM ${tenantTable('schedules')} WHERE id = $3::uuid`, [teacher[0]!.id, scheduleClass, (await queryTenant<IdRow>(
       `SELECT id::text FROM ${tenantTable('schedules')} LIMIT 1`))[0]!.id]);
     expect(await classes()).toEqual([assignmentClass, secondClass, scheduleClass].sort());
+  });
+
+  it('ferme les avis et décisions avant la revue et dès le lendemain de la fin', async () => {
+    const businessToday = `(now() AT TIME ZONE 'Africa/Abidjan')::date`;
+    const moveWindow = async (review: string, end: string) => {
+      await queryTenant(`UPDATE ${tenantTable('grading_periods')}
+        SET review_start_date = ${review}, end_date = ${end}
+        WHERE id = $1::uuid`, [periodId]);
+    };
+    const opinion = () => request().post('/api/v1/conduct/inputs').set(teacherHeaders)
+      .send({ student_id: studentId, grading_period_id: periodId, note: 12 });
+    const bulk = () => request().post('/api/v1/conduct/inputs/bulk').set(teacherHeaders)
+      .send({ class_id: classId, student_ids: [studentId], grading_period_id: periodId, note: 12 });
+    const decision = () => request().put('/api/v1/conduct/grades').set(directorHeaders)
+      .send({ student_id: studentId, grading_period_id: periodId, note: 12 });
+
+    await moveWindow(`${businessToday} + 1`, `${businessToday} + 2`);
+    const before = await request().get('/api/v1/conduct/teacher-actions').set(teacherHeaders);
+    expect(before.body.teacherOpenScopes).toEqual([]);
+    expect(before.body.teacherActions).toEqual([]);
+    for (const response of [await opinion(), await bulk(), await decision()]) {
+      expect(response.status).toBe(409);
+      expect(response.body.code).toBe('CONDUCT_REVIEW_NOT_OPEN');
+    }
+
+    await moveWindow(`${businessToday} - 1`, businessToday);
+    const onLastDay = await request().get('/api/v1/conduct/teacher-actions').set(teacherHeaders);
+    expect(onLastDay.body.teacherOpenScopes).toEqual([expect.objectContaining({ classId, gradingPeriodId: periodId })]);
+    const lastDayDecision = await decision();
+    expect(lastDayDecision.status, JSON.stringify(lastDayDecision.body)).toBe(200);
+
+    await moveWindow(`${businessToday} - 1`, `${businessToday} - 1`);
+    const after = await request().get('/api/v1/conduct/teacher-actions').set(teacherHeaders);
+    expect(after.body.teacherOpenScopes).toEqual([]);
+    expect(after.body.teacherActions).toEqual([]);
+    const workspace = await request().get('/api/v1/conduct/decision-workspace').set(directorHeaders);
+    expect(workspace.body.decisionActions).toEqual([]);
+    expect(workspace.body.decisionScopes.find((scope: { classId: string; gradingPeriodId: string }) =>
+      scope.classId === classId && scope.gradingPeriodId === periodId)?.reviewOpen).toBe(false);
+    const beforeInput = await queryTenant<{ note: string }>(`SELECT note::text FROM ${tenantTable('teacher_conduct_inputs')}
+      WHERE student_id = $1::uuid AND grading_period_id = $2::uuid`, [studentId, periodId]);
+    const beforeGrade = await queryTenant<{ note: string }>(`SELECT note::text FROM ${tenantTable('conduct_grades')}
+      WHERE student_id = $1::uuid AND grading_period_id = $2::uuid`, [studentId, periodId]);
+    for (const response of [await opinion(), await bulk(), await decision()]) {
+      expect(response.status).toBe(409);
+      expect(response.body.code).toBe('CONDUCT_REVIEW_CLOSED');
+    }
+    expect(await queryTenant<{ note: string }>(`SELECT note::text FROM ${tenantTable('teacher_conduct_inputs')}
+      WHERE student_id = $1::uuid AND grading_period_id = $2::uuid`, [studentId, periodId])).toEqual(beforeInput);
+    expect(await queryTenant<{ note: string }>(`SELECT note::text FROM ${tenantTable('conduct_grades')}
+      WHERE student_id = $1::uuid AND grading_period_id = $2::uuid`, [studentId, periodId])).toEqual(beforeGrade);
   });
 });

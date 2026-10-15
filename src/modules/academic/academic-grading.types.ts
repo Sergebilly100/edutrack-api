@@ -179,6 +179,7 @@ export type SubjectItem = {
 export type GradingPeriodItem = {
   id: string;
   schoolYearId: string;
+  schoolYearStatus: 'draft' | 'active' | 'closed';
   type: 'trimester' | 'semester';
   orderIndex: number;
   label: string;

@@ -3,6 +3,7 @@ import type { TenantDb } from '../../shared/database/db.js';
 import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
 import { authorizedConductClass } from '../../shared/database/conduct-decision-scope.js';
 import { teacherClassRelation } from '../../shared/database/teacher-class-relation.js';
+import { BUSINESS_DATE_SQL } from '../../shared/database/business-date.js';
 
 type QueryResult<T> = { rows?: T[] };
 const rows = <T>(result: unknown): T[] => {
@@ -10,7 +11,7 @@ const rows = <T>(result: unknown): T[] => {
   return (result as QueryResult<T>).rows ?? [];
 };
 
-type TeacherActionRow = { class_id: string; class_name: string; grading_period_id: string; grading_period_label: string; pending_count: number };
+type TeacherActionRow = { class_id: string; class_name: string; grading_period_id: string; grading_period_label: string; end_date: string; pending_count: number };
 type DecisionScopeRow = { class_id: string; class_name: string; level_id: string; level_name: string;
   school_year_id: string; school_year_label: string; school_year_status: 'draft' | 'active' | 'closed'; grading_period_id: string; grading_period_label: string;
   review_open: boolean; is_closed: boolean; student_count: number; pending_count: number };
@@ -20,10 +21,11 @@ export type ReviewAction = {
   className: string;
   gradingPeriodId: string;
   gradingPeriodLabel: string;
+  endDate: string;
   pendingCount: number;
 };
 
-export type DecisionScope = ReviewAction & {
+export type DecisionScope = Omit<ReviewAction, 'endDate'> & {
   levelId: string;
   levelName: string;
   schoolYearId: string;
@@ -37,15 +39,16 @@ export type DecisionScope = ReviewAction & {
 export class ConductReviewRepository {
   constructor(private readonly db: TenantDb) {}
 
-  async listTeacherActions(userId: string): Promise<ReviewAction[]> {
+  async listTeacherOpenScopes(userId: string): Promise<ReviewAction[]> {
     const result = await this.db.execute<TeacherActionRow>(sql`
       SELECT c.id::text AS class_id, c.name AS class_name,
-             gp.id::text AS grading_period_id, gp.label AS grading_period_label,
+             gp.id::text AS grading_period_id, gp.label AS grading_period_label, gp.end_date::text,
              COUNT(DISTINCT s.id) FILTER (WHERE tci.id IS NULL AND cg.id IS NULL)::int AS pending_count
       FROM teachers t
       INNER JOIN classes c ON c.is_active = true AND ${teacherClassRelation(sql`t.id`, sql`c.id`)}
       INNER JOIN grading_periods gp ON gp.school_year_id = c.school_year_id
-        AND gp.review_start_date <= CURRENT_DATE
+        AND gp.review_start_date <= ${BUSINESS_DATE_SQL} AND ${BUSINESS_DATE_SQL} <= gp.end_date
+      INNER JOIN school_years sy ON sy.id = gp.school_year_id AND sy.status = 'active'
       LEFT JOIN enrollments e ON e.class_id = c.id AND e.school_year_id = c.school_year_id
         AND e.status = 'confirmed'
       LEFT JOIN students s ON s.id = e.student_id AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
@@ -57,13 +60,14 @@ export class ConductReviewRepository {
           WHERE closure.class_id = c.id AND closure.grading_period_id = gp.id)
         AND NOT EXISTS (SELECT 1 FROM report_cards rc
           WHERE rc.class_id = c.id AND rc.grading_period_id = gp.id)
-      GROUP BY c.id, c.name, gp.id, gp.label
-      HAVING COUNT(DISTINCT s.id) FILTER (WHERE tci.id IS NULL AND cg.id IS NULL) > 0
+      GROUP BY c.id, c.name, gp.id, gp.label, gp.end_date
+      HAVING COUNT(DISTINCT s.id) > 0
       ORDER BY gp.review_start_date, c.name
     `);
     return rows<TeacherActionRow>(result).map((row) => ({
       classId: row.class_id, className: row.class_name,
       gradingPeriodId: row.grading_period_id, gradingPeriodLabel: row.grading_period_label,
+      endDate: row.end_date,
       pendingCount: row.pending_count,
     }));
   }
@@ -74,7 +78,8 @@ export class ConductReviewRepository {
              l.name AS level_name, sy.id::text AS school_year_id,
              sy.label AS school_year_label, sy.status AS school_year_status, gp.id::text AS grading_period_id,
              gp.label AS grading_period_label,
-             gp.review_start_date <= CURRENT_DATE AS review_open,
+             sy.status = 'active' AND gp.review_start_date <= ${BUSINESS_DATE_SQL}
+               AND ${BUSINESS_DATE_SQL} <= gp.end_date AS review_open,
              EXISTS (SELECT 1 FROM grading_period_class_closures closure
                WHERE closure.class_id = c.id AND closure.grading_period_id = gp.id)
                OR EXISTS (SELECT 1 FROM report_cards rc

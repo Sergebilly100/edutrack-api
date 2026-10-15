@@ -4,7 +4,8 @@ export class ConductReviewService {
   constructor(private readonly repository: ConductReviewRepository) {}
 
   async getTeacherActions(userId: string) {
-    return { teacherActions: await this.repository.listTeacherActions(userId) };
+    const teacherOpenScopes = await this.repository.listTeacherOpenScopes(userId);
+    return { teacherOpenScopes, teacherActions: teacherOpenScopes.filter((scope) => scope.pendingCount > 0) };
   }
 
   async getDecisionWorkspace(context: { userId: string; canFinalize: boolean }) {

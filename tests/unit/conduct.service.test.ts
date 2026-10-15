@@ -17,7 +17,7 @@ const repository = {
   teacherHasAverageCalculation: vi.fn(),
   gradingPeriodExists: vi.fn(),
   isGradingPeriodCompleted: vi.fn(),
-  isConductReviewOpen: vi.fn(),
+  getConductReviewState: vi.fn(),
   gradingPeriodMatchesClass: vi.fn(),
   studentsBelongToClass: vi.fn(),
   listTeacherConductScope: vi.fn(),
@@ -42,7 +42,7 @@ const studentContext = {
 beforeEach(() => {
   vi.clearAllMocks();
   repository.isGradingPeriodCompleted.mockResolvedValue(false);
-  repository.isConductReviewOpen.mockResolvedValue(true);
+  repository.getConductReviewState.mockResolvedValue('open');
   repository.educatorTargetExists.mockResolvedValue(true);
   repository.findFinalGrade.mockResolvedValue(null);
   repository.findPolicyForPeriod.mockResolvedValue({ mode: 'homeroom', coefficient: 1 });
@@ -181,6 +181,19 @@ describe('conduct.service submitTeacherConductInput', () => {
     await expect(service.submitTeacherConductInput(baseInput, { userId: 'user-teacher' })).resolves.toBeUndefined();
   });
 
+  it('distingue une revue à venir d’une fenêtre expirée', async () => {
+    const service = new ConductService(repository);
+    repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1' });
+    repository.findStudentContext.mockResolvedValue(studentContext);
+    repository.gradingPeriodExists.mockResolvedValue(true);
+    repository.getConductReviewState.mockResolvedValueOnce('before').mockResolvedValueOnce('closed');
+    await expect(service.submitTeacherConductInput(baseInput, { userId: 'user-teacher' }))
+      .rejects.toMatchObject({ code: 'CONDUCT_REVIEW_NOT_OPEN', statusCode: 409 });
+    await expect(service.submitTeacherConductInput(baseInput, { userId: 'user-teacher' }))
+      .rejects.toMatchObject({ code: 'CONDUCT_REVIEW_CLOSED', statusCode: 409 });
+    expect(repository.insertTeacherConductInput).not.toHaveBeenCalled();
+  });
+
 });
 
 describe('conduct.service submitBulkTeacherConductInputs', () => {
@@ -220,6 +233,18 @@ describe('conduct.service submitBulkTeacherConductInputs', () => {
     }, { userId: 'user-teacher' })).rejects.toMatchObject({ code: 'STUDENT_CLASS_MISMATCH' });
     expect(repository.insertTeacherConductInput).not.toHaveBeenCalled();
   });
+
+  it('ne commence aucun lot après la fin de revue', async () => {
+    const service = new ConductService(repository);
+    repository.findTeacherByUserId.mockResolvedValue({ id: 'teacher-1' });
+    repository.teacherTeachesClass.mockResolvedValue(true);
+    repository.gradingPeriodMatchesClass.mockResolvedValue(true);
+    repository.getConductReviewState.mockResolvedValue('closed');
+    await expect(service.submitBulkTeacherConductInputs({
+      class_id: 'class-1', student_ids: ['student-1'], grading_period_id: 'period-1', note: 16,
+    }, { userId: 'user-teacher' })).rejects.toMatchObject({ code: 'CONDUCT_REVIEW_CLOSED' });
+    expect(repository.insertTeacherConductInput).not.toHaveBeenCalled();
+  });
 });
 
 describe('conduct.service getTeacherConductScope', () => {
@@ -257,6 +282,16 @@ describe('conduct.service decideConductGrade', () => {
     expect(repository.upsertConductGrade).toHaveBeenCalledWith(
       expect.objectContaining({ coefficient: 1, decidedByUserId: 'educator-user' })
     );
+  });
+
+  it('refuse toute décision finale après la fin de revue', async () => {
+    const service = new ConductService(repository);
+    repository.findStudentContext.mockResolvedValue(studentContext);
+    repository.gradingPeriodExists.mockResolvedValue(true);
+    repository.getConductReviewState.mockResolvedValue('closed');
+    await expect(service.decideConductGrade(gradeBody, { userId: 'educator-user', canFinalize: true }))
+      .rejects.toMatchObject({ code: 'CONDUCT_REVIEW_CLOSED', statusCode: 409 });
+    expect(repository.upsertConductGrade).not.toHaveBeenCalled();
   });
 
   it('utilise le coefficient annuel configuré', async () => {

@@ -13,7 +13,7 @@ const scope = (overrides: Partial<DecisionScope> = {}): DecisionScope => ({
 describe('ConductReviewService', () => {
   it('ne propose au décideur que les classes en revue avec décisions manquantes', async () => {
     const repository = {
-      listTeacherActions: vi.fn().mockResolvedValue([]),
+      listTeacherOpenScopes: vi.fn().mockResolvedValue([]),
       listDecisionScopes: vi.fn().mockResolvedValue([
         scope(),
         scope({ classId: 'class-2', reviewOpen: false }),
@@ -29,16 +29,19 @@ describe('ConductReviewService', () => {
     expect(result.decisionActions).toEqual([scope()]);
     expect(result.decisionScopes).toHaveLength(5);
     expect(repository.listDecisionScopes).toHaveBeenCalledWith('user-1', true);
-    expect(repository.listTeacherActions).not.toHaveBeenCalled();
+    expect(repository.listTeacherOpenScopes).not.toHaveBeenCalled();
   });
 
   it('lit les avis professeur sans requête de décision', async () => {
     const repository = {
-      listTeacherActions: vi.fn().mockResolvedValue([{ classId: 'class-1', pendingCount: 2 }]),
+      listTeacherOpenScopes: vi.fn().mockResolvedValue([{ classId: 'class-1', pendingCount: 2 }, { classId: 'class-2', pendingCount: 0 }]),
       listDecisionScopes: vi.fn().mockRejectedValue(new Error('policy unavailable')),
     } as unknown as ConductReviewRepository;
     const service = new ConductReviewService(repository);
-    expect(await service.getTeacherActions('user-1')).toEqual({ teacherActions: [{ classId: 'class-1', pendingCount: 2 }] });
+    expect(await service.getTeacherActions('user-1')).toEqual({
+      teacherOpenScopes: [{ classId: 'class-1', pendingCount: 2 }, { classId: 'class-2', pendingCount: 0 }],
+      teacherActions: [{ classId: 'class-1', pendingCount: 2 }],
+    });
     expect(repository.listDecisionScopes).not.toHaveBeenCalled();
   });
 });

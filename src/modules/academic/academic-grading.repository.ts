@@ -42,6 +42,7 @@ type PeriodRow = {
   review_start_date: string;
   end_date: string;
   is_completed?: boolean;
+  school_year_status?: 'draft' | 'active' | 'closed';
 };
 
 const mapSubject = (row: SubjectRow): SubjectItem => ({
@@ -56,13 +57,15 @@ const mapSubject = (row: SubjectRow): SubjectItem => ({
 const mapPeriod = (row: PeriodRow): GradingPeriodItem => ({
   id: row.id,
   schoolYearId: row.school_year_id,
+  schoolYearStatus: row.school_year_status ?? 'closed',
   type: row.type,
   orderIndex: row.order_index,
   label: row.label,
   startDate: row.start_date,
   reviewStartDate: row.review_start_date,
   endDate: row.end_date,
-  ...getPeriodCapabilities({ startDate: row.start_date, reviewStartDate: row.review_start_date, endDate: row.end_date }, null, row.is_completed ?? false),
+  ...getPeriodCapabilities({ startDate: row.start_date, reviewStartDate: row.review_start_date, endDate: row.end_date }, null, row.is_completed ?? false,
+    undefined, row.school_year_status === 'active'),
   closedClassIds: [],
   hasGeneratedCards: false,
   isCompleted: row.is_completed ?? false,
@@ -251,7 +254,8 @@ export class AcademicGradingRepository {
       const ordered = [...yearPeriods].sort((left, right) => left.orderIndex - right.orderIndex);
       ordered.forEach((period, index) => {
         const previous = ordered[index - 1];
-        Object.assign(period, getPeriodCapabilities(period, previous?.reviewStartDate ?? null, period.isCompleted));
+        Object.assign(period, getPeriodCapabilities(period, previous?.reviewStartDate ?? null, period.isCompleted,
+          undefined, period.schoolYearStatus === 'active'));
         period.isCurrent = period.notesEntryOpen || period.conductReviewOpen;
       });
     }
@@ -261,7 +265,7 @@ export class AcademicGradingRepository {
   async listGradingPeriods(schoolYearId?: string): Promise<GradingPeriodItem[]> {
     const result = await this.db.execute<PeriodRow>(sql`
       SELECT gp.id, gp.school_year_id, gp.type, gp.order_index, gp.label,
-        gp.start_date::text, gp.review_start_date::text, gp.end_date::text
+        gp.start_date::text, gp.review_start_date::text, gp.end_date::text, sy.status AS school_year_status
       FROM grading_periods gp
       INNER JOIN school_years sy ON sy.id = gp.school_year_id AND sy.status <> 'draft'
       WHERE (${schoolYearId ?? null}::uuid IS NULL OR gp.school_year_id = ${schoolYearId ?? null}::uuid)
@@ -272,15 +276,18 @@ export class AcademicGradingRepository {
 
   async findGradingPeriod(id: string): Promise<GradingPeriodItem | null> {
     const result = await this.db.execute<PeriodRow>(sql`
-      SELECT id, school_year_id, type, order_index, label, start_date::text, review_start_date::text, end_date::text
-      FROM grading_periods WHERE id = ${id}::uuid LIMIT 1
+      SELECT gp.id, gp.school_year_id, gp.type, gp.order_index, gp.label, gp.start_date::text,
+        gp.review_start_date::text, gp.end_date::text, sy.status AS school_year_status
+      FROM grading_periods gp INNER JOIN school_years sy ON sy.id = gp.school_year_id
+      WHERE gp.id = ${id}::uuid LIMIT 1
     `);
     const row = rows(result)[0];
     if (!row) return null;
     const periodsInYear = await this.db.execute<PeriodRow>(sql`
-      SELECT id, school_year_id, type, order_index, label, start_date::text, review_start_date::text, end_date::text
-      FROM grading_periods
-      WHERE school_year_id = ${row.school_year_id}::uuid
+      SELECT gp.id, gp.school_year_id, gp.type, gp.order_index, gp.label, gp.start_date::text,
+        gp.review_start_date::text, gp.end_date::text, sy.status AS school_year_status
+      FROM grading_periods gp INNER JOIN school_years sy ON sy.id = gp.school_year_id
+      WHERE gp.school_year_id = ${row.school_year_id}::uuid
       ORDER BY order_index
     `);
     return (await this.withPeriodStates(rows(periodsInYear))).find((period) => period.id === id) ?? null;
@@ -295,11 +302,12 @@ export class AcademicGradingRepository {
              next_period.label,
              next_period.start_date::text,
              next_period.review_start_date::text,
-             next_period.end_date::text
+             next_period.end_date::text, sy.status AS school_year_status
       FROM grading_periods current_period
       INNER JOIN grading_periods next_period
         ON next_period.school_year_id = current_period.school_year_id
        AND next_period.order_index > current_period.order_index
+      INNER JOIN school_years sy ON sy.id = next_period.school_year_id
       WHERE current_period.id = ${id}::uuid
       ORDER BY next_period.order_index
       LIMIT 1
@@ -342,7 +350,7 @@ export class AcademicGradingRepository {
     `);
     const row = rows(result)[0];
     if (!row) throw new Error('Failed to create grading period');
-    return mapPeriod(row);
+    return (await this.findGradingPeriod(row.id)) ?? mapPeriod(row);
   }
 
   async updateGradingPeriod(id: string, input: UpdateGradingPeriodInput): Promise<GradingPeriodItem | null> {
@@ -358,7 +366,7 @@ export class AcademicGradingRepository {
       RETURNING id, school_year_id, type, order_index, label, start_date::text, review_start_date::text, end_date::text
     `);
     const row = rows(result)[0];
-    return row ? mapPeriod(row) : null;
+    return row ? this.findGradingPeriod(row.id) : null;
   }
 
   async deleteGradingPeriod(id: string): Promise<boolean> {

@@ -23,6 +23,15 @@ export class ConductModuleError extends Error {
 export class ConductService {
   constructor(private readonly repository: ConductRepository) {}
 
+  private async assertConductReviewOpen(gradingPeriodId: string): Promise<void> {
+    const state = await this.repository.getConductReviewState(gradingPeriodId);
+    if (state === 'open') return;
+    if (state === 'before') {
+      throw new ConductModuleError('La revue de conduite de cette période n’est pas encore ouverte', 409, 'CONDUCT_REVIEW_NOT_OPEN');
+    }
+    throw new ConductModuleError('La fenêtre de revue de conduite est terminée', 409, 'CONDUCT_REVIEW_CLOSED');
+  }
+
   async getPolicy(schoolYearId: string) {
     const policy = await this.repository.findPolicy(schoolYearId);
     if (!policy) throw new ConductModuleError('Année scolaire introuvable', 404, 'SCHOOL_YEAR_NOT_FOUND');
@@ -119,11 +128,9 @@ export class ConductService {
     if (!(await this.repository.gradingPeriodExists(input.grading_period_id))) {
       throw new ConductModuleError('Période d\u2019évaluation introuvable', 404, 'GRADING_PERIOD_NOT_FOUND');
     }
+    await this.assertConductReviewOpen(input.grading_period_id);
     if (await this.repository.isGradingPeriodCompleted(input.grading_period_id, student.classId)) {
       throw new ConductModuleError('Cette période est finalisée : ses bulletins ont déjà été générés', 409, 'GRADING_PERIOD_COMPLETED');
-    }
-    if (!(await this.repository.isConductReviewOpen(input.grading_period_id))) {
-      throw new ConductModuleError('La revue de conduite de cette période n’est pas encore ouverte', 409, 'CONDUCT_REVIEW_NOT_OPEN');
     }
 
     // Un prof ne saisit la conduite que pour les élèves de ses classes.
@@ -178,11 +185,9 @@ export class ConductService {
     if (!(await this.repository.gradingPeriodMatchesClass(input.grading_period_id, input.class_id))) {
       throw new ConductModuleError('La période ne correspond pas à la classe', 400, 'CONDUCT_SCOPE_MISMATCH');
     }
+    await this.assertConductReviewOpen(input.grading_period_id);
     if (await this.repository.isGradingPeriodCompleted(input.grading_period_id, input.class_id)) {
       throw new ConductModuleError('Cette période est finalisée : ses bulletins ont déjà été générés', 409, 'GRADING_PERIOD_COMPLETED');
-    }
-    if (!(await this.repository.isConductReviewOpen(input.grading_period_id))) {
-      throw new ConductModuleError('La revue de conduite de cette période n’est pas encore ouverte', 409, 'CONDUCT_REVIEW_NOT_OPEN');
     }
     const locked = await Promise.all(input.student_ids.map(studentId => this.repository.findFinalGrade(studentId, input.grading_period_id)));
     if (locked.some(Boolean)) {
@@ -274,11 +279,9 @@ export class ConductService {
     if (!(await this.repository.gradingPeriodExists(input.grading_period_id))) {
       throw new ConductModuleError('Période d\u2019évaluation introuvable', 404, 'GRADING_PERIOD_NOT_FOUND');
     }
+    await this.assertConductReviewOpen(input.grading_period_id);
     if (await this.repository.isGradingPeriodCompleted(input.grading_period_id, student.classId)) {
       throw new ConductModuleError('Cette période est finalisée : ses bulletins ont déjà été générés', 409, 'GRADING_PERIOD_COMPLETED');
-    }
-    if (!(await this.repository.isConductReviewOpen(input.grading_period_id))) {
-      throw new ConductModuleError('La revue de conduite de cette période n’est pas encore ouverte', 409, 'CONDUCT_REVIEW_NOT_OPEN');
     }
 
     await this.assertCanManageFinalConduct(student.classId, input.grading_period_id, context);

@@ -104,7 +104,7 @@ describe('F28 — conduite verrouillée', () => {
       findStudentContext: vi.fn().mockResolvedValue({ studentId: 'student', classId: 'class' }),
       gradingPeriodExists: vi.fn().mockResolvedValue(true),
       isGradingPeriodCompleted: vi.fn().mockResolvedValue(completed),
-      isConductReviewOpen: vi.fn().mockResolvedValue(current),
+      getConductReviewState: vi.fn().mockResolvedValue(current ? 'open' : 'before'),
       isHomeroomTeacherForStudent: vi.fn().mockResolvedValue(true),
       upsertConductGrade: vi.fn(),
     };

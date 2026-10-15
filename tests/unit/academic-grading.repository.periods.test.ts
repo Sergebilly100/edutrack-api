@@ -9,8 +9,8 @@ describe('AcademicGradingRepository period capabilities', () => {
     vi.setSystemTime(new Date('2026-11-15T12:00:00.000Z'));
     const execute = vi.fn()
       .mockResolvedValueOnce({ rows: [
-        { id: 'p1', school_year_id: 'y1', type: 'trimester', order_index: 1, label: 'T1', start_date: '2026-09-01', review_start_date: '2026-11-15', end_date: '2026-12-20' },
-        { id: 'p2', school_year_id: 'y1', type: 'trimester', order_index: 2, label: 'T2', start_date: '2026-11-15', review_start_date: '2027-02-15', end_date: '2027-03-31' },
+        { id: 'p1', school_year_id: 'y1', school_year_status: 'active', type: 'trimester', order_index: 1, label: 'T1', start_date: '2026-09-01', review_start_date: '2026-11-15', end_date: '2026-12-20' },
+        { id: 'p2', school_year_id: 'y1', school_year_status: 'active', type: 'trimester', order_index: 2, label: 'T2', start_date: '2026-11-15', review_start_date: '2027-02-15', end_date: '2027-03-31' },
       ] })
       .mockResolvedValueOnce({ rows: [
         { grading_period_id: 'p1', class_id: 'c1', class_closed: true, has_cards: true },
