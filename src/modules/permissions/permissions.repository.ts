@@ -39,6 +39,8 @@ type SchoolConfigRow = {
   sms_enabled: boolean;
   monetize_parent_alerts: boolean;
   allow_teacher_qr_skip: boolean;
+  evaluation_grace_days: number;
+  evaluation_late_days: number;
   logo_url: string | null;
   active_school_year: string | null;
   student_assignment_enabled: boolean;
@@ -173,6 +175,8 @@ export class PermissionsRepository {
         COALESCE(features.is_enabled, false) AS sms_enabled,
         COALESCE(features.monetize_parent_alerts, false) AS monetize_parent_alerts,
         COALESCE(tenants.allow_teacher_qr_skip, false) AS allow_teacher_qr_skip,
+        tenants.evaluation_grace_days,
+        tenants.evaluation_late_days,
         tenants.logo_url,
         tenants.active_school_year
         , COALESCE(features.student_assignment_enabled, false) AS student_assignment_enabled
@@ -612,6 +616,8 @@ export class PermissionsRepository {
       signatureImageUrl?: string | null;
       activeSchoolYear?: string | null;
       allowTeacherQrSkip?: boolean;
+      evaluationGraceDays?: number;
+      evaluationLateDays?: number;
       studentAssignmentEnabled?: boolean;
     }
   ): Promise<void> {
@@ -647,6 +653,8 @@ export class PermissionsRepository {
             THEN ${input.allowTeacherQrSkip ?? false}
           ELSE allow_teacher_qr_skip
         END,
+        evaluation_grace_days = COALESCE(${input.evaluationGraceDays ?? null}, evaluation_grace_days),
+        evaluation_late_days = COALESCE(${input.evaluationLateDays ?? null}, evaluation_late_days),
         updated_at = NOW()
       WHERE schema_name = ${schemaName}
     `);

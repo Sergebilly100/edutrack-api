@@ -6,12 +6,13 @@ const id = (last: string) => `00000000-0000-4000-8000-0000000000${last}`;
 describe('assemblage paginé des notes de direction', () => {
   it('conserve les évaluations sans note et identifie les élèves sans score', async () => {
     const execute = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ grace_days: 7, late_days: 14 }] })
       .mockResolvedValueOnce({ rows: [{ evaluation_count: '2', grade_count: '1', missing_count: '3' }] })
       .mockResolvedValueOnce({ rows: [
-        { id: id('01'), label: 'Devoir noté', evaluation_date: '2026-10-01', type: 'scheduled', coefficient: '2',
+        { id: id('01'), label: 'Devoir noté', evaluation_date: '2026-10-01', type: 'scheduled', coefficient: '2', expected_count: '2', entered_count: '1', last_reminder_at: null,
           subject_id: id('02'), subject_name: 'Maths', teacher_id: id('03'), teacher_name: 'Professeur',
           class_id: id('04'), class_name: '6e A', level_id: id('05'), level_name: '6e', period_id: id('06'), period_name: 'T1' },
-        { id: id('07'), label: 'Devoir vide', evaluation_date: null, type: 'scheduled', coefficient: '1',
+        { id: id('07'), label: 'Devoir vide', evaluation_date: null, type: 'scheduled', coefficient: '1', expected_count: '2', entered_count: '0', last_reminder_at: null,
           subject_id: id('02'), subject_name: 'Maths', teacher_id: id('03'), teacher_name: 'Professeur',
           class_id: id('04'), class_name: '6e A', level_id: id('05'), level_name: '6e', period_id: id('06'), period_name: 'T1' },
       ] })
@@ -30,7 +31,7 @@ describe('assemblage paginé des notes de direction', () => {
       expect.objectContaining({ studentName: 'Koné Moussa', score: null, maxScore: null }),
     ]));
     expect(result.items[1]?.notes.every((note) => note.score === null)).toBe(true);
-    expect(execute).toHaveBeenCalledTimes(3);
+    expect(execute).toHaveBeenCalledTimes(4);
   });
 
   it('regroupe uniquement les élèves notés, par matière, avec le signe de l’ajustement', async () => {

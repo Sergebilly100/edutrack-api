@@ -86,6 +86,8 @@ export const tenants = pgTable('tenants', {
   canExportData: boolean('can_export_data').default(true),
   midYearOnboarding: boolean('mid_year_onboarding').default(false),
   allowTeacherQrSkip: boolean('allow_teacher_qr_skip').notNull().default(false),
+  evaluationGraceDays: integer('evaluation_grace_days').notNull().default(7),
+  evaluationLateDays: integer('evaluation_late_days').notNull().default(14),
   logoUrl: text('logo_url'),
   activeSchoolYear: varchar('active_school_year', { length: 20 }),
 });

@@ -98,6 +98,9 @@ export class EvaluationReviewRepository {
   async list(query: EvaluationReviewQuery) {
     const { schoolYearId, page, pageSize } = query;
     const filter = sql`${scopeFilter(query)} AND e.type = 'scheduled'`;
+    const policy = rows(await this.db.execute<{ grace_days: number; late_days: number }>(sql`
+      SELECT evaluation_grace_days AS grace_days, evaluation_late_days AS late_days
+      FROM public.tenants WHERE schema_name = current_schema() LIMIT 1`))[0] ?? { grace_days: 7, late_days: 14 };
     const summary = rows(await this.db.execute<{ evaluation_count: string; grade_count: string; missing_count: string }>(sql`
       WITH scoped AS (
         SELECT e.id, e.class_id FROM evaluations e JOIN classes c ON c.id = e.class_id
@@ -124,17 +127,45 @@ export class EvaluationReviewRepository {
       id: string; label: string; evaluation_date: string | null; type: 'scheduled' | 'spontaneous'; coefficient: string;
       subject_id: string; subject_name: string; teacher_id: string; teacher_name: string;
       class_id: string; class_name: string; level_id: string; level_name: string; period_id: string; period_name: string;
+      last_reminder_at: Date | null; expected_count: string; entered_count: string;
     }>(sql`
+      WITH counts AS (
+        SELECT e.id,
+          COUNT(DISTINCT st.id)::text AS expected_count,
+          COUNT(DISTINCT eg.student_id)::text AS entered_count
+        FROM evaluations e JOIN classes c ON c.id = e.class_id
+        JOIN subjects s ON s.id = e.subject_id
+        LEFT JOIN enrollments en ON en.class_id = c.id AND en.school_year_id = c.school_year_id AND en.status = 'confirmed'
+        LEFT JOIN students st ON st.id = en.student_id AND st.is_active = true AND c.is_active = true
+        LEFT JOIN evaluation_grades eg ON eg.evaluation_id = e.id AND eg.student_id = st.id
+        WHERE ${filter}
+        GROUP BY e.id
+      )
       SELECT e.id::text, e.label, e.evaluation_date::text, e.type::text, e.coefficient::text,
         s.id::text AS subject_id, s.name AS subject_name, t.id::text AS teacher_id, u.name AS teacher_name,
         c.id::text AS class_id, c.name AS class_name, l.id::text AS level_id, l.name AS level_name,
-        gp.id::text AS period_id, gp.label AS period_name
+        gp.id::text AS period_id, gp.label AS period_name,
+        counts.expected_count, counts.entered_count,
+        (SELECT MAX(nl.created_at) FROM notifications_log nl
+         WHERE nl.related_id = e.id AND nl.channel = 'in_app' AND nl.type = 'custom'
+           AND nl.metadata->>'kind' = 'evaluation_reminder') AS last_reminder_at
       FROM evaluations e JOIN classes c ON c.id = e.class_id JOIN levels l ON l.id = c.level_id
       JOIN subjects s ON s.id = e.subject_id JOIN teachers t ON t.id = e.teacher_id
       JOIN users u ON u.id = t.user_id JOIN grading_periods gp ON gp.id = e.grading_period_id
-      WHERE ${filter} ORDER BY e.evaluation_date DESC NULLS LAST, e.created_at DESC, e.id DESC
+      JOIN counts ON counts.id = e.id
+      WHERE ${filter}
+      ORDER BY ${query.sort === 'teacher' ? sql`u.name ASC, c.name ASC` : query.sort === 'class' ? sql`c.name ASC, u.name ASC` : sql`
+        CASE
+          WHEN counts.expected_count::int > counts.entered_count::int AND e.evaluation_date < CURRENT_DATE
+            AND CURRENT_DATE - e.evaluation_date > ${policy.late_days} THEN 0
+          WHEN counts.expected_count::int > counts.entered_count::int AND e.evaluation_date < CURRENT_DATE
+            AND CURRENT_DATE - e.evaluation_date > ${policy.grace_days} THEN 1
+          WHEN counts.expected_count::int > counts.entered_count::int AND e.evaluation_date <= CURRENT_DATE THEN 2
+          WHEN counts.expected_count::int > 0 AND counts.expected_count::int = counts.entered_count::int THEN 3
+          ELSE 4 END ASC,
+        e.evaluation_date ASC NULLS LAST`}, e.created_at DESC, e.id DESC
       LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`));
-    if (!evaluations.length) return { items: [], summary: { evaluations: Number(summary.evaluation_count), grades: Number(summary.grade_count), missing: Number(summary.missing_count) }, page, pageSize, total: Number(summary.evaluation_count) };
+    if (!evaluations.length) return { items: [], summary: { evaluations: Number(summary.evaluation_count), grades: Number(summary.grade_count), missing: Number(summary.missing_count) }, policy: { graceDays: policy.grace_days, lateDays: policy.late_days }, page, pageSize, total: Number(summary.evaluation_count) };
     const ids = evaluations.map((item) => item.id);
     const notes = rows(await this.db.execute<{
       evaluation_id: string; student_id: string; first_name: string; last_name: string;
@@ -162,13 +193,61 @@ export class EvaluationReviewRepository {
     }
     return {
       items: evaluations.map((e) => ({ id: e.id, label: e.label, date: e.evaluation_date, type: e.type,
+        lastReminderAt: e.last_reminder_at, expectedCount: Number(e.expected_count), enteredCount: Number(e.entered_count),
         coefficient: Number(e.coefficient), subject: { id: e.subject_id, name: e.subject_name },
         teacher: { id: e.teacher_id, name: e.teacher_name }, class: { id: e.class_id, name: e.class_name },
         level: { id: e.level_id, name: e.level_name }, period: { id: e.period_id, name: e.period_name },
         notes: notesByEvaluation.get(e.id) ?? [] })),
       summary: { evaluations: Number(summary.evaluation_count), grades: Number(summary.grade_count), missing: Number(summary.missing_count) },
+      policy: { graceDays: policy.grace_days, lateDays: policy.late_days },
       page, pageSize, total: Number(summary.evaluation_count),
     };
+  }
+
+  async remind(evaluationId: string): Promise<string | 'not_found' | 'not_due' | 'too_soon'> {
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${evaluationId}, 0))`);
+      const context = rows(await tx.execute<{
+        label: string; subject_name: string; class_name: string; teacher_user_id: string;
+        expected_count: string; entered_count: string; days_since: number | null;
+        grace_days: number; last_reminder_at: Date | null; reminded_recently: boolean;
+      }>(sql`
+        SELECT e.label, s.name AS subject_name, c.name AS class_name, t.user_id::text AS teacher_user_id,
+          (SELECT COUNT(DISTINCT st.id)::text FROM enrollments en
+           JOIN students st ON st.id = en.student_id AND st.is_active = true
+           WHERE en.class_id = c.id AND en.school_year_id = c.school_year_id
+             AND en.status = 'confirmed' AND c.is_active = true) AS expected_count,
+          (SELECT COUNT(DISTINCT eg.student_id)::text FROM evaluation_grades eg
+           JOIN enrollments en ON en.student_id = eg.student_id AND en.class_id = c.id
+             AND en.school_year_id = c.school_year_id AND en.status = 'confirmed'
+           JOIN students st ON st.id = en.student_id AND st.is_active = true
+           WHERE eg.evaluation_id = e.id AND c.is_active = true) AS entered_count,
+          CASE WHEN e.evaluation_date IS NULL THEN NULL ELSE CURRENT_DATE - e.evaluation_date END AS days_since,
+          tenant.evaluation_grace_days AS grace_days,
+          (SELECT MAX(nl.created_at) FROM notifications_log nl WHERE nl.related_id = e.id
+            AND nl.channel = 'in_app' AND nl.type = 'custom'
+            AND nl.metadata->>'kind' = 'evaluation_reminder') AS last_reminder_at,
+          EXISTS (SELECT 1 FROM notifications_log nl WHERE nl.related_id = e.id
+            AND nl.channel = 'in_app' AND nl.type = 'custom'
+            AND nl.metadata->>'kind' = 'evaluation_reminder'
+            AND nl.created_at > NOW() - INTERVAL '24 hours') AS reminded_recently
+        FROM evaluations e JOIN classes c ON c.id = e.class_id
+        JOIN subjects s ON s.id = e.subject_id JOIN teachers t ON t.id = e.teacher_id
+        JOIN users u ON u.id = t.user_id AND u.is_active = true
+        JOIN public.tenants tenant ON tenant.schema_name = current_schema()
+        WHERE e.id = ${evaluationId}::uuid AND e.type = 'scheduled' LIMIT 1`))[0];
+      if (!context) return 'not_found';
+      if (Number(context.expected_count) === 0 || Number(context.expected_count) <= Number(context.entered_count)
+        || context.days_since === null || context.days_since <= context.grace_days) return 'not_due';
+      if (context.reminded_recently) return 'too_soon';
+      const message = `Merci de saisir les notes de ${context.label} en ${context.subject_name} (${context.class_name}).`;
+      const inserted = rows(await tx.execute<{ created_at: Date }>(sql`
+        INSERT INTO notifications_log (type, channel, recipient_id, recipient_phone, message, status, related_id, metadata, sent_at)
+        VALUES ('custom', 'in_app', ${context.teacher_user_id}::uuid, '', ${message}, 'sent', ${evaluationId}::uuid,
+          ${JSON.stringify({ kind: 'evaluation_reminder', url: '/academic/evaluations' })}::jsonb, NOW())
+        RETURNING created_at`))[0];
+      return new Date(inserted.created_at).toISOString();
+    });
   }
 
   async listSpontaneous(query: EvaluationReviewQuery) {

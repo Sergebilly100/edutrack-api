@@ -129,6 +129,8 @@ export default async function permissionsController(app: FastifyInstance): Promi
             ...(body.allowTeacherQrSkip !== undefined
               ? { allowTeacherQrSkip: body.allowTeacherQrSkip }
               : {}),
+            ...(body.evaluationGraceDays !== undefined ? { evaluationGraceDays: body.evaluationGraceDays } : {}),
+            ...(body.evaluationLateDays !== undefined ? { evaluationLateDays: body.evaluationLateDays } : {}),
             ...(body.studentAssignmentEnabled !== undefined
               ? { studentAssignmentEnabled: body.studentAssignmentEnabled }
               : {}),

@@ -10,7 +10,10 @@ export const evaluationReviewQuerySchema = z.object({
   studentSearch: z.string().trim().max(80).optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(50).default(20),
+  sort: z.enum(['delay', 'teacher', 'class']).default('delay'),
 });
+
+export const evaluationReminderParamsSchema = z.object({ id: z.string().uuid() });
 
 export const evaluationReviewOptionsSchema = z.object({
   schoolYearId: z.string().uuid().optional(),

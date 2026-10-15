@@ -6,19 +6,22 @@ import { getAuthHeaders, getSeedContext, queryPublic, queryTenant, request } fro
 describe('consultation direction des évaluations', () => {
   it('applique les permissions, les relations, les filtres et la pagination avec les notes manquantes', async () => {
     const suffix = Date.now().toString(36);
+    await queryPublic(`INSERT INTO public.tenants (name, subdomain, schema_name, plan, status)
+      VALUES ('École revue évaluations', $1, $2, 'pro', 'active')
+      ON CONFLICT (schema_name) DO NOTHING`, [`review-${suffix}`, getSeedContext().schemaName]);
     const teacherId = getSeedContext().teacherId;
     const director = await getAuthHeaders('director');
     const teacher = await getAuthHeaders('teacher');
     const staff = await getAuthHeaders('staff');
     const year = (await queryTenant<{ id: string }>(`
       INSERT INTO school_years (label, start_date, end_date, end_of_year_review_start_date, status)
-      VALUES ($1, '2020-09-01', '2021-06-30', '2021-05-31', 'draft') RETURNING id`, [`2020-${suffix}`]))[0]!.id;
+      VALUES ($1, '2020-09-01', '2021-06-30', '2021-05-31', 'closed') RETURNING id`, [`2020-${suffix}`]))[0]!.id;
     const otherYear = (await queryTenant<{ id: string }>(`
       INSERT INTO school_years (label, start_date, end_date, end_of_year_review_start_date, status)
-      VALUES ($1, '2021-09-01', '2022-06-30', '2022-05-31', 'draft') RETURNING id`, [`2021-${suffix}`]))[0]!.id;
+      VALUES ($1, '2021-09-01', '2022-06-30', '2022-05-31', 'closed') RETURNING id`, [`2021-${suffix}`]))[0]!.id;
     const futureYear = (await queryTenant<{ id: string }>(`
       INSERT INTO school_years (label, start_date, end_date, end_of_year_review_start_date, status)
-      VALUES ($1, CURRENT_DATE + 30, CURRENT_DATE + 400, CURRENT_DATE + 350, 'draft') RETURNING id`, [`future-${suffix}`]))[0]!.id;
+      VALUES ($1, CURRENT_DATE + 30, CURRENT_DATE + 400, CURRENT_DATE + 350, 'closed') RETURNING id`, [`future-${suffix}`]))[0]!.id;
     const level = (await queryTenant<{ id: string }>(`
       INSERT INTO levels (name, order_index, is_exam_class) VALUES ($1, 901, false) RETURNING id`, [`Niveau revue ${suffix}`]))[0]!.id;
     const otherLevel = (await queryTenant<{ id: string }>(`
@@ -100,7 +103,7 @@ describe('consultation direction des évaluations', () => {
     expect((await request().get(`${path}/spontaneous`).set(teacher).query(base)).status).toBe(403);
     expect((await request().get(`${path}/spontaneous`).set(staff).query(base)).status).toBe(403);
     const options = await request().get(`${path}/options`).set(director).query({ schoolYearId: year, gradingPeriodId: period, levelId: level, classId });
-    expect(options.status).toBe(200);
+    expect(options.status, JSON.stringify(options.body)).toBe(200);
     expect(options.body.gradingPeriods.some((item: { id: string }) => item.id === futurePeriod)).toBe(false);
     expect(options.body.gradingPeriods.find((item: { id: string }) => item.id === period).hasEvaluations).toBe(true);
     expect(options.body.subjects.map((item: { id: string }) => item.id)).toEqual(expect.arrayContaining([subject, otherSubject]));
@@ -130,6 +133,31 @@ describe('consultation direction des évaluations', () => {
     expect(all.body.items.some((item: { id: string }) => item.id === second)).toBe(true);
     expect(all.body.items.some((item: { id: string }) => item.id === third)).toBe(true);
     expect(all.body.items.every((item: { type: string }) => item.type === 'scheduled')).toBe(true);
+    expect(all.body.policy).toEqual({ graceDays: 7, lateDays: 14 });
+    expect(all.body.items[0].id).toBe(second);
+    const invalidSettings = await request().patch('/api/v1/permissions/config/school').set(director)
+      .send({ evaluationGraceDays: 15, evaluationLateDays: 14 });
+    expect(invalidSettings.status).toBe(400);
+    expect(invalidSettings.body.code).toBe('INVALID_EVALUATION_DELAYS');
+    const settingsUpdate = await request().patch('/api/v1/permissions/config/school').set(director)
+      .send({ evaluationGraceDays: 2, evaluationLateDays: 4 });
+    expect(settingsUpdate.status, JSON.stringify(settingsUpdate.body)).toBe(200);
+    const configured = await request().get(path).set(director).query(base);
+    expect(configured.body.policy).toEqual({ graceDays: 2, lateDays: 4 });
+    const reminder = await request().post(`${path}/${first}/remind`).set(director);
+    expect(reminder.status, JSON.stringify(reminder.body)).toBe(200);
+    expect(reminder.body.lastReminderAt).toBeTruthy();
+    expect((await request().post(`${path}/${first}/remind`).set(director)).status).toBe(409);
+    const teacherInbox = await request().get('/api/v1/teacher/notifications').set(teacher);
+    expect(teacherInbox.status).toBe(200);
+    expect(teacherInbox.body).toEqual(expect.arrayContaining([expect.objectContaining({
+      type: 'custom', message: expect.stringContaining('Devoir noté'),
+    })]));
+    const withTrace = await request().get(path).set(director).query(base);
+    expect(withTrace.body.items.find((item: { id: string }) => item.id === first).lastReminderAt).toBeTruthy();
+    expect((await request().post(`${path}/${first}/remind`).set(teacher)).status).toBe(403);
+    expect((await request().patch('/api/v1/permissions/config/school').set(director)
+      .send({ evaluationGraceDays: 7, evaluationLateDays: 14 })).status).toBe(200);
     const spontaneous = await request().get(`${path}/spontaneous`).set(director).query(base);
     expect(spontaneous.status, JSON.stringify(spontaneous.body)).toBe(200);
     expect(spontaneous.body).toMatchObject({ totalStudents: 2, totalNotes: 3 });

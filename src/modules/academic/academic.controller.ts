@@ -25,7 +25,7 @@ import {
 } from './academic-grading.types.js';
 import { AcademicModuleError, buildAcademicService } from './academic.service.js';
 import { EvaluationReviewError, buildEvaluationReviewService } from './evaluation-review.service.js';
-import { evaluationReviewOptionsSchema, evaluationReviewQuerySchema } from './evaluation-review.types.js';
+import { evaluationReminderParamsSchema, evaluationReviewOptionsSchema, evaluationReviewQuerySchema } from './evaluation-review.types.js';
 import {
   classIdParamsSchema,
   createClassBodySchema,
@@ -63,7 +63,8 @@ const handleError = (
   }
 
   if (error instanceof EvaluationReviewError) {
-    return reply.code(400).send({ error: error.message, code: error.code, statusCode: 400 });
+    const statusCode = error.code === 'EVALUATION_NOT_FOUND' ? 404 : error.code === 'EVALUATION_REMINDER_TOO_SOON' ? 409 : 400;
+    return reply.code(statusCode).send({ error: error.message, code: error.code, statusCode });
   }
 
   request.log.error({ err: error }, '[academic] Unexpected error');
@@ -120,6 +121,15 @@ export default async function academicController(app: FastifyInstance): Promise<
       const query = evaluationReviewQuerySchema.parse(request.query ?? {});
       return reply.send(await withTenantSchema(request.claims!.schemaName, (db) =>
         buildEvaluationReviewService(db).listSpontaneous(query)));
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+  app.post('/api/v1/academic/evaluations/:id/remind', { preHandler: requirePermission('evaluations.view') }, async (request, reply) => {
+    try {
+      const { id } = evaluationReminderParamsSchema.parse(request.params ?? {});
+      return reply.send(await withTenantSchema(request.claims!.schemaName, (db) =>
+        buildEvaluationReviewService(db).remind(id)));
     } catch (error) {
       return handleError(request, reply, error);
     }

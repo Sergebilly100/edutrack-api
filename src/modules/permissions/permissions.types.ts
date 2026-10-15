@@ -176,6 +176,8 @@ export const updateSchoolConfigBodySchema = z
       .nullable()
       .optional(),
     allowTeacherQrSkip: z.boolean().optional(),
+    evaluationGraceDays: z.number().int().min(0).max(365).optional(),
+    evaluationLateDays: z.number().int().min(1).max(365).optional(),
     studentAssignmentEnabled: z.boolean().optional(),
   })
   .refine(
@@ -187,6 +189,8 @@ export const updateSchoolConfigBodySchema = z
       value.logoUrl !== undefined ||
       value.activeSchoolYear !== undefined ||
       value.allowTeacherQrSkip !== undefined ||
+      value.evaluationGraceDays !== undefined ||
+      value.evaluationLateDays !== undefined ||
       value.studentAssignmentEnabled !== undefined,
     {
       message: 'At least one field must be provided',

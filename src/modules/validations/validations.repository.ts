@@ -1188,7 +1188,8 @@ export class ValidationsRepository {
         metadata
       FROM notifications_log
       WHERE recipient_id = ${userId}::uuid
-        AND type IN ('attendance_rejected', 'attendance_approved', 'scan_end_warning', 'scan_end_sanction', 'scan_end_sanction_cancelled')
+        AND (type IN ('attendance_rejected', 'attendance_approved', 'scan_end_warning', 'scan_end_sanction', 'scan_end_sanction_cancelled')
+          OR (type = 'custom' AND channel = 'in_app' AND metadata->>'kind' = 'evaluation_reminder'))
       ORDER BY created_at DESC
       LIMIT 50
     `);
@@ -1209,7 +1210,8 @@ export class ValidationsRepository {
       FROM notifications_log
       WHERE id = ${notificationId}::uuid
         AND recipient_id = ${userId}::uuid
-        AND type IN ('attendance_rejected', 'attendance_approved', 'scan_end_warning', 'scan_end_sanction', 'scan_end_sanction_cancelled')
+        AND (type IN ('attendance_rejected', 'attendance_approved', 'scan_end_warning', 'scan_end_sanction', 'scan_end_sanction_cancelled')
+          OR (type = 'custom' AND channel = 'in_app' AND metadata->>'kind' = 'evaluation_reminder'))
       LIMIT 1
     `);
     return getRows(result)[0] ?? null;
@@ -1228,7 +1230,8 @@ export class ValidationsRepository {
       UPDATE notifications_log
       SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('read_at', NOW()::text)
       WHERE recipient_id = ${userId}::uuid
-        AND type IN ('attendance_rejected', 'attendance_approved', 'scan_end_warning', 'scan_end_sanction', 'scan_end_sanction_cancelled')
+        AND (type IN ('attendance_rejected', 'attendance_approved', 'scan_end_warning', 'scan_end_sanction', 'scan_end_sanction_cancelled')
+          OR (type = 'custom' AND channel = 'in_app' AND metadata->>'kind' = 'evaluation_reminder'))
         AND (metadata->>'read_at' IS NULL)
     `);
   }

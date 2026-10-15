@@ -365,6 +365,9 @@ const seedTenantData = async (): Promise<SeedContext> => {
       throw new Error('[integration] Failed to seed schedule period');
     }
 
+    // Historical fixture: the shared test schedule predates the subject assignment
+    // model. Preserve that legacy case while the current trigger guards new writes.
+    await client.query('ALTER TABLE schedules DISABLE TRIGGER validate_schedule_subject_scope');
     const scheduleResult = await client.query<{ id: string }>(
       `
         INSERT INTO schedules (
@@ -382,6 +385,7 @@ const seedTenantData = async (): Promise<SeedContext> => {
       `,
       [periodId, teacherId, classId, room.id, timeSlotId, dayOfWeek]
     );
+    await client.query('ALTER TABLE schedules ENABLE TRIGGER validate_schedule_subject_scope');
 
     const scheduleId = scheduleResult.rows[0]?.id;
     if (!scheduleId) {

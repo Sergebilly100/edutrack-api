@@ -181,6 +181,8 @@ export class PermissionsService {
         ...(includeAdministration ? { currentUsers: adminUsersCount, totalUsers: currentUsers, adminUsersCount } : {}),
         canEditSmsTemplate: schoolConfig.can_edit_sms_template,
         allowTeacherQrSkip: schoolConfig.allow_teacher_qr_skip,
+        evaluationGraceDays: schoolConfig.evaluation_grace_days,
+        evaluationLateDays: schoolConfig.evaluation_late_days,
         logoUrl: schoolConfig.logo_url,
         activeSchoolYear: schoolConfig.active_school_year,
         studentAssignmentEnabled: schoolConfig.student_assignment_enabled,
@@ -207,9 +209,20 @@ export class PermissionsService {
       signatureImageUrl?: string | null;
       activeSchoolYear?: string | null;
       allowTeacherQrSkip?: boolean;
+      evaluationGraceDays?: number;
+      evaluationLateDays?: number;
       studentAssignmentEnabled?: boolean;
     }
   ) {
+    if (input.evaluationGraceDays !== undefined || input.evaluationLateDays !== undefined) {
+      const current = await this.repository.getSchoolConfigBySchemaName(schemaName);
+      if (!current) throw new PermissionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
+      const grace = input.evaluationGraceDays ?? current.evaluation_grace_days;
+      const late = input.evaluationLateDays ?? current.evaluation_late_days;
+      if (grace >= late) {
+        throw new PermissionsModuleError('Le seuil de retard doit dépasser le délai de grâce', 400, 'INVALID_EVALUATION_DELAYS');
+      }
+    }
     await this.repository.updateSchoolConfig(schemaName, input);
     return this.getSchoolConfig(schemaName);
   }

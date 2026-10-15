@@ -71,11 +71,17 @@ describe('configuration: adresse et contrats API', () => {
 
   it('renvoie une erreur métier 400 pour un professeur sans affectation, sans créer d’affectation', async () => {
     const context = getSeedContext();
+    const [level] = await queryTenant<{ id: string }>(
+      "INSERT INTO levels (name, order_index) VALUES ('Revue sans affectation', 986) RETURNING id"
+    );
+    const [subject] = await queryTenant<{ id: string }>(
+      "INSERT INTO subjects (level_id, name, coefficient) VALUES ($1, 'Mathématiques', 3) RETURNING id", [level!.id]
+    );
     const [slot] = await queryTenant<{ schedule_period_id: string; class_id: string; room_id: string; time_slot_id: string }>(
       'SELECT schedule_period_id, class_id, room_id, time_slot_id FROM schedules WHERE id=$1', [context.scheduleId]
     );
     const response = await request().post('/api/v1/schedule').set(await getAuthHeaders('director')).send({
-      ...slot, teacher_id: context.teacherId, subject: 'Mathématiques', day_of_week: 1,
+      ...slot, teacher_id: context.teacherId, subject_id: subject!.id, day_of_week: 1,
     });
     expect(response.status, JSON.stringify(response.body)).toBe(400);
     expect(response.body.code).toBe('TEACHER_ASSIGNMENT_REQUIRED');
