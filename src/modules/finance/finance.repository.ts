@@ -79,6 +79,19 @@ export type TuitionPlanRequiredContext = {
   levelName: string;
 };
 
+export type StudentTuitionScheduleAgreement = {
+  id: string;
+  studentId: string;
+  schoolYearId: string;
+  reason: string;
+  createdByUserId: string | null;
+  updatedByUserId: string | null;
+  updatedByName: string | null;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+  scheduleSteps: CumulativeScheduleStep[];
+};
+
 export type MandatorySubscriptionPlanRow = {
   id: string;
   amount: string | number;
@@ -296,9 +309,10 @@ export class FinanceRepository {
       LEFT JOIN LATERAL (
         SELECT COUNT(*)::int AS step_count,
                MAX(cumulative_amount_expected) FILTER (WHERE due_date <= ${asOfDate}::date) AS expected
-        FROM student_tuition_schedule_steps
-        WHERE student_id = s.id
-          AND school_year_id = ${schoolYearId}::uuid
+        FROM student_tuition_schedule_steps step
+        INNER JOIN student_tuition_schedule_agreements agreement ON agreement.id = step.agreement_id
+        WHERE agreement.student_id = s.id
+          AND agreement.school_year_id = ${schoolYearId}::uuid
       ) custom_steps ON true
       LEFT JOIN LATERAL (
         SELECT MAX(cumulative_amount_expected) AS expected
@@ -618,50 +632,124 @@ export class FinanceRepository {
     return rows(result)[0];
   }
 
-  async listStudentTuitionSchedule(studentId: string, schoolYearId: string): Promise<CumulativeScheduleStep[]> {
-    const result = await this.db.execute<{ due_date: string; cumulative_amount_expected: string | number }>(sql`
-      SELECT due_date::text, cumulative_amount_expected
-      FROM student_tuition_schedule_steps
-      WHERE student_id = ${studentId}::uuid
-        AND school_year_id = ${schoolYearId}::uuid
-      ORDER BY due_date ASC
+  async getSchoolYearDateRange(schoolYearId: string): Promise<{ startDate: string; endDate: string } | null> {
+    const result = await this.db.execute<{ start_date: string; end_date: string }>(sql`
+      SELECT start_date::text, end_date::text FROM school_years WHERE id = ${schoolYearId}::uuid LIMIT 1
     `);
-    return rows<{ due_date: string; cumulative_amount_expected: string | number }>(result).map((step) => ({
-      dueDate: step.due_date,
-      cumulativeAmountExpected: FinanceRepository.toNumber(step.cumulative_amount_expected),
-    }));
+    const year = rows<{ start_date: string; end_date: string }>(result)[0];
+    return year ? { startDate: year.start_date, endDate: year.end_date } : null;
+  }
+
+  async getStudentTuitionScheduleAgreement(
+    studentId: string,
+    schoolYearId: string
+  ): Promise<StudentTuitionScheduleAgreement | null> {
+    const result = await this.db.execute<{
+      id: string; student_id: string; school_year_id: string; reason: string;
+      created_by_user_id: string | null; updated_by_user_id: string | null; updated_by_name: string | null;
+      created_at: string | Date; updated_at: string | Date; schedule_steps: unknown;
+    }>(sql`
+      SELECT agreement.id::text, agreement.student_id::text, agreement.school_year_id::text,
+             agreement.reason, agreement.created_by_user_id::text, agreement.updated_by_user_id::text,
+             updated_by.name AS updated_by_name,
+             agreement.created_at, agreement.updated_at,
+             COALESCE(json_agg(json_build_object(
+               'dueDate', step.due_date::text,
+               'cumulativeAmountExpected', step.cumulative_amount_expected
+             ) ORDER BY step.due_date) FILTER (WHERE step.id IS NOT NULL), '[]'::json) AS schedule_steps
+      FROM student_tuition_schedule_agreements agreement
+      LEFT JOIN student_tuition_schedule_steps step ON step.agreement_id = agreement.id
+      LEFT JOIN users updated_by ON updated_by.id = agreement.updated_by_user_id
+      WHERE agreement.student_id = ${studentId}::uuid AND agreement.school_year_id = ${schoolYearId}::uuid
+      GROUP BY agreement.id, updated_by.name
+      LIMIT 1
+    `);
+    const agreement = rows<{
+      id: string; student_id: string; school_year_id: string; reason: string;
+      created_by_user_id: string | null; updated_by_user_id: string | null; updated_by_name: string | null;
+      created_at: string | Date; updated_at: string | Date; schedule_steps: unknown;
+    }>(result)[0];
+    if (!agreement) return null;
+    const scheduleSteps = Array.isArray(agreement.schedule_steps) ? agreement.schedule_steps : [];
+    return {
+      id: agreement.id,
+      studentId: agreement.student_id,
+      schoolYearId: agreement.school_year_id,
+      reason: agreement.reason,
+      createdByUserId: agreement.created_by_user_id,
+      updatedByUserId: agreement.updated_by_user_id,
+      updatedByName: agreement.updated_by_name,
+      createdAt: agreement.created_at,
+      updatedAt: agreement.updated_at,
+      scheduleSteps: scheduleSteps.map((step) => {
+        const row = step as { dueDate?: string; cumulativeAmountExpected?: string | number };
+        return {
+          dueDate: String(row.dueDate ?? ''),
+          cumulativeAmountExpected: FinanceRepository.toNumber(row.cumulativeAmountExpected),
+        };
+      }),
+    };
   }
 
   async replaceStudentTuitionSchedule(input: {
     studentId: string;
     schoolYearId: string;
+    reason: string;
+    actorUserId: string;
     scheduleSteps: readonly CumulativeScheduleStep[];
-  }): Promise<void> {
-    await this.db.execute(sql`
-      DELETE FROM student_tuition_schedule_steps
-      WHERE student_id = ${input.studentId}::uuid
-        AND school_year_id = ${input.schoolYearId}::uuid
-    `);
-    for (const step of input.scheduleSteps) {
+  }): Promise<StudentTuitionScheduleAgreement> {
+    const existing = await this.getStudentTuitionScheduleAgreement(input.studentId, input.schoolYearId);
+    const agreementId = existing?.id ?? rows<{ id: string }>(await this.db.execute<{ id: string }>(sql`
+      INSERT INTO student_tuition_schedule_agreements (
+        student_id, school_year_id, reason, created_by_user_id, updated_by_user_id
+      ) VALUES (
+        ${input.studentId}::uuid, ${input.schoolYearId}::uuid, ${input.reason},
+        ${input.actorUserId}::uuid, ${input.actorUserId}::uuid
+      ) RETURNING id::text
+    `))[0]?.id;
+    if (!agreementId) throw new Error('Failed to create student tuition schedule agreement');
+    if (existing) {
       await this.db.execute(sql`
-        INSERT INTO student_tuition_schedule_steps (
-          student_id, school_year_id, due_date, cumulative_amount_expected
-        ) VALUES (
-          ${input.studentId}::uuid, ${input.schoolYearId}::uuid,
-          ${step.dueDate}::date, ${step.cumulativeAmountExpected}
-        )
+        UPDATE student_tuition_schedule_agreements
+        SET reason = ${input.reason}, updated_by_user_id = ${input.actorUserId}::uuid, updated_at = NOW()
+        WHERE id = ${agreementId}::uuid
       `);
     }
+    await this.db.execute(sql`DELETE FROM student_tuition_schedule_steps WHERE agreement_id = ${agreementId}::uuid`);
+    for (const step of input.scheduleSteps) {
+      await this.db.execute(sql`
+        INSERT INTO student_tuition_schedule_steps (agreement_id, due_date, cumulative_amount_expected)
+        VALUES (${agreementId}::uuid, ${step.dueDate}::date, ${step.cumulativeAmountExpected})
+      `);
+    }
+    const agreement = await this.getStudentTuitionScheduleAgreement(input.studentId, input.schoolYearId);
+    if (!agreement) throw new Error('Failed to load student tuition schedule agreement');
+    return agreement;
   }
 
-  async deleteStudentTuitionSchedule(studentId: string, schoolYearId: string): Promise<boolean> {
-    const result = await this.db.execute<{ id: string }>(sql`
-      DELETE FROM student_tuition_schedule_steps
-      WHERE student_id = ${studentId}::uuid
-        AND school_year_id = ${schoolYearId}::uuid
-      RETURNING id::text
+  async deleteStudentTuitionSchedule(studentId: string, schoolYearId: string): Promise<StudentTuitionScheduleAgreement | null> {
+    const agreement = await this.getStudentTuitionScheduleAgreement(studentId, schoolYearId);
+    if (!agreement) return null;
+    await this.db.execute(sql`DELETE FROM student_tuition_schedule_agreements WHERE id = ${agreement.id}::uuid`);
+    return agreement;
+  }
+
+  async recordStudentTuitionScheduleAudit(input: {
+    actorUserId: string;
+    actorRole: string;
+    action: 'tuition.student_schedule.created' | 'tuition.student_schedule.updated' | 'tuition.student_schedule.reset';
+    before: Record<string, unknown> | null;
+    after: Record<string, unknown>;
+  }): Promise<void> {
+    await this.db.execute(sql`
+      INSERT INTO public.audit_financial_events (
+        tenant_id, actor_id, actor_role, action, payload_before, payload_after
+      )
+      SELECT id, ${input.actorUserId}::uuid, ${input.actorRole}, ${input.action},
+             ${input.before === null ? null : JSON.stringify(input.before)}::jsonb,
+             ${JSON.stringify(input.after)}::jsonb
+      FROM public.tenants WHERE schema_name = current_schema()
     `);
-    return rows<{ id: string }>(result).length > 0;
   }
 
   async notifyDirectorOfOverride(input: {

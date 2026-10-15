@@ -38,6 +38,7 @@ import {
   upsertProviderSettingBodySchema,
   upsertTuitionPlanBodySchema,
   upsertStudentTuitionScheduleBodySchema,
+  resetStudentTuitionScheduleBodySchema,
   cashJournalQuerySchema,
   cashJournalExportQuerySchema,
   paymentHistoryQuerySchema,
@@ -436,33 +437,43 @@ export default async function financeController(
     } catch (error) { return handleError(request, reply, error); }
   });
 
-  app.get('/api/v1/tuition/student-schedules/:studentId', { preHandler: requireAnyPermission(['tuition.view', 'tuition.grant_discount']) }, async (request, reply) => {
+  app.get('/api/v1/tuition/student-schedules/:studentId', { preHandler: requireAnyPermission(['tuition.view', 'tuition.manage_student_schedule']) }, async (request, reply) => {
     try {
       const { studentId } = studentFinancialParamsSchema.parse(request.params);
       const { school_year_id: schoolYearId } = schoolYearQuerySchema.parse(request.query);
-      return reply.send({ scheduleSteps: await withService(request, (service) =>
-        service.getStudentTuitionSchedule(studentId, schoolYearId)) });
+      return reply.send(await withService(request, (service) => service.getStudentTuitionSchedule(
+        studentId,
+        schoolYearId,
+        request.permissions?.has('tuition.manage_student_schedule') === true,
+      )));
     } catch (error) { return handleError(request, reply, error); }
   });
 
-  app.put('/api/v1/tuition/student-schedules/:studentId', { preHandler: requirePermission('tuition.grant_discount') }, async (request, reply) => {
+  app.put('/api/v1/tuition/student-schedules/:studentId', { preHandler: requirePermission('tuition.manage_student_schedule') }, async (request, reply) => {
     try {
       const { studentId } = studentFinancialParamsSchema.parse(request.params);
       const body = upsertStudentTuitionScheduleBodySchema.parse(request.body);
       return reply.send(await withService(request, (service) => service.replaceStudentTuitionSchedule({
         studentId,
         schoolYearId: body.schoolYearId,
-        scheduleSteps: body.scheduleSteps,
+        reason: body.reason,
+        installments: body.installments,
+        actorUserId: request.user!.userId,
+        actorRole: request.claims!.role,
       })));
     } catch (error) { return handleError(request, reply, error); }
   });
 
-  app.delete('/api/v1/tuition/student-schedules/:studentId', { preHandler: requirePermission('tuition.grant_discount') }, async (request, reply) => {
+  app.delete('/api/v1/tuition/student-schedules/:studentId', { preHandler: requirePermission('tuition.manage_student_schedule') }, async (request, reply) => {
     try {
       const { studentId } = studentFinancialParamsSchema.parse(request.params);
       const { school_year_id: schoolYearId } = schoolYearQuerySchema.parse(request.query);
+      const body = resetStudentTuitionScheduleBodySchema.parse(request.body);
       return reply.send(await withService(request, (service) =>
-        service.deleteStudentTuitionSchedule(studentId, schoolYearId)));
+        service.deleteStudentTuitionSchedule({
+          studentId, schoolYearId, reason: body.reason,
+          actorUserId: request.user!.userId, actorRole: request.claims!.role,
+        })));
     } catch (error) { return handleError(request, reply, error); }
   });
 

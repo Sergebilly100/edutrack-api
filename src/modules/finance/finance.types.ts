@@ -115,10 +115,15 @@ export const upsertTuitionPlanBodySchema = z.object({
 
 export const upsertStudentTuitionScheduleBodySchema = z.object({
   schoolYearId: uuidSchema,
-  scheduleSteps: z.array(z.object({
+  reason: z.string().trim().min(1, 'Le motif de l’accord est obligatoire').max(1_000),
+  installments: z.array(z.object({
     dueDate: civilDateSchema,
-    cumulativeAmountExpected: moneySchema,
+    amount: positiveMoneySchema,
   }).strict()).min(1),
+}).strict();
+
+export const resetStudentTuitionScheduleBodySchema = z.object({
+  reason: z.string().trim().min(1, 'Le motif du retour au plan commun est obligatoire').max(1_000),
 }).strict();
 
 export const upsertProviderSettingBodySchema = z.object({

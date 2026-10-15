@@ -65,6 +65,17 @@ const runMigrationsForSchema = async (pool: Pool, schemaName: string): Promise<v
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
 
+      // C44 remplace l'ancienne identité élève/année des lignes par un accord.
+      // Lors d'un replay idempotent, ne rejouons pas la migration historique qui
+      // tenterait de recréer son index sur des colonnes désormais supprimées.
+      if (migrationFile === '0071_student_tuition_schedule_steps.sql') {
+        const hasLegacyColumns = await client.query<{ table_exists: boolean; legacy_exists: boolean }>(`
+          SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'student_tuition_schedule_steps') AS table_exists,
+                 EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'student_tuition_schedule_steps' AND column_name = 'student_id') AS legacy_exists
+        `, [schemaName]);
+        if (hasLegacyColumns.rows[0]?.table_exists && !hasLegacyColumns.rows[0]?.legacy_exists) continue;
+      }
+
       if (migrationFile === '0090_finance_drop_payment_status_index.sql') {
         await client.query('BEGIN');
         try {
@@ -99,6 +110,24 @@ const runMigrationsForSchema = async (pool: Pool, schemaName: string): Promise<v
             await client.query('ROLLBACK');
             continue;
           }
+          for (const statement of statements) await client.query(statement);
+          await client.query('COMMIT');
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        }
+        continue;
+      }
+
+      if (migrationFile === '0093_student_tuition_schedule_agreements.sql') {
+        const state = await client.query<{ agreement_exists: boolean; legacy_columns_exist: boolean }>(`
+          SELECT
+            EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'student_tuition_schedule_agreements') AS agreement_exists,
+            EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'student_tuition_schedule_steps' AND column_name = 'student_id') AS legacy_columns_exist
+        `, [schemaName]);
+        if (state.rows[0]?.agreement_exists && !state.rows[0]?.legacy_columns_exist) continue;
+        await client.query('BEGIN');
+        try {
           for (const statement of statements) await client.query(statement);
           await client.query('COMMIT');
         } catch (error) {

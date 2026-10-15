@@ -8,7 +8,7 @@ const tables = [
   'rooms', 'time_slots', 'schedule_periods', 'schedules', 'teacher_subject_assignments',
   'students', 'enrollments', 'parents', 'parent_subscriptions', 'parent_student_links',
   'subscription_payments', 'tuition_plans', 'tuition_schedule_steps', 'student_tuition_overrides',
-  'student_tuition_schedule_steps', 'payments', 'attendances_teacher', 'attendances_student',
+  'student_tuition_schedule_agreements', 'student_tuition_schedule_steps', 'payments', 'attendances_teacher', 'attendances_student',
   'import_history', 'student_historical_sources',
 ] as const;
 

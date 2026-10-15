@@ -521,30 +521,50 @@ export const tuitionScheduleSteps = tenant.table(
   })
 );
 
-export const studentTuitionScheduleSteps = tenant.table(
-  'student_tuition_schedule_steps',
+export const studentTuitionScheduleAgreements = tenant.table(
+  'student_tuition_schedule_agreements',
   {
     id: uuid('id').defaultRandom().primaryKey(),
     studentId: uuid('student_id').notNull().references(() => students.id, { onDelete: 'cascade' }),
     schoolYearId: uuid('school_year_id').notNull().references(() => schoolYears.id, { onDelete: 'cascade' }),
+    reason: text('reason').notNull(),
+    // Les accords créés désormais ont toujours un acteur. Ces deux colonnes restent
+    // nullables uniquement pour préserver les anciennes courbes sans auteur connu.
+    createdByUserId: uuid('created_by_user_id').references(() => users.id),
+    updatedByUserId: uuid('updated_by_user_id').references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    studentTuitionScheduleAgreementsStudentYearUnique: unique('student_tuition_schedule_agreements_student_year_unique').on(
+      table.studentId,
+      table.schoolYearId
+    ),
+    studentTuitionScheduleAgreementsYearIdx: index('idx_student_tuition_schedule_agreements_year').on(table.schoolYearId),
+  })
+);
+
+export const studentTuitionScheduleSteps = tenant.table(
+  'student_tuition_schedule_steps',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    agreementId: uuid('agreement_id').notNull().references(() => studentTuitionScheduleAgreements.id, { onDelete: 'cascade' }),
     dueDate: date('due_date', { mode: 'string' }).notNull(),
     cumulativeAmountExpected: numeric('cumulative_amount_expected', { precision: 12, scale: 2 }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   },
   (table) => ({
-    studentTuitionScheduleStepsStudentYearDateUnique: unique('student_tuition_schedule_steps_student_year_date_unique').on(
-      table.studentId,
-      table.schoolYearId,
+    studentTuitionScheduleStepsAgreementDateUnique: unique('student_tuition_schedule_steps_agreement_date_unique').on(
+      table.agreementId,
       table.dueDate
     ),
     studentTuitionScheduleStepsAmountNonNegative: check(
       'student_tuition_schedule_steps_amount_non_negative',
       sql`${table.cumulativeAmountExpected} >= 0`
     ),
-    studentTuitionScheduleStepsStudentYearDueDateIdx: index('idx_student_tuition_schedule_steps_student_year_due_date').on(
-      table.studentId,
-      table.schoolYearId,
+    studentTuitionScheduleStepsAgreementDueDateIdx: index('idx_student_tuition_schedule_steps_agreement_due_date').on(
+      table.agreementId,
       table.dueDate
     ),
   })

@@ -101,8 +101,9 @@ export class FinancialCacheRepository {
                MAX(stss.cumulative_amount_expected) FILTER (WHERE stss.due_date <= CURRENT_DATE) AS expected_to_date,
                MIN(stss.due_date) FILTER (WHERE stss.due_date <= CURRENT_DATE) AS earliest_overdue_step_due_date
         FROM student_tuition_schedule_steps stss
-        WHERE stss.student_id = scope.student_id
-          AND stss.school_year_id = ${schoolYearId}::uuid
+        INNER JOIN student_tuition_schedule_agreements agreement ON agreement.id = stss.agreement_id
+        WHERE agreement.student_id = scope.student_id
+          AND agreement.school_year_id = ${schoolYearId}::uuid
       ) custom_steps ON true
       LEFT JOIN LATERAL (
         SELECT MAX(tss.cumulative_amount_expected) FILTER (WHERE tss.due_date <= CURRENT_DATE) AS expected_to_date,
@@ -391,39 +392,52 @@ export class FinancialCacheRepository {
 
   async listUpcomingInstallments(schoolYearId: string) {
     const result = await this.db.execute<Record<string, string | number>>(sql`
-      WITH step_amounts AS (
-        SELECT tss.tuition_plan_id,
-               tss.due_date,
-               GREATEST(
-                 tss.cumulative_amount_expected - COALESCE(
-                   LAG(tss.cumulative_amount_expected) OVER (
-                     PARTITION BY tss.tuition_plan_id ORDER BY tss.due_date
-                   ), 0
-                 ), 0
-               ) AS installment_amount
-        FROM tuition_schedule_steps tss
-        INNER JOIN tuition_plans tp ON tp.id = tss.tuition_plan_id
-        WHERE tp.school_year_id = ${schoolYearId}::uuid
-      )
-      SELECT sa.due_date::text AS due_date,
-             COALESCE(SUM(sa.installment_amount * enrolled.student_count), 0)::text AS expected_amount,
-             COALESCE(SUM(enrolled.student_count), 0)::int AS student_count
-      FROM step_amounts sa
-      INNER JOIN tuition_plans tp ON tp.id = sa.tuition_plan_id
-      LEFT JOIN LATERAL (
-        SELECT COUNT(*)::int AS student_count
+      WITH school_year AS (
+        SELECT start_date, end_date
+        FROM school_years
+        WHERE id = ${schoolYearId}::uuid
+      ), eligible_students AS (
+        SELECT e.student_id, e.class_id, c.level_id
         FROM enrollments e
         INNER JOIN students s ON s.id = e.student_id AND s.is_active = true
         INNER JOIN classes c ON c.id = e.class_id
-        WHERE e.status = 'confirmed' AND e.school_year_id = ${schoolYearId}::uuid
-          AND c.is_active = true
-          AND c.school_year_id = ${schoolYearId}::uuid
-          AND c.level_id = tp.level_id
-      ) enrolled ON true
-      WHERE sa.due_date >= CURRENT_DATE
-      GROUP BY sa.due_date
-      HAVING SUM(enrolled.student_count) > 0
-      ORDER BY sa.due_date ASC
+          AND c.school_year_id = ${schoolYearId}::uuid AND c.is_active = true
+        WHERE e.school_year_id = ${schoolYearId}::uuid AND e.status = 'confirmed'
+      ), selected_steps AS (
+        SELECT eligible.student_id, individual.due_date, individual.cumulative_amount_expected
+        FROM eligible_students eligible
+        INNER JOIN student_tuition_schedule_agreements agreement
+          ON agreement.student_id = eligible.student_id AND agreement.school_year_id = ${schoolYearId}::uuid
+        INNER JOIN student_tuition_schedule_steps individual ON individual.agreement_id = agreement.id
+        CROSS JOIN school_year
+        WHERE individual.due_date BETWEEN school_year.start_date AND school_year.end_date
+        UNION ALL
+        SELECT eligible.student_id, standard.due_date, standard.cumulative_amount_expected
+        FROM eligible_students eligible
+        INNER JOIN tuition_plans plan
+          ON plan.level_id = eligible.level_id AND plan.school_year_id = ${schoolYearId}::uuid
+        INNER JOIN tuition_schedule_steps standard ON standard.tuition_plan_id = plan.id
+        CROSS JOIN school_year
+        WHERE NOT EXISTS (
+          SELECT 1 FROM student_tuition_schedule_agreements agreement
+          WHERE agreement.student_id = eligible.student_id AND agreement.school_year_id = ${schoolYearId}::uuid
+        )
+          AND standard.due_date BETWEEN school_year.start_date AND school_year.end_date
+      ), step_amounts AS (
+        SELECT student_id, due_date,
+               GREATEST(cumulative_amount_expected - COALESCE(
+                 LAG(cumulative_amount_expected) OVER (PARTITION BY student_id ORDER BY due_date), 0
+               ), 0) AS installment_amount
+        FROM selected_steps
+      )
+      SELECT step_amounts.due_date::text AS due_date,
+             COALESCE(SUM(step_amounts.installment_amount), 0)::text AS expected_amount,
+             COUNT(DISTINCT step_amounts.student_id)::int AS student_count
+      FROM step_amounts
+      WHERE step_amounts.due_date >= CURRENT_DATE
+      GROUP BY step_amounts.due_date
+      HAVING COUNT(DISTINCT step_amounts.student_id) > 0
+      ORDER BY step_amounts.due_date ASC
       LIMIT 3
     `);
     return getRows(result);

@@ -8,6 +8,26 @@ export type CumulativeScheduleStep = {
   cumulativeAmountExpected: number;
 };
 
+export type TuitionInstallment = {
+  dueDate: string;
+  amount: number;
+};
+
+export const toCumulativeScheduleSteps = (
+  installments: readonly TuitionInstallment[]
+): CumulativeScheduleStep[] => {
+  let cumulativeAmountExpected = 0;
+  return installments.map((installment) => {
+    cumulativeAmountExpected = roundMoney(cumulativeAmountExpected + installment.amount);
+    return { dueDate: installment.dueDate, cumulativeAmountExpected };
+  });
+};
+
+export const amountFromCumulativeStep = (
+  current: CumulativeScheduleStep,
+  previous?: CumulativeScheduleStep
+): number => roundMoney(current.cumulativeAmountExpected - (previous?.cumulativeAmountExpected ?? 0));
+
 export const isValidCumulativeSchedule = (
   scheduleSteps: readonly CumulativeScheduleStep[],
   totalAmount: number
@@ -17,17 +37,19 @@ export const isValidCumulativeSchedule = (
   let previousDate = '';
   let previousAmount = -1;
   for (const step of scheduleSteps) {
-    if (
+    if (!Number.isFinite(step.cumulativeAmountExpected)
+      || step.cumulativeAmountExpected <= 0
+      || (
       step.dueDate <= previousDate
-      || step.cumulativeAmountExpected < previousAmount
+      || step.cumulativeAmountExpected <= previousAmount
       || step.cumulativeAmountExpected > totalAmount
-    ) {
+      )) {
       return false;
     }
     previousDate = step.dueDate;
     previousAmount = step.cumulativeAmountExpected;
   }
-  return true;
+  return previousAmount === totalAmount;
 };
 
 const PERIOD_MONTHS: Record<SubscriptionPeriod, number> = {

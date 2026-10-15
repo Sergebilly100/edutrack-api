@@ -43,6 +43,7 @@ export const PERMISSION_KEYS = [
   'tuition.view',
   'tuition.edit',
   'tuition.grant_discount',
+  'tuition.manage_student_schedule',
   'payments.view',
   'payments.record',
   'payments.cancel',

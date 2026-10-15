@@ -61,6 +61,7 @@ const DEFINITIONS = {
   'tuition.view': { domain: 'tuition', label: 'Voir les frais scolaires' },
   'tuition.edit': { domain: 'tuition', label: 'Configurer les frais scolaires' },
   'tuition.grant_discount': { domain: 'tuition', label: 'Accorder une remise sur les frais' },
+  'tuition.manage_student_schedule': { domain: 'tuition', label: 'Gérer les échéanciers individuels' },
   'payments.view': { domain: 'payments', label: 'Voir les paiements' },
   'payments.record': { domain: 'payments', label: 'Enregistrer un paiement' },
   'payments.cancel': { domain: 'payments', label: 'Annuler un paiement' },
@@ -115,7 +116,7 @@ const VIEW_ACTIONS = new Set([
   'create', 'edit', 'delete', 'block', 'documents', 'ranking.view', 'attendance.view',
   'password.reset', 'excuse', 'compute', 'mark_paid', 'export', 'approve', 'reject',
   'validate', 'confirm_payment', 'renew', 'cancel', 'revenue', 'mark_students',
-  'publish', 'published_correction', 'grant_discount', 'record',
+  'publish', 'published_correction', 'grant_discount', 'manage_student_schedule', 'record',
 ]);
 
 export const buildPermissionCatalogue = (features: ActivationFeatures) => ({

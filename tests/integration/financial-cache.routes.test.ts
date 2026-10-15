@@ -171,8 +171,10 @@ describe('financial cache integration (6a)', () => {
       .set(headers);
     expect(summary.status).toBe(200);
     expect(Number(summary.body.school.total_paid)).toBe(100_000);
-    expect(Number(summary.body.school.total_expected_to_date)).toBe(200_000);
-    expect(Number(summary.body.school.recovery_rate)).toBe(0.5);
+    // La remise ramène bien le dû de cette élève à zéro : elle ne gonfle ni
+    // l'attendu école ni le taux de recouvrement.
+    expect(Number(summary.body.school.total_expected_to_date)).toBe(100_000);
+    expect(Number(summary.body.school.recovery_rate)).toBe(1);
     expect(Number(summary.body.school.students_late_count)).toBe(0);
   });
 
@@ -188,7 +190,13 @@ describe('financial cache integration (6a)', () => {
     await queryTenant("INSERT INTO enrollments (student_id, class_id, school_year_id, type, status) VALUES ($1,$2,$3,'new_registration','confirmed')", [student!.id, schoolClass!.id, year!.id]);
     await queryTenant('INSERT INTO student_tuition_overrides (student_id, school_year_id, discount_amount, override_total_amount, reason, granted_by_user_id) VALUES ($1,$2,$3,$4,$5,$6)',
       [student!.id, year!.id, discount, override, 'Revue du cache', getSeedContext().directorUserId]);
-    if (step !== null) await queryTenant('INSERT INTO student_tuition_schedule_steps (student_id,school_year_id,due_date,cumulative_amount_expected) VALUES ($1,$2,CURRENT_DATE-5,$3)', [student!.id, year!.id, step]);
+    if (step !== null) {
+      const [agreement] = await queryTenant<IdRow>(
+        "INSERT INTO student_tuition_schedule_agreements(student_id,school_year_id,reason) VALUES ($1,$2,'Fixture de cache') RETURNING id",
+        [student!.id, year!.id]
+      );
+      await queryTenant('INSERT INTO student_tuition_schedule_steps (agreement_id,due_date,cumulative_amount_expected) VALUES ($1,CURRENT_DATE-5,$2)', [agreement!.id, step]);
+    }
     await withTenantSchema(TEST_SCHEMA_NAME, (db) => buildFinancialCacheService(db).recalcAll(year!.id));
     const [cached] = await queryTenant<{ total_due_year: string; total_expected_to_date: string; total_paid: string }>('SELECT total_due_year,total_expected_to_date,total_paid FROM student_financial_status WHERE student_id=$1', [student!.id]);
     expect(Number(cached?.total_due_year)).toBe(total);

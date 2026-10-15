@@ -4,9 +4,11 @@ import {
   calculateStudentTotalDue,
   canCancelPayment,
   isValidCumulativeSchedule,
+  amountFromCumulativeStep,
   prorateSubscriptionAmount,
   resolveIndividualFinancialStatus,
   resolveFinancialStanding,
+  toCumulativeScheduleSteps,
 } from '../../src/modules/finance/finance.calculations.js';
 
 describe('finance calculations', () => {
@@ -55,10 +57,10 @@ describe('finance calculations', () => {
     expect(canCancelPayment('cancelled')).toBe(false);
   });
 
-  it('valide une courbe cumulative individuelle strictement ordonnée et bornée', () => {
+  it('valide une courbe cumulative individuelle strictement ordonnée et complète', () => {
     expect(isValidCumulativeSchedule([
       { dueDate: '2026-10-01', cumulativeAmountExpected: 30_000 },
-      { dueDate: '2027-01-01', cumulativeAmountExpected: 80_000 },
+      { dueDate: '2027-01-01', cumulativeAmountExpected: 100_000 },
     ], 100_000)).toBe(true);
     expect(isValidCumulativeSchedule([
       { dueDate: '2026-10-01', cumulativeAmountExpected: 30_000 },
@@ -67,5 +69,21 @@ describe('finance calculations', () => {
     expect(isValidCumulativeSchedule([
       { dueDate: '2026-10-01', cumulativeAmountExpected: 120_000 },
     ], 100_000)).toBe(false);
+    expect(isValidCumulativeSchedule([
+      { dueDate: '2026-10-01', cumulativeAmountExpected: 30_000 },
+      { dueDate: '2027-01-01', cumulativeAmountExpected: 80_000 },
+    ], 100_000)).toBe(false);
+  });
+
+  it('calcule les cumuls et le montant de chaque échéance sans arrondi métier caché', () => {
+    const steps = toCumulativeScheduleSteps([
+      { dueDate: '2026-10-01', amount: 33_333.33 },
+      { dueDate: '2026-11-01', amount: 66_666.67 },
+    ]);
+    expect(steps).toEqual([
+      { dueDate: '2026-10-01', cumulativeAmountExpected: 33_333.33 },
+      { dueDate: '2026-11-01', cumulativeAmountExpected: 100_000 },
+    ]);
+    expect(amountFromCumulativeStep(steps[1]!, steps[0]!)).toBe(66_666.67);
   });
 });

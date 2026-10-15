@@ -21,12 +21,18 @@ const isoDate = (offsetDays: number): string => {
 
 const createFinanceContext = async (suffix: string, totalAmount = 100_000) => {
   const shortSuffix = suffix.slice(-15);
+  const schoolYearStart = isoDate(-90);
+  const schoolYearEnd = isoDate(270);
+  const endOfYearReviewStart = isoDate(180);
+  // La contrainte métier autorise une seule année active par établissement. Chaque
+  // scénario crée son propre contexte afin de ne pas réutiliser une année ou un plan.
+  await queryTenant(`UPDATE ${tenantTable('school_years')} SET status = 'closed' WHERE status = 'active'`);
   const years = await queryTenant<{ id: string }>(`
     INSERT INTO ${tenantTable('school_years')}
       (label, start_date, end_date, end_of_year_review_start_date, status)
-    VALUES ($1, '2084-09-01', '2085-06-30', '2085-05-01', 'draft')
+    VALUES ($1, $2, $3, $4, 'active')
     RETURNING id
-  `, [`fin-${shortSuffix}`]);
+  `, [`fin-${shortSuffix}`, schoolYearStart, schoolYearEnd, endOfYearReviewStart]);
   const levels = await queryTenant<{ id: string }>(`
     INSERT INTO ${tenantTable('levels')} (name, order_index, is_exam_class)
     VALUES ($1, $2, false) RETURNING id
@@ -104,10 +110,10 @@ describe('finance routes integration', () => {
       WHERE table_schema = current_schema()
         AND table_name IN (
           'tuition_plans', 'tuition_schedule_steps', 'student_tuition_overrides',
-          'student_tuition_schedule_steps', 'payment_provider_settings', 'payments', 'subscription_plans'
+          'student_tuition_schedule_steps', 'student_tuition_schedule_agreements', 'payment_provider_settings', 'payments', 'subscription_plans'
         )
     `);
-    expect(tables[0]!.count).toBe(7);
+    expect(tables[0]!.count).toBe(8);
     const columns = await queryTenant<{ column_name: string }>(`
       SELECT column_name
       FROM information_schema.columns
@@ -185,6 +191,8 @@ describe('finance routes integration', () => {
     const suffix = String(Date.now());
     const linked = await createFinanceContext(`parent-linked-${suffix}`);
     const other = await createFinanceContext(`parent-other-${suffix}`);
+    await queryTenant(`UPDATE ${tenantTable('school_years')} SET status = 'closed' WHERE status = 'active'`);
+    await queryTenant(`UPDATE ${tenantTable('school_years')} SET status = 'active' WHERE id = $1::uuid`, [linked.schoolYearId]);
     const recorded = await request().post('/api/v1/payments').set(linked.headers).send({
       studentId: linked.studentId,
       schoolYearId: linked.schoolYearId,
@@ -428,29 +436,77 @@ describe('finance routes integration', () => {
     expect(notifications[0]!.metadata.event).toBe('tuition_discount_granted');
   });
 
-  it('remplace la courbe du niveau pour un élève, recalcule son statut, puis la réinitialise', async () => {
+  it('enregistre un échéancier négocié complet et audité, recalcule son statut, puis revient au plan commun', async () => {
     const context = await createFinanceContext(`student-schedule-${Date.now()}`);
     const saved = await request()
       .put(`/api/v1/tuition/student-schedules/${context.studentId}`)
       .set(context.headers)
       .send({
         schoolYearId: context.schoolYearId,
-        scheduleSteps: [
-          { dueDate: isoDate(-1), cumulativeAmountExpected: 15_000 },
-          { dueDate: isoDate(30), cumulativeAmountExpected: 100_000 },
+        reason: 'Accord documenté avec le parent',
+        installments: [
+          { dueDate: isoDate(-1), amount: 15_000 },
+          { dueDate: isoDate(30), amount: 85_000 },
         ],
       });
     expect(saved.status, JSON.stringify(saved.body)).toBe(200);
-    expect(saved.body.scheduleSteps).toEqual([
+    expect(saved.body.agreement).toMatchObject({ reason: 'Accord documenté avec le parent' });
+    expect(saved.body.agreement.scheduleSteps).toEqual([
       { dueDate: isoDate(-1), cumulativeAmountExpected: 15_000 },
       { dueDate: isoDate(30), cumulativeAmountExpected: 100_000 },
     ]);
+
+    const [readOnlyPosition] = await queryTenant<{ id: string }>(`
+      INSERT INTO ${tenantTable('admin_positions')} (name, permissions, created_by)
+      VALUES ($1, '["tuition.view", "tuition.grant_discount"]'::jsonb, $2::uuid)
+      RETURNING id::text
+    `, [`Lecture échéancier ${Date.now()}`, getSeedContext().directorUserId]);
+    await queryTenant(`
+      INSERT INTO ${tenantTable('position_assignments')} (user_id, position_id, assigned_by)
+      VALUES ($1::uuid, $2::uuid, $3::uuid)
+    `, [getSeedContext().staffUserId, readOnlyPosition!.id, getSeedContext().directorUserId]);
+    const readOnlyHeaders = await getAuthHeaders('staff');
+    const redactedSchedule = await request()
+      .get(`/api/v1/tuition/student-schedules/${context.studentId}?school_year_id=${context.schoolYearId}`)
+      .set(readOnlyHeaders);
+    expect(redactedSchedule.status, JSON.stringify(redactedSchedule.body)).toBe(200);
+    expect(redactedSchedule.body.agreement).toMatchObject({ id: saved.body.agreement.id, scheduleSteps: saved.body.agreement.scheduleSteps });
+    expect(redactedSchedule.body.agreement).not.toHaveProperty('reason');
+    const forbiddenScheduleWrite = await request()
+      .put(`/api/v1/tuition/student-schedules/${context.studentId}`)
+      .set(readOnlyHeaders)
+      .send({
+        schoolYearId: context.schoolYearId,
+        reason: 'Le droit de remise ne doit pas suffire',
+        installments: [{ dueDate: isoDate(30), amount: 100_000 }],
+      });
+    expect(forbiddenScheduleWrite.status).toBe(403);
+
+    const summaryWithAgreement = await request()
+      .get(`/api/v1/finance/financial-summary?school_year_id=${context.schoolYearId}`)
+      .set(context.headers);
+    expect(summaryWithAgreement.status, JSON.stringify(summaryWithAgreement.body)).toBe(200);
+    expect(summaryWithAgreement.body.upcomingInstallments).toEqual(expect.arrayContaining([
+      expect.objectContaining({ due_date: isoDate(30), expected_amount: '85000.00', student_count: 1 }),
+    ]));
 
     const schedule = await request()
       .get(`/api/v1/tuition/student-schedules/${context.studentId}?school_year_id=${context.schoolYearId}`)
       .set(context.headers);
     expect(schedule.status, JSON.stringify(schedule.body)).toBe(200);
-    expect(schedule.body.scheduleSteps).toEqual(saved.body.scheduleSteps);
+    expect(schedule.body.agreement.scheduleSteps).toEqual(saved.body.agreement.scheduleSteps);
+
+    const audit = await queryPublic<{ action: string; payload_before: unknown; payload_after: { studentId: string; schoolYearId: string } }>(`
+      SELECT action, payload_before, payload_after
+      FROM public.audit_financial_events
+      WHERE action = 'tuition.student_schedule.created'
+      ORDER BY created_at DESC LIMIT 1
+    `);
+    expect(audit[0]).toMatchObject({
+      action: 'tuition.student_schedule.created',
+      payload_before: null,
+      payload_after: { studentId: context.studentId, schoolYearId: context.schoolYearId },
+    });
 
     const payment = await request().post('/api/v1/payments').set(context.headers).send({
       studentId: context.studentId,
@@ -466,7 +522,8 @@ describe('finance routes integration', () => {
 
     const reset = await request()
       .delete(`/api/v1/tuition/student-schedules/${context.studentId}?school_year_id=${context.schoolYearId}`)
-      .set(context.headers);
+      .set(context.headers)
+      .send({ reason: 'Accord terminé, retour au calendrier commun' });
     expect(reset.status, JSON.stringify(reset.body)).toBe(200);
     expect(reset.body.deleted).toBe(true);
 

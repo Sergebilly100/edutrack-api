@@ -70,8 +70,12 @@ async function seedFamilies(repo: DemoRepository, klass: DemoClass, classIndex: 
       await repo.insert('student_tuition_overrides', { student_id: studentId, school_year_id: yearId,
         discount_amount: 30000, reason: 'Remise sociale de rentrée accordée par la direction',
         granted_by_user_id: directorId, created_at: calendar.start });
+      const agreementId = await repo.insert('student_tuition_schedule_agreements', {
+        student_id: studentId, school_year_id: yearId, reason: 'Accord de paiement démo',
+        created_by_user_id: directorId, updated_by_user_id: directorId, created_at: calendar.start, updated_at: calendar.start,
+      });
       for (const [offset, amount] of [[-203, 90000], [-105, 180000], [15, 270000]]) {
-        await repo.insert('student_tuition_schedule_steps', { student_id: studentId, school_year_id: yearId,
+        await repo.insert('student_tuition_schedule_steps', { agreement_id: agreementId,
           due_date: shiftDate(calendar.today, offset!), cumulative_amount_expected: amount! });
       }
     }

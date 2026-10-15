@@ -203,10 +203,14 @@ describe('financial alerts integration (6b)', () => {
       INSERT INTO ${tenantTable('tuition_schedule_steps')} (tuition_plan_id, due_date, cumulative_amount_expected)
       VALUES ($1::uuid, CURRENT_DATE + 1, 30000)
     `, [plan[0]!.id]);
-    await queryTenant(`
-      INSERT INTO ${tenantTable('student_tuition_schedule_steps')} (student_id, school_year_id, due_date, cumulative_amount_expected)
-      VALUES ($1::uuid, $2::uuid, CURRENT_DATE + 5, 30000)
+    const agreement = await queryTenant<IdRow>(`
+      INSERT INTO ${tenantTable('student_tuition_schedule_agreements')} (student_id, school_year_id, reason)
+      VALUES ($1::uuid, $2::uuid, 'Fixture de relance') RETURNING id::text
     `, [student[0]!.id, year[0]!.id]);
+    await queryTenant(`
+      INSERT INTO ${tenantTable('student_tuition_schedule_steps')} (agreement_id, due_date, cumulative_amount_expected)
+      VALUES ($1::uuid, CURRENT_DATE + 5, 30000)
+    `, [agreement[0]!.id]);
     await queryTenant(`
       INSERT INTO ${tenantTable('student_financial_status')} (
         student_id, school_year_id, total_expected_to_date, total_paid, total_due_year, status, last_computed_at
@@ -225,8 +229,8 @@ describe('financial alerts integration (6b)', () => {
     await queryTenant(`
       UPDATE ${tenantTable('student_tuition_schedule_steps')}
       SET due_date = CURRENT_DATE + 1
-      WHERE student_id = $1::uuid AND school_year_id = $2::uuid
-    `, [student[0]!.id, year[0]!.id]);
+      WHERE agreement_id = $1::uuid
+    `, [agreement[0]!.id]);
     const reminder = await withTenantSchema(TEST_SCHEMA_NAME, (tenantDb) =>
       new FinancialAlertsRepository(tenantDb).listDueReminders(year[0]!.id));
     expect(reminder).toEqual(expect.arrayContaining([

@@ -7,11 +7,13 @@ import {
   isValidCumulativeSchedule,
   prorateSubscriptionAmount,
   resolveIndividualFinancialStatus,
+  toCumulativeScheduleSteps,
 } from './finance.calculations.js';
 import {
   FinanceRepository,
   type FinanceDb,
   type PaymentRow,
+  type StudentTuitionScheduleAgreement,
   type TuitionPlanRequiredContext,
 } from './finance.repository.js';
 import { FinancialCacheRepository } from './financial-cache.repository.js';
@@ -38,6 +40,13 @@ export class FinanceModuleError extends Error {
 
 const todayIso = (): string => new Date().toISOString().slice(0, 10);
 const iso = (value: string | Date | null): string | null => value ? new Date(value).toISOString() : null;
+const scheduleAuditPayload = (agreement: StudentTuitionScheduleAgreement) => ({
+  agreementId: agreement.id,
+  studentId: agreement.studentId,
+  schoolYearId: agreement.schoolYearId,
+  reason: agreement.reason,
+  scheduleSteps: agreement.scheduleSteps,
+});
 const mapPayment = (row: PaymentRow) => ({
   id: row.id,
   studentId: row.student_id,
@@ -586,29 +595,26 @@ export class FinanceService {
     reason: string;
     grantedByUserId: string;
   }) {
-    const context = await this.getAmountDue(input.studentId, input.schoolYearId);
-    if (input.discountAmount !== undefined && input.discountAmount > context.planTotalAmount) {
-      throw new FinanceModuleError(
-        'Discount cannot exceed the tuition plan amount',
-        400,
-        'DISCOUNT_EXCEEDS_TUITION'
-      );
-    }
-    const adjustedTuitionAmount = input.overrideTotalAmount ?? Math.max(
-      0,
-      context.planTotalAmount - (input.discountAmount ?? 0)
-    );
-    const currentSchedule = await this.repository.listStudentTuitionSchedule(input.studentId, input.schoolYearId);
-    if (currentSchedule.length > 0 && !isValidCumulativeSchedule(currentSchedule, adjustedTuitionAmount)) {
-      throw new FinanceModuleError(
-        'The individual cumulative schedule exceeds the adjusted tuition amount',
-        409,
-        'STUDENT_SCHEDULE_EXCEEDS_TUITION'
-      );
-    }
     try {
       return await this.repository.db.transaction(async (tx) => {
         const repository = new FinanceRepository(tx as FinanceDb);
+        const context = await new FinanceService(repository).getAmountDue(input.studentId, input.schoolYearId);
+        if (input.discountAmount !== undefined && input.discountAmount > context.planTotalAmount) {
+          throw new FinanceModuleError(
+            'Discount cannot exceed the tuition plan amount', 400, 'DISCOUNT_EXCEEDS_TUITION'
+          );
+        }
+        const adjustedTuitionAmount = input.overrideTotalAmount ?? Math.max(
+          0, context.planTotalAmount - (input.discountAmount ?? 0)
+        );
+        const currentSchedule = await repository.getStudentTuitionScheduleAgreement(input.studentId, input.schoolYearId);
+        if (currentSchedule && !isValidCumulativeSchedule(currentSchedule.scheduleSteps, adjustedTuitionAmount)) {
+          throw new FinanceModuleError(
+            'Le total de l’échéancier négocié ne correspondrait plus aux frais après cet ajustement.',
+            409,
+            'STUDENT_SCHEDULE_TOTAL_MISMATCH'
+          );
+        }
         const override = await repository.createTuitionOverride(input);
         const overrideId = (override as { id: string }).id;
         const amountLabel = input.overrideTotalAmount !== undefined
@@ -636,41 +642,93 @@ export class FinanceService {
     }
   }
 
-  async getStudentTuitionSchedule(studentId: string, schoolYearId: string) {
-    await this.getAmountDue(studentId, schoolYearId);
-    return this.repository.listStudentTuitionSchedule(studentId, schoolYearId);
+  async getStudentTuitionSchedule(studentId: string, schoolYearId: string, includeReason = true) {
+    const due = await this.getAmountDue(studentId, schoolYearId);
+    const agreement = await this.repository.getStudentTuitionScheduleAgreement(studentId, schoolYearId);
+    return {
+      agreement: agreement && (includeReason ? agreement : (() => {
+        const { reason: _reason, ...metadata } = agreement;
+        return metadata;
+      })()),
+      totalTuitionAmount: due.tuitionDue,
+      currency: due.currency,
+    };
   }
 
   async replaceStudentTuitionSchedule(input: {
     studentId: string;
     schoolYearId: string;
-    scheduleSteps: Array<{ dueDate: string; cumulativeAmountExpected: number }>;
+    reason: string;
+    actorUserId: string;
+    actorRole: string;
+    installments: Array<{ dueDate: string; amount: number }>;
   }) {
-    const due = await this.getAmountDue(input.studentId, input.schoolYearId);
-    if (!isValidCumulativeSchedule(input.scheduleSteps, due.tuitionDue)) {
-      throw new FinanceModuleError(
-        'Schedule steps must have increasing dates and cumulative amounts within the student tuition amount',
-        400,
-        'INVALID_STUDENT_CUMULATIVE_SCHEDULE'
-      );
-    }
     return this.repository.db.transaction(async (tx) => {
       const repository = new FinanceRepository(tx as FinanceDb);
-      await repository.replaceStudentTuitionSchedule(input);
+      const due = await new FinanceService(repository).getAmountDue(input.studentId, input.schoolYearId);
+      const schoolYear = await repository.getSchoolYearDateRange(input.schoolYearId);
+      if (!schoolYear) throw new FinanceModuleError('Année scolaire introuvable.', 404, 'SCHOOL_YEAR_NOT_FOUND');
+      const scheduleSteps = toCumulativeScheduleSteps(input.installments);
+      const datesAreInSchoolYear = scheduleSteps.every((step) =>
+        step.dueDate >= schoolYear.startDate && step.dueDate <= schoolYear.endDate
+      );
+      if (!datesAreInSchoolYear) {
+        throw new FinanceModuleError(
+          'Chaque date d’échéance doit être comprise dans l’année scolaire choisie.',
+          400,
+          'STUDENT_SCHEDULE_DATE_OUTSIDE_SCHOOL_YEAR'
+        );
+      }
+      if (!isValidCumulativeSchedule(scheduleSteps, due.tuitionDue)) {
+        throw new FinanceModuleError(
+          'Les échéances doivent être ordonnées, strictement positives et couvrir exactement les frais de scolarité.',
+          400,
+          'INVALID_STUDENT_NEGOTIATED_SCHEDULE'
+        );
+      }
+      const previous = await repository.getStudentTuitionScheduleAgreement(input.studentId, input.schoolYearId);
+      const agreement = await repository.replaceStudentTuitionSchedule({
+        ...input,
+        scheduleSteps,
+      });
+      await repository.recordStudentTuitionScheduleAudit({
+        actorUserId: input.actorUserId,
+        actorRole: input.actorRole,
+        action: previous ? 'tuition.student_schedule.updated' : 'tuition.student_schedule.created',
+        before: previous ? scheduleAuditPayload(previous) : null,
+        after: scheduleAuditPayload(agreement),
+      });
       await new FinancialCacheService(new FinancialCacheRepository(tx as FinanceDb))
         .recalcStudent(input.studentId, input.schoolYearId);
-      return { scheduleSteps: await repository.listStudentTuitionSchedule(input.studentId, input.schoolYearId) };
+      return { agreement, totalTuitionAmount: due.tuitionDue, currency: due.currency };
     });
   }
 
-  async deleteStudentTuitionSchedule(studentId: string, schoolYearId: string) {
-    await this.getAmountDue(studentId, schoolYearId);
+  async deleteStudentTuitionSchedule(input: {
+    studentId: string; schoolYearId: string; reason: string; actorUserId: string; actorRole: string;
+  }) {
     return this.repository.db.transaction(async (tx) => {
       const repository = new FinanceRepository(tx as FinanceDb);
-      const deleted = await repository.deleteStudentTuitionSchedule(studentId, schoolYearId);
+      await new FinanceService(repository).getAmountDue(input.studentId, input.schoolYearId);
+      const deletedAgreement = await repository.deleteStudentTuitionSchedule(input.studentId, input.schoolYearId);
+      if (deletedAgreement) {
+        await repository.recordStudentTuitionScheduleAudit({
+          actorUserId: input.actorUserId,
+          actorRole: input.actorRole,
+          action: 'tuition.student_schedule.reset',
+          before: scheduleAuditPayload(deletedAgreement),
+          after: {
+            agreementId: deletedAgreement.id,
+            studentId: input.studentId,
+            schoolYearId: input.schoolYearId,
+            reason: input.reason,
+            scheduleSteps: [],
+          },
+        });
+      }
       await new FinancialCacheService(new FinancialCacheRepository(tx as FinanceDb))
-        .recalcStudent(studentId, schoolYearId);
-      return { deleted };
+        .recalcStudent(input.studentId, input.schoolYearId);
+      return { deleted: Boolean(deletedAgreement) };
     });
   }
 

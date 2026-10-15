@@ -29,4 +29,15 @@ describe('catalogue de permissions', () => {
       }
     }
   }
+
+  it('expose la gestion des échéanciers comme droit distinct des remises', () => {
+    const catalogue = buildPermissionCatalogue({ canEditSmsTemplate: true, smsEnabled: true, monetizeParentAlerts: true });
+    const schedulePermission = catalogue.permissions.find((entry) => entry.key === 'tuition.manage_student_schedule');
+    expect(schedulePermission).toMatchObject({
+      label: 'Gérer les échéanciers individuels',
+      requiredPermissions: ['tuition.view'],
+      available: true,
+    });
+    expect(schedulePermission?.key).not.toBe('tuition.grant_discount');
+  });
 });

@@ -107,7 +107,8 @@ describe('F21 — livraison des relances dans la boîte des parents', () => {
     expect((await run()).sentCount).toBe(0);
     await queryTenant('UPDATE student_financial_status SET total_paid=40000 WHERE student_id=$1', [studentId]);
     expect((await run()).sentCount).toBe(0);
-    await queryTenant("INSERT INTO student_tuition_schedule_steps(student_id, school_year_id, due_date, cumulative_amount_expected) VALUES ($1,$2,CURRENT_DATE+1,60000)", [studentId, yearId]);
+    const [agreement] = await queryTenant<{ id: string }>("INSERT INTO student_tuition_schedule_agreements(student_id, school_year_id, reason) VALUES ($1,$2,'Fixture de relance') RETURNING id", [studentId, yearId]);
+    await queryTenant("INSERT INTO student_tuition_schedule_steps(agreement_id, due_date, cumulative_amount_expected) VALUES ($1,CURRENT_DATE+1,60000)", [agreement!.id]);
     await queryTenant('UPDATE student_financial_status SET total_due_year=30000 WHERE student_id=$1', [studentId]);
     expect((await run()).sentCount).toBe(0);
     await queryTenant('UPDATE student_financial_status SET total_due_year=120000 WHERE student_id=$1', [studentId]);
