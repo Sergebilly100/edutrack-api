@@ -484,7 +484,7 @@ export class AcademicGradingService {
     if (schoolClass.schoolYearStatus === 'draft') {
       throw new AcademicGradingError('L’année scolaire doit être ouverte par le support.', 409, 'SCHOOL_YEAR_NOT_OPEN');
     }
-    const [rawLessonSlots, assignedSubjects, scheduledSubjectNames, levelSubjects, evaluations, completion, correctionStatuses, gradeProgress] = await Promise.all([
+    const [rawLessonSlots, assignedSubjects, scheduledSubjects, levelSubjects, evaluations, completion, correctionStatuses, gradeProgress] = await Promise.all([
       this.repository.listTeacherLessonSlotsForClass(teacherId, classId, date),
       this.repository.listTeacherAssignedSubjectsForClass(teacherId, classId),
       this.repository.listTeacherScheduleSubjects(teacherId, classId),
@@ -495,9 +495,11 @@ export class AcademicGradingService {
       this.repository.getScheduledGradeProgress(teacherId, classId, gradingPeriodId),
     ]);
     const assignedSubjectIds = new Set(assignedSubjects.map((subject) => subject.id));
-    const scheduledSubjectKeys = new Set(scheduledSubjectNames.map(normalizeSubjectKey));
+    const scheduledSubjectIds = new Set(scheduledSubjects.map((item) => item.subjectId).filter((id): id is string => Boolean(id)));
+    const scheduledSubjectKeys = new Set(scheduledSubjects.map((item) => normalizeSubjectKey(item.subjectName)));
     const subjects = levelSubjects.filter(
-      (subject) => assignedSubjectIds.has(subject.id) || scheduledSubjectKeys.has(normalizeSubjectKey(subject.name))
+      (subject) => assignedSubjectIds.has(subject.id) || scheduledSubjectIds.has(subject.id)
+        || scheduledSubjectKeys.has(normalizeSubjectKey(subject.name))
     );
     const lessonSlots = rawLessonSlots.map((slot) => ({
       ...slot,

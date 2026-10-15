@@ -169,6 +169,20 @@ describe('academic grading integration', () => {
       .query({ classId: scheduleOnlyClassId, gradingPeriodId });
     expect(scheduleOnlyScope.status, JSON.stringify(scheduleOnlyScope.body)).toBe(200);
     expect(scheduleOnlyScope.body.subjects).toEqual(expect.arrayContaining([expect.objectContaining({ id: mathResponse.body.subject.id })]));
+    await queryTenant(`UPDATE schedules SET subject_id = $1, subject = 'Maths EDT'
+      WHERE class_id = $2 AND teacher_id = $3`, [mathResponse.body.subject.id, scheduleOnlyClassId, context.teacherId]);
+    const officialScheduleScope = await request().get('/api/v1/evaluations/scope').set(teacherHeaders)
+      .query({ classId: scheduleOnlyClassId, gradingPeriodId, date: today });
+    expect(officialScheduleScope.status, JSON.stringify(officialScheduleScope.body)).toBe(200);
+    expect(officialScheduleScope.body.subjects).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: mathResponse.body.subject.id }),
+    ]));
+    const evaluationFromSchedule = await request().post('/api/v1/evaluations').set(teacherHeaders).send({
+      subjectId: mathResponse.body.subject.id, classId: scheduleOnlyClassId,
+      gradingPeriodId, type: 'scheduled', coefficient: 1,
+      label: 'Devoir depuis EDT', evaluationDate: today,
+    });
+    expect(evaluationFromSchedule.status, JSON.stringify(evaluationFromSchedule.body)).toBe(201);
     await queryTenant(`UPDATE schedules SET is_active = false WHERE class_id = $1 AND teacher_id = $2`,
       [scheduleOnlyClassId, context.teacherId]);
     const inactiveScheduleContext = await request().get('/api/v1/academic/teacher-context').set(teacherHeaders);

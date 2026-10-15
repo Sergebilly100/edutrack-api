@@ -579,17 +579,21 @@ export class AcademicGradingRepository {
       SELECT EXISTS (
         SELECT 1 FROM teacher_subject_assignments
         WHERE teacher_id = ${teacherId}::uuid AND subject_id = ${subjectId}::uuid AND class_id = ${classId}::uuid
+        UNION ALL
+        SELECT 1 FROM schedules
+        WHERE teacher_id = ${teacherId}::uuid AND subject_id = ${subjectId}::uuid
+          AND class_id = ${classId}::uuid AND is_active = true
       ) AS exists
     `);
     return rows(result)[0]?.exists ?? false;
   }
 
-  async listTeacherScheduleSubjects(teacherId: string, classId: string): Promise<string[]> {
-    const result = await this.db.execute<{ subject: string }>(sql`
-      SELECT DISTINCT subject FROM schedules
-      WHERE teacher_id = ${teacherId}::uuid AND class_id = ${classId}::uuid
+  async listTeacherScheduleSubjects(teacherId: string, classId: string): Promise<Array<{ subjectId: string | null; subjectName: string }>> {
+    const result = await this.db.execute<{ subject_id: string | null; subject_name: string }>(sql`
+      SELECT DISTINCT subject_id::text, subject AS subject_name FROM schedules
+      WHERE teacher_id = ${teacherId}::uuid AND class_id = ${classId}::uuid AND is_active = true
     `);
-    return rows(result).map((row) => row.subject);
+    return rows(result).map((row) => ({ subjectId: row.subject_id, subjectName: row.subject_name }));
   }
 
   async listTeacherAssignedSubjectsForClass(teacherId: string, classId: string): Promise<SubjectItem[]> {

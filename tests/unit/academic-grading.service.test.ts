@@ -232,6 +232,14 @@ describe('subjectPreparation', () => {
 });
 
 describe('AcademicGradingService.listEvaluationsForTeacher', () => {
+  it('reconnaît la matière officielle du créneau même si son libellé EDT diffère', async () => {
+    repository.listTeacherAssignedSubjectsForClass.mockResolvedValue([]);
+    repository.listTeacherScheduleSubjects.mockResolvedValue([{ subjectId: ids.subject, subjectName: 'Maths EDT' }]);
+    const result = await service.listEvaluationsForTeacher(ids.schoolClass, ids.period, ids.user, '2026-10-15');
+    expect(result.subjects).toEqual([expect.objectContaining({ id: ids.subject })]);
+    expect(repository.listTeacherLessonSlotsForClass).toHaveBeenCalledWith(ids.teacher, ids.schoolClass, '2026-10-15');
+  });
+
   it('fournit les compteurs et permissions de la matière affectée', async () => {
     repository.getScheduledGradeProgress.mockResolvedValue([{ subjectId: ids.subject, evaluationCount: 2, expectedGrades: 4, enteredGrades: 3 }]);
     const result = await service.listEvaluationsForTeacher(ids.schoolClass, ids.period, ids.user);
