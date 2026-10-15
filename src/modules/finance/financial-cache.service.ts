@@ -10,12 +10,10 @@ export type { FinancialCacheStatus } from './finance.calculations.js';
 export const resolveCacheStatus = (input: {
   expectedToDate: number;
   paidConfirmed: number;
-  waivedAmount: number;
 }): FinancialCacheStatus => resolveIndividualFinancialStatus({
   totalDue: input.expectedToDate,
   cumulativeExpectedAtDate: input.expectedToDate,
   confirmedPaid: input.paidConfirmed,
-  waivedAmount: input.waivedAmount,
 }).cacheStatus;
 
 /** Taux de recouvrement borné à [0, 1] ; 1 quand rien n'est encore attendu. */
@@ -125,7 +123,6 @@ export class FinancialCacheService {
     studentId: string;
     expectedToDate: number;
     paidConfirmed: number;
-    waivedAmount: number;
     totalDueYear: number;
     earliestOverdueStepDueDate: string | null;
   }) {
@@ -134,7 +131,6 @@ export class FinancialCacheService {
       totalDue: snapshot.totalDueYear,
       cumulativeExpectedAtDate: expectedToDate,
       confirmedPaid: snapshot.paidConfirmed,
-      waivedAmount: snapshot.waivedAmount,
     }).cacheStatus;
     const daysLate =
       status === 'late' && snapshot.earliestOverdueStepDueDate
@@ -150,7 +146,6 @@ export class FinancialCacheService {
       studentId: snapshot.studentId,
       expectedToDate,
       paidConfirmed: snapshot.paidConfirmed,
-      waivedAmount: snapshot.waivedAmount,
       totalDueYear: snapshot.totalDueYear,
       status,
       daysLate,

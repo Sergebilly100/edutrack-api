@@ -7,20 +7,20 @@ import {
 
 describe('resolveCacheStatus (statut de cache financier)', () => {
   it('up_to_date quand le payé couvre le dû à date', () => {
-    expect(resolveCacheStatus({ expectedToDate: 100_000, paidConfirmed: 100_000, waivedAmount: 0 })).toBe('up_to_date');
-    expect(resolveCacheStatus({ expectedToDate: 100_000, paidConfirmed: 150_000, waivedAmount: 0 })).toBe('up_to_date');
+    expect(resolveCacheStatus({ expectedToDate: 100_000, paidConfirmed: 100_000 })).toBe('up_to_date');
+    expect(resolveCacheStatus({ expectedToDate: 100_000, paidConfirmed: 150_000 })).toBe('up_to_date');
   });
 
   it('late quand le payé est insuffisant', () => {
-    expect(resolveCacheStatus({ expectedToDate: 100_000, paidConfirmed: 40_000, waivedAmount: 0 })).toBe('late');
+    expect(resolveCacheStatus({ expectedToDate: 100_000, paidConfirmed: 40_000 })).toBe('late');
   });
 
-  it('waived quand la remise couvre entièrement le dû à date', () => {
-    expect(resolveCacheStatus({ expectedToDate: 100_000, paidConfirmed: 0, waivedAmount: 100_000 })).toBe('waived');
+  it('reste en retard tant que le paiement confirmé ne couvre pas le dû après remise', () => {
+    expect(resolveCacheStatus({ expectedToDate: 50_000, paidConfirmed: 0 })).toBe('late');
   });
 
   it('reste up_to_date avec aucun dû attendu à ce jour', () => {
-    expect(resolveCacheStatus({ expectedToDate: 0, paidConfirmed: 0, waivedAmount: 0 })).toBe('up_to_date');
+    expect(resolveCacheStatus({ expectedToDate: 0, paidConfirmed: 0 })).toBe('up_to_date');
   });
 });
 

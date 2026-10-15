@@ -105,9 +105,8 @@ describe('F21 — livraison des relances dans la boîte des parents', () => {
     await queryTenant("INSERT INTO tuition_schedule_steps(tuition_plan_id, due_date, cumulative_amount_expected) VALUES ($1,CURRENT_DATE+1,40000)", [plan!.id]);
     await queryTenant("UPDATE student_financial_status SET status='up_to_date', days_late=NULL, total_paid=40000 WHERE student_id=$1", [studentId]);
     expect((await run()).sentCount).toBe(0);
-    await queryTenant('UPDATE student_financial_status SET total_paid=0, waived_amount=40000 WHERE student_id=$1', [studentId]);
+    await queryTenant('UPDATE student_financial_status SET total_paid=40000 WHERE student_id=$1', [studentId]);
     expect((await run()).sentCount).toBe(0);
-    await queryTenant('UPDATE student_financial_status SET total_paid=40000, waived_amount=0 WHERE student_id=$1', [studentId]);
     await queryTenant("INSERT INTO student_tuition_schedule_steps(student_id, school_year_id, due_date, cumulative_amount_expected) VALUES ($1,$2,CURRENT_DATE+1,60000)", [studentId, yearId]);
     await queryTenant('UPDATE student_financial_status SET total_due_year=30000 WHERE student_id=$1', [studentId]);
     expect((await run()).sentCount).toBe(0);

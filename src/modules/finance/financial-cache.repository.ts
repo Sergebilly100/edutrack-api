@@ -24,7 +24,6 @@ export type StudentFinancialSnapshot = {
   classId: string | null;
   expectedToDate: number;
   paidConfirmed: number;
-  waivedAmount: number;
   totalDueYear: number;
   earliestOverdueStepDueDate: string | null;
 };
@@ -49,7 +48,6 @@ export class FinancialCacheRepository {
       class_id: string | null;
       expected_to_date: string;
       paid_confirmed: string;
-      waived_amount: string;
       total_due_year: string;
       earliest_overdue_step_due_date: string | null;
     }>(sql`
@@ -74,11 +72,10 @@ export class FinancialCacheRepository {
       ),
       coverage AS (
         SELECT student_id, school_year_id,
-               COALESCE(SUM(amount) FILTER (WHERE status = 'confirmed'), 0) AS paid_confirmed,
-               COALESCE(SUM(amount) FILTER (WHERE status = 'waived_by_school'), 0) AS waived_amount
+               COALESCE(SUM(amount), 0) AS paid_confirmed
         FROM payments
         WHERE school_year_id = ${schoolYearId}::uuid
-          AND status IN ('confirmed', 'waived_by_school')
+          AND status = 'confirmed'
         GROUP BY student_id, school_year_id
       )
       SELECT scope.student_id::text,
@@ -88,7 +85,6 @@ export class FinancialCacheRepository {
                ELSE COALESCE(plan_steps.expected_to_date, 0)
              END::text AS expected_to_date,
              COALESCE(cov.paid_confirmed, 0)::text AS paid_confirmed,
-             COALESCE(cov.waived_amount, 0)::text AS waived_amount,
              COALESCE(GREATEST(
                COALESCE(scope.override_total_amount, scope.plan_total - COALESCE(scope.discount_amount, 0), 0),
                0
@@ -123,7 +119,6 @@ export class FinancialCacheRepository {
       class_id: string | null;
       expected_to_date: string;
       paid_confirmed: string;
-      waived_amount: string;
       total_due_year: string;
       earliest_overdue_step_due_date: string | null;
     }>(result).map((row) => ({
@@ -131,7 +126,6 @@ export class FinancialCacheRepository {
       classId: row.class_id,
       expectedToDate: toNumber(row.expected_to_date),
       paidConfirmed: toNumber(row.paid_confirmed),
-      waivedAmount: toNumber(row.waived_amount),
       totalDueYear: toNumber(row.total_due_year),
       earliestOverdueStepDueDate: row.earliest_overdue_step_due_date,
     }));
@@ -154,9 +148,8 @@ export class FinancialCacheRepository {
       studentId: string;
       expectedToDate: number;
       paidConfirmed: number;
-      waivedAmount: number;
       totalDueYear: number;
-      status: 'up_to_date' | 'late' | 'waived';
+      status: 'up_to_date' | 'late';
       daysLate: number | null;
       earliestOverdueStepDueDate: string | null;
     }>
@@ -165,17 +158,16 @@ export class FinancialCacheRepository {
       await this.db.execute(sql`
         INSERT INTO student_financial_status (
           student_id, school_year_id, total_expected_to_date, total_paid,
-          waived_amount, total_due_year, status, days_late,
+          total_due_year, status, days_late,
           earliest_overdue_step_due_date, last_computed_at
         ) VALUES (
           ${row.studentId}::uuid, ${schoolYearId}::uuid, ${row.expectedToDate}, ${row.paidConfirmed},
-          ${row.waivedAmount}, ${row.totalDueYear}, ${row.status}::financial_cache_status,
+          ${row.totalDueYear}, ${row.status}::financial_cache_status,
           ${row.daysLate}, ${row.earliestOverdueStepDueDate ?? null}::date, NOW()
         )
         ON CONFLICT ("student_id", "school_year_id") DO UPDATE SET
           total_expected_to_date = EXCLUDED.total_expected_to_date,
           total_paid = EXCLUDED.total_paid,
-          waived_amount = EXCLUDED.waived_amount,
           total_due_year = EXCLUDED.total_due_year,
           status = EXCLUDED.status,
           days_late = EXCLUDED.days_late,
@@ -294,8 +286,7 @@ export class FinancialCacheRepository {
              (CASE WHEN SUM(sfs.total_expected_to_date) > 0
                THEN LEAST(1, SUM(sfs.total_paid) / SUM(sfs.total_expected_to_date))
                ELSE 1 END)::numeric(6,4)::text AS recovery_rate,
-             SUM(sfs.waived_amount)::text AS total_waived,
-             SUM(GREATEST(sfs.total_expected_to_date - sfs.total_paid - sfs.waived_amount, 0))::text AS remaining_to_collect,
+             SUM(GREATEST(sfs.total_expected_to_date - sfs.total_paid, 0))::text AS remaining_to_collect,
              COUNT(*) FILTER (WHERE sfs.status <> 'late')::int AS students_up_to_date_count,
              COUNT(*) FILTER (WHERE sfs.status = 'late')::int AS students_late_count,
              COALESCE((SELECT SUM(p.amount) FROM payments p
@@ -321,8 +312,7 @@ export class FinancialCacheRepository {
              c.level_id::text AS level_id, l.name AS level_name,
              SUM(sfs.total_expected_to_date)::text AS total_expected_to_date,
              SUM(sfs.total_paid)::text AS total_paid,
-             SUM(sfs.waived_amount)::text AS total_waived,
-             SUM(GREATEST(sfs.total_expected_to_date - sfs.total_paid - sfs.waived_amount, 0))::text AS remaining_to_collect,
+             SUM(GREATEST(sfs.total_expected_to_date - sfs.total_paid, 0))::text AS remaining_to_collect,
              COUNT(*) FILTER (WHERE sfs.status <> 'late')::int AS students_up_to_date_count,
              COUNT(*) FILTER (WHERE sfs.status = 'late')::int AS students_late_count,
              MAX(sfs.last_computed_at)::text AS last_computed_at
@@ -346,8 +336,7 @@ export class FinancialCacheRepository {
              l.name AS level_name,
              SUM(sfs.total_expected_to_date)::text AS total_expected_to_date,
              SUM(sfs.total_paid)::text AS total_paid,
-             SUM(sfs.waived_amount)::text AS total_waived,
-             SUM(GREATEST(sfs.total_expected_to_date - sfs.total_paid - sfs.waived_amount, 0))::text AS remaining_to_collect,
+             SUM(GREATEST(sfs.total_expected_to_date - sfs.total_paid, 0))::text AS remaining_to_collect,
              COUNT(*) FILTER (WHERE sfs.status <> 'late')::int AS students_up_to_date_count,
              COUNT(*) FILTER (WHERE sfs.status = 'late')::int AS students_late_count,
              MAX(sfs.last_computed_at)::text AS last_computed_at
@@ -462,7 +451,7 @@ export class FinancialCacheRepository {
 
   async getStudentCachedStatus(studentId: string, schoolYearId: string) {
     const result = await this.db.execute<Record<string, string | number>>(sql`
-      SELECT total_expected_to_date::text, total_paid::text, waived_amount::text,
+      SELECT total_expected_to_date::text, total_paid::text,
              total_due_year::text, status::text, days_late, last_computed_at::text
       FROM student_financial_status
       WHERE student_id = ${studentId}::uuid AND school_year_id = ${schoolYearId}::uuid
@@ -480,7 +469,6 @@ export class FinancialCacheRepository {
       matricule: string | null;
       total_expected_to_date: string;
       total_paid: string;
-      waived_amount: string;
       total_due_year: string;
       status: string;
       days_late: number | null;
@@ -490,7 +478,6 @@ export class FinancialCacheRepository {
              s.matricule,
              sfs.total_expected_to_date::text,
              sfs.total_paid::text,
-             sfs.waived_amount::text,
              sfs.total_due_year::text,
              sfs.status::text,
              sfs.days_late

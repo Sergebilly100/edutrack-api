@@ -1,7 +1,7 @@
 export type SubscriptionPeriod = 'monthly' | 'quarterly' | 'semester' | 'annual';
 export type FinancialStanding = 'up_to_date' | 'late';
-export type FinancialCacheStatus = FinancialStanding | 'waived';
-export type PaymentStatus = 'confirmed' | 'waived_by_school' | 'cancelled';
+export type FinancialCacheStatus = FinancialStanding;
+export type PaymentStatus = 'confirmed' | 'cancelled';
 
 export type CumulativeScheduleStep = {
   dueDate: string;
@@ -70,25 +70,17 @@ export const resolveIndividualFinancialStatus = (input: {
   totalDue: number;
   cumulativeExpectedAtDate: number;
   confirmedPaid: number;
-  waivedAmount: number;
 }) => {
-  const coveredAmount = roundMoney(input.confirmedPaid + input.waivedAmount);
+  const coveredAmount = roundMoney(input.confirmedPaid);
   const standing: FinancialStanding = coveredAmount >= input.cumulativeExpectedAtDate
     ? 'up_to_date'
     : 'late';
-  const cacheStatus: FinancialCacheStatus = standing === 'late'
-    ? 'late'
-    : input.waivedAmount > 0
-      && input.waivedAmount >= input.cumulativeExpectedAtDate
-      && input.waivedAmount > input.confirmedPaid
-      ? 'waived'
-      : 'up_to_date';
 
   return {
     coveredAmount,
     remainingDue: Math.max(0, roundMoney(input.totalDue - coveredAmount)),
     standing,
-    cacheStatus,
+    cacheStatus: standing,
   };
 };
 
@@ -100,8 +92,7 @@ export const resolveFinancialStanding = (
   totalDue: cumulativeExpectedAtDate,
   cumulativeExpectedAtDate,
   confirmedPaid,
-  waivedAmount: 0,
 }).standing;
 
 export const canCancelPayment = (status: PaymentStatus): boolean =>
-  status === 'confirmed' || status === 'waived_by_school';
+  status === 'confirmed';

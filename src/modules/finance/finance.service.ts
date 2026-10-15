@@ -118,12 +118,11 @@ export class FinanceService {
   /** Preview for the enrollment confirmation screen; never contributes to aggregate finance. */
   async getEnrollmentPaymentPreview(studentId: string, schoolYearId: string) {
     const due = await this.amountDueWith(this.repository, studentId, schoolYearId, true);
-    const { confirmedPaid, waivedAmount } = await this.repository.getPaymentCoverage(studentId, schoolYearId);
+    const confirmedPaid = await this.repository.getConfirmedPaid(studentId, schoolYearId);
     const status = resolveIndividualFinancialStatus({
       totalDue: due.totalDue,
       cumulativeExpectedAtDate: 0,
       confirmedPaid,
-      waivedAmount,
     });
     return { remainingDue: status.remainingDue, totalDue: due.totalDue, confirmedPaid, currency: due.currency };
   }
@@ -247,7 +246,6 @@ export class FinanceService {
         totalDue,
         cumulativeExpectedAtDate: 0,
         confirmedPaid: FinanceRepository.toNumber(context.confirmed_paid),
-        waivedAmount: FinanceRepository.toNumber(context.waived_amount),
       });
       return [context.student_id, status.remainingDue];
     }));
@@ -257,7 +255,7 @@ export class FinanceService {
     const due = allowHistorical
       ? await this.amountDueWith(this.repository, studentId, schoolYearId, false, true)
       : await this.getAmountDue(studentId, schoolYearId);
-    const { confirmedPaid, waivedAmount } = await this.repository.getPaymentCoverage(studentId, schoolYearId);
+    const confirmedPaid = await this.repository.getConfirmedPaid(studentId, schoolYearId);
     const scheduledExpectedAtDate = await this.repository.getExpectedAtDate(
       studentId,
       schoolYearId,
@@ -269,7 +267,6 @@ export class FinanceService {
       totalDue: due.totalDue,
       cumulativeExpectedAtDate,
       confirmedPaid,
-      waivedAmount,
     });
     return {
       studentId,
@@ -277,8 +274,8 @@ export class FinanceService {
       asOfDate,
       currency: due.currency,
       totalDue: due.totalDue,
+      discountAmount: due.discountAmount ?? 0,
       confirmedPaid,
-      waivedAmount,
       coveredAmount: individualStatus.coveredAmount,
       remainingDue: individualStatus.remainingDue,
       cumulativeExpectedAtDate,
@@ -415,7 +412,7 @@ export class FinanceService {
     to?: string;
     levelId?: string;
     classId?: string;
-    status?: 'up_to_date' | 'late' | 'waived';
+    status?: 'up_to_date' | 'late';
     page: number;
     limit: number;
   }) {

@@ -47,7 +47,7 @@ export type CashJournalRow = PaymentRow & {
 export type PaymentHistoryRow = CashJournalRow & {
   level_id: string;
   level_name: string;
-  financial_status: 'up_to_date' | 'late' | 'waived' | null;
+  financial_status: 'up_to_date' | 'late' | null;
 };
 
 export type CashJournalSummary = {
@@ -186,29 +186,26 @@ export class FinanceRepository {
     override_total_amount: string | number | null;
     discount_amount: string | number | null;
     confirmed_paid: string | number;
-    waived_amount: string | number;
   }>> {
     const result = await this.db.execute<{
       student_id: string; plan_total_amount: string | number | null;
       override_total_amount: string | number | null; discount_amount: string | number | null;
-      confirmed_paid: string | number; waived_amount: string | number;
+      confirmed_paid: string | number;
     }>(sql`
       SELECT e.student_id::text,
              tp.total_amount AS plan_total_amount,
              sto.override_total_amount,
              sto.discount_amount,
-             COALESCE(coverage.confirmed_paid, 0) AS confirmed_paid,
-             COALESCE(coverage.waived_amount, 0) AS waived_amount
+             COALESCE(coverage.confirmed_paid, 0) AS confirmed_paid
       FROM enrollments e
       INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = e.school_year_id
       LEFT JOIN tuition_plans tp ON tp.level_id = c.level_id AND tp.school_year_id = e.school_year_id
       LEFT JOIN student_tuition_overrides sto ON sto.student_id = e.student_id AND sto.school_year_id = e.school_year_id
       LEFT JOIN LATERAL (
-        SELECT SUM(p.amount) FILTER (WHERE p.status = 'confirmed') AS confirmed_paid,
-               SUM(p.amount) FILTER (WHERE p.status = 'waived_by_school') AS waived_amount
+        SELECT SUM(p.amount) AS confirmed_paid
         FROM payments p
         WHERE p.student_id = e.student_id AND p.school_year_id = e.school_year_id
-          AND p.status IN ('confirmed', 'waived_by_school')
+          AND p.status = 'confirmed'
       ) coverage ON true
       WHERE e.school_year_id = ${schoolYearId}::uuid AND e.status = 'confirmed'
     `);
@@ -242,25 +239,6 @@ export class FinanceRepository {
         AND status = 'confirmed'
     `);
     return FinanceRepository.toNumber(rows<{ total: string | number }>(result)[0]?.total);
-  }
-
-  async getPaymentCoverage(studentId: string, schoolYearId: string): Promise<{
-    confirmedPaid: number;
-    waivedAmount: number;
-  }> {
-    const result = await this.db.execute<{ confirmed_paid: string | number; waived_amount: string | number }>(sql`
-      SELECT COALESCE(SUM(amount) FILTER (WHERE status = 'confirmed'), 0) AS confirmed_paid,
-             COALESCE(SUM(amount) FILTER (WHERE status = 'waived_by_school'), 0) AS waived_amount
-      FROM payments
-      WHERE student_id = ${studentId}::uuid
-        AND school_year_id = ${schoolYearId}::uuid
-        AND status IN ('confirmed', 'waived_by_school')
-    `);
-    const coverage = rows<{ confirmed_paid: string | number; waived_amount: string | number }>(result)[0];
-    return {
-      confirmedPaid: FinanceRepository.toNumber(coverage?.confirmed_paid),
-      waivedAmount: FinanceRepository.toNumber(coverage?.waived_amount),
-    };
   }
 
   async unblockReEnrollmentsAfterSettlement(studentId: string, previousSchoolYearId: string): Promise<number> {
@@ -507,7 +485,7 @@ export class FinanceRepository {
     to?: string;
     levelId?: string;
     classId?: string;
-    status?: 'up_to_date' | 'late' | 'waived';
+    status?: 'up_to_date' | 'late';
     limit: number;
     offset: number;
   }): Promise<PaymentHistoryRow[]> {
@@ -546,7 +524,7 @@ export class FinanceRepository {
     to?: string;
     levelId?: string;
     classId?: string;
-    status?: 'up_to_date' | 'late' | 'waived';
+    status?: 'up_to_date' | 'late';
   }): Promise<number> {
     const result = await this.db.execute<{ total: string | number }>(sql`
       SELECT COUNT(*)::int AS total
@@ -574,7 +552,7 @@ export class FinanceRepository {
       SET status = 'cancelled', cancelled_at = NOW(),
           cancelled_by_user_id = ${actorUserId}::uuid, cancellation_reason = ${reason}
       WHERE id = ${id}::uuid
-        AND status IN ('confirmed', 'waived_by_school')
+        AND status = 'confirmed'
       RETURNING *, id::text, student_id::text, school_year_id::text,
         confirmed_by_user_id::text, cancelled_by_user_id::text
     `);

@@ -13,7 +13,7 @@ type SmsQueueHandle = {
 /** Détermine si une règle de retard s'applique (les préventives dépendent des échéances). */
 export const isRuleDue = (
   rule: Pick<FinancialAlertRule, 'type' | 'daysOffset'>,
-  student: { status: 'up_to_date' | 'late' | 'waived'; daysLate: number | null }
+  student: { status: 'up_to_date' | 'late'; daysLate: number | null }
 ): boolean => {
   if (rule.type === 'preventive' || student.status !== 'late') return false;
   return (student.daysLate ?? 0) >= rule.daysOffset;

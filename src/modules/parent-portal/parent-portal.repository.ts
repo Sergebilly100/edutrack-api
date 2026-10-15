@@ -413,7 +413,7 @@ export class ParentPortalRepository {
    */
   async getParentOverview(studentId: string): Promise<{
     financial: {
-      status: 'up_to_date' | 'late' | 'waived';
+      status: 'up_to_date' | 'late';
       daysLate: number | null;
       totalPaid: number;
       totalDueYear: number;
@@ -434,12 +434,11 @@ export class ParentPortalRepository {
       status: string;
       days_late: number | null;
       total_paid: string;
-      waived_amount: string;
       total_due_year: string;
       last_computed_at: string;
     }>(sql`
       SELECT sfs.status::text, sfs.days_late, sfs.total_paid::text,
-             sfs.waived_amount::text, sfs.total_due_year::text,
+             sfs.total_due_year::text,
              sfs.last_computed_at::text
       FROM student_financial_status sfs
       INNER JOIN enrollments e ON e.student_id = sfs.student_id
@@ -477,11 +476,11 @@ export class ParentPortalRepository {
     return {
       financial: financialRow
         ? {
-            status: financialRow.status as 'up_to_date' | 'late' | 'waived',
+            status: financialRow.status as 'up_to_date' | 'late',
             daysLate: financialRow.days_late,
             totalPaid: paid,
             totalDueYear: Number(financialRow.total_due_year),
-            remainingDue: Math.max(0, Number(financialRow.total_due_year) - paid - Number(financialRow.waived_amount)),
+            remainingDue: Math.max(0, Number(financialRow.total_due_year) - paid),
             lastComputedAt: financialRow.last_computed_at,
           }
         : null,

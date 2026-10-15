@@ -508,13 +508,13 @@ describe('enrollments integration', () => {
     expect(afterSettlement.body.data).toEqual([]);
   });
 
-  it('ne bloque pas une réinscription quand une remise couvre la dette antérieure', async () => {
+  it('ne bloque pas une réinscription quand une remise réduit la dette antérieure à zéro', async () => {
     const headers = await getAuthHeaders('director');
-    const academic = await createAcademicContext('enr-waived');
+    const academic = await createAcademicContext('enr-discount');
     await openReEnrollmentCycle(academic);
     const students = await queryTenant<{ id: string }>(`
       INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
-      VALUES ($1::uuid, 'Aya', 'Remise', 'ENR-WAIVED-001') RETURNING id
+      VALUES ($1::uuid, 'Aya', 'Remise', 'ENR-DISCOUNT-001') RETURNING id
     `, [academic.currentClassId]);
     const studentId = students[0]!.id;
     await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
@@ -532,10 +532,10 @@ describe('enrollments integration', () => {
       VALUES ($1::uuid, $2::uuid, 'promoted', $3::uuid, NOW())
     `, [studentId, academic.previousYearId, academic.targetLevelId]);
     await queryTenant(`
-      INSERT INTO ${tenantTable('payments')}
-        (student_id, school_year_id, amount, method, source, status, payment_date, receipt_number)
-      VALUES ($1::uuid, $2::uuid, 50000, 'cash', 'cashier_manual', 'waived_by_school', CURRENT_DATE, 'ENR-WAIVED-REC')
-    `, [studentId, academic.previousYearId]);
+      INSERT INTO ${tenantTable('student_tuition_overrides')}
+        (student_id, school_year_id, discount_amount, reason, granted_by_user_id)
+      VALUES ($1::uuid, $2::uuid, 50000, 'Remise sociale documentée', $3::uuid)
+    `, [studentId, academic.previousYearId, getSeedContext().directorUserId]);
 
     const financialStatus = await request()
       .get(`/api/v1/students/${studentId}/financial-status?school_year_id=${academic.previousYearId}`)

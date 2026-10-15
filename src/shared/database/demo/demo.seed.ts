@@ -75,6 +75,11 @@ async function seedFamilies(repo: DemoRepository, klass: DemoClass, classIndex: 
           due_date: shiftDate(calendar.today, offset!), cumulative_amount_expected: amount! });
       }
     }
+    if (profile === 4) {
+      await repo.insert('student_tuition_overrides', { student_id: studentId, school_year_id: yearId,
+        discount_amount: 50000, reason: 'Remise sociale documentée accordée par la direction',
+        granted_by_user_id: directorId, created_at: calendar.start });
+    }
     const instalments = profile === 0 ? [50000, 30000] : profile === 1 ? [100000, 50000]
       : profile === 2 ? [150000, 150000] : profile === 3 ? [90000, 90000]
       : profile === 4 ? [100000, 50000] : profile === 5 ? [100000, 70000, 30000]
@@ -86,10 +91,14 @@ async function seedFamilies(repo: DemoRepository, klass: DemoClass, classIndex: 
         source: 'cashier_manual', status: 'confirmed', confirmed_by_user_id: directorId,
         receipt_number: `DEMO-${number + 1}-${paymentIndex + 1}`, payment_date: paidOn, created_at: paidOn });
     }
-    if (profile === 4) await repo.insert('payments', { student_id: studentId, school_year_id: yearId, amount: 50000,
-      method: 'cash', source: 'cashier_manual', status: 'waived_by_school', confirmed_by_user_id: directorId,
-      receipt_number: `DEMO-${number + 1}-TOL`, payment_date: shiftDate(calendar.today, -20),
-      created_at: shiftDate(calendar.today, -20) });
+    if (profile === 6) {
+      const enteredOn = shiftDate(calendar.today, -2);
+      await repo.insert('payments', { student_id: studentId, school_year_id: yearId, amount: 25000,
+        method: 'cash', source: 'cashier_manual', status: 'cancelled', cancelled_by_user_id: directorId,
+        cancelled_at: `${calendar.today}T12:00:00.000Z`,
+        cancellation_reason: 'Doublon de saisie annulé avant clôture de caisse',
+        receipt_number: `DEMO-CANCEL-${number + 1}`, payment_date: enteredOn, created_at: enteredOn });
+    }
   }
 }
 

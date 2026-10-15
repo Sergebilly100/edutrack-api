@@ -74,13 +74,13 @@ describe('F10/F12 — transitions protégées', () => {
 
 describe('F15/F20 — frontières des calculs financiers', () => {
   it.each([
-    { paid: 39_999, waived: 10_000, remaining: 50_001, standing: 'late', cache: 'late' },
-    { paid: 40_000, waived: 10_000, remaining: 50_000, standing: 'up_to_date', cache: 'up_to_date' },
-    { paid: 0, waived: 50_000, remaining: 50_000, standing: 'up_to_date', cache: 'waived' },
-    { paid: 120_000, waived: 0, remaining: 0, standing: 'up_to_date', cache: 'up_to_date' },
-  ])('payé $paid / remise $waived : reste $remaining, statut $standing', ({ paid, waived, remaining, standing, cache }) => {
-    expect(resolveIndividualFinancialStatus({ totalDue: 100_000, cumulativeExpectedAtDate: 50_000, confirmedPaid: paid, waivedAmount: waived }))
-      .toEqual({ coveredAmount: paid + waived, remainingDue: remaining, standing, cacheStatus: cache });
+    { paid: 39_999, remaining: 60_001, standing: 'late', cache: 'late' },
+    { paid: 40_000, remaining: 60_000, standing: 'late', cache: 'late' },
+    { paid: 50_000, remaining: 50_000, standing: 'up_to_date', cache: 'up_to_date' },
+    { paid: 120_000, remaining: 0, standing: 'up_to_date', cache: 'up_to_date' },
+  ])('encaissé $paid : reste $remaining, statut $standing', ({ paid, remaining, standing, cache }) => {
+    expect(resolveIndividualFinancialStatus({ totalDue: 100_000, cumulativeExpectedAtDate: 50_000, confirmedPaid: paid }))
+      .toEqual({ coveredAmount: paid, remainingDue: remaining, standing, cacheStatus: cache });
   });
   it('un montant personnalisé nul ne retombe pas sur les frais du niveau', () => {
     expect(calculateStudentTotalDue({ planTotalAmount: 100_000, overrideTotalAmount: 0, mandatorySubscriptionAmounts: [1_000] })).toBe(1_000);

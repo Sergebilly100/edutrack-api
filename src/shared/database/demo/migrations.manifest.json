@@ -89,5 +89,10 @@
   "0084_student_report_card_claims.sql": "0bbb9507f5e024e540374f0bff6c2d424800cc625e89789b9dd0e9ee36fcaeac",
   "0085_subjects_abbreviation.sql": "2c08d0750f8ffefd9676df83196f36ff3e557eba35dc0e2e80d5e2c121a574ec",
   "0086_parent_access_log_redaction.sql": "1a968e5b2d05336fa1fb62790a5985305aaa358c12832e3b79ad45886a055ac3",
-  "0087_schedule_subject_id.sql": "e1b374d7b5b5ccae555c14c13982e653b3df9c796d5c9df223708e1d9d47b20c"
+  "0087_schedule_subject_id.sql": "e1b374d7b5b5ccae555c14c13982e653b3df9c796d5c9df223708e1d9d47b20c",
+  "0088_evaluation_review_delays.sql": "f0acc5324db88a88b61036f8a368159e847152cb33a8747216478518e56e4071",
+  "0089_finance_drop_status_defaults.sql": "a7810ad8300c89405da99d1f61c57a2df9bc80183deb702660cfc14376b2c745",
+  "0090_finance_drop_payment_status_index.sql": "3c08b175b988da72506bfeea0bc8e4ad7907a80d2814ab736ce4ca4a35c38607",
+  "0091_finance_remove_waivers.sql": "31ab4182f5b456a660e7193ed11f3758e52dba97be5f72d553a2e3005b236676",
+  "0092_finance_status_defaults.sql": "5cf156242f32f6898436411d3cf7ae56cf3651b0954f460f06e4a3007f67a43c"
 }

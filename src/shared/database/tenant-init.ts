@@ -9,6 +9,7 @@ import { logger } from '../observability/logger.js';
 import { databaseUrl, db } from './db.js';
 import { findMatriculeCollisions } from './matricule-collisions.js';
 import { unresolvedScheduleSubjects } from './schedule-subject-migration-report.js';
+import { shouldApplyFinancialWaiverMigration } from './financial-waiver-migration.js';
 
 const DEFAULT_ROOMS = ['Salle A1', 'Salle A2', 'Labo Sciences', 'Salle Langues'] as const;
 
@@ -74,6 +75,49 @@ const runTenantMigrations = async (
         .split('--> statement-breakpoint')
         .map((statement) => statement.trim())
         .filter((statement) => statement.length > 0);
+
+      if (migrationFile === '0090_finance_drop_payment_status_index.sql') {
+        await client.query('BEGIN');
+        try {
+          const state = await client.query<{ has_index: boolean; has_old_status: boolean }>(
+            `SELECT
+               EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = $1 AND indexname = $2) AS has_index,
+               EXISTS (
+                 SELECT 1 FROM pg_type t
+                 JOIN pg_namespace n ON n.oid = t.typnamespace
+                 JOIN pg_enum e ON e.enumtypid = t.oid
+                 WHERE n.nspname = $1 AND t.typname = 'finance_payment_status' AND e.enumlabel = 'waived_by_school'
+               ) AS has_old_status`,
+            [schemaName, 'idx_payments_confirmed_student_year']
+          );
+          if (state.rows[0]?.has_index && state.rows[0]?.has_old_status) {
+            for (const statement of statements) await client.query(statement);
+            await client.query('COMMIT');
+          } else {
+            await client.query('ROLLBACK');
+          }
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        }
+        continue;
+      }
+
+      if (migrationFile === '0091_finance_remove_waivers.sql') {
+        await client.query('BEGIN');
+        try {
+          if (!(await shouldApplyFinancialWaiverMigration(client, schemaName))) {
+            await client.query('ROLLBACK');
+            continue;
+          }
+          for (const statement of statements) await client.query(statement);
+          await client.query('COMMIT');
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        }
+        continue;
+      }
 
       for (const statement of statements) {
         try {

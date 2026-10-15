@@ -1,0 +1,1 @@
+DROP INDEX "tenant"."idx_payments_confirmed_student_year";

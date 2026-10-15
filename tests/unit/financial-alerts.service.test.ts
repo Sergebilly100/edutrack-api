@@ -16,9 +16,8 @@ describe('isRuleDue (détermination des relances dues)', () => {
     expect(isRuleDue(baseRule, { status: 'late', daysLate: null })).toBe(false);
   });
 
-  it('élève à jour ou waived : jamais de relance de retard', () => {
+  it('élève à jour : jamais de relance de retard', () => {
     expect(isRuleDue(baseRule, { status: 'up_to_date', daysLate: 30 })).toBe(false);
-    expect(isRuleDue(severeRule, { status: 'waived', daysLate: 20 })).toBe(false);
   });
 
   it('severe_late exige un retard supérieur au seuil simple', () => {

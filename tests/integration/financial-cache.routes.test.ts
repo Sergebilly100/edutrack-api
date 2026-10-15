@@ -117,7 +117,7 @@ describe('financial cache integration (6a)', () => {
     expect(cached.body.cached.days_late).toBeNull();
   });
 
-  it('traite une remise comme couverture individuelle sans la compter au recouvrement', async () => {
+  it('applique une remise au montant dû sans la compter comme encaissement', async () => {
     const headers = await getAuthHeaders('director');
     const years = await queryTenant<IdRow>(
       `SELECT id::text FROM ${tenantTable('school_years')} WHERE label = $1 LIMIT 1`,
@@ -130,17 +130,17 @@ describe('financial cache integration (6a)', () => {
     const students = await queryTenant<IdRow>(
       `INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, matricule)
        VALUES ($1::uuid, 'Aya', 'Remise', $2) RETURNING id::text`,
-      [classes[0]!.id, `FC-WAIVED-${suffix}`]
+      [classes[0]!.id, `FC-DISCOUNT-${suffix}`]
     );
     const studentId = students[0]!.id;
     await queryTenant(`INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
       VALUES ($1, $2, $3, 'new_registration', 'confirmed')`, [studentId, classes[0]!.id, yearId]);
 
     await queryTenant(
-      `INSERT INTO ${tenantTable('payments')}
-        (student_id, school_year_id, amount, method, source, status, payment_date, receipt_number)
-       VALUES ($1::uuid, $2::uuid, 300000, 'cash', 'cashier_manual', 'waived_by_school', CURRENT_DATE, $3)`,
-      [studentId, yearId, `WAIVER-${suffix}`]
+      `INSERT INTO ${tenantTable('student_tuition_overrides')}
+        (student_id, school_year_id, discount_amount, reason, granted_by_user_id)
+       VALUES ($1::uuid, $2::uuid, 300000, 'Remise sociale documentée', $3::uuid)`,
+      [studentId, yearId, getSeedContext().directorUserId]
     );
     await withTenantSchema(TEST_SCHEMA_NAME, async (db) =>
       buildFinancialCacheService(db).recalcStudent(studentId, yearId));
@@ -151,7 +151,7 @@ describe('financial cache integration (6a)', () => {
     expect(financialStatus.status, JSON.stringify(financialStatus.body)).toBe(200);
     expect(financialStatus.body.financialStatus).toMatchObject({
       confirmedPaid: 0,
-      waivedAmount: 300_000,
+      discountAmount: 300_000,
       remainingDue: 0,
       standing: 'up_to_date',
     });
@@ -162,8 +162,8 @@ describe('financial cache integration (6a)', () => {
     expect(cached.status).toBe(200);
     expect(cached.body.cached).toMatchObject({
       total_paid: '0.00',
-      waived_amount: '300000.00',
-      status: 'waived',
+      total_due_year: '0.00',
+      status: 'up_to_date',
     });
 
     const summary = await request()

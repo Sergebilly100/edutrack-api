@@ -7,14 +7,14 @@ const rows = <T>(result: unknown): T[] =>
 
 export type RecoveryClassRow = {
   class_id: string; class_name: string; level_id: string; level_name: string;
-  student_count: number; expected: string; paid: string; waived: string;
+  student_count: number; expected: string; paid: string;
   remaining: string; students_to_follow: number;
 };
 
 export type RecoveryStudentRow = {
   student_id: string; full_name: string; matricule: string | null;
-  status: 'up_to_date' | 'late' | 'waived' | null;
-  expected: string; paid: string; waived: string; remaining: string;
+  status: 'up_to_date' | 'late' | null;
+  expected: string; paid: string; remaining: string;
   days_late: number | null;
 };
 
@@ -62,9 +62,8 @@ export class RecoveryRepository {
              COUNT(*)::int AS student_count,
              COALESCE(SUM(sfs.total_expected_to_date), 0)::text AS expected,
              COALESCE(SUM(sfs.total_paid), 0)::text AS paid,
-             COALESCE(SUM(sfs.waived_amount), 0)::text AS waived,
              COALESCE(SUM(GREATEST(COALESCE(sfs.total_expected_to_date, 0)
-               - COALESCE(sfs.total_paid, 0) - COALESCE(sfs.waived_amount, 0), 0)), 0)::text AS remaining,
+               - COALESCE(sfs.total_paid, 0), 0)), 0)::text AS remaining,
              COUNT(*) FILTER (WHERE sfs.status = 'late')::int AS students_to_follow
       FROM enrollments e
       INNER JOIN students s ON s.id = e.student_id AND s.is_active = true
@@ -96,9 +95,8 @@ export class RecoveryRepository {
              s.matricule, sfs.status::text,
              COALESCE(sfs.total_expected_to_date, 0)::text AS expected,
              COALESCE(sfs.total_paid, 0)::text AS paid,
-             COALESCE(sfs.waived_amount, 0)::text AS waived,
              GREATEST(COALESCE(sfs.total_expected_to_date, 0)
-               - COALESCE(sfs.total_paid, 0) - COALESCE(sfs.waived_amount, 0), 0)::text AS remaining,
+               - COALESCE(sfs.total_paid, 0), 0)::text AS remaining,
              sfs.days_late
       FROM enrollments e
       INNER JOIN students s ON s.id = e.student_id AND s.is_active = true

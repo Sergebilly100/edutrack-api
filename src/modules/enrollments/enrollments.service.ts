@@ -108,7 +108,6 @@ export class EnrollmentsService {
         currency?: string;
         totalDue?: number;
         confirmedPaid?: number;
-        waivedAmount?: number;
         standing?: 'up_to_date' | 'late';
       }>;
       getHistoricalFinancialStatus?(studentId: string, schoolYearId: string): Promise<{
@@ -116,7 +115,6 @@ export class EnrollmentsService {
         currency?: string;
         totalDue?: number;
         confirmedPaid?: number;
-        waivedAmount?: number;
       }>;
       listReEnrollmentBalances?(schoolYearId: string): Promise<Map<string, number | null>>;
       getEnrollmentPaymentPreview(studentId: string, schoolYearId: string): Promise<{
@@ -211,7 +209,6 @@ export class EnrollmentsService {
           remainingDue: null,
           totalDue: null,
           confirmedPaid: null,
-          waivedAmount: null,
           currency: 'FCFA',
         };
       }
@@ -232,7 +229,6 @@ export class EnrollmentsService {
           remainingDue: financial.remainingDue,
           totalDue: financial.totalDue ?? null,
           confirmedPaid: financial.confirmedPaid ?? null,
-          waivedAmount: financial.waivedAmount ?? null,
           currency: financial.currency ?? 'FCFA',
         };
       } catch (error) {
@@ -250,7 +246,6 @@ export class EnrollmentsService {
             remainingDue: null,
             totalDue: null,
             confirmedPaid: null,
-            waivedAmount: null,
             currency: 'FCFA',
           };
         }
@@ -268,7 +263,6 @@ export class EnrollmentsService {
             remainingDue: null,
             totalDue: null,
             confirmedPaid: null,
-            waivedAmount: null,
             currency: 'FCFA',
           };
         }

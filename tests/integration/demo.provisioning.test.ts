@@ -84,7 +84,9 @@ describe('demo creation: isolated critical path', () => {
       .map((p: { isCompleted: boolean; isCurrent: boolean }) => [p.isCompleted, p.isCurrent]))
       .toEqual([[true, false], [true, false], [false, true]]);
     const query = (statement: string) => queryPublic(statement.replaceAll('DEMO_SCHEMA', `"${result.schemaName}"`));
-    expect(await query("SELECT 1 FROM DEMO_SCHEMA.payments WHERE status='waived_by_school'")).toHaveLength(9);
+    expect(await query("SELECT 1 FROM DEMO_SCHEMA.payments WHERE status NOT IN ('confirmed','cancelled')")).toHaveLength(0);
+    expect(await query("SELECT 1 FROM DEMO_SCHEMA.payments WHERE status='cancelled' AND length(btrim(cancellation_reason)) > 0 AND cancelled_by_user_id IS NOT NULL")).toHaveLength(9);
+    expect(await query("SELECT 1 FROM DEMO_SCHEMA.student_tuition_overrides WHERE discount_amount > 0")).toHaveLength(18);
     expect(await query('SELECT 1 FROM DEMO_SCHEMA.student_tuition_overrides WHERE discount_amount=30000')).toHaveLength(9);
     expect(await query("SELECT 1 FROM DEMO_SCHEMA.parent_subscriptions WHERE status='active'")).toHaveLength(36);
     expect(await query('SELECT 1 FROM DEMO_SCHEMA.parent_student_links WHERE subscription_id IS NULL')).toHaveLength(12);

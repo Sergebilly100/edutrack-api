@@ -31,7 +31,7 @@ describe('enrollment workflow rules', () => {
     };
     const finance = { getFinancialStatus: vi.fn(), getHistoricalFinancialStatus: vi.fn() };
     const summary = await new EnrollmentsService(repository as never, finance as never).getStudentAcademicSummary('student', false);
-    expect(summary.years).toEqual([expect.objectContaining({ schoolYearId: 'year-1', financialStatus: 'unavailable', remainingDue: null, totalDue: null, confirmedPaid: null, waivedAmount: null })]);
+    expect(summary.years).toEqual([expect.objectContaining({ schoolYearId: 'year-1', financialStatus: 'unavailable', remainingDue: null, totalDue: null, confirmedPaid: null })]);
     expect(finance.getFinancialStatus).not.toHaveBeenCalled();
     expect(finance.getHistoricalFinancialStatus).not.toHaveBeenCalled();
   });
@@ -66,12 +66,12 @@ describe('enrollment workflow rules', () => {
     };
     const finance = {
       getFinancialStatus: vi.fn().mockRejectedValue({ code: 'CONFIRMED_ENROLLMENT_REQUIRED' }),
-      getHistoricalFinancialStatus: vi.fn().mockResolvedValue({ remainingDue: 25000, totalDue: 100000, confirmedPaid: 65000, waivedAmount: 10000, currency: 'FCFA' }),
+      getHistoricalFinancialStatus: vi.fn().mockResolvedValue({ remainingDue: 25000, totalDue: 100000, confirmedPaid: 65000, currency: 'FCFA' }),
     };
     const summary = await new EnrollmentsService(repository as never, finance as never).getStudentAcademicSummary('student');
     expect(summary.years).toEqual([
       expect.objectContaining({ schoolYearId: 'year-active', enrollmentStatus: 'pending_cashier', financialStatus: 'unavailable', remainingDue: null }),
-      expect.objectContaining({ schoolYearId: 'year-prior', enrollmentStatus: 'confirmed', financialStatus: 'remaining_due', remainingDue: 25000, totalDue: 100000, confirmedPaid: 65000, waivedAmount: 10000 }),
+      expect.objectContaining({ schoolYearId: 'year-prior', enrollmentStatus: 'confirmed', financialStatus: 'remaining_due', remainingDue: 25000, totalDue: 100000, confirmedPaid: 65000 }),
     ]);
     expect(finance.getHistoricalFinancialStatus).toHaveBeenCalledWith('student', 'year-prior');
   });
@@ -132,14 +132,14 @@ describe('enrollment workflow rules', () => {
   it('calcule le solde de campagne avec remises, abonnements obligatoires et paiements validés', async () => {
     const repository = {
       listReEnrollmentBalanceContexts: vi.fn().mockResolvedValue([
-        { student_id: 'student-paid', plan_total_amount: '100000', override_total_amount: null, discount_amount: '10000', confirmed_paid: '85000', waived_amount: '10000' },
-        { student_id: 'student-unpaid', plan_total_amount: '100000', override_total_amount: null, discount_amount: null, confirmed_paid: '50000', waived_amount: '0' },
-        { student_id: 'student-no-plan', plan_total_amount: null, override_total_amount: null, discount_amount: null, confirmed_paid: '0', waived_amount: '0' },
+        { student_id: 'student-paid', plan_total_amount: '100000', override_total_amount: null, discount_amount: '10000', confirmed_paid: '85000' },
+        { student_id: 'student-unpaid', plan_total_amount: '100000', override_total_amount: null, discount_amount: null, confirmed_paid: '50000' },
+        { student_id: 'student-no-plan', plan_total_amount: null, override_total_amount: null, discount_amount: null, confirmed_paid: '0' },
       ]),
       listMandatorySubscriptionPlans: vi.fn().mockResolvedValue([{ amount: '5000', period: 'annual', imposed_duration: 'annual' }]),
     };
     const balances = await new FinanceService(repository as never).listReEnrollmentBalances('origin-year');
-    expect(balances.get('student-paid')).toBe(0);
+    expect(balances.get('student-paid')).toBe(10_000);
     expect(balances.get('student-unpaid')).toBe(55000);
     expect(balances.get('student-no-plan')).toBeNull();
   });

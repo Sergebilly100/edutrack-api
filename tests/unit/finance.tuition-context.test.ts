@@ -38,11 +38,11 @@ describe('missing tuition context', () => {
         plan_total_amount: '100000', currency: 'FCFA', override_total_amount: null, discount_amount: null,
       }),
       listMandatorySubscriptionPlans: vi.fn().mockResolvedValue([]),
-      getPaymentCoverage: vi.fn().mockResolvedValue({ confirmedPaid: 25000, waivedAmount: 10000 }),
+      getConfirmedPaid: vi.fn().mockResolvedValue(25000),
     };
     const service = new FinanceService(repository as unknown as FinanceRepository);
     await expect(service.getEnrollmentPaymentPreview('student', 'year')).resolves.toMatchObject({
-      totalDue: 100000, confirmedPaid: 25000, remainingDue: 65000,
+      totalDue: 100000, confirmedPaid: 25000, remainingDue: 75000,
     });
     expect(repository.getAmountDueContext).toHaveBeenCalledWith('student', 'year', true, false);
   });
@@ -56,12 +56,12 @@ describe('missing tuition context', () => {
         plan_total_amount: '100000', currency: 'FCFA', override_total_amount: null, discount_amount: null,
       }),
       listMandatorySubscriptionPlans: vi.fn().mockResolvedValue([]),
-      getPaymentCoverage: vi.fn().mockResolvedValue({ confirmedPaid: 65000, waivedAmount: 10000 }),
+      getConfirmedPaid: vi.fn().mockResolvedValue(65000),
       getExpectedAtDate: vi.fn().mockResolvedValue(100000),
     };
     const service = new FinanceService(repository as unknown as FinanceRepository);
     await expect(service.getHistoricalFinancialStatus('student', 'old-year')).resolves.toMatchObject({
-      totalDue: 100000, confirmedPaid: 65000, waivedAmount: 10000, remainingDue: 25000,
+      totalDue: 100000, confirmedPaid: 65000, remainingDue: 35000,
     });
     expect(repository.getAmountDueContext).toHaveBeenCalledWith('student', 'old-year', false, true);
     expect(repository.getExpectedAtDate).toHaveBeenCalledWith('student', 'old-year', expect.any(String), true);

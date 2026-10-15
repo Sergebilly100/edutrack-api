@@ -43,23 +43,15 @@ describe('finance calculations', () => {
     expect(resolveFinancialStanding(49_999, 50_000)).toBe('late');
   });
 
-  it('considère une remise de l’école comme une couverture individuelle, sans paiement encaissé', () => {
+  it('ne compte que les paiements encaissés après réduction du montant dû', () => {
+    expect(calculateStudentTotalDue({ planTotalAmount: 100_000, discountAmount: 50_000 })).toBe(50_000);
     expect(resolveIndividualFinancialStatus({
-      totalDue: 100_000,
-      cumulativeExpectedAtDate: 60_000,
-      confirmedPaid: 0,
-      waivedAmount: 100_000,
-    })).toMatchObject({
-      coveredAmount: 100_000,
-      remainingDue: 0,
-      standing: 'up_to_date',
-      cacheStatus: 'waived',
-    });
+      totalDue: 50_000, cumulativeExpectedAtDate: 50_000, confirmedPaid: 0,
+    })).toMatchObject({ coveredAmount: 0, remainingDue: 50_000, standing: 'late', cacheStatus: 'late' });
   });
 
   it('autorise l’annulation seulement depuis un statut comptable actif', () => {
     expect(canCancelPayment('confirmed')).toBe(true);
-    expect(canCancelPayment('waived_by_school')).toBe(true);
     expect(canCancelPayment('cancelled')).toBe(false);
   });
 

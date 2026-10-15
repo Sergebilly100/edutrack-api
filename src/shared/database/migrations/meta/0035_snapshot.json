@@ -1,6 +1,6 @@
 {
-  "id": "7c3a4e46-0170-4ba6-8db9-9cbdbe8a7cbb",
-  "prevId": "14afd547-2881-4d06-b2f2-91d7bbdb9b2e",
+  "id": "4af1ff45-1f79-4e20-aa45-fe229f83da41",
+  "prevId": "377ef0fa-91c1-4f78-b23d-7ea9672c7988",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -92,7 +92,7 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'Mise à jour en cours'"
+          "default": "'Mise \u00e0 jour en cours'"
         },
         "sms_provider": {
           "name": "sms_provider",
@@ -1056,7 +1056,7 @@
           "type": "varchar(120)",
           "primaryKey": false,
           "notNull": false,
-          "default": "'Élève'"
+          "default": "'\u00c9l\u00e8ve'"
         },
         "director_title": {
           "name": "director_title",
@@ -2236,6 +2236,111 @@
           "nullsNotDistinct": false,
           "columns": [
             "student_id",
+            "school_year_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "tenant.class_financial_summary": {
+      "name": "class_financial_summary",
+      "schema": "tenant",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "class_id": {
+          "name": "class_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "school_year_id": {
+          "name": "school_year_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "total_expected_to_date": {
+          "name": "total_expected_to_date",
+          "type": "numeric(14, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "total_paid": {
+          "name": "total_paid",
+          "type": "numeric(14, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "students_up_to_date_count": {
+          "name": "students_up_to_date_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "students_late_count": {
+          "name": "students_late_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "last_computed_at": {
+          "name": "last_computed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "class_financial_summary_class_id_classes_id_fk": {
+          "name": "class_financial_summary_class_id_classes_id_fk",
+          "tableFrom": "class_financial_summary",
+          "tableTo": "classes",
+          "schemaTo": "tenant",
+          "columnsFrom": [
+            "class_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "class_financial_summary_school_year_id_school_years_id_fk": {
+          "name": "class_financial_summary_school_year_id_school_years_id_fk",
+          "tableFrom": "class_financial_summary",
+          "tableTo": "school_years",
+          "schemaTo": "tenant",
+          "columnsFrom": [
+            "school_year_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "class_financial_summary_class_year_unique": {
+          "name": "class_financial_summary_class_year_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "class_id",
             "school_year_id"
           ]
         }
@@ -5154,6 +5259,28 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "idx_payments_confirmed_student_year": {
+          "name": "idx_payments_confirmed_student_year",
+          "columns": [
+            {
+              "expression": "student_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "school_year_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"tenant\".\"payments\".\"status\" = 'confirmed'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -5229,6 +5356,10 @@
         "payments_amount_positive": {
           "name": "payments_amount_positive",
           "value": "\"tenant\".\"payments\".\"amount\" > 0"
+        },
+        "payments_cancellation_consistent": {
+          "name": "payments_cancellation_consistent",
+          "value": "(\"tenant\".\"payments\".\"status\" <> 'cancelled' AND \"tenant\".\"payments\".\"cancelled_at\" IS NULL AND \"tenant\".\"payments\".\"cancelled_by_user_id\" IS NULL AND \"tenant\".\"payments\".\"cancellation_reason\" IS NULL) OR (\"tenant\".\"payments\".\"status\" = 'cancelled' AND \"tenant\".\"payments\".\"cancelled_at\" IS NOT NULL AND \"tenant\".\"payments\".\"cancelled_by_user_id\" IS NOT NULL AND length(btrim(\"tenant\".\"payments\".\"cancellation_reason\")) > 0)"
         }
       },
       "isRLSEnabled": false
@@ -7257,6 +7388,104 @@
       },
       "isRLSEnabled": false
     },
+    "tenant.school_financial_summary": {
+      "name": "school_financial_summary",
+      "schema": "tenant",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "school_year_id": {
+          "name": "school_year_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "total_expected_to_date": {
+          "name": "total_expected_to_date",
+          "type": "numeric(14, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "total_paid": {
+          "name": "total_paid",
+          "type": "numeric(14, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "recovery_rate": {
+          "name": "recovery_rate",
+          "type": "numeric(6, 4)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "students_up_to_date_count": {
+          "name": "students_up_to_date_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "students_late_count": {
+          "name": "students_late_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "previous_period_total_paid": {
+          "name": "previous_period_total_paid",
+          "type": "numeric(14, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "last_computed_at": {
+          "name": "last_computed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "school_financial_summary_school_year_id_school_years_id_fk": {
+          "name": "school_financial_summary_school_year_id_school_years_id_fk",
+          "tableFrom": "school_financial_summary",
+          "tableTo": "school_years",
+          "schemaTo": "tenant",
+          "columnsFrom": [
+            "school_year_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "school_financial_summary_year_unique": {
+          "name": "school_financial_summary_year_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "school_year_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "tenant.school_years": {
       "name": "school_years",
       "schema": "tenant",
@@ -7646,6 +7875,153 @@
           "columns": [
             "student_id",
             "document_type_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "tenant.student_financial_status": {
+      "name": "student_financial_status",
+      "schema": "tenant",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "student_id": {
+          "name": "student_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "school_year_id": {
+          "name": "school_year_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "total_expected_to_date": {
+          "name": "total_expected_to_date",
+          "type": "numeric(14, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "total_paid": {
+          "name": "total_paid",
+          "type": "numeric(14, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "waived_amount": {
+          "name": "waived_amount",
+          "type": "numeric(14, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "total_due_year": {
+          "name": "total_due_year",
+          "type": "numeric(14, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "status": {
+          "name": "status",
+          "type": "financial_cache_status",
+          "typeSchema": "tenant",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'up_to_date'"
+        },
+        "days_late": {
+          "name": "days_late",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "earliest_overdue_step_due_date": {
+          "name": "earliest_overdue_step_due_date",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_computed_at": {
+          "name": "last_computed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_student_financial_status_year": {
+          "name": "idx_student_financial_status_year",
+          "columns": [
+            {
+              "expression": "school_year_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "student_financial_status_student_id_students_id_fk": {
+          "name": "student_financial_status_student_id_students_id_fk",
+          "tableFrom": "student_financial_status",
+          "tableTo": "students",
+          "schemaTo": "tenant",
+          "columnsFrom": [
+            "student_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "student_financial_status_school_year_id_school_years_id_fk": {
+          "name": "student_financial_status_school_year_id_school_years_id_fk",
+          "tableFrom": "student_financial_status",
+          "tableTo": "school_years",
+          "schemaTo": "tenant",
+          "columnsFrom": [
+            "school_year_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "student_financial_status_student_year_unique": {
+          "name": "student_financial_status_student_year_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "student_id",
+            "school_year_id"
           ]
         }
       },
@@ -9936,6 +10312,15 @@
         "confirmed",
         "waived_by_school",
         "cancelled"
+      ]
+    },
+    "tenant.financial_cache_status": {
+      "name": "financial_cache_status",
+      "schema": "tenant",
+      "values": [
+        "up_to_date",
+        "late",
+        "waived"
       ]
     },
     "tenant.grading_period_type": {

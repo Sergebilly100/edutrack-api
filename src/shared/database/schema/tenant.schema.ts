@@ -182,8 +182,12 @@ export const paymentSourceEnum = tenant.enum('payment_source', [
 
 export const financePaymentStatusEnum = tenant.enum('finance_payment_status', [
   'confirmed',
-  'waived_by_school',
   'cancelled',
+]);
+
+export const financialCacheStatusEnum = tenant.enum('financial_cache_status', [
+  'up_to_date',
+  'late',
 ]);
 
 export const mobileMoneyProviderEnum = tenant.enum('mobile_money_provider', [
@@ -604,8 +608,70 @@ export const payments = tenant.table(
   (table) => ({
     paymentsReceiptNumberUnique: unique('payments_receipt_number_unique').on(table.receiptNumber),
     paymentsAmountPositive: check('payments_amount_positive', sql`${table.amount} > 0`),
+    paymentsCancellationConsistent: check(
+      'payments_cancellation_consistent',
+      sql`(${table.status}::text <> 'cancelled' AND ${table.cancelledAt} IS NULL AND ${table.cancelledByUserId} IS NULL AND ${table.cancellationReason} IS NULL) OR (${table.status}::text = 'cancelled' AND ${table.cancelledAt} IS NOT NULL AND ${table.cancelledByUserId} IS NOT NULL AND length(btrim(${table.cancellationReason})) > 0)`
+    ),
     paymentsStudentYearCreatedIdx: index('idx_payments_student_year_created').on(table.studentId, table.schoolYearId, table.createdAt),
     paymentsJournalFiltersIdx: index('idx_payments_journal_filters').on(table.paymentDate, table.method, table.studentId),
+    paymentsConfirmedStudentYearIdx: index('idx_payments_confirmed_student_year')
+      .on(table.studentId, table.schoolYearId)
+      .where(sql`${table.status} = 'confirmed'`),
+  })
+);
+
+export const studentFinancialStatus = tenant.table(
+  'student_financial_status',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    studentId: uuid('student_id').notNull().references(() => students.id, { onDelete: 'cascade' }),
+    schoolYearId: uuid('school_year_id').notNull().references(() => schoolYears.id, { onDelete: 'cascade' }),
+    totalExpectedToDate: numeric('total_expected_to_date', { precision: 14, scale: 2 }).notNull().default('0'),
+    totalPaid: numeric('total_paid', { precision: 14, scale: 2 }).notNull().default('0'),
+    totalDueYear: numeric('total_due_year', { precision: 14, scale: 2 }).notNull().default('0'),
+    status: financialCacheStatusEnum('status').notNull().default('up_to_date'),
+    daysLate: integer('days_late'),
+    earliestOverdueStepDueDate: date('earliest_overdue_step_due_date', { mode: 'string' }),
+    lastComputedAt: timestamp('last_computed_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    studentFinancialStatusStudentYearUnique: unique('student_financial_status_student_year_unique').on(table.studentId, table.schoolYearId),
+    studentFinancialStatusYearIdx: index('idx_student_financial_status_year').on(table.schoolYearId, table.status),
+  })
+);
+
+export const classFinancialSummary = tenant.table(
+  'class_financial_summary',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    classId: uuid('class_id').notNull().references(() => classes.id, { onDelete: 'cascade' }),
+    schoolYearId: uuid('school_year_id').notNull().references(() => schoolYears.id, { onDelete: 'cascade' }),
+    totalExpectedToDate: numeric('total_expected_to_date', { precision: 14, scale: 2 }).notNull().default('0'),
+    totalPaid: numeric('total_paid', { precision: 14, scale: 2 }).notNull().default('0'),
+    studentsUpToDateCount: integer('students_up_to_date_count').notNull().default(0),
+    studentsLateCount: integer('students_late_count').notNull().default(0),
+    lastComputedAt: timestamp('last_computed_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    classFinancialSummaryClassYearUnique: unique('class_financial_summary_class_year_unique').on(table.classId, table.schoolYearId),
+  })
+);
+
+export const schoolFinancialSummary = tenant.table(
+  'school_financial_summary',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    schoolYearId: uuid('school_year_id').notNull().references(() => schoolYears.id, { onDelete: 'cascade' }),
+    totalExpectedToDate: numeric('total_expected_to_date', { precision: 14, scale: 2 }).notNull().default('0'),
+    totalPaid: numeric('total_paid', { precision: 14, scale: 2 }).notNull().default('0'),
+    recoveryRate: numeric('recovery_rate', { precision: 6, scale: 4 }).notNull().default('0'),
+    studentsUpToDateCount: integer('students_up_to_date_count').notNull().default(0),
+    studentsLateCount: integer('students_late_count').notNull().default(0),
+    previousPeriodTotalPaid: numeric('previous_period_total_paid', { precision: 14, scale: 2 }).notNull().default('0'),
+    lastComputedAt: timestamp('last_computed_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    schoolFinancialSummaryYearUnique: unique('school_financial_summary_year_unique').on(table.schoolYearId),
   })
 );
 

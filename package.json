@@ -25,6 +25,7 @@
     "db:seed:v2": "tsx src/shared/database/seed-v2.ts",
     "demo:create": "node --import tsx src/shared/database/demo/demo-create.ts",
     "finance:recalculate-caches": "node --import tsx src/shared/database/recalculate-financial-caches.ts",
+    "finance:prepare-waiver-removal": "node --import tsx src/shared/database/prepare-financial-waiver-removal.ts",
     "population:diagnose": "node --import tsx src/shared/database/diagnose-school-population.ts",
     "calendar:diagnose": "node --import tsx src/shared/database/diagnose-grading-period-calendar.ts",
     "teacher-classes:diagnose": "node --import tsx src/shared/database/diagnose-teacher-classes.ts"

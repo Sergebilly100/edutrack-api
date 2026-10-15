@@ -8,7 +8,7 @@ export class RecoveryError extends Error {
 }
 
 export type RecoveryMetrics = {
-  studentCount: number; expected: number; paid: number; waived: number;
+  studentCount: number; expected: number; paid: number;
   remaining: number; recoveryRate: number; studentsToFollow: number;
 };
 
@@ -17,10 +17,9 @@ export const summarizeRecovery = (rows: readonly RecoveryClassRow[]): RecoveryMe
     studentCount: sum.studentCount + Number(row.student_count),
     expected: sum.expected + Number(row.expected),
     paid: sum.paid + Number(row.paid),
-    waived: sum.waived + Number(row.waived),
     remaining: sum.remaining + Number(row.remaining),
     studentsToFollow: sum.studentsToFollow + Number(row.students_to_follow),
-  }), { studentCount: 0, expected: 0, paid: 0, waived: 0, remaining: 0, studentsToFollow: 0 });
+  }), { studentCount: 0, expected: 0, paid: 0, remaining: 0, studentsToFollow: 0 });
   return { ...totals, recoveryRate: computeRecoveryRate(totals.paid, totals.expected) };
 };
 
@@ -75,7 +74,7 @@ export class RecoveryService {
       students: students.map((row) => ({
         studentId: row.student_id, name: row.full_name, matricule: row.matricule,
         status: row.status, expected: Number(row.expected), paid: Number(row.paid),
-        waived: Number(row.waived), remaining: Number(row.remaining), daysLate: row.days_late,
+        remaining: Number(row.remaining), daysLate: row.days_late,
       })),
       pagination: { page: currentPage, limit, total, totalPages },
     };

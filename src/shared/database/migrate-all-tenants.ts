@@ -11,6 +11,7 @@ import { Pool } from 'pg';
 import { findMatriculeCollisions } from './matricule-collisions.js';
 import { verifyConductMigrationContract } from './conduct-migration-contract.js';
 import { unresolvedScheduleSubjects } from './schedule-subject-migration-report.js';
+import { shouldApplyFinancialWaiverMigration } from './financial-waiver-migration.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
@@ -64,6 +65,49 @@ const runMigrationsForSchema = async (pool: Pool, schemaName: string): Promise<v
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
 
+      if (migrationFile === '0090_finance_drop_payment_status_index.sql') {
+        await client.query('BEGIN');
+        try {
+          const state = await client.query<{ has_index: boolean; has_old_status: boolean }>(
+            `SELECT
+               EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = $1 AND indexname = $2) AS has_index,
+               EXISTS (
+                 SELECT 1 FROM pg_type t
+                 JOIN pg_namespace n ON n.oid = t.typnamespace
+                 JOIN pg_enum e ON e.enumtypid = t.oid
+                 WHERE n.nspname = $1 AND t.typname = 'finance_payment_status' AND e.enumlabel = 'waived_by_school'
+               ) AS has_old_status`,
+            [schemaName, 'idx_payments_confirmed_student_year']
+          );
+          if (state.rows[0]?.has_index && state.rows[0]?.has_old_status) {
+            for (const statement of statements) await client.query(statement);
+            await client.query('COMMIT');
+          } else {
+            await client.query('ROLLBACK');
+          }
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        }
+        continue;
+      }
+
+      if (migrationFile === '0091_finance_remove_waivers.sql') {
+        await client.query('BEGIN');
+        try {
+          if (!(await shouldApplyFinancialWaiverMigration(client, schemaName))) {
+            await client.query('ROLLBACK');
+            continue;
+          }
+          for (const statement of statements) await client.query(statement);
+          await client.query('COMMIT');
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        }
+        continue;
+      }
+
       for (const statement of statements) {
         try {
           await client.query(statement);
@@ -93,6 +137,26 @@ const main = async (): Promise<void> => {
   try {
     const schemas = await getExistingTenantSchemas(pool);
     console.log(`Found ${schemas.length} tenant schema(s):`, schemas);
+
+    const migrationsFolder = path.resolve(process.cwd(), 'src/shared/database/migrations');
+    const hasC43Migration = (await readdir(migrationsFolder)).includes('0091_finance_remove_waivers.sql')
+      && (!fromMigration || '0091' >= fromMigration);
+    if (hasC43Migration) {
+      for (const schema of schemas) {
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN READ ONLY');
+          await shouldApplyFinancialWaiverMigration(client, schema);
+          await client.query('ROLLBACK');
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        } finally {
+          client.release();
+        }
+      }
+      console.log('C43 global preflight passed for all tenant schemas.');
+    }
 
     for (const schema of schemas) {
       process.stdout.write(`Migrating ${schema}... `);

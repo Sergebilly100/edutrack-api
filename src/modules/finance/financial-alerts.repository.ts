@@ -130,7 +130,7 @@ export class FinancialAlertsRepository {
                FROM student_tuition_schedule_steps stss
                WHERE stss.student_id = s.id
                  AND stss.school_year_id = sfs.school_year_id
-                 AND sfs.total_paid + sfs.waived_amount < LEAST(stss.cumulative_amount_expected, sfs.total_due_year)
+                 AND sfs.total_paid < LEAST(stss.cumulative_amount_expected, sfs.total_due_year)
                  AND stss.due_date > CURRENT_DATE
                  AND stss.due_date <= CURRENT_DATE + r.days_offset
              )
@@ -147,7 +147,7 @@ export class FinancialAlertsRepository {
                  INNER JOIN tuition_plans tp ON tp.id = tss.tuition_plan_id
                  INNER JOIN classes c2 ON c2.level_id = tp.level_id AND c2.id = confirmed_enrollment.class_id
                  WHERE tp.school_year_id = sfs.school_year_id
-                   AND sfs.total_paid + sfs.waived_amount < LEAST(tss.cumulative_amount_expected, sfs.total_due_year)
+                   AND sfs.total_paid < LEAST(tss.cumulative_amount_expected, sfs.total_due_year)
                    AND tss.due_date > CURRENT_DATE
                    AND tss.due_date <= CURRENT_DATE + r.days_offset
                )
