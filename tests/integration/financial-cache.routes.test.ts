@@ -8,6 +8,12 @@ const suffix = String(Date.now());
 
 type IdRow = { id: string };
 
+const isoDate = (offsetDays: number): string => {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() + offsetDays);
+  return date.toISOString().slice(0, 10);
+};
+
 describe('financial cache integration (6a)', () => {
   it('recalcule le cache immédiatement après un paiement confirmé', async () => {
     const headers = await getAuthHeaders('director');
@@ -16,8 +22,8 @@ describe('financial cache integration (6a)', () => {
     await queryTenant(`UPDATE ${tenantTable('school_years')} SET status='closed' WHERE status='active'`);
     const years = await queryTenant<IdRow>(
       `INSERT INTO ${tenantTable('school_years')} (label, start_date, end_date, end_of_year_review_start_date, status)
-       VALUES ($1, '2098-09-01', '2099-06-30', '2099-05-01', 'active') RETURNING id::text`,
-      [`fc-${suffix}`]
+       VALUES ($1, $2, $3, $4, 'active') RETURNING id::text`,
+      [`fc-${suffix}`, isoDate(-90), isoDate(270), isoDate(180)]
     );
     const yearId = years[0]!.id;
     const levels = await queryTenant<IdRow>(
@@ -83,10 +89,28 @@ describe('financial cache integration (6a)', () => {
     expect(summary.body.school).not.toBeNull();
     expect(Number(summary.body.school.total_paid)).toBeGreaterThanOrEqual(60_000);
     expect(Number(summary.body.school.recovery_rate)).toBeGreaterThan(0);
+    expect(summary.body.school).toMatchObject({
+      annual_total_due: '300000.00',
+      annual_remaining: '240000.00',
+      upcoming_due: '200000.00',
+    });
+    expect(summary.body.upcomingInstallments.reduce(
+      (sum: number, installment: { expected_amount: string }) => sum + Number(installment.expected_amount),
+      0
+    )).toBe(200_000);
 
     const classRow = summary.body.classes.find((c: { class_id: string }) => c.class_id === classes[0]!.id);
     expect(classRow).toBeDefined();
     expect(classRow.students_late_count).toBeGreaterThanOrEqual(1);
+    expect(Number(classRow.annual_total_due)).toBe(Number(summary.body.school.annual_total_due));
+    expect(Number(classRow.annual_remaining)).toBe(Number(summary.body.school.annual_remaining));
+    expect(Number(classRow.upcoming_due)).toBe(Number(summary.body.school.upcoming_due));
+
+    const levelRow = summary.body.levels.find((row: { level_id: string }) => row.level_id === levelId);
+    expect(levelRow).toBeDefined();
+    expect(Number(levelRow.annual_total_due)).toBe(Number(summary.body.school.annual_total_due));
+    expect(Number(levelRow.annual_remaining)).toBe(Number(summary.body.school.annual_remaining));
+    expect(Number(levelRow.upcoming_due)).toBe(Number(summary.body.school.upcoming_due));
   });
 
   it("le statut passe up_to_date quand le payé couvre le dû à date", async () => {
@@ -115,6 +139,23 @@ describe('financial cache integration (6a)', () => {
     expect(Number(cached.body.cached.total_paid)).toBe(100_000);
     expect(cached.body.cached.status).toBe('up_to_date');
     expect(cached.body.cached.days_late).toBeNull();
+
+    const recalculate = await request()
+      .post(`/api/v1/finance/recalculate?school_year_id=${yearId}`)
+      .set(headers);
+    expect(recalculate.status, JSON.stringify(recalculate.body)).toBe(200);
+    expect(recalculate.body.result.studentCount).toBeGreaterThanOrEqual(1);
+
+    const summary = await request()
+      .get(`/api/v1/finance/financial-summary?school_year_id=${yearId}`)
+      .set(headers);
+    expect(summary.status).toBe(200);
+    expect(summary.body.school).toMatchObject({
+      annual_total_due: '300000.00',
+      annual_remaining: '200000.00',
+      upcoming_due: '200000.00',
+      remaining_to_collect: '0.00',
+    });
   });
 
   it('applique une remise au montant dû sans la compter comme encaissement', async () => {
@@ -176,6 +217,59 @@ describe('financial cache integration (6a)', () => {
     expect(Number(summary.body.school.total_expected_to_date)).toBe(100_000);
     expect(Number(summary.body.school.recovery_rate)).toBe(1);
     expect(Number(summary.body.school.students_late_count)).toBe(0);
+    expect(Number(summary.body.school.annual_total_due)).toBe(300_000);
+    expect(Number(summary.body.school.annual_remaining)).toBe(200_000);
+    expect(Number(summary.body.school.upcoming_due)).toBe(200_000);
+    // Le planning affiche les échéances brutes du plan, y compris l'élève dont
+    // la remise totale annule le dû annuel : cet écart est conservé et visible.
+    expect(summary.body.upcomingInstallments.reduce(
+      (sum: number, installment: { expected_amount: string }) => sum + Number(installment.expected_amount),
+      0
+    )).toBe(400_000);
+  });
+
+  it('conserve dans la population confirmée un élève sans plan avec un dû annuel nul', async () => {
+    const headers = await getAuthHeaders('director');
+    const [year] = await queryTenant<IdRow>('SELECT id FROM school_years WHERE label=$1', [`fc-${suffix}`]);
+    const levels = await queryTenant<IdRow>(
+      'INSERT INTO levels (name, order_index, is_exam_class) VALUES ($1, 99991, false) RETURNING id::text',
+      [`FC no-plan level ${suffix}`]
+    );
+    const classes = await queryTenant<IdRow>(
+      'INSERT INTO classes (name, level_id, school_year_id, is_active) VALUES ($1, $2, $3, true) RETURNING id::text',
+      [`FC no-plan class ${suffix}`, levels[0]!.id, year!.id]
+    );
+    const students = await queryTenant<IdRow>(
+      "INSERT INTO students (class_id, first_name, last_name) VALUES ($1, 'Sans', 'Plan') RETURNING id::text",
+      [classes[0]!.id]
+    );
+    await queryTenant(
+      "INSERT INTO enrollments (student_id, class_id, school_year_id, type, status) VALUES ($1, $2, $3, 'new_registration', 'confirmed')",
+      [students[0]!.id, classes[0]!.id, year!.id]
+    );
+    await withTenantSchema(TEST_SCHEMA_NAME, (db) => buildFinancialCacheService(db).recalcAll(year!.id));
+
+    const summary = await request()
+      .get(`/api/v1/finance/financial-summary?school_year_id=${year!.id}`)
+      .set(headers);
+    expect(summary.status).toBe(200);
+    const noPlanClass = summary.body.classes.find(
+      (row: { class_id: string }) => row.class_id === classes[0]!.id
+    );
+    expect(noPlanClass).toMatchObject({
+      annual_total_due: '0.00',
+      annual_remaining: '0.00',
+      upcoming_due: '0.00',
+    });
+    expect(Number(summary.body.school.annual_total_due)).toBe(300_000);
+    expect(summary.body.classes.reduce(
+      (sum: number, row: { annual_total_due: string }) => sum + Number(row.annual_total_due),
+      0
+    )).toBe(Number(summary.body.school.annual_total_due));
+    expect(summary.body.levels.reduce(
+      (sum: number, row: { annual_total_due: string }) => sum + Number(row.annual_total_due),
+      0
+    )).toBe(Number(summary.body.school.annual_total_due));
   });
 
   it.each([
@@ -209,5 +303,25 @@ describe('financial cache integration (6a)', () => {
     expect(status.body.financialStatus.standing).toBe(expected === 0 ? 'up_to_date' : 'late');
     const [source] = await queryTenant<{ discount_amount: string }>('SELECT discount_amount FROM student_tuition_overrides WHERE student_id=$1', [student!.id]);
     expect(Number(source?.discount_amount)).toBe(Number(discount));
+
+    const summary = await request()
+      .get(`/api/v1/finance/financial-summary?school_year_id=${year!.id}`)
+      .set(await getAuthHeaders('director'));
+    expect(summary.status).toBe(200);
+    const cachedTotal = await queryTenant<{ total: string }>(
+      'SELECT COALESCE(SUM(total_due_year), 0)::text AS total FROM student_financial_status WHERE school_year_id=$1',
+      [year!.id]
+    );
+    expect(Number(summary.body.school.annual_total_due)).toBe(Number(cachedTotal[0]!.total));
+    expect(Number(summary.body.school.annual_remaining)).toBe(
+      Number(summary.body.school.annual_total_due) - Number(summary.body.school.total_paid)
+    );
+    expect(Number(summary.body.school.annual_remaining)).toBe(
+      Number(summary.body.school.remaining_to_collect) + Number(summary.body.school.upcoming_due)
+    );
+    expect(summary.body.levels.reduce(
+      (sum: number, row: { annual_total_due: string }) => sum + Number(row.annual_total_due),
+      0
+    )).toBe(Number(summary.body.school.annual_total_due));
   });
 });

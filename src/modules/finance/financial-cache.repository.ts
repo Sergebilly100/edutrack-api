@@ -284,6 +284,7 @@ export class FinancialCacheRepository {
     const result = await this.db.execute<Record<string, string | number>>(sql`
       SELECT SUM(sfs.total_expected_to_date)::text AS total_expected_to_date,
              SUM(sfs.total_paid)::text AS total_paid,
+             SUM(sfs.total_due_year)::text AS annual_total_due,
              (CASE WHEN SUM(sfs.total_expected_to_date) > 0
                THEN LEAST(1, SUM(sfs.total_paid) / SUM(sfs.total_expected_to_date))
                ELSE 1 END)::numeric(6,4)::text AS recovery_rate,
@@ -304,7 +305,7 @@ export class FinancialCacheRepository {
       WHERE sfs.school_year_id = ${schoolYearId}::uuid
       HAVING COUNT(*) > 0
     `);
-    return getRows(result)[0] ?? null;
+    return getRows<Record<string, string | number>>(result)[0] ?? null;
   }
 
   async listClassSummaries(schoolYearId: string) {
@@ -313,6 +314,7 @@ export class FinancialCacheRepository {
              c.level_id::text AS level_id, l.name AS level_name,
              SUM(sfs.total_expected_to_date)::text AS total_expected_to_date,
              SUM(sfs.total_paid)::text AS total_paid,
+             SUM(sfs.total_due_year)::text AS annual_total_due,
              SUM(GREATEST(sfs.total_expected_to_date - sfs.total_paid, 0))::text AS remaining_to_collect,
              COUNT(*) FILTER (WHERE sfs.status <> 'late')::int AS students_up_to_date_count,
              COUNT(*) FILTER (WHERE sfs.status = 'late')::int AS students_late_count,
@@ -327,7 +329,7 @@ export class FinancialCacheRepository {
       GROUP BY c.id, c.name, l.id, l.name
       ORDER BY c.name ASC
     `);
-    return getRows(result);
+    return getRows<Record<string, string | number>>(result);
   }
 
   /** Agrégat de pilotage : plusieurs classes peuvent appartenir au même niveau. */
@@ -337,6 +339,7 @@ export class FinancialCacheRepository {
              l.name AS level_name,
              SUM(sfs.total_expected_to_date)::text AS total_expected_to_date,
              SUM(sfs.total_paid)::text AS total_paid,
+             SUM(sfs.total_due_year)::text AS annual_total_due,
              SUM(GREATEST(sfs.total_expected_to_date - sfs.total_paid, 0))::text AS remaining_to_collect,
              COUNT(*) FILTER (WHERE sfs.status <> 'late')::int AS students_up_to_date_count,
              COUNT(*) FILTER (WHERE sfs.status = 'late')::int AS students_late_count,
@@ -351,7 +354,7 @@ export class FinancialCacheRepository {
       GROUP BY l.id, l.name, l.order_index
       ORDER BY l.order_index ASC, l.name ASC
     `);
-    return getRows(result);
+    return getRows<Record<string, string | number>>(result);
   }
 
   async listCollectionTrend(schoolYearId: string) {

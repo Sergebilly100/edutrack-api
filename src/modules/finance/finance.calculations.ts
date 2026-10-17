@@ -61,6 +61,18 @@ const PERIOD_MONTHS: Record<SubscriptionPeriod, number> = {
 
 const roundMoney = (value: number): number => Math.round(value * 100) / 100;
 
+export const calculateAnnualFinancialBalances = (input: {
+  annualTotalDue: number;
+  collected: number;
+  overdueToDate: number;
+}): { annualRemaining: number; upcomingDue: number } => {
+  const annualRemaining = roundMoney(input.annualTotalDue - input.collected);
+  return {
+    annualRemaining,
+    upcomingDue: roundMoney(annualRemaining - input.overdueToDate),
+  };
+};
+
 export const prorateSubscriptionAmount = (
   amount: number,
   period: SubscriptionPeriod,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  calculateAnnualFinancialBalances,
   calculateStudentTotalDue,
   canCancelPayment,
   isValidCumulativeSchedule,
@@ -12,6 +13,33 @@ import {
 } from '../../src/modules/finance/finance.calculations.js';
 
 describe('finance calculations', () => {
+  it('calcule le solde annuel restant et le futur dû à partir des agrégats à date', () => {
+    const balances = calculateAnnualFinancialBalances({
+      annualTotalDue: 300_000,
+      collected: 100_000,
+      overdueToDate: 0,
+    });
+    expect(balances).toEqual({ annualRemaining: 200_000, upcomingDue: 200_000 });
+    expect(balances.annualRemaining).toBe(0 + balances.upcomingDue);
+    expect(300_000).toBe(100_000 + balances.annualRemaining);
+  });
+
+  it('conserve le signe du solde lorsqu’il existe un trop-perçu', () => {
+    expect(calculateAnnualFinancialBalances({
+      annualTotalDue: 100_000,
+      collected: 125_000,
+      overdueToDate: 0,
+    })).toEqual({ annualRemaining: -25_000, upcomingDue: -25_000 });
+  });
+
+  it('déduit un paiement en avance des échéances annuelles restantes', () => {
+    expect(calculateAnnualFinancialBalances({
+      annualTotalDue: 300_000,
+      collected: 150_000,
+      overdueToDate: 0,
+    })).toEqual({ annualRemaining: 150_000, upcomingDue: 150_000 });
+  });
+
   it('calcule le montant dû sans remise', () => {
     expect(calculateStudentTotalDue({ planTotalAmount: 150_000 })).toBe(150_000);
   });

@@ -1,5 +1,6 @@
 import { FinancialCacheRepository } from './financial-cache.repository.js';
 import {
+  calculateAnnualFinancialBalances,
   resolveIndividualFinancialStatus,
   type FinancialCacheStatus,
 } from './finance.calculations.js';
@@ -20,6 +21,26 @@ export const resolveCacheStatus = (input: {
 export const computeRecoveryRate = (totalPaid: number, totalExpectedToDate: number): number => {
   if (totalExpectedToDate <= 0) return 1;
   return Math.min(1, Math.round((totalPaid / totalExpectedToDate) * 10000) / 10000);
+};
+
+const aggregateAmount = (value: string | number | undefined, field: string): number => {
+  if (value === undefined) throw new Error(`Missing financial aggregate field: ${field}`);
+  const amount = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(amount)) throw new Error(`Invalid financial aggregate field: ${field}`);
+  return amount;
+};
+
+const withAnnualBalances = <T extends Record<string, string | number>>(row: T) => {
+  const balances = calculateAnnualFinancialBalances({
+    annualTotalDue: aggregateAmount(row.annual_total_due, 'annual_total_due'),
+    collected: aggregateAmount(row.total_paid, 'total_paid'),
+    overdueToDate: aggregateAmount(row.remaining_to_collect, 'remaining_to_collect'),
+  });
+  return {
+    ...row,
+    annual_remaining: balances.annualRemaining.toFixed(2),
+    upcoming_due: balances.upcomingDue.toFixed(2),
+  };
 };
 
 export class FinancialCacheService {
@@ -68,19 +89,20 @@ export class FinancialCacheService {
   async getSchoolSummary(schoolYearId?: string) {
     const yearId = schoolYearId ?? (await this.repository.getActiveSchoolYearId());
     if (!yearId) return null;
-    return this.repository.getSchoolSummary(yearId);
+    const summary = await this.repository.getSchoolSummary(yearId);
+    return summary ? withAnnualBalances(summary) : null;
   }
 
   async listClassSummaries(schoolYearId?: string) {
     const yearId = schoolYearId ?? (await this.repository.getActiveSchoolYearId());
     if (!yearId) return [];
-    return this.repository.listClassSummaries(yearId);
+    return (await this.repository.listClassSummaries(yearId)).map(withAnnualBalances);
   }
 
   async listLevelSummaries(schoolYearId?: string) {
     const yearId = schoolYearId ?? (await this.repository.getActiveSchoolYearId());
     if (!yearId) return [];
-    return this.repository.listLevelSummaries(yearId);
+    return (await this.repository.listLevelSummaries(yearId)).map(withAnnualBalances);
   }
 
   async listCollectionTrend(schoolYearId?: string) {

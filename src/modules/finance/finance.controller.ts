@@ -109,6 +109,78 @@ const enqueueReceipt = async (
   return job.id;
 };
 
+const financialAggregateProperties = {
+  total_expected_to_date: { type: 'string' },
+  total_paid: { type: 'string' },
+  remaining_to_collect: { type: 'string' },
+  annual_total_due: {
+    type: 'string',
+    description: 'Somme des total_due_year du snapshot des élèves confirmés, après remises; abonnements obligatoires exclus.',
+  },
+  annual_remaining: {
+    type: 'string',
+    description: 'annual_total_due moins les paiements confirmés, sans plancher à zéro.',
+  },
+  upcoming_due: {
+    type: 'string',
+    description: 'annual_remaining moins remaining_to_collect (le reste à recouvrer à date existant), sans plancher à zéro.',
+  },
+  students_up_to_date_count: { type: 'integer' },
+  students_late_count: { type: 'integer' },
+  last_computed_at: { type: 'string' },
+} as const;
+
+const financialSummaryResponseSchema = {
+  type: 'object',
+  properties: {
+    school: {
+      anyOf: [
+        {
+          type: 'object',
+          properties: {
+            ...financialAggregateProperties,
+            recovery_rate: { type: 'string' },
+            previous_period_total_paid: { type: 'string' },
+          },
+          additionalProperties: true,
+        },
+        { type: 'null' },
+      ],
+    },
+    classes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          class_id: { type: 'string' },
+          class_name: { type: 'string' },
+          level_id: { type: 'string' },
+          level_name: { type: 'string' },
+          ...financialAggregateProperties,
+        },
+        additionalProperties: true,
+      },
+    },
+    levels: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          level_id: { type: 'string' },
+          level_name: { type: 'string' },
+          ...financialAggregateProperties,
+        },
+        additionalProperties: true,
+      },
+    },
+    collections: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    paymentMethods: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    upcomingInstallments: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    recentPayments: { type: 'array', items: { type: 'object', additionalProperties: true } },
+  },
+  additionalProperties: true,
+} as const;
+
 const readExcelFile = async (request: FastifyRequest): Promise<Buffer> => {
   let fileBuffer: Buffer | null = null;
   const parts = request.parts();
@@ -342,7 +414,19 @@ export default async function financeController(
 
   app.get(
     '/api/v1/finance/financial-summary',
-    { preHandler: requirePermission('payments.view') },
+    {
+      preHandler: requirePermission('payments.view'),
+      schema: {
+        tags: ['finance'],
+        summary: 'Read school, level, and class financial aggregates',
+        querystring: {
+          type: 'object',
+          properties: { school_year_id: { type: 'string', format: 'uuid' } },
+          additionalProperties: true,
+        },
+        response: { 200: financialSummaryResponseSchema },
+      },
+    },
     async (request, reply) => {
       try {
         const query = financialSummaryQuerySchema.parse(request.query ?? {});
