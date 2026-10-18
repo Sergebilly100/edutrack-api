@@ -1,4 +1,5 @@
 import { FinancialCacheRepository } from './financial-cache.repository.js';
+import { summarizeFinancialInstallments } from './financial-installments.js';
 import {
   calculateAnnualFinancialBalances,
   resolveIndividualFinancialStatus,
@@ -117,10 +118,10 @@ export class FinancialCacheService {
     return this.repository.listPaymentMethodSummaries(yearId);
   }
 
-  async listUpcomingInstallments(schoolYearId?: string) {
+  async getInstallmentSummary(schoolYearId?: string) {
     const yearId = schoolYearId ?? (await this.repository.getActiveSchoolYearId());
-    if (!yearId) return [];
-    return this.repository.listUpcomingInstallments(yearId);
+    if (!yearId) return summarizeFinancialInstallments([]);
+    return summarizeFinancialInstallments(await this.repository.listInstallmentLedger(yearId));
   }
 
   async listRecentPayments(schoolYearId?: string) {

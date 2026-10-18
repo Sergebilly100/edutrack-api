@@ -359,12 +359,17 @@ export class FinancialCacheRepository {
 
   async listCollectionTrend(schoolYearId: string) {
     const result = await this.db.execute<Record<string, string | number>>(sql`
-      WITH months AS (
+      WITH school_year AS (
+        SELECT start_date, end_date
+        FROM school_years
+        WHERE id = ${schoolYearId}::uuid
+      ), months AS (
         SELECT generate_series(
-          date_trunc('month', CURRENT_DATE) - INTERVAL '5 months',
-          date_trunc('month', CURRENT_DATE),
+          date_trunc('month', school_year.start_date)::date,
+          date_trunc('month', school_year.end_date)::date,
           INTERVAL '1 month'
         )::date AS month_start
+        FROM school_year
       )
       SELECT to_char(months.month_start, 'YYYY-MM') AS month_key,
              COALESCE(SUM(p.amount) FILTER (WHERE p.status = 'confirmed'), 0)::text AS total_paid
@@ -393,21 +398,44 @@ export class FinancialCacheRepository {
     return getRows(result);
   }
 
-  async listUpcomingInstallments(schoolYearId: string) {
-    const result = await this.db.execute<Record<string, string | number>>(sql`
+  async listInstallmentLedger(schoolYearId: string) {
+    const result = await this.db.execute<{
+      student_id: string;
+      annual_due: string;
+      scheduled_amount: string;
+      due_date: string | null;
+      installment_amount: string | null;
+      schedule_valid: boolean;
+      total_paid: string;
+      as_of_date: string;
+    }>(sql`
       WITH school_year AS (
-        SELECT start_date, end_date
+        SELECT start_date, end_date, CURRENT_DATE::text AS as_of_date
         FROM school_years
         WHERE id = ${schoolYearId}::uuid
       ), eligible_students AS (
-        SELECT e.student_id, e.class_id, c.level_id
+        SELECT s.id AS student_id,
+               c.level_id,
+               GREATEST(COALESCE(sto.override_total_amount, tp.total_amount - COALESCE(sto.discount_amount, 0), 0), 0) AS total_due_year,
+               COALESCE(payments.total_paid, 0) AS total_paid
         FROM enrollments e
         INNER JOIN students s ON s.id = e.student_id AND s.is_active = true
         INNER JOIN classes c ON c.id = e.class_id
           AND c.school_year_id = ${schoolYearId}::uuid AND c.is_active = true
+        LEFT JOIN tuition_plans tp ON tp.level_id = c.level_id AND tp.school_year_id = ${schoolYearId}::uuid
+        LEFT JOIN student_tuition_overrides sto ON sto.student_id = s.id AND sto.school_year_id = ${schoolYearId}::uuid
+        LEFT JOIN (
+          SELECT p.student_id, SUM(p.amount) AS total_paid
+          FROM payments p
+          WHERE p.school_year_id = ${schoolYearId}::uuid
+            AND p.status = 'confirmed'
+            AND ${confirmedFinancialStudent(sql`p.student_id`, sql`p.school_year_id`)}
+          GROUP BY p.student_id
+        ) payments ON payments.student_id = s.id
         WHERE e.school_year_id = ${schoolYearId}::uuid AND e.status = 'confirmed'
       ), selected_steps AS (
-        SELECT eligible.student_id, individual.due_date, individual.cumulative_amount_expected
+        SELECT eligible.student_id, eligible.total_due_year, eligible.total_paid,
+               individual.due_date, individual.cumulative_amount_expected, school_year.as_of_date
         FROM eligible_students eligible
         INNER JOIN student_tuition_schedule_agreements agreement
           ON agreement.student_id = eligible.student_id AND agreement.school_year_id = ${schoolYearId}::uuid
@@ -415,7 +443,8 @@ export class FinancialCacheRepository {
         CROSS JOIN school_year
         WHERE individual.due_date BETWEEN school_year.start_date AND school_year.end_date
         UNION ALL
-        SELECT eligible.student_id, standard.due_date, standard.cumulative_amount_expected
+        SELECT eligible.student_id, eligible.total_due_year, eligible.total_paid,
+               standard.due_date, standard.cumulative_amount_expected, school_year.as_of_date
         FROM eligible_students eligible
         INNER JOIN tuition_plans plan
           ON plan.level_id = eligible.level_id AND plan.school_year_id = ${schoolYearId}::uuid
@@ -426,30 +455,70 @@ export class FinancialCacheRepository {
           WHERE agreement.student_id = eligible.student_id AND agreement.school_year_id = ${schoolYearId}::uuid
         )
           AND standard.due_date BETWEEN school_year.start_date AND school_year.end_date
-      ), step_amounts AS (
-        SELECT student_id, due_date,
-               GREATEST(cumulative_amount_expected - COALESCE(
-                 LAG(cumulative_amount_expected) OVER (PARTITION BY student_id ORDER BY due_date), 0
-               ), 0) AS installment_amount
+      ), ordered_steps AS (
+        SELECT student_id, due_date, total_paid, as_of_date, total_due_year,
+               cumulative_amount_expected,
+               LAG(cumulative_amount_expected) OVER (
+                 PARTITION BY student_id ORDER BY due_date
+               ) AS previous_cumulative_amount_expected
         FROM selected_steps
+      ), step_amounts AS (
+        SELECT student_id, due_date, total_paid, as_of_date,
+               cumulative_amount_expected >= COALESCE(previous_cumulative_amount_expected, 0) AS schedule_valid,
+               GREATEST(
+                 LEAST(cumulative_amount_expected, total_due_year)
+                 - CASE
+                   WHEN previous_cumulative_amount_expected IS NULL THEN 0
+                   ELSE LEAST(previous_cumulative_amount_expected, total_due_year)
+                 END,
+                 0
+               ) AS installment_amount
+        FROM ordered_steps
+      ), installment_totals AS (
+        SELECT eligible.student_id,
+               COALESCE(SUM(step.installment_amount), 0) AS scheduled_amount,
+               COALESCE(BOOL_AND(step.schedule_valid), true) AS schedule_valid
+        FROM eligible_students eligible
+        LEFT JOIN step_amounts step ON step.student_id = eligible.student_id
+        GROUP BY eligible.student_id
+      ), positive_installments AS (
+        SELECT student_id, due_date, installment_amount
+        FROM step_amounts
+        WHERE installment_amount > 0
       )
-      SELECT step_amounts.due_date::text AS due_date,
-             COALESCE(SUM(step_amounts.installment_amount), 0)::text AS expected_amount,
-             COUNT(DISTINCT step_amounts.student_id)::int AS student_count
-      FROM step_amounts
-      WHERE step_amounts.due_date >= CURRENT_DATE
-      GROUP BY step_amounts.due_date
-      HAVING COUNT(DISTINCT step_amounts.student_id) > 0
-      ORDER BY step_amounts.due_date ASC
-      LIMIT 3
+      SELECT eligible.student_id::text,
+             eligible.total_due_year::text AS annual_due,
+             totals.scheduled_amount::text,
+             installment.due_date::text,
+             installment.installment_amount::text,
+             totals.schedule_valid,
+             eligible.total_paid::text,
+             school_year.as_of_date
+      FROM eligible_students eligible
+      INNER JOIN installment_totals totals ON totals.student_id = eligible.student_id
+      LEFT JOIN positive_installments installment ON installment.student_id = eligible.student_id
+      CROSS JOIN school_year
+      ORDER BY eligible.student_id ASC, installment.due_date ASC
     `);
-    return getRows(result);
+    return getRows<{
+      student_id: string;
+      annual_due: string;
+      scheduled_amount: string;
+      due_date: string | null;
+      installment_amount: string | null;
+      schedule_valid: boolean;
+      total_paid: string;
+      as_of_date: string;
+    }>(result);
   }
 
   async listRecentPayments(schoolYearId: string) {
     const result = await this.db.execute<Record<string, string | number | null>>(sql`
-      SELECT p.payment_date::text AS payment_date,
+      SELECT p.id::text AS payment_id,
+             p.student_id::text AS student_id,
+             p.payment_date::text AS payment_date,
              concat_ws(' ', s.first_name, s.last_name) AS student_name,
+             s.matricule AS student_matricule,
              c.name AS class_name,
              p.method::text AS method,
              p.amount::text AS amount,

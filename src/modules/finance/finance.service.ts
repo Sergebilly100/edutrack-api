@@ -161,9 +161,9 @@ export class FinanceService {
     return cache.listPaymentMethodSummaries(schoolYearId);
   }
 
-  async listFinancialUpcomingInstallments(schoolYearId?: string) {
+  async getFinancialInstallmentSummary(schoolYearId?: string) {
     const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
-    return cache.listUpcomingInstallments(schoolYearId);
+    return cache.getInstallmentSummary(schoolYearId);
   }
 
   async listFinancialRecentPayments(schoolYearId?: string) {

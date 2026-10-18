@@ -373,7 +373,8 @@ describe('finance routes integration', () => {
       (summary: { level_id: string }) => summary.level_id === context.levelId
     );
     expect(Number(levelSummary.total_paid)).toBe(55_000);
-    expect(financialSummary.body.collections).toHaveLength(6);
+    expect(financialSummary.body.collections.length).toBeGreaterThanOrEqual(12);
+    expect(financialSummary.body.collections.length).toBeLessThanOrEqual(13);
     expect(financialSummary.body.collections.some((point: { total_paid: string }) => Number(point.total_paid) === 55_000)).toBe(true);
     const cashMethod = financialSummary.body.paymentMethods.find((item: { method: string }) => item.method === 'cash');
     const mobileMoneyMethod = financialSummary.body.paymentMethods.find((item: { method: string }) => item.method === 'mobile_money');
@@ -382,8 +383,16 @@ describe('finance routes integration', () => {
     expect(mobileMoneyMethod).toMatchObject({ method: 'mobile_money', payment_count: 1 });
     expect(Number(mobileMoneyMethod.total_paid)).toBe(15_000);
     expect(financialSummary.body.upcomingInstallments).toEqual(expect.any(Array));
+    expect(financialSummary.body.installmentScheduleComplete).toBe(false);
+    expect(financialSummary.body.aging).toBeNull();
     expect(financialSummary.body.recentPayments).toEqual(expect.arrayContaining([
-      expect.objectContaining({ student_name: 'Awa Finance', method: 'cash' }),
+      expect.objectContaining({
+        payment_id: expect.any(String),
+        student_id: context.studentId,
+        student_name: 'Awa Finance',
+        student_matricule: context.matricule,
+        method: 'cash',
+      }),
     ]));
   });
 
@@ -488,6 +497,12 @@ describe('finance routes integration', () => {
     expect(summaryWithAgreement.status, JSON.stringify(summaryWithAgreement.body)).toBe(200);
     expect(summaryWithAgreement.body.upcomingInstallments).toEqual(expect.arrayContaining([
       expect.objectContaining({ due_date: isoDate(30), expected_amount: '85000.00', student_count: 1 }),
+    ]));
+    expect(summaryWithAgreement.body.installmentScheduleComplete).toBe(true);
+    expect(summaryWithAgreement.body.aging).toEqual(expect.arrayContaining([
+      expect.objectContaining({ bucket: '0-30', total_amount: '15000.00', student_count: 1 }),
+      expect.objectContaining({ bucket: '31-60', total_amount: '0.00', student_count: 0 }),
+      expect.objectContaining({ bucket: '>60', total_amount: '0.00', student_count: 0 }),
     ]));
 
     const schedule = await request()

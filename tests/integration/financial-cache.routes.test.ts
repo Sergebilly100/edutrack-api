@@ -98,6 +98,11 @@ describe('financial cache integration (6a)', () => {
       (sum: number, installment: { expected_amount: string }) => sum + Number(installment.expected_amount),
       0
     )).toBe(200_000);
+    expect(summary.body.aging).toEqual(expect.arrayContaining([
+      expect.objectContaining({ bucket: '0-30', total_amount: '40000.00', student_count: 1 }),
+      expect.objectContaining({ bucket: '31-60', total_amount: '0.00', student_count: 0 }),
+      expect.objectContaining({ bucket: '>60', total_amount: '0.00', student_count: 0 }),
+    ]));
 
     const classRow = summary.body.classes.find((c: { class_id: string }) => c.class_id === classes[0]!.id);
     expect(classRow).toBeDefined();
@@ -220,12 +225,17 @@ describe('financial cache integration (6a)', () => {
     expect(Number(summary.body.school.annual_total_due)).toBe(300_000);
     expect(Number(summary.body.school.annual_remaining)).toBe(200_000);
     expect(Number(summary.body.school.upcoming_due)).toBe(200_000);
-    // Le planning affiche les échéances brutes du plan, y compris l'élève dont
-    // la remise totale annule le dû annuel : cet écart est conservé et visible.
+    expect(summary.body.installmentScheduleComplete).toBe(true);
+    expect(summary.body.aging).toEqual([
+      expect.objectContaining({ bucket: '0-30' }),
+      expect.objectContaining({ bucket: '31-60' }),
+      expect.objectContaining({ bucket: '>60' }),
+    ]);
+    // La remise totale annule aussi les échéances restantes de cette élève.
     expect(summary.body.upcomingInstallments.reduce(
       (sum: number, installment: { expected_amount: string }) => sum + Number(installment.expected_amount),
       0
-    )).toBe(400_000);
+    )).toBe(200_000);
   });
 
   it('conserve dans la population confirmée un élève sans plan avec un dû annuel nul', async () => {

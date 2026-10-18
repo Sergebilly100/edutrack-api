@@ -175,7 +175,39 @@ const financialSummaryResponseSchema = {
     },
     collections: { type: 'array', items: { type: 'object', additionalProperties: true } },
     paymentMethods: { type: 'array', items: { type: 'object', additionalProperties: true } },
-    upcomingInstallments: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    upcomingInstallments: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          due_date: { type: 'string' },
+          expected_amount: { type: 'string', description: 'Montant restant dû à cette échéance après affectation FIFO des paiements confirmés.' },
+          student_count: { type: 'integer' },
+        },
+        required: ['due_date', 'expected_amount', 'student_count'],
+        additionalProperties: false,
+      },
+    },
+    installmentScheduleComplete: { type: 'boolean' },
+    aging: {
+      anyOf: [
+        {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              bucket: { type: 'string', enum: ['0-30', '31-60', '>60'] },
+              total_amount: { type: 'string' },
+              student_count: { type: 'integer' },
+            },
+            required: ['bucket', 'total_amount', 'student_count'],
+            additionalProperties: false,
+          },
+        },
+        { type: 'null' },
+      ],
+      description: 'Soldes échus restant dus par ancienneté, après affectation FIFO des paiements confirmés.',
+    },
     recentPayments: { type: 'array', items: { type: 'object', additionalProperties: true } },
   },
   additionalProperties: true,
@@ -437,9 +469,19 @@ export default async function financeController(
             service.listLevelFinancialSummaries(query.school_year_id),
             service.listFinancialCollectionTrend(query.school_year_id),
             service.listFinancialPaymentMethods(query.school_year_id),
-            service.listFinancialUpcomingInstallments(query.school_year_id),
+            service.getFinancialInstallmentSummary(query.school_year_id),
             service.listFinancialRecentPayments(query.school_year_id),
-          ]).then(([school, classes, levels, collections, paymentMethods, upcomingInstallments, recentPayments]) => ({ school, classes, levels, collections, paymentMethods, upcomingInstallments, recentPayments }))
+          ]).then(([school, classes, levels, collections, paymentMethods, installmentSummary, recentPayments]) => ({
+            school,
+            classes,
+            levels,
+            collections,
+            paymentMethods,
+            upcomingInstallments: installmentSummary.upcomingInstallments,
+            installmentScheduleComplete: installmentSummary.scheduleComplete,
+            aging: installmentSummary.aging,
+            recentPayments,
+          }))
         );
         return reply.send(result);
       } catch (error) { return handleError(request, reply, error); }
