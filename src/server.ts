@@ -33,7 +33,14 @@ import attendanceController from './modules/attendance/attendance.controller.js'
 import { emitStudentAbsent } from './modules/attendance/attendance.events.js';
 import { runAttendanceMissingQrScanHandler } from './modules/attendance/attendance.worker-handler.js';
 import { runAbsenceMarkingForSchema } from './modules/attendance/attendance.absence-marking.worker.js';
-import { processFinancialCacheJob } from './modules/finance/financial-cache.queue.js';
+import {
+  FINANCIAL_CACHE_QUEUE_NAME,
+  processFinancialCacheJob,
+} from './modules/finance/financial-cache.queue.js';
+import {
+  FINANCIAL_ALERTS_QUEUE_NAME,
+  type FinancialAlertsJobData,
+} from './modules/finance/financial-alerts.queue.js';
 import { geoAutoApproveWorker, scheduleGeoAutoApprove } from './modules/attendance/attendance.geo-auto-approve.worker.js';
 import authController from './modules/auth/auth.controller.js';
 import billingController from './modules/billing/billing.controller.js'
@@ -135,9 +142,9 @@ const absenceMarkingWorker = new Worker(
 );
 attachFailedHandler(absenceMarkingWorker, 'absence-marking', { deadLetterQueue, logger: app.log });
 attachFailedHandler(geoAutoApproveWorker, 'geo-auto-approve', { deadLetterQueue, logger: app.log });
-const financialCacheQueue = new Queue('financial-cache', { connection: sharedRedis });
+const financialCacheQueue = new Queue(FINANCIAL_CACHE_QUEUE_NAME, { connection: sharedRedis });
 const financialCacheWorker = new Worker(
-  'financial-cache',
+  FINANCIAL_CACHE_QUEUE_NAME,
   async (job) => {
     const result = await processFinancialCacheJob(job);
     // Tâche 7b : régénère les action items du dashboard directeur après le cache.
@@ -153,18 +160,17 @@ const financialCacheWorker = new Worker(
   }
 );
 attachFailedHandler(financialCacheWorker, 'financial-cache', { deadLetterQueue, logger: app.log });
-// Relances de paiement : job quotidien à faible activité (même plage que la
-// maintenance des abonnements, 08:00 Africa/Abidjan).
-const financialAlertsQueue = new Queue('financial-cache', { connection: sharedRedis });
+// Relances de paiement : file distincte du cache pour qu'aucun worker ne
+// consomme silencieusement les jobs de l'autre traitement.
+const financialAlertsQueue = new Queue<FinancialAlertsJobData>(FINANCIAL_ALERTS_QUEUE_NAME, { connection: sharedRedis });
 const financialAlertsWorker = new Worker(
-  'financial-cache',
+  FINANCIAL_ALERTS_QUEUE_NAME,
   async (job) => {
-    if (job.name !== 'daily-financial-alerts') return null;
     const { runFinancialAlertsForSchema } = await import(
       './modules/finance/financial-alerts.worker.js'
     );
     return runFinancialAlertsForSchema({
-      schemaName: (job.data as { schemaName?: string }).schemaName ?? '',
+      schemaName: job.data.schemaName,
       smsQueue: notificationsQueue,
     });
   },
@@ -173,7 +179,7 @@ const financialAlertsWorker = new Worker(
     concurrency: 1,
   }
 );
-attachFailedHandler(financialAlertsWorker, 'financial-cache', { deadLetterQueue, logger: app.log });
+attachFailedHandler(financialAlertsWorker, FINANCIAL_ALERTS_QUEUE_NAME, { deadLetterQueue, logger: app.log });
 const notificationsService = new NotificationsService({
   smsQueue: notificationsQueue,
 });
@@ -490,8 +496,11 @@ const start = async (): Promise<void> => {
         data: { type: 'validation-daily-summary-all' },
       }
     );
-    // Relances financières : quotidiennes, tôt le matin (faible activité).
+    // Relances financières : quotidiennes à 06:00 (faible activité).
     for (const tenant of activeTenants) {
+      // Migration depuis l'ancienne file partagée : supprime le scheduler
+      // portant ce même identifiant avant de le recréer dans sa propre file.
+      await financialCacheQueue.removeJobScheduler(`financial-alerts-${tenant.id}`);
       await financialAlertsQueue.upsertJobScheduler(
         `financial-alerts-${tenant.id}`,
         { pattern: '0 6 * * 1-6', tz: 'Africa/Abidjan' },
@@ -503,6 +512,13 @@ const start = async (): Promise<void> => {
       await financialCacheQueue.upsertJobScheduler(
         `financial-cache-${tenant.id}`,
         { pattern: '*/15 6-18 * * 1-6', tz: 'Africa/Abidjan' },
+        { name: 'recalculate-financial-cache', data: { schemaName: tenant.schema_name } }
+      );
+      // Le recalcul nocturne garantit aussi la bascule de situation à date,
+      // même hors plage scolaire ou sans action utilisateur.
+      await financialCacheQueue.upsertJobScheduler(
+        `financial-cache-daily-${tenant.id}`,
+        { pattern: '5 0 * * *', tz: 'Africa/Abidjan' },
         { name: 'recalculate-financial-cache', data: { schemaName: tenant.schema_name } }
       );
     }

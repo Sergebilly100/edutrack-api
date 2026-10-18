@@ -163,6 +163,71 @@ describe('financial cache integration (6a)', () => {
     });
   });
 
+  it('resynchronise le cache dès qu’un échéancier de niveau est modifié', async () => {
+    const headers = await getAuthHeaders('director');
+    const years = await queryTenant<IdRow>(
+      `SELECT id::text FROM ${tenantTable('school_years')} WHERE label = $1 LIMIT 1`,
+      [`fc-${suffix}`]
+    );
+    const yearId = years[0]!.id;
+    const levels = await queryTenant<IdRow>(
+      `SELECT id::text FROM ${tenantTable('levels')} WHERE name = $1 LIMIT 1`,
+      [`FC level ${suffix}`]
+    );
+    const levelId = levels[0]!.id;
+    const students = await queryTenant<IdRow>(
+      `SELECT s.id::text FROM ${tenantTable('students')} s
+       INNER JOIN ${tenantTable('classes')} c ON c.id = s.class_id
+       WHERE c.name = $1 LIMIT 1`,
+      [`FC class ${suffix}`]
+    );
+    const studentId = students[0]!.id;
+
+    const updatedPlan = await request()
+      .put(`/api/v1/tuition-plans/levels/${levelId}`)
+      .set(headers)
+      .send({
+        schoolYearId: yearId,
+        totalAmount: 300_000,
+        currency: 'XOF',
+        scheduleSteps: [
+          { dueDate: isoDate(-30), cumulativeAmountExpected: 50_000 },
+          { dueDate: isoDate(120), cumulativeAmountExpected: 300_000 },
+        ],
+      });
+    expect(updatedPlan.status, JSON.stringify(updatedPlan.body)).toBe(200);
+
+    const [cached, live] = await Promise.all([
+      request().get(`/api/v1/students/${studentId}/financial-cache?school_year_id=${yearId}`).set(headers),
+      request().get(`/api/v1/students/${studentId}/financial-status?school_year_id=${yearId}`).set(headers),
+    ]);
+    expect(cached.status).toBe(200);
+    expect(live.status).toBe(200);
+    expect(cached.body.cached).toMatchObject({
+      total_expected_to_date: '50000.00',
+      status: 'up_to_date',
+    });
+    expect(live.body.financialStatus).toMatchObject({
+      cumulativeExpectedAtDate: 50_000,
+      standing: 'up_to_date',
+    });
+
+    // Les scénarios suivants utilisent l'échéancier initial partagé.
+    const restoredPlan = await request()
+      .put(`/api/v1/tuition-plans/levels/${levelId}`)
+      .set(headers)
+      .send({
+        schoolYearId: yearId,
+        totalAmount: 300_000,
+        currency: 'XOF',
+        scheduleSteps: [
+          { dueDate: isoDate(-30), cumulativeAmountExpected: 100_000 },
+          { dueDate: isoDate(120), cumulativeAmountExpected: 300_000 },
+        ],
+      });
+    expect(restoredPlan.status, JSON.stringify(restoredPlan.body)).toBe(200);
+  });
+
   it('applique une remise au montant dû sans la compter comme encaissement', async () => {
     const headers = await getAuthHeaders('director');
     const years = await queryTenant<IdRow>(

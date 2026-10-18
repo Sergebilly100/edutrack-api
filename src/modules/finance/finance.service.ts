@@ -754,7 +754,16 @@ export class FinanceService {
       previousAmount = step.cumulativeAmountExpected;
     }
     try {
-      return await this.repository.upsertTuitionPlan(levelId, input);
+      return await this.repository.db.transaction(async (tx) => {
+        const repository = new FinanceRepository(tx as FinanceDb);
+        const tuitionPlan = await repository.upsertTuitionPlan(levelId, input);
+        // Le détail financier calcule la situation en temps réel, tandis que
+        // les listes et indicateurs s'appuient sur ce cache. Le recalcul est
+        // dans la même transaction que le plan pour éviter tout état divergent.
+        await new FinancialCacheService(new FinancialCacheRepository(tx as FinanceDb))
+          .recalcAll(input.schoolYearId);
+        return tuitionPlan;
+      });
     } catch (error) {
       if ((error as { code?: string }).code === 'SCHOOL_YEAR_NOT_OPEN') {
         throw new FinanceModuleError('L’année scolaire doit être ouverte par le support.', 409, 'SCHOOL_YEAR_NOT_OPEN');
