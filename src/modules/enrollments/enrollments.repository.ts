@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
+import { currentGeneralRank } from '../../shared/database/report-card-visible-rank.js';
 import type { EnrollmentStatus, EnrollmentType, StudentDocumentStatus } from './enrollments.types.js';
 
 type Db = NodePgDatabase<Record<string, unknown>>;
@@ -63,9 +64,18 @@ export type StudentSummaryProfile = {
   matricule: string | null;
 };
 
-type StudentYearEvaluationRow = { id: string; period_label: string; subject_name: string | null; label: string; score: string; max_score: string; coefficient: string };
-type StudentYearAverageRow = { id: string; period_label: string; subject_name: string | null; average: string; rank: number | null };
-type StudentYearConductRow = { id: string; period_label: string; note: string; coefficient: string };
+type StudentYearPeriodRow = {
+  id: string; label: string; start_date: string; end_date: string; is_current: boolean; is_future: boolean;
+};
+type StudentYearEvaluationRow = {
+  id: string; grading_period_id: string; period_label: string; subject_name: string | null; label: string;
+  evaluation_date: string | null; teacher_name: string | null; score: string; max_score: string; coefficient: string;
+};
+type StudentYearAverageRow = {
+  id: string; grading_period_id: string; period_label: string; subject_name: string | null;
+  average: string; rank: number | null;
+};
+type StudentYearConductRow = { id: string; grading_period_id: string; period_label: string; note: string; coefficient: string };
 
 export class EnrollmentsRepository {
   constructor(private readonly db: Db) {}
@@ -262,28 +272,55 @@ export class EnrollmentsRepository {
   }
 
   async listStudentYearResults(studentId: string, schoolYearId: string) {
-    const [evaluationResult, averageResult, conductResult] = await Promise.all([
+    const [periodResult, evaluationResult, averageResult, conductResult] = await Promise.all([
+      this.db.execute<StudentYearPeriodRow>(sql`
+        SELECT gp.id::text, gp.label, gp.start_date::text, gp.end_date::text,
+               CURRENT_DATE BETWEEN gp.start_date AND gp.end_date AS is_current,
+               gp.start_date > CURRENT_DATE AS is_future
+        FROM grading_periods gp
+        WHERE gp.school_year_id = ${schoolYearId}::uuid
+        ORDER BY gp.order_index, gp.start_date, gp.id
+      `),
       this.db.execute<StudentYearEvaluationRow>(sql`
-        SELECT e.id::text, gp.label AS period_label, sub.name AS subject_name, e.label,
+        SELECT e.id::text, gp.id::text AS grading_period_id, gp.label AS period_label,
+               sub.name AS subject_name, e.label, e.evaluation_date::text,
+               u.name AS teacher_name,
                eg.score::text, eg.max_score::text, e.coefficient::text
         FROM evaluation_grades eg
         INNER JOIN evaluations e ON e.id = eg.evaluation_id
         INNER JOIN grading_periods gp ON gp.id = e.grading_period_id
         LEFT JOIN subjects sub ON sub.id = e.subject_id
+        LEFT JOIN teachers t ON t.id = e.teacher_id
+        LEFT JOIN users u ON u.id = t.user_id
         WHERE eg.student_id = ${studentId}::uuid AND gp.school_year_id = ${schoolYearId}::uuid
         ORDER BY gp.order_index, e.created_at, e.id
       `),
       this.db.execute<StudentYearAverageRow>(sql`
-        SELECT spa.id::text, gp.label AS period_label, sub.name AS subject_name,
-               spa.average::text, spa.rank
+        SELECT spa.id::text, gp.id::text AS grading_period_id, gp.label AS period_label, sub.name AS subject_name,
+               spa.average::text,
+               CASE
+                 WHEN spa.subject_id IS NOT NULL THEN spa.rank
+                 WHEN student_enrollment.class_id IS NOT NULL THEN
+                   ${currentGeneralRank(sql`spa.student_id`, sql`student_enrollment.class_id`, sql`gp.id`)}
+                 ELSE NULL
+               END AS rank
         FROM student_period_averages spa
         INNER JOIN grading_periods gp ON gp.id = spa.grading_period_id
         LEFT JOIN subjects sub ON sub.id = spa.subject_id
+        LEFT JOIN LATERAL (
+          SELECT enrollment.class_id
+          FROM enrollments enrollment
+          WHERE enrollment.student_id = spa.student_id
+            AND enrollment.school_year_id = gp.school_year_id
+            AND enrollment.status = 'confirmed'
+          ORDER BY enrollment.enrolled_at DESC, enrollment.id
+          LIMIT 1
+        ) student_enrollment ON true
         WHERE spa.student_id = ${studentId}::uuid AND gp.school_year_id = ${schoolYearId}::uuid
         ORDER BY gp.order_index, sub.name NULLS FIRST
       `),
       this.db.execute<StudentYearConductRow>(sql`
-        SELECT cg.id::text, gp.label AS period_label, cg.note::text, cg.coefficient::text
+        SELECT cg.id::text, gp.id::text AS grading_period_id, gp.label AS period_label, cg.note::text, cg.coefficient::text
         FROM conduct_grades cg
         INNER JOIN grading_periods gp ON gp.id = cg.grading_period_id
         WHERE cg.student_id = ${studentId}::uuid AND gp.school_year_id = ${schoolYearId}::uuid
@@ -291,6 +328,7 @@ export class EnrollmentsRepository {
       `),
     ]);
     return {
+      periods: rows<StudentYearPeriodRow>(periodResult),
       evaluations: rows<StudentYearEvaluationRow>(evaluationResult).map((row) => ({ ...row, score: Number(row.score), max_score: Number(row.max_score), coefficient: Number(row.coefficient) })),
       averages: rows<StudentYearAverageRow>(averageResult).map((row) => ({ ...row, average: Number(row.average) })),
       conduct: rows<StudentYearConductRow>(conductResult).map((row) => ({ ...row, note: Number(row.note), coefficient: Number(row.coefficient) })),

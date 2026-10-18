@@ -15,6 +15,7 @@ describe('report-cards routes (5c)', () => {
   let directorHeaders: Record<string, string>;
   let parentHeaders: Record<string, string>;
   let levelId = '';
+  let yearId = '';
   let classId = '';
   let periodT1 = '';
   let periodT2 = '';
@@ -48,7 +49,7 @@ describe('report-cards routes (5c)', () => {
        VALUES ($1, '2096-09-01', '2097-06-30', '2097-05-01', 'active') RETURNING id::text`,
       [`rc-${suffix}`]
     );
-    const yearId = years[0]!.id;
+    yearId = years[0]!.id;
     const periods = await queryTenant<IdRow>(
       `INSERT INTO ${tenantTable('grading_periods')} (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
        VALUES ($1::uuid, 'trimester', 1, 'T1 rc', CURRENT_DATE - 30, CURRENT_DATE - 1, CURRENT_DATE + 30),
@@ -250,6 +251,11 @@ describe('report-cards routes (5c)', () => {
        WHERE student_id = $1::uuid AND grading_period_id = $2::uuid AND subject_id IS NULL`,
       [studentAId, periodT1]
     );
+    await queryTenant(
+      `UPDATE ${tenantTable('student_period_averages')} SET average = 20
+       WHERE student_id = $1::uuid AND grading_period_id = $2::uuid AND subject_id IS NULL`,
+      [studentBId, periodT1]
+    );
 
     const response = await request()
       .post('/api/v1/report-cards/generate')
@@ -264,6 +270,40 @@ describe('report-cards routes (5c)', () => {
       .get(`/api/v1/parent/students/${studentAId}/report-cards`)
       .set(parentHeaders);
     expect(parentList.body.reportCards[0].generalAverage).toBe(15.75);
+    expect(parentList.body.reportCards[0].rank).toBe(2);
+
+    const yearResults = await request()
+      .get(`/api/v1/students/${studentAId}/academic-years/${yearId}/results`)
+      .set(directorHeaders);
+    expect(yearResults.status, JSON.stringify(yearResults.body)).toBe(200);
+    expect(yearResults.body.averages.find((average: { subjectName: string | null }) => average.subjectName === null).rank).toBe(2);
+
+    const studentCards = await request()
+      .get(`/api/v1/students/${studentAId}/report-cards`)
+      .set(directorHeaders);
+    expect(studentCards.body.reportCards[0].rank).toBe(2);
+
+    const cardId = parentList.body.reportCards[0].id as string;
+    const cardDetail = await request()
+      .get(`/api/v1/students/${studentAId}/report-cards/${cardId}`)
+      .set(directorHeaders);
+    expect(cardDetail.body.reportCard.rank).toBe(2);
+
+    const pdfPayload = await withTenantSchema(TEST_SCHEMA_NAME, db =>
+      buildReportCardsService(db).getPdfPayload(cardId)
+    );
+    expect(pdfPayload.generalRank).toBe(2);
+
+    const dossier = await request().get(`/api/v1/students/${studentAId}/dossier`).set(directorHeaders);
+    expect(dossier.body.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ detail: expect.stringContaining('rang 2ème / 2') }),
+    ]));
+
+    await queryTenant(
+      `UPDATE ${tenantTable('student_period_averages')} SET average = 10.5
+       WHERE student_id = $1::uuid AND grading_period_id = $2::uuid AND subject_id IS NULL`,
+      [studentBId, periodT1]
+    );
   });
 
   it('décision de fin d\u2019année uniquement sur la dernière période', async () => {

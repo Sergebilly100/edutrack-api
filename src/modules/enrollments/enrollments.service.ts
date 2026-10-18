@@ -285,9 +285,23 @@ export class EnrollmentsService {
     const result = await this.repository.listStudentYearResults(studentId, schoolYearId);
     return {
       studentId, schoolYearId,
-      evaluations: result.evaluations.map((row) => ({ id: row.id, periodLabel: row.period_label, subjectName: row.subject_name, label: row.label, score: row.score, maxScore: row.max_score, coefficient: row.coefficient })),
-      averages: result.averages.map((row) => ({ id: row.id, periodLabel: row.period_label, subjectName: row.subject_name, average: row.average, rank: row.rank })),
-      conduct: result.conduct.map((row) => ({ id: row.id, periodLabel: row.period_label, note: row.note, coefficient: row.coefficient })),
+      periods: result.periods.map((row) => ({
+        id: row.id, label: row.label, startDate: row.start_date, endDate: row.end_date,
+        isCurrent: row.is_current, isFuture: row.is_future,
+      })),
+      evaluations: result.evaluations.map((row) => ({
+        id: row.id, gradingPeriodId: row.grading_period_id, periodLabel: row.period_label,
+        subjectName: row.subject_name, label: row.label, evaluationDate: row.evaluation_date,
+        teacherName: row.teacher_name, score: row.score, maxScore: row.max_score, coefficient: row.coefficient,
+      })),
+      averages: result.averages.map((row) => ({
+        id: row.id, gradingPeriodId: row.grading_period_id, periodLabel: row.period_label,
+        subjectName: row.subject_name, average: row.average, rank: row.rank,
+      })),
+      conduct: result.conduct.map((row) => ({
+        id: row.id, gradingPeriodId: row.grading_period_id, periodLabel: row.period_label,
+        note: row.note, coefficient: row.coefficient,
+      })),
     };
   }
 

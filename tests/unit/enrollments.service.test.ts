@@ -41,17 +41,31 @@ describe('enrollment workflow rules', () => {
       getStudentSummaryProfile: vi.fn().mockResolvedValue({ id: 'student' }),
       listStudentAcademicSummary: vi.fn().mockResolvedValue([{ school_year_id: 'year-1' }]),
       listStudentYearResults: vi.fn().mockResolvedValue({
-        evaluations: [{ id: 'grade-1', period_label: 'Trimestre 1', subject_name: 'Mathématiques', label: 'Devoir', score: 15, max_score: 20, coefficient: 2 }],
-        averages: [{ id: 'average-1', period_label: 'Trimestre 1', subject_name: null, average: 14, rank: 3 }],
-        conduct: [{ id: 'conduct-1', period_label: 'Trimestre 1', note: 16, coefficient: 1 }],
+        periods: [{
+          id: 'period-1', label: 'Trimestre 1', start_date: '2026-09-01', end_date: '2026-10-31',
+          is_current: true, is_future: false,
+        }],
+        evaluations: [{
+          id: 'grade-1', grading_period_id: 'period-1', period_label: 'Trimestre 1',
+          subject_name: 'Mathématiques', label: 'Devoir', evaluation_date: '2026-10-05',
+          teacher_name: 'Kouamé Aya', score: 15, max_score: 20, coefficient: 2,
+        }],
+        averages: [{ id: 'average-1', grading_period_id: 'period-1', period_label: 'Trimestre 1', subject_name: null, average: 14, rank: 3 }],
+        conduct: [{ id: 'conduct-1', grading_period_id: 'period-1', period_label: 'Trimestre 1', note: 16, coefficient: 1 }],
       }),
     };
     const service = new EnrollmentsService(repository as never);
     await expect(service.getStudentYearResults('student', 'year-2')).rejects.toMatchObject({ code: 'STUDENT_YEAR_NOT_FOUND', statusCode: 404 });
     expect(repository.listStudentYearResults).not.toHaveBeenCalled();
     await expect(service.getStudentYearResults('student', 'year-1')).resolves.toMatchObject({
-      schoolYearId: 'year-1', evaluations: [{ periodLabel: 'Trimestre 1', score: 15 }],
-      averages: [{ periodLabel: 'Trimestre 1', average: 14 }], conduct: [{ note: 16 }],
+      schoolYearId: 'year-1',
+      periods: [{ id: 'period-1', startDate: '2026-09-01', endDate: '2026-10-31', isCurrent: true, isFuture: false }],
+      evaluations: [{
+        periodLabel: 'Trimestre 1', gradingPeriodId: 'period-1', evaluationDate: '2026-10-05',
+        teacherName: 'Kouamé Aya', score: 15,
+      }],
+      averages: [{ periodLabel: 'Trimestre 1', gradingPeriodId: 'period-1', average: 14 }],
+      conduct: [{ periodLabel: 'Trimestre 1', gradingPeriodId: 'period-1', note: 16 }],
     });
     expect(repository.listStudentYearResults).toHaveBeenCalledWith('student', 'year-1');
   });
