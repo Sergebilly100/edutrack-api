@@ -1,6 +1,7 @@
 import type { TenantDb } from '../../shared/database/db.js';
 import { sql } from 'drizzle-orm';
 import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
+import { studentGradeRiskCtes } from '../../shared/database/student-grade-risk-query.js';
 
 const monthToBounds = (month: string): { monthStart: string; monthEnd: string } => {
   const [yearRaw, monthRaw] = month.split('-');
@@ -22,6 +23,10 @@ const maxIsoDate = (a: string, b: string): string => (a >= b ? a : b);
 export function buildDashboardRepository(db: TenantDb) {
   async function getPilotageOverview(schoolYearId?: string, gradingPeriodId?: string) {
     const selectedYear = sql`COALESCE(${schoolYearId ?? null}::uuid, (SELECT id FROM school_years WHERE status = 'active' ORDER BY start_date DESC LIMIT 1))`;
+    const gradeRiskCtes = studentGradeRiskCtes({
+      schoolYearId: selectedYear,
+      gradingPeriodId,
+    });
     const [populationResult, academicResult, risksResult] = await Promise.all([
       db.execute<{ active_students: number; active_teachers: number; active_classes: number }>(sql`
         SELECT
@@ -175,7 +180,8 @@ export function buildDashboardRepository(db: TenantDb) {
         ORDER BY lc.order_index, lc.level_name
       `),
       db.execute<{ student_absences: number; student_grades: number; student_payments: number; teacher_absences: number; teacher_lateness: number; teachers_at_risk: number }>(sql`
-        WITH eligible_teacher_risks AS (
+        WITH ${gradeRiskCtes},
+        eligible_teacher_risks AS (
           SELECT trs.absences_signal, trs.lateness_signal
           FROM teacher_risk_status trs
           INNER JOIN teachers t ON t.id = trs.teacher_id AND t.is_blocked = false
@@ -183,7 +189,11 @@ export function buildDashboardRepository(db: TenantDb) {
         )
         SELECT
           (SELECT COUNT(*)::int FROM student_risk_status srs WHERE absences_signal = true AND ${confirmedSchoolStudent(sql`srs.student_id`, selectedYear)}) AS student_absences,
-          (SELECT COUNT(*)::int FROM student_risk_status srs WHERE grades_signal = true AND ${confirmedSchoolStudent(sql`srs.student_id`, selectedYear)}) AS student_grades,
+          (SELECT COUNT(*)::int
+           FROM student_grade_risks sgr
+           INNER JOIN student_risk_status srs ON srs.student_id = sgr.student_id
+           WHERE sgr.grades_signal = true
+             AND ${confirmedSchoolStudent(sql`sgr.student_id`, selectedYear)}) AS student_grades,
           (SELECT COUNT(*)::int FROM student_risk_status srs WHERE payment_signal = true AND ${confirmedSchoolStudent(sql`srs.student_id`, selectedYear)}) AS student_payments,
           (SELECT COUNT(*)::int FROM eligible_teacher_risks WHERE absences_signal = true) AS teacher_absences,
           (SELECT COUNT(*)::int FROM eligible_teacher_risks WHERE lateness_signal = true) AS teacher_lateness,

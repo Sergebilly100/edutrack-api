@@ -102,7 +102,7 @@ export class StudentDossierRepository {
       WITH events AS (
         SELECT e.enrolled_at::date AS date,
                'enrollment' AS type,
-               concat('Inscription ', COALESCE(e.status::text, ''), ' · ', COALESCE(sy.label, '')) AS label,
+               concat('Inscription ',  ' · ', COALESCE(sy.label, '')) AS label,
                NULL::text AS detail,
                e.school_year_id::text AS "schoolYearId",
                NULL::integer AS rank, NULL::integer AS "classHeadcount"

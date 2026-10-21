@@ -5,6 +5,7 @@ import { monthBoundsFromDate } from '../../shared/utils/date.js';
 import { getRowsUntyped as getRows } from '../../shared/utils/db-helpers.js';
 import { on } from '../../shared/events/event-bus.js';
 import { withTenantSchema } from '../../shared/database/db.js';
+import { logger } from '../../shared/observability/logger.js';
 
 type QueryExecutor = NodePgDatabase<Record<string, unknown>>;
 
@@ -187,14 +188,43 @@ export class SalariesService {
 export const buildSalariesService = (db: QueryExecutor): SalariesService =>
   new SalariesService(db);
 
-export const registerSalaryEventListeners = (): void => {
-  on('teacher.checkout_completed', (payload) => {
-    void withTenantSchema(payload.schemaName, async (tenantDb) => {
+const recalculateSalaryForEvent = async (params: {
+  schemaName: string;
+  teacherId: string;
+  month: string;
+  eventName: string;
+}): Promise<void> => {
+  try {
+    await withTenantSchema(params.schemaName, async (tenantDb) => {
       const service = buildSalariesService(tenantDb);
       await service.recalculateForTeacherMonth({
-        teacherId: payload.teacherId,
-        month: payload.monthStart.slice(0, 7),
+        teacherId: params.teacherId,
+        month: params.month,
       });
+    });
+  } catch (error) {
+    if (error instanceof SalariesModuleError && error.code === 'SALARY_RECORD_NOT_FOUND') {
+      return;
+    }
+
+    logger.error(
+      {
+        err: error instanceof Error ? error.message : 'unknown',
+        schemaName: params.schemaName,
+        teacherId: params.teacherId,
+      },
+      `[salaries] ${params.eventName} listener failed (non-blocking)`
+    );
+  }
+};
+
+export const registerSalaryEventListeners = (): void => {
+  on('teacher.checkout_completed', (payload) => {
+    void recalculateSalaryForEvent({
+      schemaName: payload.schemaName,
+      teacherId: payload.teacherId,
+      month: payload.monthStart.slice(0, 7),
+      eventName: 'teacher.checkout_completed',
     });
   });
 
@@ -202,19 +232,11 @@ export const registerSalaryEventListeners = (): void => {
   // le salary_record pour intégrer les modifications d'attendance intervenues
   // entre la dernière compute et le paiement (validations, sanctions, annulations).
   on('salary.payment_recorded', (payload) => {
-    void withTenantSchema(payload.schemaName, async (tenantDb) => {
-      const service = buildSalariesService(tenantDb);
-      try {
-        await service.recalculateForTeacherMonth({
-          teacherId: payload.teacherId,
-          month: payload.periodMonth,
-        });
-      } catch (error) {
-        if (error instanceof SalariesModuleError && error.code === 'SALARY_RECORD_NOT_FOUND') {
-          return;
-        }
-        throw error;
-      }
+    void recalculateSalaryForEvent({
+      schemaName: payload.schemaName,
+      teacherId: payload.teacherId,
+      month: payload.periodMonth,
+      eventName: 'salary.payment_recorded',
     });
   });
 };

@@ -1,11 +1,11 @@
 import { sql } from 'drizzle-orm';
 import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
+import { studentGradeRiskCtes } from '../../shared/database/student-grade-risk-query.js';
 
 import type { TenantDb } from '../../shared/database/db.js';
 import {
   DEFAULT_RISK_RULES,
   isAbsenceRisk,
-  isGradeDropRisk,
   isPaymentRisk,
   resolveRiskRule,
   resolveRollingRiskRule,
@@ -36,6 +36,8 @@ export type RiskRule = {
 export type StudentRiskListInput = {
   page: number;
   limit: number;
+  schoolYearId?: string;
+  gradingPeriodId?: string;
   schoolLevelId?: string;
   classId?: string;
   category?: 'absences' | 'grades' | 'payments';
@@ -126,33 +128,36 @@ export class RiskRepository {
 
   /**
    * Signaux élève en une requête : absences non justifiées sur la fenêtre,
-   * baisse de moyenne générale entre les deux dernières périodes notées,
+   * baisse de moyenne générale sur la période sélectionnée et la précédente,
+   * uniquement si les deux périodes sont clôturées,
    * statut de paiement depuis le cache financier (6a).
    */
   async computeStudentSignals(): Promise<Map<string, {
     absences: { count: number; active: boolean };
-    grades: { drop: number | null; active: boolean };
+    grades: { active: boolean };
     payments: boolean;
   }>> {
     // Fenêtre et seuils par défaut (surchargés par les règles actives).
     const rules = await this.listRules();
     const absenceRule = rules.find((r) => r.subjectType === 'student' && r.signalType === 'absences');
-    const gradeRule = rules.find((r) => r.subjectType === 'student' && r.signalType === 'grades');
     const paymentRule = rules.find((r) => r.subjectType === 'student' && r.signalType === 'payments');
     const absenceConfig = resolveRollingRiskRule(absenceRule, DEFAULT_RISK_RULES.studentAbsences);
-    const gradeConfig = resolveRiskRule(gradeRule, DEFAULT_RISK_RULES.studentGrades);
     const paymentConfig = resolveRiskRule(paymentRule, DEFAULT_RISK_RULES.studentPayments);
 
     const absenceWindow = absenceConfig.periodDays;
+    const activeSchoolYearId = sql`(
+      SELECT id FROM school_years WHERE status = 'active' ORDER BY start_date DESC LIMIT 1
+    )`;
+    const gradeRiskCtes = studentGradeRiskCtes({ schoolYearId: activeSchoolYearId });
 
     const result = await this.db.execute<{
       student_id: string;
       absence_count: number;
-      avg_latest: string | null;
-      avg_previous: string | null;
+      grades_signal: boolean;
       payment_late: boolean;
     }>(sql`
-      WITH window_bounds AS (
+      WITH ${gradeRiskCtes},
+      window_bounds AS (
         SELECT CURRENT_DATE - (${absenceWindow})::int AS window_start
       ),
       absence_counts AS (
@@ -165,58 +170,33 @@ export class RiskRepository {
           AND ast.date >= wb.window_start
           AND ${confirmedSchoolStudent(sql`ast.student_id`, sql`absence_class.school_year_id`, sql`absence_class.id`)}
         GROUP BY ast.student_id
-      ),
-      ranked_averages AS (
-        SELECT spa.student_id, spa.average, gp.start_date,
-               ROW_NUMBER() OVER (
-                 PARTITION BY spa.student_id
-                 ORDER BY gp.start_date DESC
-               ) AS rn
-        FROM student_period_averages spa
-        INNER JOIN grading_periods gp ON gp.id = spa.grading_period_id
-        INNER JOIN school_years sy ON sy.id = gp.school_year_id
-        WHERE sy.status = 'active'
-          AND spa.subject_id IS NULL
       )
       SELECT s.id::text AS student_id,
              COALESCE(ac.cnt, 0)::int AS absence_count,
-             latest.average::text AS avg_latest,
-             previous.average::text AS avg_previous,
+             COALESCE(grade_risk.grades_signal, false) AS grades_signal,
              COALESCE((sfs.status = 'late'), false) AS payment_late
       FROM students s
       LEFT JOIN absence_counts ac ON ac.student_id = s.id
-      LEFT JOIN LATERAL (
-        SELECT ra.average FROM ranked_averages ra WHERE ra.student_id = s.id AND ra.rn = 1
-      ) latest ON true
-      LEFT JOIN LATERAL (
-        SELECT ra.average FROM ranked_averages ra WHERE ra.student_id = s.id AND ra.rn = 2
-      ) previous ON true
+      LEFT JOIN student_grade_risks grade_risk ON grade_risk.student_id = s.id
       LEFT JOIN student_financial_status sfs
         ON sfs.student_id = s.id
-       AND sfs.school_year_id = (SELECT id FROM school_years WHERE status = 'active' LIMIT 1)
-      WHERE ${confirmedSchoolStudent(sql`s.id`, sql`(SELECT id FROM school_years WHERE status = 'active' LIMIT 1)`)}
+       AND sfs.school_year_id = ${activeSchoolYearId}
+      WHERE ${confirmedSchoolStudent(sql`s.id`, activeSchoolYearId)}
     `);
 
     const map = new Map<string, {
       absences: { count: number; active: boolean };
-      grades: { drop: number | null; active: boolean };
+      grades: { active: boolean };
       payments: boolean;
     }>();
 
     for (const row of getRows<{
       student_id: string;
       absence_count: number;
-      avg_latest: string | null;
-      avg_previous: string | null;
+      grades_signal: boolean;
       payment_late: boolean;
     }>(result)) {
       const absenceCount = row.absence_count ?? 0;
-      const latest = row.avg_latest !== null ? Number(row.avg_latest) : null;
-      const previous = row.avg_previous !== null ? Number(row.avg_previous) : null;
-      const drop =
-        latest !== null && previous !== null
-          ? Math.round((previous - latest) * 100) / 100
-          : null;
 
       map.set(row.student_id, {
         absences: {
@@ -228,8 +208,7 @@ export class RiskRepository {
           ),
         },
         grades: {
-          drop,
-          active: isGradeDropRisk(drop, gradeConfig.thresholdValue, gradeConfig.isActive),
+          active: row.grades_signal,
         },
         payments: isPaymentRisk(row.payment_late, paymentConfig.isActive),
       });
@@ -329,68 +308,104 @@ export class RiskRepository {
 
   async listStudentRisks(input: StudentRiskListInput): Promise<{ rows: StudentRiskRow[]; total: number }> {
     const offset = (input.page - 1) * input.limit;
-    const score = input.includePayments
-      ? sql`srs.risk_score`
-      : sql`(CASE WHEN srs.absences_signal THEN 1 ELSE 0 END + CASE WHEN srs.grades_signal THEN 1 ELSE 0 END)`;
+    const schoolYearId = sql`COALESCE(
+      ${input.schoolYearId ?? null}::uuid,
+      (SELECT id FROM school_years WHERE status = 'active' ORDER BY start_date DESC LIMIT 1)
+    )`;
+    const gradeRiskCtes = studentGradeRiskCtes({
+      schoolYearId,
+      gradingPeriodId: input.gradingPeriodId,
+    });
+    const score = sql`(CASE WHEN srs.absences_signal THEN 1 ELSE 0 END
+      + CASE WHEN COALESCE(grade_risk.grades_signal, false) THEN 1 ELSE 0 END
+      + CASE WHEN ${input.includePayments} AND srs.payment_signal THEN 1 ELSE 0 END)`;
     const riskLevel = sql`CASE
-      WHEN ${score} <= 0 THEN 'none'::risk_level
-      WHEN ${score} = 1 THEN 'attention'::risk_level
-      WHEN ${score} = 2 THEN 'warning'::risk_level
-      ELSE 'critical'::risk_level
+      WHEN ${score} = 0 THEN 'none'
+      WHEN ${score} = 1 THEN 'attention'
+      WHEN ${score} = 2 THEN 'warning'
+      ELSE 'critical'
     END`;
     const categoryCondition = input.category === 'absences'
-      ? sql`srs.absences_signal`
+      ? sql`scoped.absences_signal`
       : input.category === 'grades'
-        ? sql`srs.grades_signal`
+        ? sql`scoped.grades_signal`
         : input.category === 'payments'
-          ? input.includePayments ? sql`srs.payment_signal` : sql`FALSE`
+          ? input.includePayments ? sql`scoped.payment_signal` : sql`FALSE`
           : sql`TRUE`;
     const studentScope = input.studentIds
       ? input.studentIds.length > 0
-        ? sql`s.id IN (${sql.join(input.studentIds.map((studentId) => sql`${studentId}::uuid`), sql`, `)})`
+        ? sql`scoped.student_id IN (${sql.join(input.studentIds.map((studentId) => sql`${studentId}::uuid`), sql`, `)})`
         : sql`FALSE`
       : sql`TRUE`;
     const conditions = sql`
-      s.is_active = true
-      AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
-      AND (${input.schoolLevelId ?? null}::uuid IS NULL OR c.level_id = ${input.schoolLevelId ?? null}::uuid)
-      AND (${input.classId ?? null}::uuid IS NULL OR c.id = ${input.classId ?? null}::uuid)
+      (${input.schoolLevelId ?? null}::uuid IS NULL OR scoped.school_level_id = ${input.schoolLevelId ?? null}::uuid)
+      AND (${input.classId ?? null}::uuid IS NULL OR scoped.class_id = ${input.classId ?? null}::uuid)
       AND ${studentScope}
-      AND (${input.atRisk} = false OR ${score} > 0)
+      AND (${input.atRisk} = false OR scoped.risk_score > 0)
       AND ${categoryCondition}
-      AND (${input.riskLevel ?? null}::text IS NULL OR ${riskLevel}::text = ${input.riskLevel ?? null})
+      AND (${input.riskLevel ?? null}::text IS NULL OR scoped.level = ${input.riskLevel ?? null}::text)
     `;
     const [itemsResult, totalResult] = await Promise.all([
       this.db.execute<StudentRiskRow>(sql`
-        SELECT srs.student_id::text,
-               concat_ws(' ', s.first_name, s.last_name) AS student_name,
-               l.id::text AS school_level_id,
-               l.name AS school_level_name,
-               c.id::text AS class_id,
-               c.name AS class_name,
-               srs.absences_signal,
-               srs.grades_signal,
-               ${input.includePayments ? sql`srs.payment_signal` : sql`FALSE`} AS payment_signal,
-               ${score}::int AS risk_score,
-               ${riskLevel}::text AS level,
-               srs.computed_at::text
-        FROM student_risk_status srs
-        INNER JOIN students s ON s.id = srs.student_id
-        INNER JOIN classes c ON c.is_active = true AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
-        INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
-        LEFT JOIN levels l ON l.id = c.level_id
+        WITH ${gradeRiskCtes},
+        scoped_student_risks AS (
+          SELECT srs.student_id,
+                 concat_ws(' ', s.first_name, s.last_name) AS student_name,
+                 l.id AS school_level_id,
+                 l.name AS school_level_name,
+                 c.id AS class_id,
+                 c.name AS class_name,
+                 srs.absences_signal,
+                 COALESCE(grade_risk.grades_signal, false) AS grades_signal,
+                 srs.payment_signal,
+                 ${score}::int AS risk_score,
+                 ${riskLevel}::text AS level,
+                 srs.computed_at
+          FROM student_risk_status srs
+          INNER JOIN students s ON s.id = srs.student_id AND s.is_active = true
+          INNER JOIN classes c ON c.is_active = true AND c.school_year_id = ${schoolYearId}
+            AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
+          LEFT JOIN levels l ON l.id = c.level_id
+          LEFT JOIN student_grade_risks grade_risk ON grade_risk.student_id = s.id
+        )
+        SELECT scoped.student_id::text,
+               scoped.student_name,
+               scoped.school_level_id::text,
+               scoped.school_level_name,
+               scoped.class_id::text,
+               scoped.class_name,
+               scoped.absences_signal,
+               scoped.grades_signal,
+               ${input.includePayments ? sql`scoped.payment_signal` : sql`FALSE`} AS payment_signal,
+               scoped.risk_score,
+               scoped.level,
+               scoped.computed_at::text
+        FROM scoped_student_risks scoped
         WHERE ${conditions}
-        ORDER BY ${score} DESC, student_name ASC
+        ORDER BY scoped.risk_score DESC, scoped.student_name ASC
         LIMIT ${input.limit}
         OFFSET ${offset}
       `),
       this.db.execute<{ total: string | number }>(sql`
+        WITH ${gradeRiskCtes},
+        scoped_student_risks AS (
+          SELECT srs.student_id,
+                 l.id AS school_level_id,
+                 c.id AS class_id,
+                 srs.absences_signal,
+                 COALESCE(grade_risk.grades_signal, false) AS grades_signal,
+                 srs.payment_signal,
+                 ${score}::int AS risk_score,
+                 ${riskLevel}::text AS level
+          FROM student_risk_status srs
+          INNER JOIN students s ON s.id = srs.student_id AND s.is_active = true
+          INNER JOIN classes c ON c.is_active = true AND c.school_year_id = ${schoolYearId}
+            AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
+          LEFT JOIN levels l ON l.id = c.level_id
+          LEFT JOIN student_grade_risks grade_risk ON grade_risk.student_id = s.id
+        )
         SELECT COUNT(*) AS total
-        FROM student_risk_status srs
-        INNER JOIN students s ON s.id = srs.student_id
-        INNER JOIN classes c ON c.is_active = true AND ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
-        INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
-        LEFT JOIN levels l ON l.id = c.level_id
+        FROM scoped_student_risks scoped
         WHERE ${conditions}
       `),
     ]);

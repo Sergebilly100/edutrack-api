@@ -68,7 +68,7 @@ export class RiskService {
     for (const studentId of studentIds) {
       const signal = signals.get(studentId) ?? {
         absences: { count: 0, active: false },
-        grades: { drop: null, active: false },
+        grades: { active: false },
         payments: false,
       };
       const score =

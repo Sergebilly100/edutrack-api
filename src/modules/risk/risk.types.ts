@@ -23,6 +23,8 @@ const queryBooleanSchema = z.preprocess(
 export const riskStudentsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(50).default(10),
+  schoolYearId: z.string().uuid().optional(),
+  gradingPeriodId: z.string().uuid().optional(),
   schoolLevelId: z.string().uuid().optional(),
   classId: z.string().uuid().optional(),
   category: z.enum(['absences', 'grades', 'payments']).optional(),

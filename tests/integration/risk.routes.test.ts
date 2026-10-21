@@ -19,7 +19,7 @@ describe('risk alerts integration (7a)', () => {
   it('calcule le niveau élève selon les signaux actifs et expose les profs à risque', async () => {
     const headers = await getAuthHeaders('director');
 
-    // Élèves : un avec 2 signaux (absences + paiement), un sans signal
+    // Un élève avec un paiement en retard, un élève sans signal initial.
     await queryTenant(`UPDATE ${tenantTable('school_years')} SET status='closed' WHERE status='active'`);
     const years = await queryTenant<IdRow>(
       `INSERT INTO ${tenantTable('school_years')} (label, start_date, end_date, end_of_year_review_start_date, status)
@@ -54,6 +54,31 @@ describe('risk alerts integration (7a)', () => {
              ($2::uuid, $3::uuid, $4::uuid, 'new_registration', 'confirmed')`,
       [riskyStudentId, safeStudentId, classId, yearId]);
 
+    const gradingPeriods = await queryTenant<IdRow & { order_index: number }>(
+      `INSERT INTO ${tenantTable('grading_periods')}
+         (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+       VALUES
+         ($1::uuid, 'trimester', 1, $2, '2103-09-01', '2103-11-01', '2103-12-01'),
+         ($1::uuid, 'trimester', 2, $3, '2104-01-01', '2104-03-01', '2104-04-01'),
+         ($1::uuid, 'trimester', 3, $4, '2104-05-01', '2104-06-01', '2104-06-30')
+       RETURNING id::text, order_index`,
+      [yearId, `RK T1 ${suffix}`, `RK T2 ${suffix}`, `RK T3 ${suffix}`]
+    );
+    const [firstPeriod, secondPeriod, provisionalPeriod] = gradingPeriods.sort((a, b) => a.order_index - b.order_index);
+    await queryTenant(
+      `INSERT INTO ${tenantTable('grading_period_class_closures')} (grading_period_id, class_id)
+       VALUES ($1::uuid, $3::uuid), ($2::uuid, $3::uuid)`,
+      [firstPeriod!.id, secondPeriod!.id, classId]
+    );
+    await queryTenant(
+      `INSERT INTO ${tenantTable('student_period_averages')}
+         (student_id, grading_period_id, average)
+       VALUES
+         ($1::uuid, $3::uuid, 15), ($1::uuid, $4::uuid, 14), ($1::uuid, $5::uuid, 8),
+         ($2::uuid, $3::uuid, 15), ($2::uuid, $4::uuid, 12), ($2::uuid, $5::uuid, 8)`,
+      [riskyStudentId, safeStudentId, firstPeriod!.id, secondPeriod!.id, provisionalPeriod!.id]
+    );
+
     // Cache financier : risky en retard
     await queryTenant(
       `INSERT INTO ${tenantTable('student_financial_status')}
@@ -69,20 +94,60 @@ describe('risk alerts integration (7a)', () => {
     );
     expect(summary.students).toBeGreaterThanOrEqual(2);
     expect(summary.teachers).toBeGreaterThanOrEqual(0);
+    const completedPeriodDrop = await queryTenant<{ grades_signal: boolean }>(
+      `SELECT grades_signal FROM ${tenantTable('student_risk_status')} WHERE student_id = $1::uuid`,
+      [safeStudentId]
+    );
+    expect(completedPeriodDrop[0]?.grades_signal).toBe(true);
 
-    // Endpoint : le directeur voit l'élève à risque avec score >= 2 → warning
-    const list = await request().get('/api/v1/risk/students').set(headers);
+    // La période sélectionnée (T2) est clôturée et baisse la moyenne de Safe
+    // d'au moins deux points ; la moyenne provisoire de T3 reste ignorée.
+    const list = await request()
+      .get('/api/v1/risk/students')
+      .set(headers)
+      .query({ schoolYearId: yearId, gradingPeriodId: secondPeriod!.id });
     expect(list.status).toBe(200);
-    const rows = list.body.students as Array<{ student_id: string; risk_score: number; level: string }>;
+    const rows = list.body.students as Array<{ student_id: string; grades_signal: boolean; risk_score: number; level: string }>;
     expect(list.body.pagination).toEqual(expect.objectContaining({ page: 1, limit: 10 }));
     const risky = rows.find((row) => row.student_id === riskyStudentId);
+    const safe = rows.find((row) => row.student_id === safeStudentId);
+    expect(risky).toBeDefined();
+    expect(safe).toBeDefined();
+    expect(risky?.grades_signal).toBe(false);
+    expect(safe?.grades_signal).toBe(true);
+    expect(risky?.risk_score).toBeGreaterThanOrEqual(1);
+    expect(['attention', 'warning', 'critical']).toContain(risky?.level);
 
-    // Signal paiements actif. Les absences/moyennes dépendent des données du
-    // schéma : on vérifie au minimum le signal financier et la cohérence score/niveau.
-    if (rows.length > 0 && risky) {
-      expect(risky.risk_score).toBeGreaterThanOrEqual(1);
-      expect(['attention', 'warning', 'critical']).toContain(risky.level);
-    }
+    const provisionalSelection = await request()
+      .get('/api/v1/risk/students')
+      .set(headers)
+      .query({
+        schoolYearId: yearId,
+        gradingPeriodId: provisionalPeriod!.id,
+        category: 'grades',
+        atRisk: true,
+      });
+    expect(provisionalSelection.status).toBe(200);
+    const provisionalRows = provisionalSelection.body.students as Array<{ student_id: string; grades_signal: boolean }>;
+    expect(provisionalRows.find((row) => row.student_id === safeStudentId)?.grades_signal).toBe(true);
+    expect(provisionalRows.find((row) => row.student_id === riskyStudentId)?.grades_signal).toBe(false);
+
+    const dashboard = await request()
+      .get('/api/v1/dashboard/pilotage')
+      .set(headers)
+      .query({ schoolYearId: yearId, gradingPeriodId: provisionalPeriod!.id });
+    expect(dashboard.status).toBe(200);
+    const selectedGradeRisks = await request()
+      .get('/api/v1/risk/students')
+      .set(headers)
+      .query({
+        schoolYearId: yearId,
+        gradingPeriodId: provisionalPeriod!.id,
+        category: 'grades',
+        atRisk: true,
+      });
+    expect(selectedGradeRisks.status).toBe(200);
+    expect(dashboard.body.risks.studentGrades).toBe(selectedGradeRisks.body.pagination.total);
 
     const filteredStudents = await request()
       .get('/api/v1/risk/students')
