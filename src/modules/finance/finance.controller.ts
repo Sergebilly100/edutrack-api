@@ -20,6 +20,7 @@ import {
   cancelPaymentBodySchema,
   createSubscriptionPlanBodySchema,
   grantTuitionOverrideBodySchema,
+  withdrawTuitionOverrideBodySchema,
   parentReceiptParamsSchema,
   paymentIdParamsSchema,
   recordPaymentBodySchema,
@@ -558,9 +559,17 @@ export default async function financeController(
       const result = await withService(request, (service) => service.grantTuitionOverride({
         ...body,
         grantedByUserId: request.user!.userId,
+        actorRole: request.claims!.role,
       }));
       return reply.code(201).send(result);
     } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.get('/api/v1/tuition/overrides/:studentId/withdrawal-preview', { preHandler: requirePermission('tuition.grant_discount') }, async (request, reply) => {
+    try { const { studentId } = studentFinancialParamsSchema.parse(request.params); const { school_year_id: schoolYearId } = schoolYearQuerySchema.parse(request.query); return reply.send(await withService(request, (service) => service.previewTuitionOverrideWithdrawal(studentId, schoolYearId))); } catch (error) { return handleError(request, reply, error); }
+  });
+  app.post('/api/v1/tuition/overrides/:studentId/withdraw', { preHandler: requirePermission('tuition.grant_discount') }, async (request, reply) => {
+    try { const { studentId } = studentFinancialParamsSchema.parse(request.params); const body = withdrawTuitionOverrideBodySchema.parse(request.body); return reply.send(await withService(request, (service) => service.withdrawTuitionOverride({ studentId, ...body, actorUserId: request.user!.userId, actorRole: request.claims!.role }))); } catch (error) { return handleError(request, reply, error); }
   });
 
   app.get('/api/v1/tuition/student-schedules/:studentId', { preHandler: requireAnyPermission(['tuition.view', 'tuition.manage_student_schedule']) }, async (request, reply) => {

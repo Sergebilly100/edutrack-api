@@ -103,6 +103,13 @@ export const grantTuitionOverrideBodySchema = z.object({
   }
 });
 
+export const withdrawTuitionOverrideBodySchema = z.object({
+  schoolYearId: uuidSchema,
+  reason: z.string().trim().min(1, 'Le motif du retrait est obligatoire').max(1_000),
+  scheduleResolution: z.enum(['keep', 'reset', 'replace']).default('keep'),
+  installments: z.array(z.object({ dueDate: civilDateSchema, amount: positiveMoneySchema }).strict()).optional(),
+}).strict();
+
 export const upsertTuitionPlanBodySchema = z.object({
   schoolYearId: uuidSchema,
   totalAmount: moneySchema,

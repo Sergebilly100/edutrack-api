@@ -67,7 +67,7 @@ export class FinancialCacheRepository {
         LEFT JOIN tuition_plans tp
           ON tp.level_id = c.level_id AND tp.school_year_id = ${schoolYearId}::uuid
         LEFT JOIN student_tuition_overrides sto
-          ON sto.student_id = s.id AND sto.school_year_id = ${schoolYearId}::uuid
+          ON sto.student_id = s.id AND sto.school_year_id = ${schoolYearId}::uuid AND sto.status = 'active'
         WHERE s.is_active = true
       ),
       coverage AS (
@@ -423,7 +423,7 @@ export class FinancialCacheRepository {
         INNER JOIN classes c ON c.id = e.class_id
           AND c.school_year_id = ${schoolYearId}::uuid AND c.is_active = true
         LEFT JOIN tuition_plans tp ON tp.level_id = c.level_id AND tp.school_year_id = ${schoolYearId}::uuid
-        LEFT JOIN student_tuition_overrides sto ON sto.student_id = s.id AND sto.school_year_id = ${schoolYearId}::uuid
+        LEFT JOIN student_tuition_overrides sto ON sto.student_id = s.id AND sto.school_year_id = ${schoolYearId}::uuid AND sto.status = 'active'
         LEFT JOIN (
           SELECT p.student_id, SUM(p.amount) AS total_paid
           FROM payments p

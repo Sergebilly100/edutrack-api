@@ -14,6 +14,7 @@ import {
   type FinanceDb,
   type PaymentRow,
   type StudentTuitionScheduleAgreement,
+  type TuitionOverride,
   type TuitionPlanRequiredContext,
 } from './finance.repository.js';
 import { FinancialCacheRepository } from './financial-cache.repository.js';
@@ -46,6 +47,12 @@ const scheduleAuditPayload = (agreement: StudentTuitionScheduleAgreement) => ({
   schoolYearId: agreement.schoolYearId,
   reason: agreement.reason,
   scheduleSteps: agreement.scheduleSteps,
+});
+const overrideAuditPayload = (override: TuitionOverride, withdrawalReason?: string) => ({
+  overrideId: override.id, studentId: override.studentId, schoolYearId: override.schoolYearId,
+  type: override.overrideTotalAmount === null ? 'discount' : 'custom_total',
+  overrideTotalAmount: override.overrideTotalAmount, discountAmount: override.discountAmount,
+  grantedByUserId: override.grantedByUserId, status: override.status, reason: withdrawalReason ?? override.reason,
 });
 const mapPayment = (row: PaymentRow) => ({
   id: row.id,
@@ -594,6 +601,7 @@ export class FinanceService {
     discountAmount?: number;
     reason: string;
     grantedByUserId: string;
+    actorRole: string;
   }) {
     try {
       return await this.repository.db.transaction(async (tx) => {
@@ -617,6 +625,7 @@ export class FinanceService {
         }
         const override = await repository.createTuitionOverride(input);
         const overrideId = (override as { id: string }).id;
+        await repository.recordTuitionOverrideAudit({ actorUserId: input.grantedByUserId, actorRole: input.actorRole, action: 'tuition.override.created', before: null, after: overrideAuditPayload(override as TuitionOverride) });
         const amountLabel = input.overrideTotalAmount !== undefined
           ? `montant personnalisé ${input.overrideTotalAmount} FCFA`
           : `remise ${input.discountAmount} FCFA`;
@@ -640,6 +649,41 @@ export class FinanceService {
       }
       throw error;
     }
+  }
+
+  async previewTuitionOverrideWithdrawal(studentId: string, schoolYearId: string) {
+    const activeOverride = await this.repository.getActiveTuitionOverride(studentId, schoolYearId);
+    if (!activeOverride) throw new FinanceModuleError('Aucun ajustement actif à retirer pour cet élève.', 404, 'TUITION_OVERRIDE_NOT_FOUND');
+    const current = await this.getAmountDue(studentId, schoolYearId);
+    const restoredTuitionAmount = current.planTotalAmount;
+    const restoredTotalAmount = calculateStudentTotalDue({ planTotalAmount: restoredTuitionAmount, mandatorySubscriptionAmounts: current.subscriptionLines.map((line) => line.amount) });
+    const confirmedPaid = await this.repository.getConfirmedPaid(studentId, schoolYearId);
+    const agreement = await this.repository.getStudentTuitionScheduleAgreement(studentId, schoolYearId);
+    const scheduleCompatible = !agreement || isValidCumulativeSchedule(agreement.scheduleSteps, restoredTuitionAmount);
+    const expected = await this.repository.getExpectedAtDate(studentId, schoolYearId, todayIso());
+    const currentStatus = resolveIndividualFinancialStatus({ totalDue: current.totalDue, cumulativeExpectedAtDate: Math.min(current.tuitionDue, expected), confirmedPaid });
+    const restoredStatus = resolveIndividualFinancialStatus({ totalDue: restoredTotalAmount, cumulativeExpectedAtDate: Math.min(restoredTuitionAmount, expected), confirmedPaid });
+    return { adjustment: overrideAuditPayload(activeOverride), currency: current.currency, currentTotalAmount: current.totalDue, restoredTotalAmount, currentTuitionAmount: current.tuitionDue, restoredTuitionAmount, confirmedPaid, remainingBefore: currentStatus.remainingDue, remainingAfter: restoredStatus.remainingDue, standingBefore: currentStatus.standing, standingAfter: restoredStatus.standing, potentialOverpayment: confirmedPaid > restoredTotalAmount, schedule: agreement ? { present: true, compatible: scheduleCompatible, steps: agreement.scheduleSteps } : { present: false, compatible: true, steps: [] } };
+  }
+
+  async withdrawTuitionOverride(input: { studentId: string; schoolYearId: string; reason: string; actorUserId: string; actorRole: string; scheduleResolution: 'keep' | 'reset' | 'replace'; installments?: Array<{ dueDate: string; amount: number }> }) {
+    return this.repository.db.transaction(async (tx) => {
+      const repository = new FinanceRepository(tx as FinanceDb); const service = new FinanceService(repository);
+      const preview = await service.previewTuitionOverrideWithdrawal(input.studentId, input.schoolYearId);
+      if (preview.potentialOverpayment) throw new FinanceModuleError('Le retrait créerait un trop-perçu. Traitez d’abord le remboursement, l’avoir ou la réaffectation comptable.', 409, 'TUITION_OVERRIDE_WITHDRAWAL_OVERPAYMENT');
+      if (preview.schedule.present && !preview.schedule.compatible && input.scheduleResolution === 'keep') throw new FinanceModuleError('L’échéancier négocié doit être remplacé ou abandonné avant le retrait.', 409, 'STUDENT_SCHEDULE_TOTAL_MISMATCH');
+      if (preview.schedule.present && !preview.schedule.compatible && input.scheduleResolution === 'replace') {
+        if (!input.installments) throw new FinanceModuleError('Un nouvel échéancier complet est requis.', 400, 'REPLACEMENT_SCHEDULE_REQUIRED');
+        await service.replaceStudentTuitionSchedule({ studentId: input.studentId, schoolYearId: input.schoolYearId, reason: input.reason, actorUserId: input.actorUserId, actorRole: input.actorRole, installments: input.installments });
+      } else if (preview.schedule.present && !preview.schedule.compatible && input.scheduleResolution === 'reset') {
+        await service.deleteStudentTuitionSchedule({ studentId: input.studentId, schoolYearId: input.schoolYearId, reason: input.reason, actorUserId: input.actorUserId, actorRole: input.actorRole });
+      }
+      const withdrawn = await repository.withdrawTuitionOverride(preview.adjustment.overrideId as string, input.actorUserId, input.reason);
+      if (!withdrawn) throw new FinanceModuleError('Cet ajustement a déjà été retiré.', 409, 'TUITION_OVERRIDE_ALREADY_WITHDRAWN');
+      await repository.recordTuitionOverrideAudit({ actorUserId: input.actorUserId, actorRole: input.actorRole, action: 'tuition.override.withdrawn', before: preview.adjustment, after: overrideAuditPayload(withdrawn, input.reason) });
+      await new FinancialCacheService(new FinancialCacheRepository(tx as FinanceDb)).recalcStudent(input.studentId, input.schoolYearId);
+      return { withdrawn: true, preview: await service.previewTuitionOverrideWithdrawal(input.studentId, input.schoolYearId).catch(() => ({ restoredTotalAmount: preview.restoredTotalAmount, remainingAfter: preview.remainingAfter, standingAfter: preview.standingAfter })) };
+    });
   }
 
   async getStudentTuitionSchedule(studentId: string, schoolYearId: string, includeReason = true) {

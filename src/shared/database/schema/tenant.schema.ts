@@ -580,11 +580,16 @@ export const studentTuitionOverrides = tenant.table(
     discountAmount: numeric('discount_amount', { precision: 12, scale: 2 }),
     reason: text('reason').notNull(),
     grantedByUserId: uuid('granted_by_user_id').notNull().references(() => users.id),
+    status: varchar('status', { length: 20 }).notNull().default('active'),
+    withdrawnAt: timestamp('withdrawn_at', { withTimezone: true, mode: 'date' }),
+    withdrawnByUserId: uuid('withdrawn_by_user_id').references(() => users.id),
+    withdrawalReason: text('withdrawal_reason'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   },
   (table) => ({
-    studentTuitionOverridesStudentYearUnique: unique('student_tuition_overrides_student_year_unique').on(table.studentId, table.schoolYearId),
+    studentTuitionOverridesActiveStudentYearUnique: uniqueIndex('student_tuition_overrides_active_student_year_unique').on(table.studentId, table.schoolYearId).where(sql`${table.status} = 'active'`),
     studentTuitionOverridesOneValue: check('student_tuition_overrides_one_value', sql`(${table.overrideTotalAmount} IS NOT NULL AND ${table.discountAmount} IS NULL) OR (${table.overrideTotalAmount} IS NULL AND ${table.discountAmount} IS NOT NULL)`),
+    studentTuitionOverridesStatus: check('student_tuition_overrides_status', sql`${table.status} IN ('active', 'withdrawn')`),
   })
 );
 

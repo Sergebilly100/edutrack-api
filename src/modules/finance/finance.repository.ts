@@ -78,6 +78,10 @@ export type TuitionPlanRequiredContext = {
   levelId: string;
   levelName: string;
 };
+export type TuitionOverride = {
+  id: string; studentId: string; schoolYearId: string; overrideTotalAmount: number | null; discountAmount: number | null;
+  reason: string; grantedByUserId: string; status: 'active' | 'withdrawn'; createdAt: string | Date;
+};
 
 export type StudentTuitionScheduleAgreement = {
   id: string;
@@ -174,6 +178,7 @@ export class FinanceRepository {
       LEFT JOIN student_tuition_overrides sto
         ON sto.student_id = s.id
        AND sto.school_year_id = ${schoolYearId}::uuid
+       AND sto.status = 'active'
       WHERE s.id = ${studentId}::uuid ${allowHistorical ? sql`` : sql`AND s.is_active = true`}
       ORDER BY e.enrolled_at DESC
       LIMIT 1
@@ -213,7 +218,7 @@ export class FinanceRepository {
       FROM enrollments e
       INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = e.school_year_id
       LEFT JOIN tuition_plans tp ON tp.level_id = c.level_id AND tp.school_year_id = e.school_year_id
-      LEFT JOIN student_tuition_overrides sto ON sto.student_id = e.student_id AND sto.school_year_id = e.school_year_id
+      LEFT JOIN student_tuition_overrides sto ON sto.student_id = e.student_id AND sto.school_year_id = e.school_year_id AND sto.status = 'active'
       LEFT JOIN LATERAL (
         SELECT SUM(p.amount) AS confirmed_paid
         FROM payments p
@@ -630,6 +635,22 @@ export class FinanceRepository {
       RETURNING *, id::text, student_id::text, school_year_id::text, granted_by_user_id::text
     `);
     return rows(result)[0];
+  }
+
+  async getActiveTuitionOverride(studentId: string, schoolYearId: string): Promise<TuitionOverride | null> {
+    const result = await this.db.execute(sql`SELECT id::text, student_id::text, school_year_id::text, override_total_amount, discount_amount, reason, granted_by_user_id::text, status, created_at FROM student_tuition_overrides WHERE student_id=${studentId}::uuid AND school_year_id=${schoolYearId}::uuid AND status='active' LIMIT 1`);
+    const row = rows<Record<string, unknown>>(result)[0];
+    return row ? { id: String(row.id), studentId: String(row.student_id), schoolYearId: String(row.school_year_id), overrideTotalAmount: row.override_total_amount === null ? null : FinanceRepository.toNumber(row.override_total_amount as string | number), discountAmount: row.discount_amount === null ? null : FinanceRepository.toNumber(row.discount_amount as string | number), reason: String(row.reason), grantedByUserId: String(row.granted_by_user_id), status: 'active', createdAt: row.created_at as string | Date } : null;
+  }
+
+  async withdrawTuitionOverride(id: string, actorUserId: string, reason: string): Promise<TuitionOverride | null> {
+    const result = await this.db.execute(sql`UPDATE student_tuition_overrides SET status='withdrawn', withdrawn_at=NOW(), withdrawn_by_user_id=${actorUserId}::uuid, withdrawal_reason=${reason} WHERE id=${id}::uuid AND status='active' RETURNING id::text, student_id::text, school_year_id::text, override_total_amount, discount_amount, reason, granted_by_user_id::text, status, created_at`);
+    const row = rows<Record<string, unknown>>(result)[0];
+    return row ? { id: String(row.id), studentId: String(row.student_id), schoolYearId: String(row.school_year_id), overrideTotalAmount: row.override_total_amount === null ? null : FinanceRepository.toNumber(row.override_total_amount as string | number), discountAmount: row.discount_amount === null ? null : FinanceRepository.toNumber(row.discount_amount as string | number), reason: String(row.reason), grantedByUserId: String(row.granted_by_user_id), status: 'withdrawn', createdAt: row.created_at as string | Date } : null;
+  }
+
+  async recordTuitionOverrideAudit(input: { actorUserId: string; actorRole: string; action: 'tuition.override.created' | 'tuition.override.withdrawn'; before: Record<string, unknown> | null; after: Record<string, unknown> }) {
+    await this.db.execute(sql`INSERT INTO public.audit_financial_events (tenant_id, actor_id, actor_role, action, payload_before, payload_after) SELECT id, ${input.actorUserId}::uuid, ${input.actorRole}, ${input.action}, ${input.before === null ? null : JSON.stringify(input.before)}::jsonb, ${JSON.stringify(input.after)}::jsonb FROM public.tenants WHERE schema_name=current_schema()`);
   }
 
   async getSchoolYearDateRange(schoolYearId: string): Promise<{ startDate: string; endDate: string } | null> {
