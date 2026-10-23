@@ -532,15 +532,18 @@ export const studentTuitionScheduleAgreements = tenant.table(
     // nullables uniquement pour préserver les anciennes courbes sans auteur connu.
     createdByUserId: uuid('created_by_user_id').references(() => users.id),
     updatedByUserId: uuid('updated_by_user_id').references(() => users.id),
+    status: varchar('status', { length: 20 }).notNull().default('active'),
+    closedAt: timestamp('closed_at', { withTimezone: true, mode: 'date' }),
+    closedByUserId: uuid('closed_by_user_id').references(() => users.id),
+    closureReason: text('closure_reason'),
+    replacedByAgreementId: uuid('replaced_by_agreement_id'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   },
   (table) => ({
-    studentTuitionScheduleAgreementsStudentYearUnique: unique('student_tuition_schedule_agreements_student_year_unique').on(
-      table.studentId,
-      table.schoolYearId
-    ),
+    studentTuitionScheduleAgreementsActiveStudentYearUnique: uniqueIndex('student_tuition_schedule_agreements_active_student_year_unique').on(table.studentId, table.schoolYearId).where(sql`${table.status} = 'active'`),
     studentTuitionScheduleAgreementsYearIdx: index('idx_student_tuition_schedule_agreements_year').on(table.schoolYearId),
+    studentTuitionScheduleAgreementsStatus: check('student_tuition_schedule_agreements_status', sql`${table.status} IN ('active', 'replaced', 'reset')`),
   })
 );
 

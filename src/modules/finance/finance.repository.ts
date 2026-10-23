@@ -124,19 +124,71 @@ export class FinanceRepository {
     return Number.isFinite(parsed) ? parsed : 0;
   }
 
-  async listAgreementsRegister(input: { schoolYearId: string; kind: 'overrides' | 'schedules'; search?: string; status: 'active' | 'withdrawn' | 'all'; page: number; limit: number }) {
+  async listAgreementsRegister(input: { schoolYearId: string; kind: 'overrides' | 'schedules'; search?: string; studentId?: string; classId?: string; levelId?: string; from?: string; to?: string; status: 'active' | 'withdrawn' | 'replaced' | 'reset' | 'all'; page: number; limit: number }) {
     const offset = (input.page - 1) * input.limit;
     const search = input.search ? `%${input.search}%` : null;
+    const studentId = input.studentId ?? null;
+    const classId = input.classId ?? null;
+    const levelId = input.levelId ?? null;
+    const from = input.from ?? null;
+    const to = input.to ?? null;
     const overrideRows = input.kind === 'overrides' ? await this.db.execute(sql`
-      SELECT o.id::text AS id, 'override'::text AS kind, o.status, s.id::text AS student_id, concat_ws(' ', s.first_name,s.last_name) AS student_name, s.matricule, c.name AS class_name, l.name AS level_name, o.discount_amount, o.override_total_amount, tp.total_amount AS plan_total_amount, COALESCE(sfs.total_paid,0) AS total_paid, COALESCE(sfs.remaining_due,0) AS remaining_due, sfs.status AS financial_status, o.created_at, o.withdrawn_at, o.granted_by_user_id::text AS actor_id
-      FROM student_tuition_overrides o JOIN students s ON s.id=o.student_id JOIN enrollments e ON e.student_id=s.id AND e.school_year_id=o.school_year_id AND e.status='confirmed' JOIN classes c ON c.id=e.class_id JOIN levels l ON l.id=c.level_id LEFT JOIN tuition_plans tp ON tp.level_id=c.level_id AND tp.school_year_id=o.school_year_id LEFT JOIN student_financial_status sfs ON sfs.student_id=s.id AND sfs.school_year_id=o.school_year_id
-      WHERE o.school_year_id=${input.schoolYearId}::uuid AND (${input.status}='all' OR o.status=${input.status}) AND (${search}::text IS NULL OR concat_ws(' ',s.first_name,s.last_name,s.matricule,c.name,l.name) ILIKE ${search}) ORDER BY o.created_at DESC LIMIT ${input.limit} OFFSET ${offset}`) : { rows: [] };
+      SELECT o.id::text AS id, 'override'::text AS kind, o.status, s.id::text AS student_id, o.school_year_id::text AS school_year_id, c.id::text AS class_id, l.id::text AS level_id, concat_ws(' ', s.first_name,s.last_name) AS student_name, s.matricule, c.name AS class_name, l.name AS level_name, o.discount_amount, o.override_total_amount, tp.total_amount AS plan_total_amount, COALESCE(sfs.total_paid,0) AS total_paid, GREATEST(COALESCE(sfs.total_due_year,0) - COALESCE(sfs.total_paid,0), 0) AS remaining_due, sfs.status AS financial_status, o.created_at, o.withdrawn_at, o.granted_by_user_id::text AS actor_id, grantor.name AS created_by_name, 0::numeric AS active_discount_amount, COUNT(*) OVER()::int AS total_count
+      FROM student_tuition_overrides o JOIN students s ON s.id=o.student_id JOIN enrollments e ON e.student_id=s.id AND e.school_year_id=o.school_year_id AND e.status='confirmed' JOIN classes c ON c.id=e.class_id JOIN levels l ON l.id=c.level_id LEFT JOIN tuition_plans tp ON tp.level_id=c.level_id AND tp.school_year_id=o.school_year_id LEFT JOIN student_financial_status sfs ON sfs.student_id=s.id AND sfs.school_year_id=o.school_year_id LEFT JOIN users grantor ON grantor.id=o.granted_by_user_id
+      WHERE o.school_year_id=${input.schoolYearId}::uuid AND (${input.status}='all' OR o.status=${input.status}) AND (${studentId}::uuid IS NULL OR o.student_id=${studentId}::uuid) AND (${classId}::uuid IS NULL OR c.id=${classId}::uuid) AND (${levelId}::uuid IS NULL OR l.id=${levelId}::uuid) AND (${from}::date IS NULL OR o.created_at::date >= ${from}::date) AND (${to}::date IS NULL OR o.created_at::date <= ${to}::date) AND (${search}::text IS NULL OR concat_ws(' ',s.first_name,s.last_name,s.matricule,c.name,l.name) ILIKE ${search}) ORDER BY o.created_at DESC LIMIT ${input.limit} OFFSET ${offset}`) : { rows: [] };
     const scheduleRows = input.kind === 'schedules' ? await this.db.execute(sql`
-      SELECT a.id::text AS id, 'schedule'::text AS kind, 'active'::text AS status, s.id::text AS student_id, concat_ws(' ', s.first_name,s.last_name) AS student_name, s.matricule, c.name AS class_name, l.name AS level_name, NULL::numeric AS discount_amount, NULL::numeric AS override_total_amount, COALESCE(sfs.total_due_year,0) AS plan_total_amount, COALESCE(sfs.total_paid,0) AS total_paid, COALESCE(sfs.remaining_due,0) AS remaining_due, sfs.status AS financial_status, a.created_at, NULL::timestamptz AS withdrawn_at, a.updated_by_user_id::text AS actor_id
-      FROM student_tuition_schedule_agreements a JOIN students s ON s.id=a.student_id JOIN enrollments e ON e.student_id=s.id AND e.school_year_id=a.school_year_id AND e.status='confirmed' JOIN classes c ON c.id=e.class_id JOIN levels l ON l.id=c.level_id LEFT JOIN student_financial_status sfs ON sfs.student_id=s.id AND sfs.school_year_id=a.school_year_id
-      WHERE a.school_year_id=${input.schoolYearId}::uuid AND (${search}::text IS NULL OR concat_ws(' ',s.first_name,s.last_name,s.matricule,c.name,l.name) ILIKE ${search}) ORDER BY a.updated_at DESC LIMIT ${input.limit} OFFSET ${offset}`) : { rows: [] };
+      SELECT a.id::text AS id, 'schedule'::text AS kind, a.status, s.id::text AS student_id, a.school_year_id::text AS school_year_id, c.id::text AS class_id, l.id::text AS level_id, concat_ws(' ', s.first_name,s.last_name) AS student_name, s.matricule, c.name AS class_name, l.name AS level_name, NULL::numeric AS discount_amount, NULL::numeric AS override_total_amount, COALESCE(sfs.total_due_year,0) AS plan_total_amount, COALESCE(sfs.total_paid,0) AS total_paid, GREATEST(COALESCE(sfs.total_due_year,0) - COALESCE(sfs.total_paid,0), 0) AS remaining_due, sfs.status AS financial_status, a.created_at, a.closed_at AS withdrawn_at, a.updated_by_user_id::text AS actor_id, creator.name AS created_by_name, COALESCE(discount.discount_amount, 0) AS active_discount_amount, schedule.step_count, schedule.schedule_total_amount, schedule.next_due_date, COUNT(*) OVER()::int AS total_count
+      FROM student_tuition_schedule_agreements a JOIN students s ON s.id=a.student_id JOIN enrollments e ON e.student_id=s.id AND e.school_year_id=a.school_year_id AND e.status='confirmed' JOIN classes c ON c.id=e.class_id JOIN levels l ON l.id=c.level_id LEFT JOIN student_financial_status sfs ON sfs.student_id=s.id AND sfs.school_year_id=a.school_year_id LEFT JOIN users creator ON creator.id=a.created_by_user_id LEFT JOIN student_tuition_overrides discount ON discount.student_id=a.student_id AND discount.school_year_id=a.school_year_id AND discount.status='active' AND discount.discount_amount IS NOT NULL
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS step_count, COALESCE(MAX(step.cumulative_amount_expected), 0) AS schedule_total_amount,
+          MIN(step.due_date) FILTER (WHERE step.due_date >= CURRENT_DATE)::text AS next_due_date
+        FROM student_tuition_schedule_steps step WHERE step.agreement_id=a.id
+      ) schedule ON TRUE
+      WHERE a.school_year_id=${input.schoolYearId}::uuid AND (${input.status}='all' OR a.status=${input.status}) AND (${studentId}::uuid IS NULL OR a.student_id=${studentId}::uuid) AND (${classId}::uuid IS NULL OR c.id=${classId}::uuid) AND (${levelId}::uuid IS NULL OR l.id=${levelId}::uuid) AND (${from}::date IS NULL OR a.created_at::date >= ${from}::date) AND (${to}::date IS NULL OR a.created_at::date <= ${to}::date) AND (${search}::text IS NULL OR concat_ws(' ',s.first_name,s.last_name,s.matricule,c.name,l.name) ILIKE ${search}) ORDER BY a.updated_at DESC LIMIT ${input.limit} OFFSET ${offset}`) : { rows: [] };
     const result = input.kind === 'overrides' ? overrideRows : scheduleRows;
-    return rows<Record<string, unknown>>(result).map((row) => ({ ...row, discount_amount: FinanceRepository.toNumber(row.discount_amount as string | number), override_total_amount: FinanceRepository.toNumber(row.override_total_amount as string | number), plan_total_amount: FinanceRepository.toNumber(row.plan_total_amount as string | number), total_paid: FinanceRepository.toNumber(row.total_paid as string | number), remaining_due: FinanceRepository.toNumber(row.remaining_due as string | number) }));
+    const entries = rows<Record<string, unknown>>(result).map((row) => ({ ...row, discount_amount: FinanceRepository.toNumber(row.discount_amount as string | number), override_total_amount: FinanceRepository.toNumber(row.override_total_amount as string | number), active_discount_amount: FinanceRepository.toNumber(row.active_discount_amount as string | number), plan_total_amount: FinanceRepository.toNumber(row.plan_total_amount as string | number), total_paid: FinanceRepository.toNumber(row.total_paid as string | number), remaining_due: FinanceRepository.toNumber(row.remaining_due as string | number), step_count: FinanceRepository.toNumber(row.step_count as string | number), schedule_total_amount: FinanceRepository.toNumber(row.schedule_total_amount as string | number) }));
+    return { entries, total: Number((entries[0] as Record<string, unknown> | undefined)?.total_count ?? 0) };
+  }
+
+  async getAgreementDetail(kind: 'overrides' | 'schedules', agreementId: string) {
+    const result = kind === 'overrides'
+      ? await this.db.execute(sql`
+          SELECT o.id::text AS id, 'override'::text AS kind, o.status, o.reason, o.withdrawal_reason, o.created_at, o.withdrawn_at, o.discount_amount, o.override_total_amount, o.student_id::text AS student_id, o.school_year_id::text AS school_year_id, grantor.name AS created_by_name, 0::numeric AS active_discount_amount,
+            concat_ws(' ', s.first_name, s.last_name) AS student_name, s.matricule, c.name AS class_name, l.name AS level_name, COALESCE(tp.total_amount, 0) AS plan_total_amount, COALESCE(sfs.total_paid, 0) AS total_paid, GREATEST(COALESCE(sfs.total_due_year,0) - COALESCE(sfs.total_paid,0), 0) AS remaining_due, sfs.status AS financial_status
+          FROM student_tuition_overrides o JOIN students s ON s.id=o.student_id JOIN enrollments e ON e.student_id=s.id AND e.school_year_id=o.school_year_id AND e.status='confirmed' JOIN classes c ON c.id=e.class_id JOIN levels l ON l.id=c.level_id LEFT JOIN tuition_plans tp ON tp.level_id=c.level_id AND tp.school_year_id=o.school_year_id LEFT JOIN student_financial_status sfs ON sfs.student_id=o.student_id AND sfs.school_year_id=o.school_year_id LEFT JOIN users grantor ON grantor.id=o.granted_by_user_id
+          WHERE o.id=${agreementId}::uuid LIMIT 1`)
+      : await this.db.execute(sql`
+          SELECT a.id::text AS id, 'schedule'::text AS kind, a.status, a.reason, a.closure_reason AS withdrawal_reason, a.created_at, a.closed_at AS withdrawn_at, NULL::numeric AS discount_amount, NULL::numeric AS override_total_amount, a.student_id::text AS student_id, a.school_year_id::text AS school_year_id, creator.name AS created_by_name, COALESCE(discount.discount_amount, 0) AS active_discount_amount,
+            concat_ws(' ', s.first_name, s.last_name) AS student_name, s.matricule, c.name AS class_name, l.name AS level_name, COALESCE(sfs.total_due_year, 0) AS plan_total_amount, COALESCE(sfs.total_paid, 0) AS total_paid, GREATEST(COALESCE(sfs.total_due_year,0) - COALESCE(sfs.total_paid,0), 0) AS remaining_due, sfs.status AS financial_status, schedule.schedule_steps
+          FROM student_tuition_schedule_agreements a JOIN students s ON s.id=a.student_id JOIN enrollments e ON e.student_id=s.id AND e.school_year_id=a.school_year_id AND e.status='confirmed' JOIN classes c ON c.id=e.class_id JOIN levels l ON l.id=c.level_id LEFT JOIN student_financial_status sfs ON sfs.student_id=a.student_id AND sfs.school_year_id=a.school_year_id LEFT JOIN users creator ON creator.id=a.created_by_user_id LEFT JOIN student_tuition_overrides discount ON discount.student_id=a.student_id AND discount.school_year_id=a.school_year_id AND discount.status='active' AND discount.discount_amount IS NOT NULL
+          LEFT JOIN LATERAL (
+            SELECT COALESCE(json_agg(json_build_object('dueDate', step.due_date::text, 'cumulativeAmountExpected', step.cumulative_amount_expected) ORDER BY step.due_date), '[]'::json) AS schedule_steps
+            FROM student_tuition_schedule_steps step WHERE step.agreement_id=a.id
+          ) schedule ON TRUE
+          WHERE a.id=${agreementId}::uuid LIMIT 1`);
+    const agreement = rows<Record<string, unknown>>(result)[0];
+    if (!agreement) return null;
+    const events = rows<Record<string, unknown>>(await this.db.execute(sql`
+      SELECT event.id::text AS id, event.action, event.actor_role, event.created_at, actor.name AS actor_name, event.payload_before, event.payload_after
+      FROM public.audit_financial_events event
+      LEFT JOIN users actor ON actor.id=event.actor_id
+      WHERE event.tenant_id=(SELECT id FROM public.tenants WHERE schema_name=current_schema())
+        AND (event.payload_before->>'agreementId'=${agreementId} OR event.payload_after->>'agreementId'=${agreementId} OR event.payload_before->>'overrideId'=${agreementId} OR event.payload_after->>'overrideId'=${agreementId})
+      ORDER BY event.created_at ASC`));
+    return { agreement: { ...agreement, discount_amount: FinanceRepository.toNumber(agreement.discount_amount as string | number), override_total_amount: FinanceRepository.toNumber(agreement.override_total_amount as string | number), active_discount_amount: FinanceRepository.toNumber(agreement.active_discount_amount as string | number), plan_total_amount: FinanceRepository.toNumber(agreement.plan_total_amount as string | number), total_paid: FinanceRepository.toNumber(agreement.total_paid as string | number), remaining_due: FinanceRepository.toNumber(agreement.remaining_due as string | number) }, events };
+  }
+
+  async getAgreementsMetrics(schoolYearId: string) {
+    const result = await this.db.execute<{ active_overrides: string; active_discounts: string; active_schedules: string; late_schedules: string; late_schedule_remaining: string }>(sql`
+      SELECT
+        (SELECT COUNT(*) FROM student_tuition_overrides WHERE school_year_id=${schoolYearId}::uuid AND status='active')::text AS active_overrides,
+        (SELECT COALESCE(SUM(discount_amount), 0) FROM student_tuition_overrides WHERE school_year_id=${schoolYearId}::uuid AND status='active')::text AS active_discounts,
+        (SELECT COUNT(*) FROM student_tuition_schedule_agreements WHERE school_year_id=${schoolYearId}::uuid AND status='active')::text AS active_schedules,
+        (SELECT COUNT(*) FROM student_tuition_schedule_agreements a INNER JOIN student_financial_status sfs ON sfs.student_id=a.student_id AND sfs.school_year_id=a.school_year_id WHERE a.school_year_id=${schoolYearId}::uuid AND a.status='active' AND sfs.status='late')::text AS late_schedules,
+        (SELECT COALESCE(SUM(GREATEST(sfs.total_expected_to_date - sfs.total_paid, 0)),0) FROM student_tuition_schedule_agreements a INNER JOIN student_financial_status sfs ON sfs.student_id=a.student_id AND sfs.school_year_id=a.school_year_id WHERE a.school_year_id=${schoolYearId}::uuid AND a.status='active' AND sfs.status='late')::text AS late_schedule_remaining
+    `);
+    const row = rows<{ active_overrides: string; active_discounts: string; active_schedules: string; late_schedules: string; late_schedule_remaining: string }>(result)[0];
+    return { activeOverrides: Number(row?.active_overrides ?? 0), activeDiscounts: FinanceRepository.toNumber(row?.active_discounts), activeSchedules: Number(row?.active_schedules ?? 0), lateSchedules: Number(row?.late_schedules ?? 0), lateScheduleRemaining: FinanceRepository.toNumber(row?.late_schedule_remaining) };
   }
 
   async nextReceiptNumber(): Promise<string> {
@@ -331,8 +383,9 @@ export class FinanceRepository {
                MAX(cumulative_amount_expected) FILTER (WHERE due_date <= ${asOfDate}::date) AS expected
         FROM student_tuition_schedule_steps step
         INNER JOIN student_tuition_schedule_agreements agreement ON agreement.id = step.agreement_id
-        WHERE agreement.student_id = s.id
+      WHERE agreement.student_id = s.id
           AND agreement.school_year_id = ${schoolYearId}::uuid
+          AND agreement.status = 'active'
       ) custom_steps ON true
       LEFT JOIN LATERAL (
         SELECT MAX(cumulative_amount_expected) AS expected
@@ -696,7 +749,7 @@ export class FinanceRepository {
       FROM student_tuition_schedule_agreements agreement
       LEFT JOIN student_tuition_schedule_steps step ON step.agreement_id = agreement.id
       LEFT JOIN users updated_by ON updated_by.id = agreement.updated_by_user_id
-      WHERE agreement.student_id = ${studentId}::uuid AND agreement.school_year_id = ${schoolYearId}::uuid
+      WHERE agreement.student_id = ${studentId}::uuid AND agreement.school_year_id = ${schoolYearId}::uuid AND agreement.status = 'active'
       GROUP BY agreement.id, updated_by.name
       LIMIT 1
     `);
@@ -735,7 +788,15 @@ export class FinanceRepository {
     scheduleSteps: readonly CumulativeScheduleStep[];
   }): Promise<StudentTuitionScheduleAgreement> {
     const existing = await this.getStudentTuitionScheduleAgreement(input.studentId, input.schoolYearId);
-    const agreementId = existing?.id ?? rows<{ id: string }>(await this.db.execute<{ id: string }>(sql`
+    if (existing) {
+      await this.db.execute(sql`
+        UPDATE student_tuition_schedule_agreements
+        SET status = 'replaced', closed_at = NOW(), closed_by_user_id = ${input.actorUserId}::uuid,
+            closure_reason = ${input.reason}, updated_at = NOW()
+        WHERE id = ${existing.id}::uuid AND status = 'active'
+      `);
+    }
+    const agreementId = rows<{ id: string }>(await this.db.execute<{ id: string }>(sql`
       INSERT INTO student_tuition_schedule_agreements (
         student_id, school_year_id, reason, created_by_user_id, updated_by_user_id
       ) VALUES (
@@ -744,14 +805,7 @@ export class FinanceRepository {
       ) RETURNING id::text
     `))[0]?.id;
     if (!agreementId) throw new Error('Failed to create student tuition schedule agreement');
-    if (existing) {
-      await this.db.execute(sql`
-        UPDATE student_tuition_schedule_agreements
-        SET reason = ${input.reason}, updated_by_user_id = ${input.actorUserId}::uuid, updated_at = NOW()
-        WHERE id = ${agreementId}::uuid
-      `);
-    }
-    await this.db.execute(sql`DELETE FROM student_tuition_schedule_steps WHERE agreement_id = ${agreementId}::uuid`);
+    if (existing) await this.db.execute(sql`UPDATE student_tuition_schedule_agreements SET replaced_by_agreement_id=${agreementId}::uuid WHERE id=${existing.id}::uuid`);
     for (const step of input.scheduleSteps) {
       await this.db.execute(sql`
         INSERT INTO student_tuition_schedule_steps (agreement_id, due_date, cumulative_amount_expected)
@@ -763,10 +817,10 @@ export class FinanceRepository {
     return agreement;
   }
 
-  async deleteStudentTuitionSchedule(studentId: string, schoolYearId: string): Promise<StudentTuitionScheduleAgreement | null> {
+  async deleteStudentTuitionSchedule(studentId: string, schoolYearId: string, actorUserId: string, reason: string): Promise<StudentTuitionScheduleAgreement | null> {
     const agreement = await this.getStudentTuitionScheduleAgreement(studentId, schoolYearId);
     if (!agreement) return null;
-    await this.db.execute(sql`DELETE FROM student_tuition_schedule_agreements WHERE id = ${agreement.id}::uuid`);
+    await this.db.execute(sql`UPDATE student_tuition_schedule_agreements SET status='reset', closed_at=NOW(), closed_by_user_id=${actorUserId}::uuid, closure_reason=${reason}, updated_at=NOW() WHERE id=${agreement.id}::uuid AND status='active'`);
     return agreement;
   }
 

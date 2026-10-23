@@ -172,9 +172,16 @@ export class FinanceService {
     const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
     return cache.getInstallmentSummary(schoolYearId);
   }
-  async listAgreementsRegister(input: { schoolYearId: string; kind: 'overrides' | 'schedules'; search?: string; status: 'active' | 'withdrawn' | 'all'; page: number; limit: number }) {
-    return { entries: await this.repository.listAgreementsRegister(input), pagination: { page: input.page, limit: input.limit } };
+  async listAgreementsRegister(input: { schoolYearId: string; kind: 'overrides' | 'schedules'; search?: string; studentId?: string; classId?: string; levelId?: string; from?: string; to?: string; status: 'active' | 'withdrawn' | 'replaced' | 'reset' | 'all'; page: number; limit: number }) {
+    const result = await this.repository.listAgreementsRegister(input);
+    return { entries: result.entries, pagination: { page: input.page, limit: input.limit, total: result.total, totalPages: Math.ceil(result.total / input.limit) } };
   }
+  async getAgreementDetail(kind: 'overrides' | 'schedules', agreementId: string) {
+    const detail = await this.repository.getAgreementDetail(kind, agreementId);
+    if (!detail) throw new FinanceModuleError('Accord introuvable.', 404, 'AGREEMENT_NOT_FOUND');
+    return detail;
+  }
+  async getAgreementsMetrics(schoolYearId: string) { return this.repository.getAgreementsMetrics(schoolYearId); }
 
   async listFinancialRecentPayments(schoolYearId?: string) {
     const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
@@ -645,13 +652,60 @@ export class FinanceService {
     } catch (error) {
       if ((error as { code?: string }).code === '23505') {
         throw new FinanceModuleError(
-          'A tuition override already exists for this student and school year',
+          'Un ajustement individuel actif existe déjà pour cet élève et cette année. Retirez-le avant d’en accorder un nouveau.',
           409,
           'TUITION_OVERRIDE_ALREADY_EXISTS'
         );
       }
       throw error;
     }
+  }
+
+  /** Replaces an active adjustment without erasing its financial and audit history. */
+  async replaceTuitionOverride(input: {
+    studentId: string;
+    schoolYearId: string;
+    overrideTotalAmount?: number;
+    discountAmount?: number;
+    reason: string;
+    grantedByUserId: string;
+    actorRole: string;
+  }) {
+    return this.repository.db.transaction(async (tx) => {
+      const repository = new FinanceRepository(tx as FinanceDb);
+      const service = new FinanceService(repository);
+      const current = await repository.getActiveTuitionOverride(input.studentId, input.schoolYearId);
+      if (!current) {
+        throw new FinanceModuleError('Aucun ajustement actif à modifier pour cet élève.', 404, 'TUITION_OVERRIDE_NOT_FOUND');
+      }
+      const context = await service.getAmountDue(input.studentId, input.schoolYearId);
+      if (input.discountAmount !== undefined && input.discountAmount > context.planTotalAmount) {
+        throw new FinanceModuleError('La remise ne peut pas dépasser le montant du plan de scolarité.', 400, 'DISCOUNT_EXCEEDS_TUITION');
+      }
+      const adjustedTuitionAmount = input.overrideTotalAmount ?? Math.max(0, context.planTotalAmount - (input.discountAmount ?? 0));
+      const confirmedPaid = await repository.getConfirmedPaid(input.studentId, input.schoolYearId);
+      if (confirmedPaid > adjustedTuitionAmount) {
+        throw new FinanceModuleError('Cette modification créerait un trop-perçu. Traitez d’abord le remboursement, l’avoir ou la réaffectation comptable.', 409, 'TUITION_OVERRIDE_REPLACEMENT_OVERPAYMENT');
+      }
+      const schedule = await repository.getStudentTuitionScheduleAgreement(input.studentId, input.schoolYearId);
+      if (schedule && !isValidCumulativeSchedule(schedule.scheduleSteps, adjustedTuitionAmount)) {
+        throw new FinanceModuleError('Modifiez ou réinitialisez d’abord l’échéancier négocié : son total ne correspondrait plus à cet ajustement.', 409, 'STUDENT_SCHEDULE_TOTAL_MISMATCH');
+      }
+      const closureReason = `Remplacé : ${input.reason}`;
+      const withdrawn = await repository.withdrawTuitionOverride(current.id, input.grantedByUserId, closureReason);
+      if (!withdrawn) throw new FinanceModuleError('Cet ajustement a été modifié entre-temps. Actualisez le registre.', 409, 'TUITION_OVERRIDE_CONCURRENT_UPDATE');
+      const override = await repository.createTuitionOverride(input);
+      await repository.recordTuitionOverrideAudit({
+        actorUserId: input.grantedByUserId, actorRole: input.actorRole,
+        action: 'tuition.override.withdrawn', before: overrideAuditPayload(current), after: overrideAuditPayload(withdrawn, closureReason),
+      });
+      await repository.recordTuitionOverrideAudit({
+        actorUserId: input.grantedByUserId, actorRole: input.actorRole,
+        action: 'tuition.override.created', before: overrideAuditPayload(current), after: overrideAuditPayload(override as TuitionOverride),
+      });
+      await new FinancialCacheService(new FinancialCacheRepository(tx as FinanceDb)).recalcStudent(input.studentId, input.schoolYearId);
+      return { override };
+    });
   }
 
   async previewTuitionOverrideWithdrawal(studentId: string, schoolYearId: string) {
@@ -677,7 +731,7 @@ export class FinanceService {
       if (preview.schedule.present && !preview.schedule.compatible && input.scheduleResolution === 'keep') throw new FinanceModuleError('L’échéancier négocié doit être remplacé ou abandonné avant le retrait.', 409, 'STUDENT_SCHEDULE_TOTAL_MISMATCH');
       if (preview.schedule.present && !preview.schedule.compatible && input.scheduleResolution === 'replace') {
         if (!input.installments) throw new FinanceModuleError('Un nouvel échéancier complet est requis.', 400, 'REPLACEMENT_SCHEDULE_REQUIRED');
-        await service.replaceStudentTuitionSchedule({ studentId: input.studentId, schoolYearId: input.schoolYearId, reason: input.reason, actorUserId: input.actorUserId, actorRole: input.actorRole, installments: input.installments });
+        await service.replaceStudentTuitionSchedule({ studentId: input.studentId, schoolYearId: input.schoolYearId, reason: input.reason, actorUserId: input.actorUserId, actorRole: input.actorRole, installments: input.installments, targetTuitionAmount: preview.restoredTuitionAmount });
       } else if (preview.schedule.present && !preview.schedule.compatible && input.scheduleResolution === 'reset') {
         await service.deleteStudentTuitionSchedule({ studentId: input.studentId, schoolYearId: input.schoolYearId, reason: input.reason, actorUserId: input.actorUserId, actorRole: input.actorRole });
       }
@@ -692,12 +746,16 @@ export class FinanceService {
   async getStudentTuitionSchedule(studentId: string, schoolYearId: string, includeReason = true) {
     const due = await this.getAmountDue(studentId, schoolYearId);
     const agreement = await this.repository.getStudentTuitionScheduleAgreement(studentId, schoolYearId);
+    const confirmedPaid = await this.repository.getConfirmedPaid(studentId, schoolYearId);
+    const remainingToPlan = Math.max(0, Math.round((due.tuitionDue - confirmedPaid) * 100) / 100);
     return {
       agreement: agreement && (includeReason ? agreement : (() => {
         const { reason: _reason, ...metadata } = agreement;
         return metadata;
       })()),
       totalTuitionAmount: due.tuitionDue,
+      confirmedPaid,
+      remainingToPlan,
       currency: due.currency,
     };
   }
@@ -709,14 +767,27 @@ export class FinanceService {
     actorUserId: string;
     actorRole: string;
     installments: Array<{ dueDate: string; amount: number }>;
+    /** Used only by the atomic C46 withdrawal flow, before the override is archived. */
+    targetTuitionAmount?: number;
   }) {
-    return this.repository.db.transaction(async (tx) => {
+    try {
+      return await this.repository.db.transaction(async (tx) => {
       const repository = new FinanceRepository(tx as FinanceDb);
       const due = await new FinanceService(repository).getAmountDue(input.studentId, input.schoolYearId);
       const schoolYear = await repository.getSchoolYearDateRange(input.schoolYearId);
       if (!schoolYear) throw new FinanceModuleError('Année scolaire introuvable.', 404, 'SCHOOL_YEAR_NOT_FOUND');
-      const scheduleSteps = toCumulativeScheduleSteps(input.installments);
-      const datesAreInSchoolYear = scheduleSteps.every((step) =>
+      const tuitionAmount = input.targetTuitionAmount ?? due.tuitionDue;
+      const confirmedPaid = await repository.getConfirmedPaid(input.studentId, input.schoolYearId);
+      const remainingToPlan = Math.max(0, Math.round((tuitionAmount - confirmedPaid) * 100) / 100);
+      if (remainingToPlan <= 0) {
+        throw new FinanceModuleError(
+          'Aucun reste à planifier : les paiements confirmés couvrent déjà les frais de scolarité.',
+          409,
+          'STUDENT_SCHEDULE_NOTHING_REMAINING'
+        );
+      }
+      const requestedScheduleSteps = toCumulativeScheduleSteps(input.installments);
+      const datesAreInSchoolYear = requestedScheduleSteps.every((step) =>
         step.dueDate >= schoolYear.startDate && step.dueDate <= schoolYear.endDate
       );
       if (!datesAreInSchoolYear) {
@@ -726,9 +797,20 @@ export class FinanceService {
           'STUDENT_SCHEDULE_DATE_OUTSIDE_SCHOOL_YEAR'
         );
       }
-      if (!isValidCumulativeSchedule(scheduleSteps, due.tuitionDue)) {
+      if (!isValidCumulativeSchedule(requestedScheduleSteps, remainingToPlan)) {
         throw new FinanceModuleError(
-          'Les échéances doivent être ordonnées, strictement positives et couvrir exactement les frais de scolarité.',
+          `Les échéances doivent être ordonnées, strictement positives et couvrir exactement le reste à planifier (${remainingToPlan} FCFA).`,
+          400,
+          'INVALID_STUDENT_NEGOTIATED_SCHEDULE'
+        );
+      }
+      const scheduleSteps = requestedScheduleSteps.map((step) => ({
+        dueDate: step.dueDate,
+        cumulativeAmountExpected: Math.round((confirmedPaid + step.cumulativeAmountExpected) * 100) / 100,
+      }));
+      if (!isValidCumulativeSchedule(scheduleSteps, tuitionAmount)) {
+        throw new FinanceModuleError(
+          'L’échéancier ne peut pas réintégrer un montant déjà encaissé.',
           400,
           'INVALID_STUDENT_NEGOTIATED_SCHEDULE'
         );
@@ -747,8 +829,18 @@ export class FinanceService {
       });
       await new FinancialCacheService(new FinancialCacheRepository(tx as FinanceDb))
         .recalcStudent(input.studentId, input.schoolYearId);
-      return { agreement, totalTuitionAmount: due.tuitionDue, currency: due.currency };
-    });
+        return { agreement, totalTuitionAmount: tuitionAmount, confirmedPaid, remainingToPlan, currency: due.currency };
+      });
+    } catch (error) {
+      if ((error as { code?: string }).code === '23505') {
+        throw new FinanceModuleError(
+          'Cet échéancier a été modifié par un autre utilisateur. Actualisez le registre avant de réessayer.',
+          409,
+          'STUDENT_SCHEDULE_CONCURRENT_UPDATE'
+        );
+      }
+      throw error;
+    }
   }
 
   async deleteStudentTuitionSchedule(input: {
@@ -757,7 +849,7 @@ export class FinanceService {
     return this.repository.db.transaction(async (tx) => {
       const repository = new FinanceRepository(tx as FinanceDb);
       await new FinanceService(repository).getAmountDue(input.studentId, input.schoolYearId);
-      const deletedAgreement = await repository.deleteStudentTuitionSchedule(input.studentId, input.schoolYearId);
+      const deletedAgreement = await repository.deleteStudentTuitionSchedule(input.studentId, input.schoolYearId, input.actorUserId, input.reason);
       if (deletedAgreement) {
         await repository.recordStudentTuitionScheduleAudit({
           actorUserId: input.actorUserId,

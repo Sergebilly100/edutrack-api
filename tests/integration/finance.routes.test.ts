@@ -436,6 +436,27 @@ describe('finance routes integration', () => {
     });
     expect(response.status).toBe(201);
 
+    const register = await request()
+      .get(`/api/v1/finance/agreements?school_year_id=${context.schoolYearId}&kind=overrides&status=all&page=1&limit=20`)
+      .set(context.headers);
+    expect(register.status, JSON.stringify(register.body)).toBe(200);
+    expect(register.body.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: response.body.override.id, student_id: context.studentId, status: 'active' }),
+    ]));
+    expect(register.body.pagination).toMatchObject({ page: 1, limit: 20 });
+
+    const summary = await request()
+      .get(`/api/v1/finance/financial-summary?school_year_id=${context.schoolYearId}`)
+      .set(context.headers);
+    expect(summary.status, JSON.stringify(summary.body)).toBe(200);
+    expect(summary.body.agreementMetrics).toMatchObject({ activeOverrides: 1, activeSchedules: 0 });
+
+    const detail = await request()
+      .get(`/api/v1/finance/agreements/overrides/${response.body.override.id}`)
+      .set(context.headers);
+    expect(detail.status, JSON.stringify(detail.body)).toBe(200);
+    expect(detail.body.agreement).toMatchObject({ id: response.body.override.id, reason: 'Soutien exceptionnel validé' });
+
     const notifications = await queryTenant<{ related_id: string; metadata: { event?: string } }>(`
       SELECT related_id::text, metadata
       FROM ${tenantTable('notifications_log')}
@@ -443,6 +464,27 @@ describe('finance routes integration', () => {
     `, [response.body.override.id]);
     expect(notifications).toHaveLength(1);
     expect(notifications[0]!.metadata.event).toBe('tuition_discount_granted');
+
+    const replacement = await request()
+      .put(`/api/v1/tuition/overrides/${context.studentId}`)
+      .set(context.headers)
+      .send({
+        studentId: context.studentId,
+        schoolYearId: context.schoolYearId,
+        discountAmount: 15_000,
+        reason: 'Remise révisée après étude du dossier',
+      });
+    expect(replacement.status, JSON.stringify(replacement.body)).toBe(200);
+
+    const replacementRegister = await request()
+      .get(`/api/v1/finance/agreements?school_year_id=${context.schoolYearId}&kind=overrides&status=all&page=1&limit=20`)
+      .set(context.headers);
+    expect(replacementRegister.status, JSON.stringify(replacementRegister.body)).toBe(200);
+    expect(replacementRegister.body.entries.filter((entry: { status: string }) => entry.status === 'active')).toHaveLength(1);
+    expect(replacementRegister.body.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: response.body.override.id, status: 'withdrawn' }),
+      expect.objectContaining({ id: replacement.body.override.id, status: 'active', discount_amount: 15_000 }),
+    ]));
   });
 
   it('enregistre un échéancier négocié complet et audité, recalcule son statut, puis revient au plan commun', async () => {
@@ -464,6 +506,30 @@ describe('finance routes integration', () => {
       { dueDate: isoDate(-1), cumulativeAmountExpected: 15_000 },
       { dueDate: isoDate(30), cumulativeAmountExpected: 100_000 },
     ]);
+
+    const scheduleDetail = await request()
+      .get(`/api/v1/finance/agreements/schedules/${saved.body.agreement.id}`)
+      .set(context.headers);
+    expect(scheduleDetail.status, JSON.stringify(scheduleDetail.body)).toBe(200);
+    expect(scheduleDetail.body.agreement).toMatchObject({
+      id: saved.body.agreement.id,
+      kind: 'schedule',
+      reason: 'Accord documenté avec le parent',
+      schedule_steps: saved.body.agreement.scheduleSteps,
+    });
+    expect(scheduleDetail.body.agreement.created_by_name).toEqual(expect.any(String));
+
+    const scheduleRegister = await request()
+      .get(`/api/v1/finance/agreements?school_year_id=${context.schoolYearId}&kind=schedules&status=all&page=1&limit=20`)
+      .set(context.headers);
+    expect(scheduleRegister.status, JSON.stringify(scheduleRegister.body)).toBe(200);
+    expect(scheduleRegister.body.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: saved.body.agreement.id,
+        active_discount_amount: 0,
+        created_by_name: expect.any(String),
+      }),
+    ]));
 
     const [readOnlyPosition] = await queryTenant<{ id: string }>(`
       INSERT INTO ${tenantTable('admin_positions')} (name, permissions, created_by)
@@ -549,6 +615,43 @@ describe('finance routes integration', () => {
     expect(status.body.financialStatus).toMatchObject({
       cumulativeExpectedAtDate: 60_000,
       standing: 'late',
+    });
+
+    const remainingToPlan = await request()
+      .get(`/api/v1/tuition/student-schedules/${context.studentId}?school_year_id=${context.schoolYearId}`)
+      .set(context.headers);
+    expect(remainingToPlan.status, JSON.stringify(remainingToPlan.body)).toBe(200);
+    expect(remainingToPlan.body).toMatchObject({
+      totalTuitionAmount: 100_000,
+      confirmedPaid: 20_000,
+      remainingToPlan: 80_000,
+    });
+
+    const wrongRemainingSchedule = await request()
+      .put(`/api/v1/tuition/student-schedules/${context.studentId}`)
+      .set(context.headers)
+      .send({
+        schoolYearId: context.schoolYearId,
+        reason: 'Ne doit pas reprogrammer le paiement déjà encaissé',
+        installments: [{ dueDate: isoDate(45), amount: 100_000 }],
+      });
+    expect(wrongRemainingSchedule.status, JSON.stringify(wrongRemainingSchedule.body)).toBe(400);
+    expect(wrongRemainingSchedule.body.code).toBe('INVALID_STUDENT_NEGOTIATED_SCHEDULE');
+
+    const remainingSchedule = await request()
+      .put(`/api/v1/tuition/student-schedules/${context.studentId}`)
+      .set(context.headers)
+      .send({
+        schoolYearId: context.schoolYearId,
+        reason: 'Planification du seul reste à payer',
+        installments: [{ dueDate: isoDate(45), amount: 80_000 }],
+      });
+    expect(remainingSchedule.status, JSON.stringify(remainingSchedule.body)).toBe(200);
+    expect(remainingSchedule.body).toMatchObject({
+      totalTuitionAmount: 100_000,
+      confirmedPaid: 20_000,
+      remainingToPlan: 80_000,
+      agreement: { scheduleSteps: [{ dueDate: isoDate(45), cumulativeAmountExpected: 100_000 }] },
     });
   });
 });

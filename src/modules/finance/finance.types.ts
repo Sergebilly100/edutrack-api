@@ -70,9 +70,19 @@ export const agreementsRegisterQuerySchema = z.object({
   school_year_id: uuidSchema,
   kind: z.enum(['overrides', 'schedules']).default('overrides'),
   search: z.string().trim().max(120).optional(),
-  status: z.enum(['active', 'withdrawn', 'all']).default('all'),
+  student_id: uuidSchema.optional(),
+  class_id: uuidSchema.optional(),
+  level_id: uuidSchema.optional(),
+  from: z.string().date().optional(),
+  to: z.string().date().optional(),
+  status: z.enum(['active', 'withdrawn', 'replaced', 'reset', 'all']).default('all'),
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export const agreementDetailParamsSchema = z.object({
+  kind: z.enum(['overrides', 'schedules']),
+  agreementId: uuidSchema,
 });
 
 export const recordPaymentBodySchema = z.object({

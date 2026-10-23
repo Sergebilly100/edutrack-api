@@ -131,6 +131,7 @@ export class FinancialAlertsRepository {
                INNER JOIN student_tuition_schedule_agreements agreement ON agreement.id = stss.agreement_id
                WHERE agreement.student_id = s.id
                  AND agreement.school_year_id = sfs.school_year_id
+                 AND agreement.status = 'active'
                  AND sfs.total_paid < LEAST(stss.cumulative_amount_expected, sfs.total_due_year)
                  AND stss.due_date > CURRENT_DATE
                  AND stss.due_date <= CURRENT_DATE + r.days_offset
@@ -141,6 +142,7 @@ export class FinancialAlertsRepository {
                  FROM student_tuition_schedule_agreements agreement
                  WHERE agreement.student_id = s.id
                    AND agreement.school_year_id = sfs.school_year_id
+                  AND agreement.status = 'active'
                )
                AND EXISTS (
                  SELECT 1

@@ -104,6 +104,7 @@ export class FinancialCacheRepository {
         INNER JOIN student_tuition_schedule_agreements agreement ON agreement.id = stss.agreement_id
         WHERE agreement.student_id = scope.student_id
           AND agreement.school_year_id = ${schoolYearId}::uuid
+          AND agreement.status = 'active'
       ) custom_steps ON true
       LEFT JOIN LATERAL (
         SELECT MAX(tss.cumulative_amount_expected) FILTER (WHERE tss.due_date <= CURRENT_DATE) AS expected_to_date,
@@ -438,7 +439,7 @@ export class FinancialCacheRepository {
                individual.due_date, individual.cumulative_amount_expected, school_year.as_of_date
         FROM eligible_students eligible
         INNER JOIN student_tuition_schedule_agreements agreement
-          ON agreement.student_id = eligible.student_id AND agreement.school_year_id = ${schoolYearId}::uuid
+          ON agreement.student_id = eligible.student_id AND agreement.school_year_id = ${schoolYearId}::uuid AND agreement.status = 'active'
         INNER JOIN student_tuition_schedule_steps individual ON individual.agreement_id = agreement.id
         CROSS JOIN school_year
         WHERE individual.due_date BETWEEN school_year.start_date AND school_year.end_date
@@ -452,7 +453,7 @@ export class FinancialCacheRepository {
         CROSS JOIN school_year
         WHERE NOT EXISTS (
           SELECT 1 FROM student_tuition_schedule_agreements agreement
-          WHERE agreement.student_id = eligible.student_id AND agreement.school_year_id = ${schoolYearId}::uuid
+          WHERE agreement.student_id = eligible.student_id AND agreement.school_year_id = ${schoolYearId}::uuid AND agreement.status = 'active'
         )
           AND standard.due_date BETWEEN school_year.start_date AND school_year.end_date
       ), ordered_steps AS (

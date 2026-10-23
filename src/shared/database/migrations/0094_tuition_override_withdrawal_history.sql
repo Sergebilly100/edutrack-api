@@ -1,4 +1,4 @@
-ALTER TABLE "tenant"."student_tuition_overrides" DROP CONSTRAINT "student_tuition_overrides_student_year_unique";--> statement-breakpoint
+ALTER TABLE "tenant"."student_tuition_overrides" DROP CONSTRAINT IF EXISTS "student_tuition_overrides_student_year_unique";--> statement-breakpoint
 ALTER TABLE "tenant"."student_tuition_overrides" ADD COLUMN "status" varchar(20) DEFAULT 'active' NOT NULL;--> statement-breakpoint
 ALTER TABLE "tenant"."student_tuition_overrides" ADD COLUMN "withdrawn_at" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "tenant"."student_tuition_overrides" ADD COLUMN "withdrawn_by_user_id" uuid;--> statement-breakpoint

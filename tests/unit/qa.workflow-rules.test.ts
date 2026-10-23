@@ -90,7 +90,7 @@ describe('F15/F20 — frontières des calculs financiers', () => {
     const first = { dueDate: '2026-10-01', cumulativeAmountExpected: 30_000 };
     expect(isValidCumulativeSchedule([first, { ...first, cumulativeAmountExpected: 40_000 }], 100_000)).toBe(false);
     expect(isValidCumulativeSchedule([first, { dueDate: '2026-11-01', cumulativeAmountExpected: 20_000 }], 100_000)).toBe(false);
-    expect(isValidCumulativeSchedule([first, { dueDate: '2026-11-01', cumulativeAmountExpected: 30_000 }], 100_000)).toBe(true);
+    expect(isValidCumulativeSchedule([first, { dueDate: '2026-11-01', cumulativeAmountExpected: 100_000 }], 100_000)).toBe(true);
     expect(isValidCumulativeSchedule([], 100_000)).toBe(false);
   });
 });
