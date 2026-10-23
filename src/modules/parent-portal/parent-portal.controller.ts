@@ -12,6 +12,7 @@ import {
 import {
   parentAbsencesQuerySchema,
   parentChangePasswordSchema,
+  parentGradesQuerySchema,
   parentNotificationParamsSchema,
   parentNotificationsQuerySchema,
   parentScheduleQuerySchema,
@@ -136,6 +137,25 @@ export default async function parentPortalController(app: FastifyInstance): Prom
           { parentId: request.parentId!, allowedStudentIds: request.allowedStudentIds ?? [] }
         );
       });
+      return reply.send(result);
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
+  app.get('/api/v1/parent/students/:studentId/grades', { preHandler: requireParent }, async (request, reply) => {
+    try {
+      const { studentId } = parentStudentIdParamsSchema.parse(request.params ?? {});
+      checkStudentAccess(request, studentId);
+      const query = parentGradesQuerySchema.parse(request.query ?? {});
+
+      const claims = request.claims!;
+      const result = await withTenantSchema(claims.schemaName, async (tenantDb) =>
+        buildParentPortalService(tenantDb).getStudentGrades(
+          { studentId, gradingPeriodId: query.gradingPeriodId },
+          { parentId: request.parentId!, allowedStudentIds: request.allowedStudentIds ?? [] }
+        )
+      );
       return reply.send(result);
     } catch (error) {
       return handleError(reply, error);

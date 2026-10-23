@@ -3,7 +3,13 @@ import { resolveScheduleSubjectDisplay } from '../../shared/utils/schedule-subje
 
 import { ParentPortalRepository } from './parent-portal.repository.js';
 import type { TenantDb } from './parent-portal.repository.js';
-import type { ParentNotification, ParentStudentSummary, ParentSubscriptionStatus } from './parent-portal.types.js';
+import type {
+  ParentGradeEvaluation,
+  ParentGradeSubject,
+  ParentNotification,
+  ParentStudentSummary,
+  ParentSubscriptionStatus,
+} from './parent-portal.types.js';
 
 type ServiceContext = {
   parentId: string;
@@ -265,6 +271,100 @@ export class ParentPortalService {
       monthStart,
       monthEnd,
     });
+  }
+
+  async getStudentGrades(input: {
+    studentId: string;
+    gradingPeriodId?: string;
+  }, context: ServiceContext) {
+    await this.assertStudentAccess(input.studentId, context);
+
+    const gradeContext = await this.repository.getStudentActiveGradeContext(input.studentId);
+    if (!gradeContext) {
+      throw new ParentPortalError('Student not found', 404, 'STUDENT_NOT_FOUND');
+    }
+
+    const periods = await this.repository.listGradePeriods(gradeContext.schoolYearId);
+    if (input.gradingPeriodId && !periods.some((period) => period.id === input.gradingPeriodId)) {
+      throw new ParentPortalError('Grading period not found', 404, 'GRADING_PERIOD_NOT_FOUND');
+    }
+
+    const selectedPeriod = input.gradingPeriodId
+      ? periods.find((period) => period.id === input.gradingPeriodId) ?? null
+      : periods.find((period) => period.isCurrent) ?? periods[0] ?? null;
+
+    if (!selectedPeriod) {
+      return {
+        schoolYear: { id: gradeContext.schoolYearId, label: gradeContext.schoolYearLabel },
+        periods: [],
+        selectedGradingPeriodId: null,
+        subjects: [],
+        conductGrade: null,
+        resultsInRevision: false,
+      };
+    }
+
+    const [subjectRows, conductGrade, resultsInRevision] = await Promise.all([
+      this.repository.listCompletedSubjectGrades({
+        studentId: input.studentId,
+        classId: gradeContext.classId,
+        schoolYearId: gradeContext.schoolYearId,
+        gradingPeriodId: selectedPeriod.id,
+      }),
+      this.repository.getStudentConductGrade({
+        studentId: input.studentId,
+        classId: gradeContext.classId,
+        schoolYearId: gradeContext.schoolYearId,
+        gradingPeriodId: selectedPeriod.id,
+      }),
+      this.repository.hasApprovedGradeRevision({
+        classId: gradeContext.classId,
+        gradingPeriodId: selectedPeriod.id,
+      }),
+    ]);
+
+    const subjectsById = new Map<string, ParentGradeSubject>();
+    for (const row of subjectRows) {
+      let subject = subjectsById.get(row.id);
+      if (!subject) {
+        subject = {
+          id: row.id,
+          name: row.name,
+          average: row.average,
+          evaluations: [],
+        };
+        subjectsById.set(row.id, subject);
+      }
+
+      if (
+        row.evaluationId &&
+        row.evaluationLabel &&
+        row.evaluationType &&
+        row.coefficient !== null &&
+        row.score !== null &&
+        row.maxScore !== null
+      ) {
+        const evaluation: ParentGradeEvaluation = {
+          id: row.evaluationId,
+          label: row.evaluationLabel,
+          date: row.evaluationDate,
+          type: row.evaluationType,
+          coefficient: row.coefficient,
+          score: row.score,
+          maxScore: row.maxScore,
+        };
+        subject.evaluations.push(evaluation);
+      }
+    }
+
+    return {
+      schoolYear: { id: gradeContext.schoolYearId, label: gradeContext.schoolYearLabel },
+      periods: periods.map(({ id, label }) => ({ id, label })),
+      selectedGradingPeriodId: selectedPeriod.id,
+      subjects: [...subjectsById.values()],
+      conductGrade,
+      resultsInRevision,
+    };
   }
 
   /** Vue d'ensemble enrichie (17b) : finances + dernier bulletin publié, par enfant. */

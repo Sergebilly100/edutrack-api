@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
+import { randomUUID } from 'node:crypto';
 
 import { signAccessToken } from '../../src/modules/auth/auth.service.js';
 import { ParentPortalRepository } from '../../src/modules/parent-portal/parent-portal.repository.js';
@@ -715,5 +716,200 @@ describe('report-cards routes (5c)', () => {
     const ownPdf = await request().post(`/api/v1/parent/students/${studentAId}/report-cards/${newCardId}/pdf`)
       .set(parentHeaders);
     expect(ownPdf.status).toBe(202);
+  });
+
+  it('sert uniquement les notes validées du parent et masque la matière rouverte', async () => {
+    const context = getSeedContext();
+    const parentId = randomUUID();
+    await queryTenant(
+      `INSERT INTO ${tenantTable('parents')} (id, full_name, phone, password_hash, must_change_password)
+       VALUES ($1::uuid, 'Parent C45', $2, 'not-used-by-test', false)`,
+      [parentId, `22507${Date.now().toString().slice(-8)}`]
+    );
+    await queryTenant(
+      `INSERT INTO ${tenantTable('parent_student_links')} (parent_id, student_id)
+       VALUES ($1::uuid, $2::uuid)`,
+      [parentId, studentAId]
+    );
+
+    const periodId = (await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('grading_periods')}
+       (school_year_id, type, order_index, label, start_date, review_start_date, end_date)
+       SELECT $1::uuid, 'trimester', COALESCE(MAX(order_index), 0) + 1, $2,
+         CURRENT_DATE - 1, CURRENT_DATE, CURRENT_DATE + 30
+       FROM ${tenantTable('grading_periods')} WHERE school_year_id = $1::uuid
+       RETURNING id::text`,
+      [yearId, `C45 ${suffix}`]
+    ))[0]!.id;
+    await queryTenant(
+      `INSERT INTO ${tenantTable('conduct_grades')}
+       (student_id, grading_period_id, note, coefficient, decided_by_user_id)
+       VALUES ($1::uuid, $2::uuid, 13.75, 1, $3::uuid)`,
+      [studentAId, periodId, context.directorUserId]
+    );
+    await queryTenant(
+      `INSERT INTO ${tenantTable('class_subject_completion')}
+       (class_id, subject_id, grading_period_id, status, completed_at)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 'completed', NOW()),
+              ($1::uuid, $4::uuid, $3::uuid, 'completed', NOW())`,
+      [classId, subjectMathsId, periodId, subjectFrenchId]
+    );
+    await seedAverage(studentAId, periodId, subjectMathsId, 15);
+    await seedAverage(studentAId, periodId, subjectFrenchId, 12);
+
+    const scheduledEvaluationId = (await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('evaluations')}
+       (subject_id, class_id, grading_period_id, teacher_id, type, coefficient, label, evaluation_date)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'scheduled', 2, 'Composition surveillée', CURRENT_DATE)
+       RETURNING id::text`,
+      [subjectMathsId, classId, periodId, context.teacherId]
+    ))[0]!.id;
+    await queryTenant(
+      `INSERT INTO ${tenantTable('evaluation_grades')}
+       (evaluation_id, student_id, score, max_score, comment)
+       VALUES ($1::uuid, $2::uuid, 8, 10, 'Commentaire strictement privé'),
+              ($1::uuid, $3::uuid, 4, 10, 'Note d’un autre enfant')`,
+      [scheduledEvaluationId, studentAId, studentBId]
+    );
+    const frenchEvaluationId = (await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('evaluations')}
+       (subject_id, class_id, grading_period_id, teacher_id, type, coefficient, label, evaluation_date)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'scheduled', 1, 'Dictée', CURRENT_DATE)
+       RETURNING id::text`,
+      [subjectFrenchId, classId, periodId, context.teacherId]
+    ))[0]!.id;
+    await queryTenant(
+      `INSERT INTO ${tenantTable('evaluation_grades')}
+       (evaluation_id, student_id, score, max_score, comment)
+       VALUES ($1::uuid, $2::uuid, 12, 20, 'Commentaire privé français')`,
+      [frenchEvaluationId, studentAId]
+    );
+    const spontaneousEvaluationId = (await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('evaluations')}
+       (subject_id, class_id, grading_period_id, teacher_id, type, coefficient, label, evaluation_date)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'spontaneous', 1, 'Note spontanée -1', CURRENT_DATE)
+       RETURNING id::text`,
+      [subjectMathsId, classId, periodId, context.teacherId]
+    ))[0]!.id;
+    await queryTenant(
+      `INSERT INTO ${tenantTable('evaluation_grades')}
+       (evaluation_id, student_id, score, max_score, comment)
+       VALUES ($1::uuid, $2::uuid, 1, 20, 'Ajustement privé')`,
+      [spontaneousEvaluationId, studentAId]
+    );
+
+    const parentToken = await signAccessToken({
+      sub: parentId,
+      role: 'parent',
+      schemaName: TEST_SCHEMA_NAME,
+      studentIds: [studentAId],
+    });
+    const parentAuth = { authorization: `Bearer ${parentToken}`, 'x-tenant-schema': TEST_SCHEMA_NAME };
+    const unauthenticated = await request().get(`/api/v1/parent/students/${studentAId}/grades`);
+    expect(unauthenticated.status).toBe(401);
+
+    const defaultPeriod = await request()
+      .get(`/api/v1/parent/students/${studentAId}/grades`)
+      .set(parentAuth);
+    expect(defaultPeriod.status).toBe(200);
+    expect(defaultPeriod.body.selectedGradingPeriodId).toBe(periodId);
+    expect(defaultPeriod.body.conductGrade).toBe(13.75);
+
+    const response = await request()
+      .get(`/api/v1/parent/students/${studentAId}/grades`)
+      .query({ gradingPeriodId: periodId })
+      .set(parentAuth);
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(response.body.selectedGradingPeriodId).toBe(periodId);
+    expect(response.body.subjects.map((subject: { name: string }) => subject.name)).toEqual(['Français RC', 'Maths RC']);
+    const maths = response.body.subjects.find((subject: { id: string }) => subject.id === subjectMathsId);
+    expect(maths).toEqual({
+      id: subjectMathsId,
+      name: 'Maths RC',
+      average: 15,
+      evaluations: [
+        expect.objectContaining({
+          label: 'Composition surveillée',
+          type: 'scheduled',
+          coefficient: 2,
+          score: 8,
+          maxScore: 10,
+        }),
+        expect.objectContaining({
+          label: 'Note spontanée -1',
+          type: 'spontaneous',
+          coefficient: 1,
+          score: -1,
+          maxScore: 20,
+        }),
+      ],
+    });
+    expect(JSON.stringify(response.body)).not.toMatch(/Commentaire strictement privé|Commentaire privé français|Note d’un autre enfant|Ajustement privé|rank|audit|reason/i);
+
+    const foreignPeriod = await request()
+      .get(`/api/v1/parent/students/${studentAId}/grades`)
+      .query({ gradingPeriodId: randomUUID() })
+      .set(parentAuth);
+    expect(foreignPeriod.status).toBe(404);
+    expect(foreignPeriod.body.code).toBe('GRADING_PERIOD_NOT_FOUND');
+
+    const forgedStudentToken = await signAccessToken({
+      sub: parentId,
+      role: 'parent',
+      schemaName: TEST_SCHEMA_NAME,
+      studentIds: [studentBId],
+    });
+    const unlinkedStudent = await request()
+      .get(`/api/v1/parent/students/${studentBId}/grades`)
+      .set({ authorization: `Bearer ${forgedStudentToken}`, 'x-tenant-schema': TEST_SCHEMA_NAME });
+    expect(unlinkedStudent.status).toBe(403);
+    expect(unlinkedStudent.body.code).toBe('STUDENT_ACCESS_DENIED');
+
+    const claimId = (await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('report_card_claims')}
+       (class_id, student_id, subject_id, grading_period_id, requested_by_user_id, reason, status, phase)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'raison confidentielle', 'approved', 'published')
+       RETURNING id::text`,
+      [classId, studentAId, subjectMathsId, periodId, context.directorUserId]
+    ))[0]!.id;
+    await queryTenant(
+      `UPDATE ${tenantTable('class_subject_completion')}
+       SET status = 'in_progress', completed_at = NULL
+       WHERE class_id = $1::uuid AND subject_id = $2::uuid AND grading_period_id = $3::uuid`,
+      [classId, subjectMathsId, periodId]
+    );
+    const inRevision = await request()
+      .get(`/api/v1/parent/students/${studentAId}/grades`)
+      .query({ gradingPeriodId: periodId })
+      .set(parentAuth);
+    expect(inRevision.status).toBe(200);
+    expect(inRevision.body.subjects.map((subject: { name: string }) => subject.name)).toEqual(['Français RC']);
+    expect(inRevision.body.resultsInRevision).toBe(true);
+    expect(JSON.stringify(inRevision.body)).not.toMatch(/Maths RC|raison confidentielle|approved|claimId/i);
+
+    await queryTenant(
+      `UPDATE ${tenantTable('class_subject_completion')}
+       SET status = 'completed', completed_at = NOW()
+       WHERE class_id = $1::uuid AND subject_id = $2::uuid AND grading_period_id = $3::uuid`,
+      [classId, subjectMathsId, periodId]
+    );
+    await queryTenant(`UPDATE ${tenantTable('report_card_claims')} SET status = 'corrected' WHERE id = $1::uuid`, [claimId]);
+    await queryTenant(
+      `UPDATE ${tenantTable('evaluation_grades')} SET score = 9
+       WHERE evaluation_id = $1::uuid AND student_id = $2::uuid`,
+      [scheduledEvaluationId, studentAId]
+    );
+    await queryTenant(
+      `UPDATE ${tenantTable('student_period_averages')}
+       SET average = 17 WHERE student_id = $1::uuid AND subject_id = $2::uuid AND grading_period_id = $3::uuid`,
+      [studentAId, subjectMathsId, periodId]
+    );
+    const revalidated = await request()
+      .get(`/api/v1/parent/students/${studentAId}/grades`)
+      .query({ gradingPeriodId: periodId })
+      .set(parentAuth);
+    expect(revalidated.body.resultsInRevision).toBe(false);
+    expect(revalidated.body.subjects[0].average).toBe(17);
+    expect(revalidated.body.subjects[0].evaluations[0].score).toBe(9);
   });
 });

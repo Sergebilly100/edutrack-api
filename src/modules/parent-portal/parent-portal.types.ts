@@ -18,6 +18,10 @@ export const parentAbsencesQuerySchema = z.object({
   month: civilMonthSchema,
 });
 
+export const parentGradesQuerySchema = z.object({
+  gradingPeriodId: z.string().uuid().optional(),
+});
+
 export const parentChangePasswordSchema = z.object({
   current_password: z.string().min(1),
   new_password: z
@@ -52,4 +56,35 @@ export type ParentNotification = {
   readAt: string | null;
   studentId: string | null;
   studentName: string | null;
+};
+
+export type ParentGradePeriod = {
+  id: string;
+  label: string;
+};
+
+export type ParentGradeEvaluation = {
+  id: string;
+  label: string;
+  date: string | null;
+  type: 'scheduled' | 'spontaneous';
+  coefficient: number;
+  score: number;
+  maxScore: number;
+};
+
+export type ParentGradeSubject = {
+  id: string;
+  name: string;
+  average: number | null;
+  evaluations: ParentGradeEvaluation[];
+};
+
+export type ParentGradesResponse = {
+  schoolYear: { id: string; label: string };
+  periods: ParentGradePeriod[];
+  selectedGradingPeriodId: string | null;
+  subjects: ParentGradeSubject[];
+  conductGrade: number | null;
+  resultsInRevision: boolean;
 };

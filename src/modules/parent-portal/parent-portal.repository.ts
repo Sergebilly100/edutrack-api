@@ -6,6 +6,32 @@ import { todayInBusinessTimezone } from '../../shared/utils/business-time.js';
 
 export type TenantDb = Pick<NodePgDatabase<Record<string, unknown>>, 'execute'>;
 
+export type ParentGradeContext = {
+  schoolYearId: string;
+  schoolYearLabel: string;
+  classId: string;
+};
+
+export type ParentGradePeriodRow = {
+  id: string;
+  label: string;
+  orderIndex: number;
+  isCurrent: boolean;
+};
+
+export type ParentGradeSubjectRow = {
+  id: string;
+  name: string;
+  average: number | null;
+  evaluationId: string | null;
+  evaluationLabel: string | null;
+  evaluationDate: string | null;
+  evaluationType: 'scheduled' | 'spontaneous' | null;
+  coefficient: number | null;
+  score: number | null;
+  maxScore: number | null;
+};
+
 type ParentRow = {
   id: string;
   phone: string;
@@ -93,6 +119,146 @@ export class ParentPortalRepository {
       SELECT id::text FROM school_years WHERE status = 'active' LIMIT 1
     `);
     return result.rows[0]?.id ?? null;
+  }
+
+  async getStudentActiveGradeContext(studentId: string): Promise<ParentGradeContext | null> {
+    const result = await this.db.execute<ParentGradeContext>(sql`
+      SELECT sy.id::text AS "schoolYearId", sy.label AS "schoolYearLabel", c.id::text AS "classId"
+      FROM students s
+      INNER JOIN enrollments e ON e.student_id = s.id AND e.status = 'confirmed'
+      INNER JOIN school_years sy ON sy.id = e.school_year_id AND sy.status = 'active'
+      INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = sy.id AND c.is_active = true
+      WHERE s.id = ${studentId}::uuid
+        AND s.is_active = true
+        AND s.lifecycle_status = 'active'
+        AND ${confirmedSchoolStudent(sql`s.id`, sql`sy.id`, sql`c.id`)}
+      ORDER BY sy.start_date DESC, e.created_at DESC, c.id::text ASC
+      LIMIT 1
+    `);
+    return result.rows[0] ?? null;
+  }
+
+  async listGradePeriods(schoolYearId: string): Promise<ParentGradePeriodRow[]> {
+    const result = await this.db.execute<{
+      id: string;
+      label: string;
+      order_index: number;
+      is_current: boolean;
+    }>(sql`
+      SELECT id::text, label, order_index,
+        ${todayInBusinessTimezone()}::date BETWEEN start_date AND end_date AS is_current
+      FROM grading_periods
+      WHERE school_year_id = ${schoolYearId}::uuid
+      ORDER BY order_index DESC, start_date DESC, id::text ASC
+    `);
+    return result.rows.map((row) => ({
+      id: row.id,
+      label: row.label,
+      orderIndex: row.order_index,
+      isCurrent: row.is_current,
+    }));
+  }
+
+  async listCompletedSubjectGrades(input: {
+    studentId: string;
+    classId: string;
+    schoolYearId: string;
+    gradingPeriodId: string;
+  }): Promise<ParentGradeSubjectRow[]> {
+    const result = await this.db.execute<ParentGradeSubjectRow>(sql`
+      SELECT subject.id::text AS id, subject.name,
+        average.average::float8 AS average,
+        evaluation.id::text AS "evaluationId",
+        evaluation.label AS "evaluationLabel",
+        evaluation.evaluation_date::text AS "evaluationDate",
+        evaluation.type::text AS "evaluationType",
+        evaluation.coefficient::float8 AS coefficient,
+        CASE
+          WHEN evaluation.type = 'spontaneous' AND evaluation.label LIKE 'Note spontanée -%'
+            THEN -grade.score::float8
+          ELSE grade.score::float8
+        END AS score,
+        grade.max_score::float8 AS "maxScore"
+      FROM class_subject_completion completion
+      INNER JOIN classes c ON c.id = completion.class_id
+        AND c.school_year_id = ${input.schoolYearId}::uuid
+        AND c.is_active = true
+      INNER JOIN subjects subject ON subject.id = completion.subject_id
+        AND subject.level_id = c.level_id
+      INNER JOIN students student ON student.id = ${input.studentId}::uuid
+        AND student.is_active = true
+        AND student.lifecycle_status = 'active'
+      LEFT JOIN student_period_averages average
+        ON average.student_id = student.id
+        AND average.subject_id = subject.id
+        AND average.grading_period_id = completion.grading_period_id
+      LEFT JOIN evaluations evaluation
+        ON evaluation.class_id = c.id
+        AND evaluation.subject_id = subject.id
+        AND evaluation.grading_period_id = completion.grading_period_id
+      LEFT JOIN evaluation_grades grade
+        ON grade.evaluation_id = evaluation.id
+        AND grade.student_id = student.id
+      WHERE completion.class_id = ${input.classId}::uuid
+        AND completion.grading_period_id = ${input.gradingPeriodId}::uuid
+        AND completion.status = 'completed'
+        AND ${confirmedSchoolStudent(sql`student.id`, sql`c.school_year_id`, sql`c.id`)}
+      ORDER BY subject.name ASC, evaluation.evaluation_date ASC NULLS LAST,
+        evaluation.created_at ASC, evaluation.id::text ASC
+    `);
+    return result.rows;
+  }
+
+  async getStudentConductGrade(input: {
+    studentId: string;
+    classId: string;
+    schoolYearId: string;
+    gradingPeriodId: string;
+  }): Promise<number | null> {
+    const result = await this.db.execute<{ note: number }>(sql`
+      SELECT conduct.note::float8 AS note
+      FROM conduct_grades conduct
+      INNER JOIN grading_periods period
+        ON period.id = conduct.grading_period_id
+        AND period.school_year_id = ${input.schoolYearId}::uuid
+      INNER JOIN classes c
+        ON c.id = ${input.classId}::uuid
+        AND c.school_year_id = period.school_year_id
+        AND c.is_active = true
+      INNER JOIN students student
+        ON student.id = conduct.student_id
+        AND student.is_active = true
+        AND student.lifecycle_status = 'active'
+      WHERE conduct.student_id = ${input.studentId}::uuid
+        AND conduct.grading_period_id = ${input.gradingPeriodId}::uuid
+        AND ${confirmedSchoolStudent(sql`student.id`, sql`c.school_year_id`, sql`c.id`)}
+      LIMIT 1
+    `);
+    return result.rows[0]?.note ?? null;
+  }
+
+  async hasApprovedGradeRevision(input: {
+    classId: string;
+    gradingPeriodId: string;
+  }): Promise<boolean> {
+    const result = await this.db.execute<{ in_revision: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1
+        FROM report_card_claims claim
+        INNER JOIN class_subject_completion completion
+          ON completion.class_id = claim.class_id
+          AND completion.subject_id = claim.subject_id
+          AND completion.grading_period_id = claim.grading_period_id
+          AND completion.status = 'in_progress'
+        INNER JOIN classes c ON c.id = claim.class_id
+        INNER JOIN subjects subject ON subject.id = claim.subject_id
+          AND subject.level_id = c.level_id
+        WHERE claim.class_id = ${input.classId}::uuid
+          AND claim.grading_period_id = ${input.gradingPeriodId}::uuid
+          AND claim.status = 'approved'
+      ) AS in_revision
+    `);
+    return result.rows[0]?.in_revision ?? false;
   }
 
   async findParentByPhone(phone: string): Promise<ParentRow | null> {
