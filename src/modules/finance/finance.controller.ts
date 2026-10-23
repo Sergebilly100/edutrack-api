@@ -20,6 +20,7 @@ import {
   cancelPaymentBodySchema,
   createSubscriptionPlanBodySchema,
   grantTuitionOverrideBodySchema,
+  agreementsRegisterQuerySchema,
   withdrawTuitionOverrideBodySchema,
   parentReceiptParamsSchema,
   paymentIdParamsSchema,
@@ -563,6 +564,9 @@ export default async function financeController(
       }));
       return reply.code(201).send(result);
     } catch (error) { return handleError(request, reply, error); }
+  });
+  app.get('/api/v1/finance/agreements', { preHandler: requireAnyPermission(['tuition.view', 'tuition.grant_discount', 'tuition.manage_student_schedule']) }, async (request, reply) => {
+    try { const query = agreementsRegisterQuerySchema.parse(request.query); return reply.send(await withService(request, (service) => service.listAgreementsRegister({ schoolYearId: query.school_year_id, kind: query.kind, search: query.search, status: query.status, page: query.page, limit: query.limit }))); } catch (error) { return handleError(request, reply, error); }
   });
 
   app.get('/api/v1/tuition/overrides/:studentId/withdrawal-preview', { preHandler: requirePermission('tuition.grant_discount') }, async (request, reply) => {

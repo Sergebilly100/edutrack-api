@@ -172,6 +172,9 @@ export class FinanceService {
     const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
     return cache.getInstallmentSummary(schoolYearId);
   }
+  async listAgreementsRegister(input: { schoolYearId: string; kind: 'overrides' | 'schedules'; search?: string; status: 'active' | 'withdrawn' | 'all'; page: number; limit: number }) {
+    return { entries: await this.repository.listAgreementsRegister(input), pagination: { page: input.page, limit: input.limit } };
+  }
 
   async listFinancialRecentPayments(schoolYearId?: string) {
     const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
