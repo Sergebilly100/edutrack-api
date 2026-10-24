@@ -159,15 +159,23 @@ export class ParentPortalRepository {
     }));
   }
 
-  async listCompletedSubjectGrades(input: {
+  async listAvailableSubjectGrades(input: {
     studentId: string;
     classId: string;
     schoolYearId: string;
     gradingPeriodId: string;
   }): Promise<ParentGradeSubjectRow[]> {
     const result = await this.db.execute<ParentGradeSubjectRow>(sql`
+      WITH eligible_students AS (
+        SELECT student.id
+        FROM students student
+        INNER JOIN classes c ON c.id = ${input.classId}::uuid
+        WHERE student.is_active = true
+          AND student.lifecycle_status = 'active'
+          AND ${confirmedSchoolStudent(sql`student.id`, sql`c.school_year_id`, sql`c.id`)}
+      )
       SELECT subject.id::text AS id, subject.name,
-        average.average::float8 AS average,
+        CASE WHEN completion.status = 'completed' THEN average.average::float8 ELSE NULL END AS average,
         evaluation.id::text AS "evaluationId",
         evaluation.label AS "evaluationLabel",
         evaluation.evaluation_date::text AS "evaluationDate",
@@ -179,30 +187,70 @@ export class ParentPortalRepository {
           ELSE grade.score::float8
         END AS score,
         grade.max_score::float8 AS "maxScore"
-      FROM class_subject_completion completion
-      INNER JOIN classes c ON c.id = completion.class_id
-        AND c.school_year_id = ${input.schoolYearId}::uuid
-        AND c.is_active = true
-      INNER JOIN subjects subject ON subject.id = completion.subject_id
-        AND subject.level_id = c.level_id
+      FROM classes c
+      INNER JOIN subjects subject ON subject.level_id = c.level_id
       INNER JOIN students student ON student.id = ${input.studentId}::uuid
         AND student.is_active = true
         AND student.lifecycle_status = 'active'
+        AND ${confirmedSchoolStudent(sql`student.id`, sql`c.school_year_id`, sql`c.id`)}
+      LEFT JOIN class_subject_completion completion
+        ON completion.class_id = c.id
+        AND completion.subject_id = subject.id
+        AND completion.grading_period_id = ${input.gradingPeriodId}::uuid
       LEFT JOIN student_period_averages average
         ON average.student_id = student.id
         AND average.subject_id = subject.id
-        AND average.grading_period_id = completion.grading_period_id
+        AND average.grading_period_id = ${input.gradingPeriodId}::uuid
       LEFT JOIN evaluations evaluation
         ON evaluation.class_id = c.id
         AND evaluation.subject_id = subject.id
-        AND evaluation.grading_period_id = completion.grading_period_id
+        AND evaluation.grading_period_id = ${input.gradingPeriodId}::uuid
+        AND (
+          evaluation.type = 'spontaneous'
+          OR (
+            evaluation.type = 'scheduled'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM eligible_students eligible
+              LEFT JOIN evaluation_grades entered
+                ON entered.evaluation_id = evaluation.id
+                AND entered.student_id = eligible.id
+              WHERE entered.id IS NULL
+            )
+          )
+        )
+        AND NOT (
+          completion.status = 'in_progress'
+          AND EXISTS (
+            SELECT 1
+            FROM report_card_claims claim
+            WHERE claim.class_id = c.id
+              AND claim.subject_id = subject.id
+              AND claim.grading_period_id = ${input.gradingPeriodId}::uuid
+              AND claim.status = 'approved'
+          )
+        )
       LEFT JOIN evaluation_grades grade
         ON grade.evaluation_id = evaluation.id
         AND grade.student_id = student.id
-      WHERE completion.class_id = ${input.classId}::uuid
-        AND completion.grading_period_id = ${input.gradingPeriodId}::uuid
-        AND completion.status = 'completed'
-        AND ${confirmedSchoolStudent(sql`student.id`, sql`c.school_year_id`, sql`c.id`)}
+      WHERE c.id = ${input.classId}::uuid
+        AND c.school_year_id = ${input.schoolYearId}::uuid
+        AND c.is_active = true
+        AND (
+          completion.status = 'completed'
+          OR evaluation.id IS NOT NULL
+        )
+        AND NOT (
+          completion.status = 'in_progress'
+          AND EXISTS (
+            SELECT 1
+            FROM report_card_claims claim
+            WHERE claim.class_id = c.id
+              AND claim.subject_id = subject.id
+              AND claim.grading_period_id = ${input.gradingPeriodId}::uuid
+              AND claim.status = 'approved'
+          )
+        )
       ORDER BY subject.name ASC, evaluation.evaluation_date ASC NULLS LAST,
         evaluation.created_at ASC, evaluation.id::text ASC
     `);

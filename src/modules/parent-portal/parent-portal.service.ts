@@ -305,7 +305,7 @@ export class ParentPortalService {
     }
 
     const [subjectRows, conductGrade, resultsInRevision] = await Promise.all([
-      this.repository.listCompletedSubjectGrades({
+      this.repository.listAvailableSubjectGrades({
         studentId: input.studentId,
         classId: gradeContext.classId,
         schoolYearId: gradeContext.schoolYearId,
@@ -359,7 +359,7 @@ export class ParentPortalService {
 
     return {
       schoolYear: { id: gradeContext.schoolYearId, label: gradeContext.schoolYearLabel },
-      periods: periods.map(({ id, label }) => ({ id, label })),
+      periods: periods.map(({ id, label, isCurrent }) => ({ id, label, isCurrent })),
       selectedGradingPeriodId: selectedPeriod.id,
       subjects: [...subjectsById.values()],
       conductGrade,

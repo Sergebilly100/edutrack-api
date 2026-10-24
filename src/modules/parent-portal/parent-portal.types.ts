@@ -61,6 +61,7 @@ export type ParentNotification = {
 export type ParentGradePeriod = {
   id: string;
   label: string;
+  isCurrent: boolean;
 };
 
 export type ParentGradeEvaluation = {

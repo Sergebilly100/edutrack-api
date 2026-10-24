@@ -781,8 +781,22 @@ describe('report-cards routes (5c)', () => {
     await queryTenant(
       `INSERT INTO ${tenantTable('evaluation_grades')}
        (evaluation_id, student_id, score, max_score, comment)
-       VALUES ($1::uuid, $2::uuid, 12, 20, 'Commentaire privé français')`,
-      [frenchEvaluationId, studentAId]
+       VALUES ($1::uuid, $2::uuid, 12, 20, 'Commentaire privé français'),
+              ($1::uuid, $3::uuid, 10, 20, 'Note privée autre élève')`,
+      [frenchEvaluationId, studentAId, studentBId]
+    );
+    const incompleteFrenchEvaluationId = (await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('evaluations')}
+       (subject_id, class_id, grading_period_id, teacher_id, type, coefficient, label, evaluation_date)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'scheduled', 1, 'Évaluation incomplète', CURRENT_DATE)
+       RETURNING id::text`,
+      [subjectFrenchId, classId, periodId, context.teacherId]
+    ))[0]!.id;
+    await queryTenant(
+      `INSERT INTO ${tenantTable('evaluation_grades')}
+       (evaluation_id, student_id, score, max_score)
+       VALUES ($1::uuid, $2::uuid, 15, 20)`,
+      [incompleteFrenchEvaluationId, studentAId]
     );
     const spontaneousEvaluationId = (await queryTenant<IdRow>(
       `INSERT INTO ${tenantTable('evaluations')}
@@ -845,6 +859,29 @@ describe('report-cards routes (5c)', () => {
       ],
     });
     expect(JSON.stringify(response.body)).not.toMatch(/Commentaire strictement privé|Commentaire privé français|Note d’un autre enfant|Ajustement privé|rank|audit|reason/i);
+
+    await queryTenant(
+      `UPDATE ${tenantTable('class_subject_completion')}
+       SET status = 'in_progress', completed_at = NULL
+       WHERE class_id = $1::uuid AND subject_id = $2::uuid AND grading_period_id = $3::uuid`,
+      [classId, subjectFrenchId, periodId]
+    );
+    const completeEvaluation = await request()
+      .get(`/api/v1/parent/students/${studentAId}/grades`)
+      .query({ gradingPeriodId: periodId })
+      .set(parentAuth);
+    const frenchWhileUnvalidated = completeEvaluation.body.subjects.find(
+      (subject: { id: string }) => subject.id === subjectFrenchId
+    );
+    expect(frenchWhileUnvalidated.average).toBeNull();
+    expect(frenchWhileUnvalidated.evaluations.map((evaluation: { id: string }) => evaluation.id)).toEqual([frenchEvaluationId]);
+    expect(JSON.stringify(frenchWhileUnvalidated)).not.toContain('Évaluation incomplète');
+    await queryTenant(
+      `UPDATE ${tenantTable('class_subject_completion')}
+       SET status = 'completed', completed_at = NOW()
+       WHERE class_id = $1::uuid AND subject_id = $2::uuid AND grading_period_id = $3::uuid`,
+      [classId, subjectFrenchId, periodId]
+    );
 
     const foreignPeriod = await request()
       .get(`/api/v1/parent/students/${studentAId}/grades`)
