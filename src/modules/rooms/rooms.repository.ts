@@ -112,6 +112,7 @@ export class RoomsRepository {
     latitude?: number | null;
     longitude?: number | null;
     geoRadius?: number | null;
+    isActive: boolean;
   }): Promise<RoomEntity> {
 
     const result = await this.db.execute<RoomEntityRow>(sql`
@@ -124,7 +125,7 @@ export class RoomsRepository {
         ${input.latitude ?? null}::numeric,
         ${input.longitude ?? null}::numeric,
         ${input.geoRadius ?? null},
-        true
+        ${input.isActive}
       )
       RETURNING id, name, qr_token, building, capacity, latitude, longitude, geo_radius, is_active, created_at
     `);
@@ -146,6 +147,7 @@ export class RoomsRepository {
       latitude?: number | null;
       longitude?: number | null;
       geoRadius?: number | null;
+      isActive?: boolean;
     }
   ): Promise<RoomEntity | null> {
 
@@ -157,7 +159,8 @@ export class RoomsRepository {
         capacity = CASE WHEN ${input.capacity !== undefined} THEN ${input.capacity ?? null}::integer ELSE capacity END,
         latitude = CASE WHEN ${input.latitude !== undefined} THEN ${input.latitude ?? null}::numeric ELSE latitude END,
         longitude = CASE WHEN ${input.longitude !== undefined} THEN ${input.longitude ?? null}::numeric ELSE longitude END,
-        geo_radius = CASE WHEN ${input.geoRadius !== undefined} THEN ${input.geoRadius ?? null}::integer ELSE geo_radius END
+        geo_radius = CASE WHEN ${input.geoRadius !== undefined} THEN ${input.geoRadius ?? null}::integer ELSE geo_radius END,
+        is_active = CASE WHEN ${input.isActive !== undefined} THEN ${input.isActive ?? null} ELSE is_active END
       WHERE id = ${roomId}
       RETURNING id, name, qr_token, building, capacity, latitude, longitude, geo_radius, is_active, created_at
     `);

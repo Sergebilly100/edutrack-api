@@ -875,10 +875,11 @@ export class FinanceRepository {
         throw Object.assign(new Error('L’année scolaire doit être ouverte par le support.'), { code: 'SCHOOL_YEAR_NOT_OPEN' });
       }
       const result = await repository.db.execute<{ id: string }>(sql`
-        INSERT INTO tuition_plans (level_id, school_year_id, total_amount, currency)
-        VALUES (${levelId}::uuid, ${input.schoolYearId}::uuid, ${input.totalAmount}, ${input.currency})
+        INSERT INTO tuition_plans (level_id, school_year_id, total_amount, registration_amount, currency)
+        VALUES (${levelId}::uuid, ${input.schoolYearId}::uuid, ${input.totalAmount}, ${input.registrationAmount}, ${input.currency})
         ON CONFLICT (level_id, school_year_id) DO UPDATE SET
           total_amount = EXCLUDED.total_amount,
+          registration_amount = EXCLUDED.registration_amount,
           currency = EXCLUDED.currency,
           updated_at = NOW()
         RETURNING id::text
@@ -918,7 +919,7 @@ export class FinanceRepository {
     const result = await this.db.execute(sql`
       SELECT tp.id::text, tp.level_id::text, l.name AS level_name,
              tp.school_year_id::text, sy.label AS school_year_label,
-             tp.total_amount, tp.currency, tp.created_at, tp.updated_at,
+             tp.total_amount, tp.registration_amount, tp.currency, tp.created_at, tp.updated_at,
              COALESCE(json_agg(json_build_object(
                'id', tss.id::text,
                'dueDate', tss.due_date::text,

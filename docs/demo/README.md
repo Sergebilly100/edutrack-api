@@ -1,5 +1,8 @@
 # Démonstrations locales isolées
 
+Pour le pas-à-pas de création et de lancement simultané d'une école vide et d'une école
+préremplie, voir [DEMOS-LOCALES.md](DEMOS-LOCALES.md).
+
 Depuis `edutrack-api`, avec les dépendances installées et `DATABASE_URL` configurée dans `.env` :
 
 ```sh

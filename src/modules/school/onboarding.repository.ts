@@ -26,7 +26,7 @@ export class OnboardingRepository {
         EXISTS (SELECT 1 FROM subjects) AS subjects,
         EXISTS (SELECT 1 FROM rooms WHERE is_active = true) AS rooms,
         EXISTS (SELECT 1 FROM tuition_plans tp JOIN school_years sy ON sy.id = tp.school_year_id
-          WHERE sy.status = 'active') AS fees,
+          WHERE sy.status = 'active' AND tp.total_amount > 0 AND tp.registration_amount > 0) AS fees,
         EXISTS (SELECT 1 FROM teachers teacher JOIN users u ON u.id = teacher.user_id
           WHERE u.is_active = true) AS teachers
       FROM public.tenants t WHERE t.schema_name = ${schemaName} LIMIT 1

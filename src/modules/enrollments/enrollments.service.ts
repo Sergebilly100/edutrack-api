@@ -56,6 +56,7 @@ const mapReEnrollmentCandidate = (row: ReEnrollmentCandidateRow) => ({
   nextLevelId: row.next_level_id,
   nextLevelName: row.next_level_name,
   sourceSchoolYearStatus: row.source_school_year_status,
+  isHistoricalSource: row.is_historical_source,
   enrollment: row.enrollment_id && row.enrollment_status
     ? {
         id: row.enrollment_id,
@@ -136,24 +137,34 @@ export class EnrollmentsService {
     };
   }
 
-  async listReEnrollmentCandidates(input: { schoolYearId?: string; campaignStatus: 'decision_pending' | 'ready' | 'to_process' | 'awaiting_cashier' | 'awaiting_documents' | 'blocked_unpaid' | 'confirmed' | 're_enrolled' | 'excluded' | 'financial_unavailable' | 'all'; sourceSchoolYearId?: string; levelId?: string; classId?: string; search?: string; page: number; limit: number }) {
-    if (!this.finance?.listReEnrollmentBalances) {
+  async listReEnrollmentCandidates(input: { schoolYearId?: string; campaignStatus: 'decision_pending' | 'ready' | 'to_process' | 'awaiting_cashier' | 'awaiting_documents' | 'blocked_unpaid' | 'confirmed' | 're_enrolled' | 'excluded' | 'financial_unavailable' | 'all'; sourceSchoolYearId?: string; sourceSchoolYearLabel?: string; levelId?: string; classId?: string; search?: string; page: number; limit: number }) {
+    if (!input.sourceSchoolYearLabel && !this.finance?.listReEnrollmentBalances) {
       throw new EnrollmentsModuleError('Financial module is unavailable', 503, 'FINANCE_MODULE_UNAVAILABLE');
     }
     const rows = await this.repository.listReEnrollmentCandidates(input);
     const sourceYearId = input.sourceSchoolYearId ?? rows[0]?.current_school_year_id;
-    const targetSchoolYear = sourceYearId ? await this.repository.getFollowingSchoolYear(sourceYearId) : null;
+    const targetSchoolYear = input.sourceSchoolYearLabel
+      ? input.schoolYearId ? await this.repository.getSchoolYear(input.schoolYearId) : null
+      : sourceYearId ? await this.repository.getFollowingSchoolYear(sourceYearId) : null;
     const balancesByYear = new Map<string, Map<string, number | null>>();
-    for (const yearId of new Set(rows.map((row) => row.current_school_year_id))) {
-      balancesByYear.set(yearId, await this.finance.listReEnrollmentBalances(yearId));
+    for (const row of rows) {
+      if (!row.is_historical_source && row.current_school_year_id && !balancesByYear.has(row.current_school_year_id)) {
+        if (!this.finance?.listReEnrollmentBalances) {
+          throw new EnrollmentsModuleError('Financial module is unavailable', 503, 'FINANCE_MODULE_UNAVAILABLE');
+        }
+        balancesByYear.set(row.current_school_year_id, await this.finance.listReEnrollmentBalances(row.current_school_year_id));
+      }
     }
     const candidates = rows.map((row) => {
-      const remainingDue = balancesByYear.get(row.current_school_year_id)?.get(row.student_id);
+      const remainingDue = row.current_school_year_id
+        ? balancesByYear.get(row.current_school_year_id)?.get(row.student_id)
+        : 0;
       const status = row.enrollment_status === 'confirmed' ? 're_enrolled'
         : row.enrollment_status === 'blocked_unpaid' ? 'blocked_unpaid'
         : row.enrollment_status === 'pending_dossier' ? 'awaiting_documents'
         : row.enrollment_status === 'pending_cashier' ? 'awaiting_cashier'
         : row.final_decision === 'expelled' ? 'excluded'
+        : row.is_historical_source ? 'ready'
         : !row.final_decision || !row.next_level_id ? 'decision_pending'
         : remainingDue === undefined || remainingDue === null ? 'financial_unavailable'
         : remainingDue > 0 ? 'blocked_unpaid' : 'ready';
@@ -188,6 +199,10 @@ export class EnrollmentsService {
         totalPages: Math.max(1, Math.ceil(matching.length / input.limit)),
       },
     };
+  }
+
+  listHistoricalSourceYears() {
+    return this.repository.listHistoricalSourceYears();
   }
 
   async getStudentAcademicSummary(studentId: string, includeFinance = true) {
@@ -332,7 +347,7 @@ export class EnrollmentsService {
   async createEnrollment(input: {
     studentId: string; classId: string; schoolYearId: string; type: EnrollmentType;
     hasPreviousYearUnpaid: boolean;
-    levelId?: string; expectedActiveSchoolYearId?: string;
+    levelId?: string; expectedActiveSchoolYearId?: string; sourceSchoolYearLabel?: string;
   }) {
     const [student, targetClass] = await Promise.all([
       this.repository.getStudentContext(input.studentId),
@@ -349,41 +364,54 @@ export class EnrollmentsService {
     }
     this.assertClassSelection(targetClass, input);
 
+    let isHistoricalReEnrollment = false;
     if (input.type === 're_registration') {
-      const yearContext = await this.repository.getReEnrollmentYearContext(input.studentId, input.schoolYearId);
-      if (!yearContext || yearContext.target_school_year_id !== input.schoolYearId) {
-        throw new EnrollmentsModuleError('Target school year not found', 404, 'TARGET_SCHOOL_YEAR_NOT_FOUND');
-      }
-      if (yearContext.source_school_year_id === input.schoolYearId) {
-        throw new EnrollmentsModuleError('Re-enrollment cannot target the current school year', 409, 'RE_ENROLLMENT_CURRENT_YEAR_FORBIDDEN');
-      }
-      if (yearContext.source_school_year_status !== 'closed' || yearContext.target_school_year_status !== 'active' || !yearContext.target_school_year_start_date || yearContext.target_school_year_start_date <= yearContext.source_school_year_end_date) {
-        throw new EnrollmentsModuleError(
-          'Re-enrollment requires a closed school year and a new active school year opened by the super administrator',
-          409,
-          'RE_ENROLLMENT_YEAR_TRANSITION_REQUIRED'
-        );
-      }
-      const followingYear = await this.repository.getFollowingSchoolYear(yearContext.source_school_year_id);
-      if (followingYear?.id !== input.schoolYearId) {
-        throw new EnrollmentsModuleError('Re-enrollment must target the next school year', 409, 'RE_ENROLLMENT_NEXT_YEAR_REQUIRED');
-      }
-      if (!student.final_decision) {
-        throw new EnrollmentsModuleError('A validated class decision is required', 409, 'CLASS_DECISION_REQUIRED');
-      }
-      if (student.final_decision === 'expelled') {
-        throw new EnrollmentsModuleError('An expelled student cannot be re-enrolled', 409, 'STUDENT_EXPELLED');
-      }
-      const expectedLevelId = student.final_decision === 'repeat'
-        ? (student.next_level_id ?? student.current_level_id)
-        : student.next_level_id;
-      if (!expectedLevelId || targetClass.level_id !== expectedLevelId) {
-        throw new EnrollmentsModuleError('Target class does not match the validated decision', 400, 'DECISION_CLASS_MISMATCH');
+      if (!student.current_school_year_id) {
+        isHistoricalReEnrollment = Boolean(input.sourceSchoolYearLabel)
+          && await this.repository.hasHistoricalSourceBeforeTarget(
+            input.studentId,
+            input.sourceSchoolYearLabel!,
+            input.schoolYearId
+          );
+        if (!isHistoricalReEnrollment) {
+          throw new EnrollmentsModuleError('No matching historical enrollment source was found', 409, 'HISTORICAL_SOURCE_REQUIRED');
+        }
+      } else {
+        const yearContext = await this.repository.getReEnrollmentYearContext(input.studentId, input.schoolYearId);
+        if (!yearContext || yearContext.target_school_year_id !== input.schoolYearId) {
+          throw new EnrollmentsModuleError('Target school year not found', 404, 'TARGET_SCHOOL_YEAR_NOT_FOUND');
+        }
+        if (yearContext.source_school_year_id === input.schoolYearId) {
+          throw new EnrollmentsModuleError('Re-enrollment cannot target the current school year', 409, 'RE_ENROLLMENT_CURRENT_YEAR_FORBIDDEN');
+        }
+        if (yearContext.source_school_year_status !== 'closed' || yearContext.target_school_year_status !== 'active' || !yearContext.target_school_year_start_date || yearContext.target_school_year_start_date <= yearContext.source_school_year_end_date) {
+          throw new EnrollmentsModuleError(
+            'Re-enrollment requires a closed school year and a new active school year opened by the super administrator',
+            409,
+            'RE_ENROLLMENT_YEAR_TRANSITION_REQUIRED'
+          );
+        }
+        const followingYear = await this.repository.getFollowingSchoolYear(yearContext.source_school_year_id);
+        if (followingYear?.id !== input.schoolYearId) {
+          throw new EnrollmentsModuleError('Re-enrollment must target the next school year', 409, 'RE_ENROLLMENT_NEXT_YEAR_REQUIRED');
+        }
+        if (!student.final_decision) {
+          throw new EnrollmentsModuleError('A validated class decision is required', 409, 'CLASS_DECISION_REQUIRED');
+        }
+        if (student.final_decision === 'expelled') {
+          throw new EnrollmentsModuleError('An expelled student cannot be re-enrolled', 409, 'STUDENT_EXPELLED');
+        }
+        const expectedLevelId = student.final_decision === 'repeat'
+          ? (student.next_level_id ?? student.current_level_id)
+          : student.next_level_id;
+        if (!expectedLevelId || targetClass.level_id !== expectedLevelId) {
+          throw new EnrollmentsModuleError('Target class does not match the validated decision', 400, 'DECISION_CLASS_MISMATCH');
+        }
       }
     }
 
     let hasPreviousYearUnpaid = false;
-    if (input.type === 're_registration') {
+    if (input.type === 're_registration' && !isHistoricalReEnrollment) {
       if (!student.current_school_year_id || !this.finance) {
         throw new EnrollmentsModuleError(
           'Previous-year financial status is unavailable',

@@ -69,12 +69,19 @@ export default async function enrollmentsController(
         ...(query.school_year_id ? { schoolYearId: query.school_year_id } : {}),
         campaignStatus: query.campaign_status,
         ...(query.source_school_year_id ? { sourceSchoolYearId: query.source_school_year_id } : {}),
+        ...(query.source_school_year_label ? { sourceSchoolYearLabel: query.source_school_year_label } : {}),
         ...(query.level_id ? { levelId: query.level_id } : {}),
         ...(query.class_id ? { classId: query.class_id } : {}),
         ...(query.search ? { search: query.search } : {}),
         page: query.page,
         limit: query.limit,
       })));
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.get('/api/v1/enrollments/re-enrollment/historical-sources', { preHandler: requirePermission('enrollments.view') }, async (request, reply) => {
+    try {
+      return reply.send({ schoolYearLabels: await withService(request, (service) => service.listHistoricalSourceYears()) });
     } catch (error) { return handleError(request, reply, error); }
   });
 

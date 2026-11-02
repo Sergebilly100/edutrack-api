@@ -131,6 +131,7 @@ export const withdrawTuitionOverrideBodySchema = z.object({
 export const upsertTuitionPlanBodySchema = z.object({
   schoolYearId: uuidSchema,
   totalAmount: moneySchema,
+  registrationAmount: moneySchema.default(0),
   currency: z.string().trim().min(3).max(10).default('FCFA'),
   scheduleSteps: z.array(z.object({
     dueDate: civilDateSchema,

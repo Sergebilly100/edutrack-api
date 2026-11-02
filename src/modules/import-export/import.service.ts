@@ -7,6 +7,8 @@ import { birthDateIssue, isCivilDate } from '../../shared/utils/date-validation.
 import { isValidScheduleInterval, parseScheduleTime } from '../../shared/utils/schedule-time.js';
 import { emit } from '../../shared/events/event-bus.js';
 import { generateUsername } from '../../shared/utils/username.js';
+import { generateInitialPassword } from '../../shared/utils/password-generator.js';
+import { logger } from '../../shared/observability/logger.js';
 import { matriculeKey, trimMatricule } from '../../shared/utils/matricule.js';
 import { createTemporaryParentCredentials } from '../parents/parent-accounts.service.js';
 import {
@@ -1611,15 +1613,15 @@ export class ImportService {
   ): Promise<ConfirmReport> {
     this.ensureNoValidationErrors(validation.report);
 
-    const defaultTeacherPassword = process.env.IMPORT_TEACHER_DEFAULT_PASSWORD;
-    if (!defaultTeacherPassword) {
-      throw new ImportModuleError(
-        'Variable IMPORT_TEACHER_DEFAULT_PASSWORD non configurée',
-        500,
-        'IMPORT_MISSING_CONFIG'
+    const configuredPassword = process.env.IMPORT_TEACHER_DEFAULT_PASSWORD?.trim();
+    const sharedPasswordHash = configuredPassword && configuredPassword.length >= 8
+      ? await argon2.hash(configuredPassword)
+      : null;
+    if (!sharedPasswordHash) {
+      logger.warn(
+        '[import] IMPORT_TEACHER_DEFAULT_PASSWORD is missing or too short - generating temporary teacher passwords'
       );
     }
-    const passwordHash = await argon2.hash(defaultTeacherPassword);
 
     const run = async (executor: QueryExecutor): Promise<ConfirmReport> => {
       let imported = 0;
@@ -1630,7 +1632,7 @@ export class ImportService {
         const displayName = `${row.firstName} ${row.lastName}`.trim();
         const result = await this.repository.upsertTeacher(executor, row, {
           displayName,
-          passwordHash,
+          passwordHash: sharedPasswordHash ?? await argon2.hash(generateInitialPassword(10)),
         });
 
         if (result === 'inserted') {

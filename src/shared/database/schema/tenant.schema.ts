@@ -494,6 +494,7 @@ export const tuitionPlans = tenant.table(
     levelId: uuid('level_id').notNull().references(() => levels.id, { onDelete: 'cascade' }),
     schoolYearId: uuid('school_year_id').notNull().references(() => schoolYears.id, { onDelete: 'cascade' }),
     totalAmount: numeric('total_amount', { precision: 12, scale: 2 }).notNull(),
+    registrationAmount: numeric('registration_amount', { precision: 12, scale: 2 }).notNull().default('0'),
     currency: varchar('currency', { length: 10 }).notNull().default('FCFA'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
@@ -502,6 +503,7 @@ export const tuitionPlans = tenant.table(
     tuitionPlansLevelYearUnique: unique('tuition_plans_level_year_unique').on(table.levelId, table.schoolYearId),
     tuitionPlansSchoolYearIdx: index('idx_tuition_plans_school_year').on(table.schoolYearId, table.levelId),
     tuitionPlansAmountNonNegative: check('tuition_plans_amount_non_negative', sql`${table.totalAmount} >= 0`),
+    tuitionPlansRegistrationAmountNonNegative: check('tuition_plans_registration_amount_non_negative', sql`${table.registrationAmount} >= 0`),
   })
 );
 

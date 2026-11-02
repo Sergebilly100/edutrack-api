@@ -67,7 +67,24 @@ describe('director historical import C7', () => {
     const klass = (await queryTenant<{ id: string }>('INSERT INTO classes (name, level_id, school_year_id) VALUES ($1,$2::uuid,$3::uuid) RETURNING id::text', ['C7 classe', level.id, year.id]))[0]!;
     const tuition = await request().put(`/api/v1/tuition-plans/levels/${level.id}`).set(headers).send({ schoolYearId: year.id, totalAmount: 50000, currency: 'FCFA', scheduleSteps: [] });
     expect(tuition.status).toBe(200);
-    const enrollment = await request().post('/api/v1/enrollments').set(headers).send({ studentId, classId: klass.id, schoolYearId: year.id, type: 'new_registration' });
+    const historicalYears = await request().get('/api/v1/enrollments/re-enrollment/historical-sources').set(headers);
+    expect(historicalYears.status).toBe(200);
+    expect(historicalYears.body.schoolYearLabels).toContain('2024-2025');
+    const campaign = await request().get(`/api/v1/enrollments/re-enrollment/candidates?school_year_id=${year.id}&source_school_year_label=2024-2025&search=C7-H1`).set(headers);
+    expect(campaign.status, JSON.stringify(campaign.body)).toBe(200);
+    expect(campaign.body.candidates).toEqual([
+      expect.objectContaining({
+        studentId,
+        currentSchoolYearId: null,
+        currentSchoolYearLabel: '2024-2025',
+        currentClassName: 'Classe non renseignée',
+        isHistoricalSource: true,
+        status: 'ready',
+      }),
+    ]);
+    const enrollment = await request().post('/api/v1/enrollments').set(headers).send({
+      studentId, classId: klass.id, schoolYearId: year.id, type: 're_registration', sourceSchoolYearLabel: '2024-2025',
+    });
     expect(enrollment.status, JSON.stringify(enrollment.body)).toBe(201);
     expect(enrollment.body.enrollment.status).toBe('pending_cashier');
     const beforePayment = await request().get(`/api/v1/students?class_id=${klass.id}`).set(headers);

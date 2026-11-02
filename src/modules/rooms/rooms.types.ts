@@ -13,6 +13,7 @@ export const createRoomBodySchema = z
     longitude: z.number().min(-180).max(180).nullable().optional(),
     // geoRadius peut être null pour désactiver le géofencing
     geoRadius: z.number().int().min(30).max(300).nullable().optional(),
+    isActive: z.boolean().default(true),
   })
   .refine(
     (data) => {
@@ -35,6 +36,7 @@ export const updateRoomBodySchema = z
     latitude: z.number().min(-90).max(90).nullable().optional(),
     longitude: z.number().min(-180).max(180).nullable().optional(),
     geoRadius: z.number().int().min(30).max(300).nullable().optional(),
+    isActive: z.boolean().optional(),
   })
   .refine((payload) => Object.values(payload).some((value) => value !== undefined), {
     message: 'At least one field is required',

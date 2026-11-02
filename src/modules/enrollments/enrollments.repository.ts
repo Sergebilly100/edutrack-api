@@ -35,7 +35,7 @@ export type ReEnrollmentCandidateRow = {
   student_last_name: string;
   student_matricule: string | null;
   current_class_name: string;
-  current_school_year_id: string;
+  current_school_year_id: string | null;
   current_school_year_label: string;
   final_decision: 'promoted' | 'repeat' | 'expelled' | null;
   next_level_id: string | null;
@@ -43,7 +43,8 @@ export type ReEnrollmentCandidateRow = {
   enrollment_id: string | null;
   enrollment_status: EnrollmentStatus | null;
   enrollment_class_name: string | null;
-  source_school_year_status: 'active' | 'closed';
+  source_school_year_status: 'active' | 'closed' | 'historical';
+  is_historical_source: boolean;
 };
 
 export type StudentAcademicSummaryRow = {
@@ -135,10 +136,55 @@ export class EnrollmentsRepository {
   async listReEnrollmentCandidates(input: {
     schoolYearId?: string;
     sourceSchoolYearId?: string;
+    sourceSchoolYearLabel?: string;
     levelId?: string;
     classId?: string;
     search?: string;
   }): Promise<ReEnrollmentCandidateRow[]> {
+    if (input.sourceSchoolYearLabel) {
+      const search = input.search ? `%${input.search}%` : null;
+      const result = await this.db.execute<ReEnrollmentCandidateRow>(sql`
+        SELECT
+          s.id::text AS student_id,
+          s.first_name AS student_first_name,
+          s.last_name AS student_last_name,
+          s.matricule AS student_matricule,
+          COALESCE(source.old_class_name, 'Classe non renseignée') AS current_class_name,
+          NULL::text AS current_school_year_id,
+          source.school_year_label AS current_school_year_label,
+          NULL::text AS final_decision,
+          NULL::text AS next_level_id,
+          NULL::text AS next_level_name,
+          enrollment.id::text AS enrollment_id,
+          enrollment.status::text AS enrollment_status,
+          enrollment_class.name AS enrollment_class_name,
+          'historical'::text AS source_school_year_status,
+          true AS is_historical_source
+        FROM student_historical_sources source
+        INNER JOIN students s ON s.id = source.student_id
+        LEFT JOIN enrollments enrollment
+          ON enrollment.student_id = s.id
+         AND enrollment.school_year_id = ${input.schoolYearId ?? null}::uuid
+        LEFT JOIN classes enrollment_class ON enrollment_class.id = enrollment.class_id
+        WHERE source.school_year_label = ${input.sourceSchoolYearLabel}
+          AND s.is_active
+          AND s.lifecycle_status = 'active'
+          AND (${input.schoolYearId ?? null}::uuid IS NULL OR EXISTS (
+            SELECT 1 FROM school_years target_year
+            WHERE target_year.id = ${input.schoolYearId ?? null}::uuid
+              AND target_year.status IN ('active', 'closed')
+              AND split_part(source.school_year_label, '-', 1)::integer < split_part(target_year.label, '-', 1)::integer
+          ))
+          AND (${search}::text IS NULL OR (
+            s.first_name ILIKE ${search}
+            OR s.last_name ILIKE ${search}
+            OR s.matricule ILIKE ${search}
+          ))
+        ORDER BY s.last_name ASC, s.first_name ASC, s.created_at ASC
+      `);
+      return rows<ReEnrollmentCandidateRow>(result);
+    }
+
     const search = input.search ? `%${input.search}%` : null;
     const result = await this.db.execute<ReEnrollmentCandidateRow>(sql`
       SELECT
@@ -155,7 +201,8 @@ export class EnrollmentsRepository {
         next_level.name AS next_level_name,
         enrollment.id::text AS enrollment_id,
         enrollment.status::text AS enrollment_status,
-        enrollment_class.name AS enrollment_class_name
+        enrollment_class.name AS enrollment_class_name,
+        false AS is_historical_source
       FROM students s
       INNER JOIN LATERAL (
         SELECT confirmed.class_id
@@ -207,6 +254,39 @@ export class EnrollmentsRepository {
       LIMIT 1
     `);
     return rows<{ id: string; label: string; status: 'draft' | 'active' | 'closed' }>(result)[0] ?? null;
+  }
+
+  async getSchoolYear(schoolYearId: string) {
+    const result = await this.db.execute<{ id: string; label: string; status: 'draft' | 'active' | 'closed' }>(sql`
+      SELECT id::text, label, status::text
+      FROM school_years
+      WHERE id = ${schoolYearId}::uuid
+      LIMIT 1
+    `);
+    return rows<{ id: string; label: string; status: 'draft' | 'active' | 'closed' }>(result)[0] ?? null;
+  }
+
+  async listHistoricalSourceYears(): Promise<string[]> {
+    const result = await this.db.execute<{ school_year_label: string }>(sql`
+      SELECT DISTINCT school_year_label
+      FROM student_historical_sources
+      ORDER BY school_year_label DESC
+    `);
+    return rows<{ school_year_label: string }>(result).map((row) => row.school_year_label);
+  }
+
+  async hasHistoricalSourceBeforeTarget(studentId: string, schoolYearLabel: string, targetSchoolYearId: string): Promise<boolean> {
+    const result = await this.db.execute<{ found: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1
+        FROM student_historical_sources source
+        INNER JOIN school_years target_year ON target_year.id = ${targetSchoolYearId}::uuid
+        WHERE source.student_id = ${studentId}::uuid
+          AND source.school_year_label = ${schoolYearLabel}
+          AND split_part(source.school_year_label, '-', 1)::integer < split_part(target_year.label, '-', 1)::integer
+      ) AS found
+    `);
+    return rows<{ found: boolean }>(result)[0]?.found === true;
   }
 
   async getStudentSummaryProfile(studentId: string): Promise<StudentSummaryProfile | null> {

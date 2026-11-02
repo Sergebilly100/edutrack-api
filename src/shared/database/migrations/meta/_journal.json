@@ -302,6 +302,13 @@
       "when": 1792755473962,
       "tag": "0095_tuition_schedule_agreement_history",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1793575100552,
+      "tag": "0096_tuition_registration_amount",
+      "breakpoints": true
     }
   ]
 }

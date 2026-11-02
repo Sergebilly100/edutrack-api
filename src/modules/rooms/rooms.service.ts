@@ -74,6 +74,7 @@ export class RoomsService {
     latitude?: number | null;
     longitude?: number | null;
     geoRadius?: number | null;
+    isActive: boolean;
   }): Promise<PublicRoom> {
     try {
       const room = await this.repository.createRoom({
@@ -109,6 +110,7 @@ export class RoomsService {
       latitude?: number | null;
       longitude?: number | null;
       geoRadius?: number | null;
+      isActive?: boolean;
     }
   ): Promise<PublicRoom> {
     try {

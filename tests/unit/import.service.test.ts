@@ -526,6 +526,30 @@ describe('import.service - teachers confirm', () => {
     expect(repository.upsertTeacher.mock.calls[0][1]).toMatchObject({ username: 'diallo.ibra' });
     expect(repository.upsertTeacher.mock.calls[1][1]).toMatchObject({ username: 'diallo.ibra2' });
   });
+  it('importe les professeurs sans mot de passe configuré avec des secrets temporaires distincts', async () => {
+    const configuredPassword = process.env.IMPORT_TEACHER_DEFAULT_PASSWORD;
+    delete process.env.IMPORT_TEACHER_DEFAULT_PASSWORD;
+    repository.listTeacherDirectory.mockResolvedValue([]);
+    const rows = [
+      { 'Nom*': 'Diallo', 'Prénom*': 'Ibrahim', 'Type*': 'vacataire', 'Taux horaire FCFA': '5000', 'Téléphone': '2250700000001' },
+      { 'Nom*': 'Kone', 'Prénom*': 'Aya', 'Type*': 'vacataire', 'Taux horaire FCFA': '4500', 'Téléphone': '2250700000002' },
+    ];
+
+    try {
+      const report = await new ImportService(repository).confirm('teachers', await toWorkbookBuffer(rows), db);
+      const passwordHashes = repository.upsertTeacher.mock.calls.map((call) => call[2].passwordHash);
+
+      expect(report.imported).toBe(2);
+      expect(passwordHashes).toHaveLength(2);
+      expect(passwordHashes[0]).toMatch(/^\$argon2/);
+      expect(passwordHashes[1]).toMatch(/^\$argon2/);
+      expect(passwordHashes[0]).not.toBe(passwordHashes[1]);
+      expect(JSON.stringify(report)).not.toContain('password');
+    } finally {
+      if (configuredPassword === undefined) delete process.env.IMPORT_TEACHER_DEFAULT_PASSWORD;
+      else process.env.IMPORT_TEACHER_DEFAULT_PASSWORD = configuredPassword;
+    }
+  });
 
   it('mode replace → deactivateTeachersByIds appelé avec les IDs absents', async () => {
     repository.listExistingTeachers

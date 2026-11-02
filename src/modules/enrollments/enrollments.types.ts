@@ -33,13 +33,14 @@ export const enrollmentListQuerySchema = z.object({
 export const reEnrollmentCandidatesQuerySchema = z.object({
   school_year_id: z.string().uuid().optional(),
   source_school_year_id: z.string().uuid().optional(),
+  source_school_year_label: z.string().regex(/^\d{4}-\d{4}$/).optional(),
   campaign_status: z.enum(['decision_pending', 'ready', 'to_process', 'awaiting_cashier', 'awaiting_documents', 'blocked_unpaid', 'confirmed', 're_enrolled', 'excluded', 'financial_unavailable', 'all']).default('all'),
   level_id: z.string().uuid().optional(),
   class_id: z.string().uuid().optional(),
   search: z.string().trim().min(1).max(100).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
-}).refine((value) => Boolean(value.school_year_id || value.source_school_year_id), {
+}).refine((value) => Boolean(value.school_year_id || value.source_school_year_id || value.source_school_year_label), {
   message: 'A source or target school year is required',
 });
 
@@ -50,6 +51,7 @@ export const createEnrollmentBodySchema = z
     schoolYearId: z.string().uuid(),
     levelId: z.string().uuid().optional(),
     expectedActiveSchoolYearId: z.string().uuid().optional(),
+    sourceSchoolYearLabel: z.string().regex(/^\d{4}-\d{4}$/).optional(),
     type: enrollmentTypeSchema,
     hasPreviousYearUnpaid: z.boolean().default(false),
   })

@@ -3,7 +3,7 @@ import { sql } from 'drizzle-orm';
 import { ZodError, z } from 'zod';
 
 import { db, withTenantSchema } from '../../shared/database/db.js';
-import { authenticateRequest, requirePermission } from '../../shared/middleware/auth.middleware.js';
+import { authenticateRequest, requireDirector, requirePermission } from '../../shared/middleware/auth.middleware.js';
 import { attachTenantDb, releaseTenantDb } from '../../shared/middleware/tenant.middleware.js';
 import { OnboardingRepository } from './onboarding.repository.js';
 import { OnboardingPrerequisitesError, OnboardingService } from './onboarding.service.js';
@@ -233,7 +233,7 @@ const fetchSchoolInfoBySchema = async (schemaName: string) => {
 export default async function schoolController(app: FastifyInstance): Promise<void> {
   app.addHook('onResponse', releaseTenantDb);
   app.get('/api/v1/school/onboarding-status', {
-    preHandler: [requirePermission('settings.school'), attachTenantDb],
+    preHandler: [requireDirector, attachTenantDb],
   }, async (request, reply) => {
     try {
       const service = new OnboardingService(new OnboardingRepository(request.db!));
@@ -337,7 +337,7 @@ export default async function schoolController(app: FastifyInstance): Promise<vo
 
   app.patch(
     '/api/v1/school/onboarding-complete',
-    { preHandler: [requirePermission('settings.school'), attachTenantDb] },
+    { preHandler: [requireDirector, attachTenantDb] },
     async (request, reply) => {
       try {
         const claims = request.claims!;

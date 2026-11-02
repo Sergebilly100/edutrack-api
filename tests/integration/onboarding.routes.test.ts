@@ -45,7 +45,7 @@ describe('C6 configuration initiale', () => {
     const room = await request().post('/api/v1/rooms').set(director).send({ name: 'Salle C6' });
     expect(room.status).toBe(201);
     const fees = await request().put(`/api/v1/tuition-plans/levels/${level.body.level.id}`).set(director)
-      .send({ schoolYearId: opened.body.id, totalAmount: 100000, currency: 'FCFA', scheduleSteps: [] });
+      .send({ schoolYearId: opened.body.id, totalAmount: 100000, registrationAmount: 25000, currency: 'FCFA', scheduleSteps: [] });
     expect(fees.status, JSON.stringify(fees.body)).toBe(200);
     // No teacher profiles are needed to finish.
     await queryTenant("UPDATE users SET is_active = false WHERE role = 'teacher'");
