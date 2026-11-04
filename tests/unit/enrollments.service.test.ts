@@ -143,7 +143,7 @@ describe('enrollment workflow rules', () => {
     expect(resolveInitialEnrollmentStatus('new_registration', true)).toBe('pending_cashier');
   });
 
-  it('calcule le solde de campagne avec remises, abonnements obligatoires et paiements validés', async () => {
+  it('calcule le solde de campagne avec la seule scolarité, les remises et paiements validés', async () => {
     const repository = {
       listReEnrollmentBalanceContexts: vi.fn().mockResolvedValue([
         { student_id: 'student-paid', plan_total_amount: '100000', override_total_amount: null, discount_amount: '10000', confirmed_paid: '85000' },
@@ -153,8 +153,8 @@ describe('enrollment workflow rules', () => {
       listMandatorySubscriptionPlans: vi.fn().mockResolvedValue([{ amount: '5000', period: 'annual', imposed_duration: 'annual' }]),
     };
     const balances = await new FinanceService(repository as never).listReEnrollmentBalances('origin-year');
-    expect(balances.get('student-paid')).toBe(10_000);
-    expect(balances.get('student-unpaid')).toBe(55000);
+    expect(balances.get('student-paid')).toBe(5_000);
+    expect(balances.get('student-unpaid')).toBe(50_000);
     expect(balances.get('student-no-plan')).toBeNull();
   });
 

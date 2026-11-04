@@ -20,6 +20,9 @@ type PublicFeatureRow = {
   sms_cap_per_student: number;
   commission_pct: string | number;
   sms_unit_price_fcfa: number | null;
+  mandatory_at_enrollment: boolean;
+  imposed_duration_months: number | null;
+  show_on_school_receipt: boolean;
   use_real_hours: boolean;
   geo_check_enabled: boolean;
   checkout_tolerance_minutes: number;
@@ -63,6 +66,14 @@ type ParentDetailRow = {
 };
 
 type ParentPhoneRow = { id: string };
+export type EnrollmentParentContextRow = {
+  student_id: string;
+  student_name: string;
+  parent_id: string | null;
+  parent_name: string | null;
+  parent_phone: string | null;
+  parent_email: string | null;
+};
 
 type SubscriptionRow = {
   id: string;
@@ -190,6 +201,9 @@ export class SubscriptionsRepository {
           sms_cap_per_student,
           commission_pct,
           sms_unit_price_fcfa,
+          COALESCE(mandatory_at_enrollment, false) AS mandatory_at_enrollment,
+          imposed_duration_months,
+          COALESCE(show_on_school_receipt, false) AS show_on_school_receipt,
           COALESCE(use_real_hours, false) AS use_real_hours,
           COALESCE(geo_check_enabled, false) AS geo_check_enabled,
           COALESCE(checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
@@ -202,7 +216,7 @@ export class SubscriptionsRepository {
       if ((error as { cause?: { code?: string }; code?: string }).cause?.code !== '42703') {
         throw error;
       }
-      const fallback = await publicDb.execute<Omit<PublicFeatureRow, 'monetize_parent_alerts' | 'use_real_hours' | 'geo_check_enabled' | 'checkout_tolerance_minutes'>>(sql`
+      const fallback = await publicDb.execute<Omit<PublicFeatureRow, 'monetize_parent_alerts' | 'use_real_hours' | 'geo_check_enabled' | 'checkout_tolerance_minutes' | 'mandatory_at_enrollment' | 'imposed_duration_months' | 'show_on_school_receipt'>>(sql`
         SELECT
           tenant_id::text,
           is_enabled,
@@ -218,12 +232,77 @@ export class SubscriptionsRepository {
         ? {
             ...row,
             monetize_parent_alerts: false,
+            mandatory_at_enrollment: false,
+            imposed_duration_months: null,
+            show_on_school_receipt: false,
             use_real_hours: false,
             geo_check_enabled: false,
             checkout_tolerance_minutes: 5,
           }
         : null;
     }
+  }
+
+  async getEnrollmentParentContext(studentId: string): Promise<EnrollmentParentContextRow | null> {
+    const result = await this.tenantDb.execute<EnrollmentParentContextRow>(sql`
+      SELECT
+        s.id::text AS student_id,
+        concat_ws(' ', s.first_name, s.last_name) AS student_name,
+        linked.id::text AS parent_id,
+        COALESCE(linked.full_name, NULLIF(s.parent_name, ''), NULLIF(s.parent_name_2, '')) AS parent_name,
+        COALESCE(linked.phone, NULLIF(s.parent_phone, ''), NULLIF(s.parent_phone_2, '')) AS parent_phone,
+        COALESCE(linked.email, NULLIF(s.parent_email, '')) AS parent_email
+      FROM students s
+      LEFT JOIN LATERAL (
+        SELECT p.id, p.full_name, p.phone, p.email
+        FROM parent_student_links psl
+        INNER JOIN parents p ON p.id = psl.parent_id
+        WHERE psl.student_id = s.id
+        ORDER BY (p.phone = s.parent_phone) DESC, p.created_at ASC
+        LIMIT 1
+      ) linked ON TRUE
+      WHERE s.id = ${studentId}::uuid
+      LIMIT 1
+    `);
+    return result.rows[0] ?? null;
+  }
+
+  async updateParentAlertSettingsByTenantId(
+    tenantId: string,
+    settings: {
+      smsUnitPriceFcfa: number;
+      mandatoryAtEnrollment: boolean;
+      imposedDurationMonths: number | null;
+      showOnSchoolReceipt: boolean;
+    }
+  ): Promise<PublicFeatureRow> {
+    const result = await publicDb.execute<PublicFeatureRow>(sql`
+      UPDATE public.school_sms_features
+      SET sms_unit_price_fcfa = ${settings.smsUnitPriceFcfa},
+          mandatory_at_enrollment = ${settings.mandatoryAtEnrollment},
+          imposed_duration_months = ${settings.imposedDurationMonths},
+          show_on_school_receipt = ${settings.showOnSchoolReceipt},
+          updated_at = NOW()
+      WHERE tenant_id = ${tenantId}::uuid
+      RETURNING
+        tenant_id::text,
+        is_enabled,
+        COALESCE(monetize_parent_alerts, false) AS monetize_parent_alerts,
+        sms_cap_per_student,
+        commission_pct,
+        sms_unit_price_fcfa,
+        mandatory_at_enrollment,
+        imposed_duration_months,
+        show_on_school_receipt,
+        COALESCE(use_real_hours, false) AS use_real_hours,
+        COALESCE(geo_check_enabled, false) AS geo_check_enabled,
+        COALESCE(checkout_tolerance_minutes, 5)::int AS checkout_tolerance_minutes
+    `);
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error('Parent alerts settings are not initialized');
+    }
+    return row;
   }
 
   async updateSmsUnitPriceByTenantId(
@@ -739,6 +818,7 @@ export class SubscriptionsRepository {
     unitPriceFcfa: number;
     studentCount: number;
     totalAmountFcfa: number;
+    platformSharePct: number;
     durationMonths: number;
     startsAt: string;
     endsAt: string;
@@ -1170,22 +1250,20 @@ export class SubscriptionsRepository {
     status: SubscriptionStatus,
     actorUserId?: string
   ): Promise<void> {
-    try {
-      await this.tenantDb.execute(sql`
+    await this.tenantDb.execute(sql`
+      WITH updated AS (
         UPDATE parent_subscriptions
         SET status = ${status}
         ${status === 'cancelled'
           ? sql`, cancelled_at = NOW(), cancelled_by = ${actorUserId ?? null}::uuid`
           : sql``}
         WHERE id = ${subscriptionId}::uuid
-      `);
-    } catch {
-      await this.tenantDb.execute(sql`
-        UPDATE parent_subscriptions
-        SET status = ${status}
-        WHERE id = ${subscriptionId}::uuid
-      `);
-    }
+        RETURNING id
+      )
+      INSERT INTO parent_subscription_events (subscription_id, action, actor_user_id, metadata)
+      SELECT id, ${status}, ${actorUserId ?? null}::uuid, '{}'::jsonb
+      FROM updated
+    `);
   }
 
   async computeMonthlyRevenue(month: string): Promise<{ total_subscriptions_fcfa: number; subscription_count: number }> {
@@ -1209,6 +1287,7 @@ export class SubscriptionsRepository {
     subscriptions_active_count: number;
     subscriptions_new_this_month: number;
     total_collected_fcfa: number;
+    commission_due_fcfa: number;
     monthly_revenue_prorated_fcfa: number;
     commission_paid_fcfa: number;
   }> {
@@ -1233,6 +1312,18 @@ export class SubscriptionsRepository {
       WHERE DATE_TRUNC('month', sp.paid_at)::date = ${monthDate}::date
         AND ps.status <> 'cancelled'
     `);
+    const commissionDueResult = await this.tenantDb.execute<{ total: string | number }>(sql`
+      SELECT COALESCE(SUM(
+        COALESCE(
+          sp.platform_share_amount_fcfa,
+          ROUND(sp.amount_fcfa * COALESCE(ps.platform_share_pct, 15) / 100)
+        )
+      ), 0) AS total
+      FROM subscription_payments sp
+      INNER JOIN parent_subscriptions ps ON ps.id = sp.subscription_id
+      WHERE DATE_TRUNC('month', sp.paid_at)::date = ${monthDate}::date
+        AND ps.status <> 'cancelled'
+    `);
     const prorated = await this.computeMonthlyRevenue(params.month);
     const paidResult = await publicDb.execute<{ paid: number }>(sql`
       SELECT COALESCE(commission_paid_fcfa, 0)::int AS paid
@@ -1245,6 +1336,7 @@ export class SubscriptionsRepository {
       subscriptions_active_count: activeResult.rows[0]?.count ?? 0,
       subscriptions_new_this_month: newResult.rows[0]?.count ?? 0,
       total_collected_fcfa: Math.round(Number(collectedResult.rows[0]?.total ?? 0)),
+      commission_due_fcfa: Math.round(Number(commissionDueResult.rows[0]?.total ?? 0)),
       monthly_revenue_prorated_fcfa: prorated.total_subscriptions_fcfa,
       commission_paid_fcfa: paidResult.rows[0]?.paid ?? 0,
     };
@@ -1587,10 +1679,9 @@ export class SubscriptionsRepository {
       months.map((month) => this.getRevenueSummary({ tenantId: params.tenantId, month }))
     );
 
-    const COMMISSION_PCT = 15;
     return results.map((summary, i) => {
       const month = months[i]!;
-      const due = Math.round((summary.total_collected_fcfa * COMMISSION_PCT) / 100);
+      const due = summary.commission_due_fcfa;
       // Pas de commission due si rien n'a été collecté ce mois
       const remaining = summary.total_collected_fcfa > 0 ? Math.max(0, due - summary.commission_paid_fcfa) : 0;
       return {
@@ -1616,24 +1707,59 @@ export class SubscriptionsRepository {
         WHERE status = 'active'
           AND ends_at < ${businessToday}::date
         RETURNING id
+      ),
+      logged AS (
+        INSERT INTO parent_subscription_events (subscription_id, action, metadata)
+        SELECT id, 'expired', jsonb_build_object('expiredAt', ${businessToday})
+        FROM updated
+        RETURNING subscription_id
       )
-      SELECT COUNT(*)::int AS count FROM updated
+      SELECT COUNT(*)::int AS count FROM logged
     `);
     return result.rows[0]?.count ?? 0;
   }
 
-  async listRenewalAlertsInSevenDays(): Promise<Array<{ parentPhone: string; parentName: string; endsAt: string }>> {
+  async listRenewalAlertsInSevenDays(): Promise<Array<{
+    subscriptionId: string;
+    studentName: string;
+    parentPhone: string;
+    parentName: string;
+    endsAt: string;
+  }>> {
     const targetDate = addDaysIso(todayInBusinessTimezone(), 7);
-    const result = await this.tenantDb.execute<{ parent_phone: string; parent_name: string; ends_at: string }>(sql`
-      SELECT p.phone AS parent_phone, p.full_name AS parent_name, ps.ends_at::text AS ends_at
+    const result = await this.tenantDb.execute<{
+      subscription_id: string;
+      student_name: string;
+      parent_phone: string;
+      parent_name: string;
+      ends_at: string;
+    }>(sql`
+      SELECT
+        ps.id::text AS subscription_id,
+        COALESCE(
+          NULLIF(concat_ws(' ', s.first_name, s.last_name), ''),
+          linked.student_names,
+          'votre enfant'
+        ) AS student_name,
+        p.phone AS parent_phone,
+        p.full_name AS parent_name,
+        ps.ends_at::text AS ends_at
       FROM parent_subscriptions ps
       INNER JOIN parents p ON p.id = ps.parent_id
+      LEFT JOIN students s ON s.id = ps.student_id
+      LEFT JOIN LATERAL (
+        SELECT string_agg(concat_ws(' ', linked_student.first_name, linked_student.last_name), ', ') AS student_names
+        FROM parent_student_links psl
+        INNER JOIN students linked_student ON linked_student.id = psl.student_id
+        WHERE psl.subscription_id = ps.id
+      ) linked ON TRUE
       WHERE ps.status = 'active'
-        AND ps.auto_renew_alert = true
         AND ps.ends_at = ${targetDate}::date
         AND p.phone IS NOT NULL
     `);
     return result.rows.map((row) => ({
+      subscriptionId: row.subscription_id,
+      studentName: row.student_name,
       parentPhone: row.parent_phone,
       parentName: row.parent_name,
       endsAt: row.ends_at,
@@ -1658,6 +1784,7 @@ export class SubscriptionsRepository {
     unitPriceFcfa: number;
     studentCount: number;
     totalAmountFcfa: number;
+    platformSharePct: number;
     durationMonths: number;
     startsAt: string;
     endsAt: string;
@@ -1665,7 +1792,7 @@ export class SubscriptionsRepository {
     studentIds: string[];
     paidNow: boolean;
     paymentMethod: string;
-  }): Promise<{ parentId: string; subscriptionId: string; parentCreated: boolean }> {
+  }): Promise<{ parentId: string; subscriptionId: string; subscriptionIds: string[]; parentCreated: boolean }> {
     return this.tenantDb.transaction(async (tx) => {
       const parentResult = await tx.execute<{ id: string; created: boolean }>(sql`
         INSERT INTO parents (full_name, phone, email, password_hash, must_change_password, is_active)
@@ -1679,42 +1806,56 @@ export class SubscriptionsRepository {
       const parentId = parentResult.rows[0]!.id;
       const parentCreated = parentResult.rows[0]!.created;
 
-      const subResult = await tx.execute<{ id: string }>(sql`
-        INSERT INTO parent_subscriptions (
-          parent_id, unit_price_fcfa, student_count, total_amount_fcfa, duration_months,
-          starts_at, ends_at, status, auto_renew_alert, renewed_count, created_by
-        ) VALUES (
-          ${parentId}::uuid, ${params.unitPriceFcfa}, ${params.studentCount}, ${params.totalAmountFcfa},
-          ${params.durationMonths}, ${params.startsAt}, ${params.endsAt}, 'active', false, 0, ${params.createdBy}::uuid
-        )
-        RETURNING id::text
-      `);
-      const subscriptionId = subResult.rows[0]!.id;
-
+      const subscriptionIds: string[] = [];
       for (const studentId of params.studentIds) {
-        const updatedLink = await tx.execute<{ id: string }>(sql`
-          UPDATE parent_student_links
-          SET subscription_id = ${subscriptionId}::uuid
-          WHERE parent_id = ${parentId}::uuid
-            AND student_id = ${studentId}::uuid
+        const studentAmount = params.unitPriceFcfa * params.durationMonths;
+        const platformShareAmount = Math.round(studentAmount * params.platformSharePct / 100);
+        const subResult = await tx.execute<{ id: string }>(sql`
+          INSERT INTO parent_subscriptions (
+            student_id, parent_id, unit_price_fcfa, student_count, total_amount_fcfa,
+            platform_share_pct, platform_share_amount_fcfa, duration_months,
+            starts_at, ends_at, status, auto_renew_alert, renewed_count, created_by
+          ) VALUES (
+            ${studentId}::uuid, ${parentId}::uuid, ${params.unitPriceFcfa}, 1, ${studentAmount},
+            ${params.platformSharePct}, ${platformShareAmount}, ${params.durationMonths},
+            ${params.startsAt}::date, ${params.endsAt}::date, 'active', false, 0,
+            ${params.createdBy}::uuid
+          )
           RETURNING id::text
         `);
-        if (updatedLink.rows.length === 0) {
+        const subscriptionId = subResult.rows[0]?.id;
+        if (!subscriptionId) throw new Error('Failed to create per-student parent subscription');
+        subscriptionIds.push(subscriptionId);
+
+        await tx.execute(sql`
+          INSERT INTO parent_student_links (subscription_id, parent_id, student_id)
+          VALUES (${subscriptionId}::uuid, ${parentId}::uuid, ${studentId}::uuid)
+          ON CONFLICT (parent_id, student_id) DO UPDATE SET subscription_id = EXCLUDED.subscription_id
+        `);
+
+        if (params.paidNow) {
           await tx.execute(sql`
-            INSERT INTO parent_student_links (subscription_id, parent_id, student_id)
-            VALUES (${subscriptionId}::uuid, ${parentId}::uuid, ${studentId}::uuid)
+            INSERT INTO subscription_payments (
+              subscription_id, amount_fcfa, platform_share_amount_fcfa, payment_purpose,
+              payment_method, paid_at, recorded_by
+            )
+            VALUES (
+              ${subscriptionId}::uuid, ${studentAmount}, ${platformShareAmount},
+              'manual', ${params.paymentMethod}, NOW(), ${params.createdBy}::uuid
+            )
           `);
         }
-      }
-
-      if (params.paidNow) {
         await tx.execute(sql`
-          INSERT INTO subscription_payments (subscription_id, amount_fcfa, payment_method, paid_at, recorded_by)
-          VALUES (${subscriptionId}::uuid, ${params.totalAmountFcfa}, ${params.paymentMethod}, NOW(), ${params.createdBy}::uuid)
+          INSERT INTO parent_subscription_events (subscription_id, action, actor_user_id, metadata)
+          VALUES
+            (${subscriptionId}::uuid, 'created', ${params.createdBy}::uuid,
+              jsonb_build_object('studentId', ${studentId})),
+            (${subscriptionId}::uuid, 'activated', ${params.createdBy}::uuid,
+              jsonb_build_object('startsAt', ${params.startsAt}, 'endsAt', ${params.endsAt}, 'paidNow', ${params.paidNow}))
         `);
       }
 
-      return { parentId, subscriptionId, parentCreated };
+      return { parentId, subscriptionId: subscriptionIds[0]!, subscriptionIds, parentCreated };
     });
   }
 
@@ -1723,44 +1864,68 @@ export class SubscriptionsRepository {
     unitPriceFcfa: number;
     studentCount: number;
     totalAmountFcfa: number;
+    platformSharePct: number;
     durationMonths: number;
     startsAt: string;
     endsAt: string;
     createdBy: string;
     autoRenewAlert: boolean;
     studentIds: string[];
+    renewedFromSubscriptionId?: string;
     paidNow: boolean;
     paymentMethod: string;
-  }): Promise<{ subscriptionId: string }> {
+  }): Promise<{ subscriptionId: string; subscriptionIds: string[] }> {
     return this.tenantDb.transaction(async (tx) => {
-      const subResult = await tx.execute<{ id: string }>(sql`
-        INSERT INTO parent_subscriptions (
-          parent_id, unit_price_fcfa, student_count, total_amount_fcfa, duration_months,
-          starts_at, ends_at, status, auto_renew_alert, renewed_count, created_by
-        ) VALUES (
-          ${params.parentId}::uuid, ${params.unitPriceFcfa}, ${params.studentCount}, ${params.totalAmountFcfa},
-          ${params.durationMonths}, ${params.startsAt}, ${params.endsAt}, 'active', ${params.autoRenewAlert}, 0, ${params.createdBy}::uuid
-        )
-        RETURNING id::text
-      `);
-      const subscriptionId = subResult.rows[0]!.id;
-
+      const subscriptionIds: string[] = [];
       for (const studentId of params.studentIds) {
+        const studentAmount = params.unitPriceFcfa * params.durationMonths;
+        const platformShareAmount = Math.round(studentAmount * params.platformSharePct / 100);
+        const subResult = await tx.execute<{ id: string }>(sql`
+          INSERT INTO parent_subscriptions (
+            student_id, parent_id, unit_price_fcfa, student_count, total_amount_fcfa,
+            platform_share_pct, platform_share_amount_fcfa, duration_months,
+            renewed_from_subscription_id, starts_at, ends_at, status,
+            auto_renew_alert, renewed_count, created_by
+          ) VALUES (
+            ${studentId}::uuid, ${params.parentId}::uuid, ${params.unitPriceFcfa}, 1, ${studentAmount},
+            ${params.platformSharePct}, ${platformShareAmount}, ${params.durationMonths},
+            ${params.renewedFromSubscriptionId ?? null}::uuid,
+            ${params.startsAt}::date, ${params.endsAt}::date, 'active',
+            ${params.autoRenewAlert}, 0, ${params.createdBy}::uuid
+          )
+          RETURNING id::text
+        `);
+        const subscriptionId = subResult.rows[0]?.id;
+        if (!subscriptionId) throw new Error('Failed to create per-student renewal subscription');
         await tx.execute(sql`
           INSERT INTO parent_student_links (subscription_id, parent_id, student_id)
           VALUES (${subscriptionId}::uuid, ${params.parentId}::uuid, ${studentId}::uuid)
           ON CONFLICT (parent_id, student_id) DO UPDATE SET subscription_id = EXCLUDED.subscription_id
         `);
-      }
 
-      if (params.paidNow) {
+        if (params.paidNow) {
+          await tx.execute(sql`
+            INSERT INTO subscription_payments (
+              subscription_id, amount_fcfa, platform_share_amount_fcfa, payment_purpose,
+              payment_method, paid_at, recorded_by
+            )
+            VALUES (
+              ${subscriptionId}::uuid, ${studentAmount}, ${platformShareAmount}, 'renewal',
+              ${params.paymentMethod}, NOW(), ${params.createdBy}::uuid
+            )
+          `);
+        }
         await tx.execute(sql`
-          INSERT INTO subscription_payments (subscription_id, amount_fcfa, payment_method, paid_at, recorded_by)
-          VALUES (${subscriptionId}::uuid, ${params.totalAmountFcfa}, ${params.paymentMethod}, NOW(), ${params.createdBy}::uuid)
+          INSERT INTO parent_subscription_events (subscription_id, action, actor_user_id, metadata)
+          VALUES (${subscriptionId}::uuid, 'renewed', ${params.createdBy}::uuid,
+            jsonb_build_object('previousSubscriptionId', ${params.renewedFromSubscriptionId ?? null},
+              'studentId', ${studentId}, 'startsAt', ${params.startsAt}, 'endsAt', ${params.endsAt},
+              'paidNow', ${params.paidNow}))
         `);
+        subscriptionIds.push(subscriptionId);
       }
 
-      return { subscriptionId };
+      return { subscriptionId: subscriptionIds[0]!, subscriptionIds };
     });
   }
 

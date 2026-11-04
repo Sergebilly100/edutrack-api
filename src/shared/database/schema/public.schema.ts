@@ -183,6 +183,9 @@ export const schoolSmsFeatures = pgTable(
     commissionPct: numeric('commission_pct', { precision: 5, scale: 2 }).notNull().default('0'),
     smsCapPerStudent: integer('sms_cap_per_student').notNull().default(60),
     smsUnitPriceFcfa: integer('sms_unit_price_fcfa'),
+    mandatoryAtEnrollment: boolean('mandatory_at_enrollment').notNull().default(false),
+    imposedDurationMonths: integer('imposed_duration_months'),
+    showOnSchoolReceipt: boolean('show_on_school_receipt').notNull().default(false),
     useRealHours: boolean('use_real_hours').notNull().default(false),
     geoCheckEnabled: boolean('geo_check_enabled').notNull().default(false),
     checkoutToleranceMinutes: integer('checkout_tolerance_minutes').notNull().default(5),
@@ -202,6 +205,11 @@ export const schoolSmsFeatures = pgTable(
     schoolSmsFeaturesSmsCapNonNegativeCheck: check(
       'school_sms_features_sms_cap_non_negative_check',
       sql`${table.smsCapPerStudent} >= 0`
+    ),
+    schoolSmsFeaturesImposedDurationCheck: check(
+      'school_sms_features_imposed_duration_check',
+      sql`(${table.mandatoryAtEnrollment} = false AND ${table.imposedDurationMonths} IS NULL)
+        OR (${table.mandatoryAtEnrollment} = true AND ${table.imposedDurationMonths} IN (1, 3, 6, 12))`
     ),
     schoolSmsFeaturesCheckoutToleranceRangeCheck: check(
       'school_sms_features_checkout_tolerance_range_check',

@@ -3,7 +3,10 @@ import { Queue as BullQueue, Worker as BullWorker } from 'bullmq';
 import { sql } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 
-import { db } from '../../shared/database/db.js';
+import { db, withTenantSchema } from '../../shared/database/db.js';
+import type { NotificationJobData } from '../notifications/notifications.queue.js';
+import { SubscriptionsRepository } from './subscriptions.repository.js';
+import { SubscriptionsService } from './subscriptions.service.js';
 
 export const SUBSCRIPTION_MAINTENANCE_QUEUE = 'subscription-maintenance';
 
@@ -15,12 +18,12 @@ export const createSubscriptionMaintenanceQueue = (connection: Redis): Queue<Mai
   new BullQueue<MaintenanceJobData>(SUBSCRIPTION_MAINTENANCE_QUEUE, { connection });
 
 export const createSubscriptionMaintenanceWorker = (
-  connection: Redis
+  connection: Redis,
+  notificationsQueue: Queue<NotificationJobData>
 ): Worker<MaintenanceJobData> =>
   new BullWorker<MaintenanceJobData>(
     SUBSCRIPTION_MAINTENANCE_QUEUE,
     async () => {
-
       await db.execute(sql`
         WITH expired_trials AS (
           UPDATE public.tenants
@@ -46,6 +49,34 @@ export const createSubscriptionMaintenanceWorker = (
         FROM expired_trials
         WHERE s.tenant_id = expired_trials.id
       `);
+
+      const tenants = await db.execute<{ schema_name: string }>(sql`
+        SELECT schema_name
+        FROM public.tenants
+        WHERE schema_name IS NOT NULL
+        ORDER BY schema_name
+      `);
+      for (const { schema_name: schemaName } of tenants.rows) {
+        const maintenance = await withTenantSchema(schemaName, async (tenantDb) =>
+          new SubscriptionsService(new SubscriptionsRepository(tenantDb)).runDailyMaintenance()
+        );
+        for (const reminder of maintenance.reminders) {
+          await notificationsQueue.add('send-sms', {
+            type: 'send-sms',
+            to: reminder.parentPhone,
+            recipientPhone: reminder.parentPhone,
+            message: `La souscription Alertes Parents de ${reminder.studentName} expire le ${reminder.endsAt}. Vous pouvez la renouveler volontairement depuis le service Alertes Parents.`,
+            notificationType: 'subscription_expiry_alert',
+            schemaName,
+            relatedId: reminder.subscriptionId,
+            queueRef: `subscription-expiry-${reminder.subscriptionId}`,
+          }, {
+            jobId: `subscription-expiry-${schemaName}-${reminder.subscriptionId}`,
+            removeOnComplete: 100,
+            removeOnFail: 100,
+          });
+        }
+      }
     },
     { connection }
   );

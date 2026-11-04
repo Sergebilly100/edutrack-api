@@ -1,11 +1,12 @@
 import ExcelJS from 'exceljs';
 import { invalidateSchoolDerivedStudent } from '../../shared/database/invalidate-school-derived-student.js';
+import type { TenantSqlExecutor } from '../../shared/database/sql-executor.js';
+import { allocateEnrollmentPayment, calculateEnrollmentMinimum } from '../../shared/utils/parent-alerts.js';
 
 import {
   calculateStudentTotalDue,
   canCancelPayment,
   isValidCumulativeSchedule,
-  prorateSubscriptionAmount,
   resolveIndividualFinancialStatus,
   toCumulativeScheduleSteps,
 } from './finance.calculations.js';
@@ -27,7 +28,6 @@ import { calculateRunningBalances } from './finance.reports.js';
 import type {
   MobileMoneyProvider,
   PaymentMethod,
-  SubscriptionPlanInput,
   UpsertTuitionPlanInput,
 } from './finance.types.js';
 
@@ -78,7 +78,6 @@ export class FinanceService {
 
   private async amountDueWith(repository: FinanceRepository, studentId: string, schoolYearId: string, allowPending = false, allowHistorical = false) {
     const context = await repository.getAmountDueContext(studentId, schoolYearId, allowPending, allowHistorical);
-    const subscriptionPlans = await repository.listMandatorySubscriptionPlans();
     if (!context) {
       if (!allowPending && !(await repository.hasConfirmedEnrollment(studentId, schoolYearId, allowHistorical))) {
         throw new FinanceModuleError('A confirmed enrollment is required for this school year', 409, 'CONFIRMED_ENROLLMENT_REQUIRED');
@@ -90,16 +89,6 @@ export class FinanceService {
         await repository.getTuitionPlanRequiredContext(studentId, schoolYearId, allowPending, allowHistorical) ?? undefined
       );
     }
-    const subscriptionLines = subscriptionPlans.map((plan) => ({
-      id: plan.id,
-      label: plan.label,
-      amount: prorateSubscriptionAmount(
-        FinanceRepository.toNumber(plan.amount),
-        plan.period,
-        plan.imposed_duration
-      ),
-      showSeparately: plan.show_on_receipt_as_separate_line,
-    }));
     const totalDue = calculateStudentTotalDue({
       planTotalAmount: FinanceRepository.toNumber(context.plan_total_amount),
       overrideTotalAmount: context.override_total_amount === null
@@ -108,7 +97,6 @@ export class FinanceService {
       discountAmount: context.discount_amount === null
         ? null
         : FinanceRepository.toNumber(context.discount_amount),
-      mandatorySubscriptionAmounts: subscriptionLines.map((line) => line.amount),
     });
     return {
       ...context,
@@ -119,7 +107,7 @@ export class FinanceService {
       discountAmount: context.discount_amount === null
         ? null
         : FinanceRepository.toNumber(context.discount_amount),
-      subscriptionLines,
+      subscriptionLines: [],
       tuitionDue: Math.max(0, context.override_total_amount === null
         ? FinanceRepository.toNumber(context.plan_total_amount) - (context.discount_amount === null ? 0 : FinanceRepository.toNumber(context.discount_amount))
         : FinanceRepository.toNumber(context.override_total_amount)),
@@ -140,7 +128,16 @@ export class FinanceService {
       cumulativeExpectedAtDate: 0,
       confirmedPaid,
     });
-    return { remainingDue: status.remainingDue, totalDue: due.totalDue, confirmedPaid, currency: due.currency };
+    return {
+      remainingDue: status.remainingDue,
+      firstTuitionInstallment: Math.min(
+        status.remainingDue,
+        Math.max(0, FinanceRepository.toNumber(due.registration_amount))
+      ),
+      totalDue: due.totalDue,
+      confirmedPaid,
+      currency: due.currency,
+    };
   }
 
   async getSchoolFinancialSummary(schoolYearId?: string) {
@@ -253,20 +250,13 @@ export class FinanceService {
   }
 
   async listReEnrollmentBalances(schoolYearId: string): Promise<Map<string, number | null>> {
-    const [contexts, subscriptions] = await Promise.all([
-      this.repository.listReEnrollmentBalanceContexts(schoolYearId),
-      this.repository.listMandatorySubscriptionPlans(),
-    ]);
-    const mandatorySubscriptionAmounts = subscriptions.map((plan) => prorateSubscriptionAmount(
-      FinanceRepository.toNumber(plan.amount), plan.period, plan.imposed_duration
-    ));
+    const contexts = await this.repository.listReEnrollmentBalanceContexts(schoolYearId);
     return new Map(contexts.map((context) => {
       if (context.plan_total_amount === null) return [context.student_id, null];
       const totalDue = calculateStudentTotalDue({
         planTotalAmount: FinanceRepository.toNumber(context.plan_total_amount),
         overrideTotalAmount: context.override_total_amount === null ? null : FinanceRepository.toNumber(context.override_total_amount),
         discountAmount: context.discount_amount === null ? null : FinanceRepository.toNumber(context.discount_amount),
-        mandatorySubscriptionAmounts,
       });
       const status = resolveIndividualFinancialStatus({
         totalDue,
@@ -522,6 +512,24 @@ export class FinanceService {
     method: PaymentMethod;
     providerReference?: string;
     schoolReceiptReference: string;
+    parentAlerts?: {
+      amountFcfa: number;
+      minimumTuitionAmount: number;
+      showOnSchoolReceipt: boolean;
+      createSubscription: (
+        executor: TenantSqlExecutor,
+        method: PaymentMethod
+      ) => Promise<{
+        subscriptionId: string;
+        subscriptionPaymentId: string;
+        parentId: string;
+        parentPhone: string | null;
+        startsAt: string;
+        endsAt: string;
+        amountFcfa: number;
+        durationMonths: number;
+      }>;
+    };
   }) {
     return this.repository.db.transaction(async (tx) => {
       const repository = new FinanceRepository(tx as FinanceDb);
@@ -539,7 +547,8 @@ export class FinanceService {
       const due = await this.amountDueWith(repository, enrollment.student_id, enrollment.school_year_id, true);
       const alreadyPaid = await repository.getConfirmedPaid(enrollment.student_id, enrollment.school_year_id);
       const remainingDue = Math.max(0, Math.round((due.totalDue - alreadyPaid) * 100) / 100);
-      if (remainingDue <= 0) {
+      const alertsAmount = input.parentAlerts?.amountFcfa ?? 0;
+      if (remainingDue <= 0 && alertsAmount <= 0) {
         throw new FinanceModuleError(
           'No remaining amount can be recorded for this enrollment',
           409,
@@ -547,30 +556,78 @@ export class FinanceService {
         );
       }
       const amount = Math.round(input.amount * 100) / 100;
-      if (amount > remainingDue) {
+      const minimumTuitionAmount = Math.min(
+        remainingDue,
+        Math.max(0, input.parentAlerts?.minimumTuitionAmount ?? 0)
+      );
+      const minimumCombinedAmount = calculateEnrollmentMinimum(minimumTuitionAmount, alertsAmount);
+      if (input.parentAlerts && amount < minimumCombinedAmount) {
         throw new FinanceModuleError(
-          'Payment amount cannot exceed the remaining amount due',
+          `The minimum amount required to confirm enrollment is ${minimumCombinedAmount} FCFA`,
+          400,
+          'ENROLLMENT_PAYMENT_BELOW_MINIMUM'
+        );
+      }
+      if (amount > remainingDue + alertsAmount) {
+        throw new FinanceModuleError(
+          'Payment amount cannot exceed the remaining tuition and parent alerts amounts',
           400,
           'ENROLLMENT_PAYMENT_EXCEEDS_REMAINING_DUE'
         );
       }
-      const payment = await repository.insertPayment({
-        studentId: enrollment.student_id,
-        schoolYearId: enrollment.school_year_id,
+      if (alertsAmount > 0 && !input.parentAlerts) {
+        throw new FinanceModuleError('Parent alerts payment details are missing', 409, 'PARENT_ALERTS_PAYMENT_REQUIRED');
+      }
+      const allocationAmounts = allocateEnrollmentPayment({
         amount,
-        method: input.method,
-        source: 'cashier_manual',
-        confirmedByUserId: input.actorUserId,
-        providerReference: input.providerReference,
-        schoolReceiptReference: input.schoolReceiptReference,
-        receiptNumber: await repository.nextReceiptNumber(),
+        remainingTuition: remainingDue,
+        parentAlertsAmountFcfa: alertsAmount,
       });
+      const tuitionAmount = allocationAmounts.tuitionAmount;
+      const payment = tuitionAmount > 0
+        ? await repository.insertPayment({
+            studentId: enrollment.student_id,
+            schoolYearId: enrollment.school_year_id,
+            amount: tuitionAmount,
+            method: input.method,
+            source: 'cashier_manual',
+            confirmedByUserId: input.actorUserId,
+            providerReference: input.providerReference,
+            schoolReceiptReference: input.schoolReceiptReference,
+            receiptNumber: await repository.nextReceiptNumber(),
+          })
+        : null;
+      const subscription = input.parentAlerts
+        ? await input.parentAlerts.createSubscription(tx, input.method)
+        : null;
+      if (subscription && input.parentAlerts) {
+        await repository.insertEnrollmentPaymentAllocation({
+          paymentId: payment?.id ?? null,
+          subscriptionPaymentId: subscription.subscriptionPaymentId,
+          studentId: enrollment.student_id,
+          schoolYearId: enrollment.school_year_id,
+          totalAmount: allocationAmounts.totalAmount,
+          tuitionAmount,
+          parentAlertsAmount: allocationAmounts.parentAlertsAmount,
+          showParentAlertsOnReceipt: input.parentAlerts.showOnSchoolReceipt,
+          actorUserId: input.actorUserId,
+        });
+      }
       await repository.confirmEnrollment(input.enrollmentId, input.actorUserId);
       await invalidateSchoolDerivedStudent(tx as FinanceDb, enrollment.student_id, enrollment.school_year_id);
       await new FinancialCacheService(
         new FinancialCacheRepository(tx as FinanceDb)
       ).recalcStudent(enrollment.student_id, enrollment.school_year_id);
-      return { payment: mapPayment(payment) };
+      return {
+        payment: payment ? mapPayment(payment) : null,
+        allocation: subscription ? {
+          totalAmount: allocationAmounts.totalAmount,
+          tuitionAmount,
+          parentAlertsAmount: allocationAmounts.parentAlertsAmount,
+          showParentAlertsOnSchoolReceipt: input.parentAlerts?.showOnSchoolReceipt ?? false,
+        } : null,
+        subscription,
+      };
     });
   }
 
@@ -713,7 +770,7 @@ export class FinanceService {
     if (!activeOverride) throw new FinanceModuleError('Aucun ajustement actif à retirer pour cet élève.', 404, 'TUITION_OVERRIDE_NOT_FOUND');
     const current = await this.getAmountDue(studentId, schoolYearId);
     const restoredTuitionAmount = current.planTotalAmount;
-    const restoredTotalAmount = calculateStudentTotalDue({ planTotalAmount: restoredTuitionAmount, mandatorySubscriptionAmounts: current.subscriptionLines.map((line) => line.amount) });
+    const restoredTotalAmount = calculateStudentTotalDue({ planTotalAmount: restoredTuitionAmount });
     const confirmedPaid = await this.repository.getConfirmedPaid(studentId, schoolYearId);
     const agreement = await this.repository.getStudentTuitionScheduleAgreement(studentId, schoolYearId);
     const scheduleCompatible = !agreement || isValidCumulativeSchedule(agreement.scheduleSteps, restoredTuitionAmount);
@@ -750,7 +807,8 @@ export class FinanceService {
     const remainingToPlan = Math.max(0, Math.round((due.tuitionDue - confirmedPaid) * 100) / 100);
     return {
       agreement: agreement && (includeReason ? agreement : (() => {
-        const { reason: _reason, ...metadata } = agreement;
+        const { reason, ...metadata } = agreement;
+        void reason;
         return metadata;
       })()),
       totalTuitionAmount: due.tuitionDue,
@@ -941,31 +999,30 @@ export class FinanceService {
   }) {
     return this.repository.upsertProviderSetting({ ...input, isActive: false });
   }
-  listSubscriptionPlans() { return this.repository.listSubscriptionPlans(); }
-  createSubscriptionPlan(input: SubscriptionPlanInput) { return this.repository.createSubscriptionPlan(input); }
-  async updateSubscriptionPlan(id: string, input: SubscriptionPlanInput) {
-    const plan = await this.repository.updateSubscriptionPlan(id, input);
-    if (!plan) throw new FinanceModuleError('Subscription plan not found', 404, 'SUBSCRIPTION_PLAN_NOT_FOUND');
-    return plan;
-  }
-
   async getReceiptPayload(paymentId: string) {
     const payment = await this.repository.getReceiptContext(paymentId);
     if (!payment) throw new FinanceModuleError('Payment not found', 404, 'PAYMENT_NOT_FOUND');
     const status = await this.getFinancialStatus(payment.student_id, payment.school_year_id);
-    const due = await this.getAmountDue(payment.student_id, payment.school_year_id);
     return {
       receiptNumber: payment.receipt_number,
       studentName: payment.student_name,
       className: payment.class_name,
       schoolYearLabel: payment.school_year_label,
-      amount: FinanceRepository.toNumber(payment.amount),
+      amount: FinanceRepository.toNumber(
+        payment.enrollment_total_amount ?? payment.amount
+      ),
       currency: payment.currency,
       method: payment.method,
       createdAt: iso(payment.created_at)!,
       schoolReceiptReference: payment.school_receipt_reference,
       remainingDue: status.remainingDue,
-      subscriptionLines: due.subscriptionLines.filter((line) => line.showSeparately),
+      subscriptionLines: payment.show_parent_alerts_on_receipt
+        && FinanceRepository.toNumber(payment.enrollment_parent_alerts_amount) > 0
+        ? [{
+            label: 'Alertes Parents',
+            amount: FinanceRepository.toNumber(payment.enrollment_parent_alerts_amount),
+          }]
+        : [],
     };
   }
 }

@@ -6,7 +6,6 @@ import {
   canCancelPayment,
   isValidCumulativeSchedule,
   amountFromCumulativeStep,
-  prorateSubscriptionAmount,
   resolveIndividualFinancialStatus,
   resolveFinancialStanding,
   toCumulativeScheduleSteps,
@@ -59,13 +58,8 @@ describe('finance calculations', () => {
     })).toBe(95_000);
   });
 
-  it('ajoute le montant proratisé de l’abonnement imposé', () => {
-    const mandatorySubscription = prorateSubscriptionAmount(1_000, 'monthly', 'quarterly');
-    expect(mandatorySubscription).toBe(3_000);
-    expect(calculateStudentTotalDue({
-      planTotalAmount: 150_000,
-      mandatorySubscriptionAmounts: [mandatorySubscription],
-    })).toBe(153_000);
+  it('garde le service Alertes Parents hors du dû de scolarité', () => {
+    expect(calculateStudentTotalDue({ planTotalAmount: 150_000 })).toBe(150_000);
   });
 
   it('compare uniquement le cumul confirmé au seuil attendu à date', () => {

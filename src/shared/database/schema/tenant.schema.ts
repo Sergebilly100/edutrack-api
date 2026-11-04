@@ -1555,13 +1555,17 @@ export const parentSubscriptions = tenant.table(
   'parent_subscriptions',
   {
     id: uuid('id').defaultRandom().primaryKey(),
+    studentId: uuid('student_id').references(() => students.id, { onDelete: 'cascade' }),
     parentId: uuid('parent_id')
       .notNull()
       .references(() => parents.id, { onDelete: 'cascade' }),
     unitPriceFcfa: integer('unit_price_fcfa').notNull(),
     studentCount: integer('student_count').notNull(),
     totalAmountFcfa: integer('total_amount_fcfa').notNull(),
+    platformSharePct: numeric('platform_share_pct', { precision: 5, scale: 2 }),
+    platformShareAmountFcfa: integer('platform_share_amount_fcfa'),
     durationMonths: integer('duration_months').notNull().default(1),
+    renewedFromSubscriptionId: uuid('renewed_from_subscription_id'),
     startsAt: date('starts_at', { mode: 'string' }).notNull(),
     endsAt: date('ends_at', { mode: 'string' }).notNull(),
     status: varchar('status', { length: 20 }).notNull().default('active'),
@@ -1585,7 +1589,13 @@ export const parentSubscriptions = tenant.table(
       'parent_subscriptions_total_amount_non_negative_check',
       sql`${table.totalAmountFcfa} >= 0`
     ),
+    parentSubscriptionsPlatformShareCheck: check(
+      'parent_subscriptions_platform_share_check',
+      sql`${table.platformSharePct} >= 0 AND ${table.platformSharePct} <= 100
+        AND ${table.platformShareAmountFcfa} >= 0`
+    ),
     parentSubscriptionsParentIdx: index('idx_parent_subs_parent').on(table.parentId),
+    parentSubscriptionsStudentIdx: index('idx_parent_subs_student').on(table.studentId),
     parentSubscriptionsStatusEndIdx: index('idx_parent_subs_status_end').on(
       table.status,
       table.endsAt
@@ -1624,6 +1634,8 @@ export const subscriptionPayments = tenant.table(
       .notNull()
       .references(() => parentSubscriptions.id, { onDelete: 'cascade' }),
     amountFcfa: integer('amount_fcfa').notNull(),
+    platformShareAmountFcfa: integer('platform_share_amount_fcfa'),
+    paymentPurpose: varchar('payment_purpose', { length: 30 }).notNull().default('manual'),
     paymentMethod: varchar('payment_method', { length: 20 }).notNull().default('cash'),
     paidAt: timestamp('paid_at', { withTimezone: true, mode: 'date' }).notNull(),
     recordedBy: uuid('recorded_by')
@@ -1635,13 +1647,69 @@ export const subscriptionPayments = tenant.table(
   (table) => ({
     subscriptionPaymentsMethodCheck: check(
       'subscription_payments_method_check',
-      sql`${table.paymentMethod} IN ('cash', 'momo_mtn', 'momo_orange')`
+      sql`${table.paymentMethod} IN ('cash', 'momo_mtn', 'momo_orange', 'mobile_money', 'bank_transfer')`
     ),
     subscriptionPaymentsAmountNonNegativeCheck: check(
       'subscription_payments_amount_non_negative_check',
       sql`${table.amountFcfa} >= 0`
     ),
+    subscriptionPaymentsPlatformShareNonNegativeCheck: check(
+      'subscription_payments_platform_share_non_negative_check',
+      sql`${table.platformShareAmountFcfa} >= 0`
+    ),
+    subscriptionPaymentsPurposeCheck: check(
+      'subscription_payments_purpose_check',
+      sql`${table.paymentPurpose} IN ('manual', 'enrollment', 'renewal')`
+    ),
     subscriptionPaymentsSubscriptionIdx: index('idx_sub_payments_sub').on(table.subscriptionId),
+  })
+);
+
+export const enrollmentPaymentAllocations = tenant.table(
+  'enrollment_payment_allocations',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    paymentId: uuid('payment_id').unique().references(() => payments.id, { onDelete: 'restrict' }),
+    subscriptionPaymentId: uuid('subscription_payment_id').unique().references(() => subscriptionPayments.id, { onDelete: 'restrict' }),
+    studentId: uuid('student_id').notNull().references(() => students.id, { onDelete: 'restrict' }),
+    schoolYearId: uuid('school_year_id').notNull().references(() => schoolYears.id, { onDelete: 'restrict' }),
+    totalAmount: numeric('total_amount', { precision: 12, scale: 2 }).notNull(),
+    tuitionAmount: numeric('tuition_amount', { precision: 12, scale: 2 }).notNull(),
+    parentAlertsAmount: numeric('parent_alerts_amount', { precision: 12, scale: 2 }).notNull().default('0'),
+    showParentAlertsOnReceipt: boolean('show_parent_alerts_on_receipt').notNull().default(false),
+    allocatedByUserId: uuid('allocated_by_user_id').notNull().references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    enrollmentPaymentAllocationsStudentYearIdx: index('idx_enrollment_payment_allocations_student_year')
+      .on(table.studentId, table.schoolYearId),
+    enrollmentPaymentAllocationsAmountsCheck: check(
+      'enrollment_payment_allocations_amounts_check',
+      sql`(${table.paymentId} IS NOT NULL OR ${table.subscriptionPaymentId} IS NOT NULL)
+        AND ${table.totalAmount} > 0 AND ${table.tuitionAmount} >= 0
+        AND ${table.parentAlertsAmount} >= 0
+        AND ${table.totalAmount} = ${table.tuitionAmount} + ${table.parentAlertsAmount}`
+    ),
+  })
+);
+
+export const parentSubscriptionEvents = tenant.table(
+  'parent_subscription_events',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    subscriptionId: uuid('subscription_id').notNull().references(() => parentSubscriptions.id, { onDelete: 'restrict' }),
+    action: varchar('action', { length: 30 }).notNull(),
+    actorUserId: uuid('actor_user_id').references(() => users.id),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    parentSubscriptionEventsActionCheck: check(
+      'parent_subscription_events_action_check',
+      sql`${table.action} IN ('created', 'activated', 'renewed', 'expired', 'cancelled', 'reversal_recorded')`
+    ),
+    parentSubscriptionEventsSubscriptionIdx: index('idx_parent_subscription_events_subscription')
+      .on(table.subscriptionId, table.createdAt),
   })
 );
 

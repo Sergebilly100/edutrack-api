@@ -5,6 +5,8 @@ import { SubscriptionsService } from '../../src/modules/subscriptions/subscripti
 const buildRepositoryMock = () => ({
   getTenantIdBySchemaName: vi.fn(),
   getSmsFeatureByTenantId: vi.fn(),
+  getEnrollmentParentContext: vi.fn(),
+  updateParentAlertSettingsByTenantId: vi.fn(),
   getActiveSubscriptionLinkByStudent: vi.fn(),
   getUsageByStudentMonth: vi.fn(),
   computeStartsAndEnds: vi.fn(),
@@ -131,10 +133,29 @@ describe('subscriptions.service', () => {
   });
 
   describe('createParentSubscription', () => {
+    it('refuse d’activer une souscription avant encaissement', async () => {
+      const repository = buildRepositoryMock();
+      const service = new SubscriptionsService(repository as never);
+
+      await expect(service.createParentSubscription({
+        schemaName: 'school_test',
+        actorUserId: 'user-1',
+        payload: {
+          full_name: 'P',
+          phone: '2250709990001',
+          student_ids: ['s1'],
+          duration_months: 1,
+          payment_method: 'cash',
+          paid_now: false,
+        },
+      })).rejects.toMatchObject({ code: 'SUBSCRIPTION_PAYMENT_REQUIRED' });
+      expect(repository.getTenantIdBySchemaName).not.toHaveBeenCalled();
+    });
+
     it('calcule 2 élèves × 1000 × 1 = 2000 et appelle la transaction', async () => {
       const repository = buildRepositoryMock();
       repository.getTenantIdBySchemaName.mockResolvedValue('tenant-1');
-      repository.getSmsFeatureByTenantId.mockResolvedValue({ is_enabled: true, sms_unit_price_fcfa: 1000, commission_pct: 15, sms_cap_per_student: 60 });
+      repository.getSmsFeatureByTenantId.mockResolvedValue({ is_enabled: true, monetize_parent_alerts: true, sms_unit_price_fcfa: 1000, commission_pct: 15, sms_cap_per_student: 60 });
       repository.getStudentsByIds.mockResolvedValue([{ id: 'student-1' }, { id: 'student-2' }]);
       repository.findParentByPhone.mockResolvedValue(null);
       repository.computeStartsAndEnds.mockReturnValue({ startsAt: '2026-04-15', endsAt: '2026-05-15' });
@@ -156,7 +177,7 @@ describe('subscriptions.service', () => {
     it('calcule 2 élèves × 1000 × 3 = 6000', async () => {
       const repository = buildRepositoryMock();
       repository.getTenantIdBySchemaName.mockResolvedValue('tenant-1');
-      repository.getSmsFeatureByTenantId.mockResolvedValue({ is_enabled: true, sms_unit_price_fcfa: 1000, commission_pct: 15, sms_cap_per_student: 60 });
+      repository.getSmsFeatureByTenantId.mockResolvedValue({ is_enabled: true, monetize_parent_alerts: true, sms_unit_price_fcfa: 1000, commission_pct: 15, sms_cap_per_student: 60 });
       repository.getStudentsByIds.mockResolvedValue([{ id: 'student-1' }, { id: 'student-2' }]);
       repository.findParentByPhone.mockResolvedValue(null);
       repository.computeStartsAndEnds.mockReturnValue({ startsAt: '2026-04-15', endsAt: '2026-07-15' });
@@ -175,7 +196,7 @@ describe('subscriptions.service', () => {
     it('ajoute un abonnement au parent existant sans recréer ses accès', async () => {
       const repository = buildRepositoryMock();
       repository.getTenantIdBySchemaName.mockResolvedValue('tenant-1');
-      repository.getSmsFeatureByTenantId.mockResolvedValue({ is_enabled: true, sms_unit_price_fcfa: 1000, sms_cap_per_student: 60 });
+      repository.getSmsFeatureByTenantId.mockResolvedValue({ is_enabled: true, monetize_parent_alerts: true, sms_unit_price_fcfa: 1000, sms_cap_per_student: 60 });
       repository.getStudentsByIds.mockResolvedValue([{ id: 'student-1' }]);
       repository.findParentByPhone.mockResolvedValue({ id: 'existing-parent' });
       repository.computeStartsAndEnds.mockReturnValue({ startsAt: '2026-04-15', endsAt: '2026-05-15' });
@@ -211,17 +232,42 @@ describe('subscriptions.service', () => {
         })
       ).rejects.toMatchObject({ code: 'SMS_FEATURE_NOT_ENABLED' });
     });
+
+    it('refuse la souscription payante lorsque la monétisation est désactivée', async () => {
+      const repository = buildRepositoryMock();
+      repository.getTenantIdBySchemaName.mockResolvedValue('tenant-1');
+      repository.getSmsFeatureByTenantId.mockResolvedValue({
+        is_enabled: true,
+        monetize_parent_alerts: false,
+        sms_unit_price_fcfa: 1000,
+      });
+
+      const service = new SubscriptionsService(repository as never);
+      await expect(service.createParentSubscription({
+        schemaName: 'school_test',
+        actorUserId: 'user-1',
+        payload: {
+          full_name: 'P',
+          phone: '2250709990001',
+          student_ids: ['s1'],
+          duration_months: 1,
+          payment_method: 'cash',
+          paid_now: true,
+        },
+      })).rejects.toMatchObject({ code: 'SMS_FEATURE_NOT_ENABLED' });
+    });
   });
 
   describe('renewParentSubscription', () => {
-    it('utilise starts_at = ancien ends_at + 1 jour (abonnement récent)', async () => {
+    it('renouvelle une souscription expirée à partir du jour courant', async () => {
       const repository = buildRepositoryMock();
       repository.getParentById.mockResolvedValue({ id: 'parent-1' });
-      repository.getLatestSubscription.mockResolvedValue({ id: 'sub-old', ends_at: '2099-02-15', auto_renew_alert: false });
+      repository.getLatestSubscription.mockResolvedValue({ id: 'sub-old', status: 'expired', ends_at: '2020-02-15', auto_renew_alert: false });
       repository.getSubscriptionStudents.mockResolvedValue([{ id: 'student-1' }]);
       repository.getTenantIdBySchemaName.mockResolvedValue('tenant-1');
-      repository.getSmsFeatureByTenantId.mockResolvedValue({ sms_unit_price_fcfa: 1000, is_enabled: true, sms_cap_per_student: 60 });
-      repository.computeRenewalStartsAndEnds.mockReturnValue({ startsAt: '2099-02-16', endsAt: '2099-03-16' });
+      repository.getSmsFeatureByTenantId.mockResolvedValue({ sms_unit_price_fcfa: 1000, is_enabled: true, monetize_parent_alerts: true, sms_cap_per_student: 60 });
+      const today = new Date().toISOString().slice(0, 10);
+      repository.computeRenewalStartsAndEnds.mockReturnValue({ startsAt: today, endsAt: '2026-12-01' });
       repository.renewSubscriptionTx.mockResolvedValue({ subscriptionId: 'sub-new' });
 
       const service = new SubscriptionsService(repository as never);
@@ -230,17 +276,17 @@ describe('subscriptions.service', () => {
         payload: { duration_months: 1, payment_method: 'cash', paid_now: true },
       });
 
-      expect(repository.computeRenewalStartsAndEnds).toHaveBeenCalledWith('2099-02-15', 1);
-      expect(result.starts_at).toBe('2099-02-16');
+      expect(repository.computeRenewalStartsAndEnds).toHaveBeenCalledWith('2020-02-15', 1);
+      expect(result.starts_at).toBe(today);
     });
 
     it('starts_at = today si abonnement expiré depuis longtemps', async () => {
       const repository = buildRepositoryMock();
       repository.getParentById.mockResolvedValue({ id: 'parent-1' });
-      repository.getLatestSubscription.mockResolvedValue({ id: 'sub-old', ends_at: '2020-01-01', auto_renew_alert: false });
+      repository.getLatestSubscription.mockResolvedValue({ id: 'sub-old', status: 'expired', ends_at: '2020-01-01', auto_renew_alert: false });
       repository.getSubscriptionStudents.mockResolvedValue([{ id: 'student-1' }]);
       repository.getTenantIdBySchemaName.mockResolvedValue('tenant-1');
-      repository.getSmsFeatureByTenantId.mockResolvedValue({ sms_unit_price_fcfa: 1000, is_enabled: true, sms_cap_per_student: 60 });
+      repository.getSmsFeatureByTenantId.mockResolvedValue({ sms_unit_price_fcfa: 1000, is_enabled: true, monetize_parent_alerts: true, sms_cap_per_student: 60 });
       const today = new Date().toISOString().slice(0, 10);
       repository.computeRenewalStartsAndEnds.mockReturnValue({ startsAt: today, endsAt: '2026-12-01' });
       repository.renewSubscriptionTx.mockResolvedValue({ subscriptionId: 'sub-new' });
@@ -252,6 +298,19 @@ describe('subscriptions.service', () => {
       });
 
       expect(result.starts_at).toBe(today);
+    });
+
+    it('refuse le renouvellement avant expiration', async () => {
+      const repository = buildRepositoryMock();
+      repository.getParentById.mockResolvedValue({ id: 'parent-1' });
+      repository.getLatestSubscription.mockResolvedValue({ id: 'sub-active', status: 'active', ends_at: '2099-02-15' });
+      const service = new SubscriptionsService(repository as never);
+
+      await expect(service.renewParentSubscription({
+        parentId: 'parent-1', actorUserId: 'user-1', schemaName: 'school_test',
+        payload: { duration_months: 1, payment_method: 'cash', paid_now: true },
+      })).rejects.toMatchObject({ code: 'SUBSCRIPTION_RENEWAL_NOT_ELIGIBLE' });
+      expect(repository.renewSubscriptionTx).not.toHaveBeenCalled();
     });
   });
 
@@ -348,6 +407,7 @@ describe('subscriptions.service', () => {
       repository.getSmsFeatureByTenantId.mockResolvedValue({ commission_pct: 15 });
       repository.getRevenueSummary.mockResolvedValue({
         monthly_revenue_prorated_fcfa: 4000, total_collected_fcfa: 4000,
+        commission_due_fcfa: 600,
         commission_paid_fcfa: 0, subscriptions_count: 2, active_subscriptions_count: 2,
         subscriptions_active_count: 2, subscriptions_new_this_month: 0,
       });
@@ -364,6 +424,7 @@ describe('subscriptions.service', () => {
       repository.getSmsFeatureByTenantId.mockResolvedValue({ commission_pct: 15 });
       repository.getRevenueSummary.mockResolvedValue({
         monthly_revenue_prorated_fcfa: 4000, total_collected_fcfa: 4000,
+        commission_due_fcfa: 600,
         commission_paid_fcfa: 600, subscriptions_active_count: 2, subscriptions_new_this_month: 0,
       });
 
@@ -379,14 +440,14 @@ describe('subscriptions.service', () => {
       const repository = buildRepositoryMock();
       repository.expireOutdatedSubscriptions.mockResolvedValue(3);
       repository.listRenewalAlertsInSevenDays.mockResolvedValue([
-        { parentPhone: '2250700000001', parentName: 'Parent', endsAt: '2026-05-10' },
-        { parentPhone: '2250700000002', parentName: 'Parent 2', endsAt: '2026-05-10' },
+        { subscriptionId: 'sub-1', studentName: 'Awa', parentPhone: '2250700000001', parentName: 'Parent', endsAt: '2026-05-10' },
+        { subscriptionId: 'sub-2', studentName: 'Koffi', parentPhone: '2250700000002', parentName: 'Parent 2', endsAt: '2026-05-10' },
       ]);
 
       const service = new SubscriptionsService(repository as never);
       const result = await service.runDailyMaintenance();
 
-      expect(result).toEqual({ expired: 3, alerts: 2 });
+      expect(result).toMatchObject({ expired: 3, alerts: 2, reminders: expect.any(Array) });
       expect(repository.insertSubscriptionExpiryAlertLog).toHaveBeenCalledTimes(2);
     });
 
@@ -398,8 +459,62 @@ describe('subscriptions.service', () => {
       const service = new SubscriptionsService(repository as never);
       const result = await service.runDailyMaintenance();
 
-      expect(result).toEqual({ expired: 0, alerts: 0 });
+      expect(result).toMatchObject({ expired: 0, alerts: 0, reminders: [] });
       expect(repository.insertSubscriptionExpiryAlertLog).not.toHaveBeenCalled();
+    });
+
+    describe('getEnrollmentAlertRequirement', () => {
+      it('requires payment for the configured period only when the paid service is active', async () => {
+        const repository = buildRepositoryMock();
+        repository.getTenantIdBySchemaName.mockResolvedValue('tenant-1');
+        repository.getSmsFeatureByTenantId.mockResolvedValue({
+          is_enabled: true,
+          monetize_parent_alerts: true,
+          mandatory_at_enrollment: true,
+          imposed_duration_months: 3,
+          sms_unit_price_fcfa: 2000,
+          commission_pct: 12,
+          show_on_school_receipt: true,
+        });
+        repository.getEnrollmentParentContext.mockResolvedValue({
+          student_id: 'student-1',
+          student_name: 'Awa Koné',
+          parent_id: 'parent-1',
+          parent_name: 'Mariam Koné',
+          parent_phone: '2250700000001',
+          parent_email: null,
+        });
+
+        const result = await new SubscriptionsService(repository as never)
+          .getEnrollmentAlertRequirement('school_test', 'student-1');
+
+        expect(result).toMatchObject({
+          studentId: 'student-1',
+          required: true,
+          monthlyPriceFcfa: 2000,
+          durationMonths: 3,
+          amountFcfa: 6000,
+          platformSharePct: 12,
+          parentContactMissing: false,
+        });
+      });
+
+      it('does not create an automatic requirement when the paid service is disabled', async () => {
+        const repository = buildRepositoryMock();
+        repository.getTenantIdBySchemaName.mockResolvedValue('tenant-1');
+        repository.getSmsFeatureByTenantId.mockResolvedValue({
+          is_enabled: false,
+          monetize_parent_alerts: true,
+          mandatory_at_enrollment: true,
+          imposed_duration_months: 3,
+        });
+
+        const result = await new SubscriptionsService(repository as never)
+          .getEnrollmentAlertRequirement('school_test', 'student-1');
+
+        expect(result).toMatchObject({ required: false, amountFcfa: 0, parentContactMissing: false });
+        expect(repository.getEnrollmentParentContext).not.toHaveBeenCalled();
+      });
     });
   });
 });

@@ -82,8 +82,8 @@ describe('F15/F20 — frontières des calculs financiers', () => {
     expect(resolveIndividualFinancialStatus({ totalDue: 100_000, cumulativeExpectedAtDate: 50_000, confirmedPaid: paid }))
       .toEqual({ coveredAmount: paid, remainingDue: remaining, standing, cacheStatus: cache });
   });
-  it('un montant personnalisé nul ne retombe pas sur les frais du niveau', () => {
-    expect(calculateStudentTotalDue({ planTotalAmount: 100_000, overrideTotalAmount: 0, mandatorySubscriptionAmounts: [1_000] })).toBe(1_000);
+  it('un montant personnalisé nul ne retombe pas sur les frais du niveau ni les alertes parents', () => {
+    expect(calculateStudentTotalDue({ planTotalAmount: 100_000, overrideTotalAmount: 0 })).toBe(0);
     expect(calculateStudentTotalDue({ planTotalAmount: 100_000, discountAmount: 150_000 })).toBe(0);
   });
   it('refuse les dates identiques et les cumuls décroissants, accepte un palier', () => {

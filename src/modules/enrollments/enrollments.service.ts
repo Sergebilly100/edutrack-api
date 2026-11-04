@@ -2,6 +2,9 @@ import { EnrollmentsRepository, type EnrollmentRow, type ReEnrollmentCandidateRo
 import type { EnrollmentStatus, EnrollmentType, StudentDocumentStatus } from './enrollments.types.js';
 import { buildFinanceService } from '../finance/finance.service.js';
 import type { PaymentMethod } from '../finance/finance.types.js';
+import { SubscriptionsRepository } from '../subscriptions/subscriptions.repository.js';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
+import type { TenantSqlExecutor } from '../../shared/database/sql-executor.js';
 
 export class EnrollmentsModuleError extends Error {
   constructor(message: string, public readonly statusCode: number, public readonly code: string) {
@@ -103,7 +106,38 @@ export class EnrollmentsService {
         method: PaymentMethod;
         providerReference?: string;
         schoolReceiptReference: string;
-      }): Promise<{ payment: { id: string } & Record<string, unknown> }>;
+        parentAlerts?: {
+          amountFcfa: number;
+          minimumTuitionAmount: number;
+          showOnSchoolReceipt: boolean;
+          createSubscription: (
+            executor: TenantSqlExecutor,
+            method: PaymentMethod
+          ) => Promise<{
+            subscriptionId: string;
+            subscriptionPaymentId: string;
+            parentId: string;
+            parentPhone: string | null;
+            startsAt: string;
+            endsAt: string;
+            amountFcfa: number;
+            durationMonths: number;
+          }>;
+        };
+      }): Promise<{
+        payment: ({ id: string } & Record<string, unknown>) | null;
+        allocation: { totalAmount: number; tuitionAmount: number; parentAlertsAmount: number; showParentAlertsOnSchoolReceipt: boolean } | null;
+        subscription: {
+          subscriptionId: string;
+          subscriptionPaymentId: string;
+          parentId: string;
+          parentPhone: string | null;
+          startsAt: string;
+          endsAt: string;
+          amountFcfa: number;
+          durationMonths: number;
+        } | null;
+      }>;
       getFinancialStatus(studentId: string, schoolYearId: string): Promise<{
         remainingDue: number;
         currency?: string;
@@ -119,9 +153,11 @@ export class EnrollmentsService {
       }>;
       listReEnrollmentBalances?(schoolYearId: string): Promise<Map<string, number | null>>;
       getEnrollmentPaymentPreview(studentId: string, schoolYearId: string): Promise<{
-        remainingDue: number; currency: string; totalDue: number; confirmedPaid: number;
+        remainingDue: number; firstTuitionInstallment: number; currency: string; totalDue: number; confirmedPaid: number;
       }>;
-    }
+    },
+    private readonly parentAlerts?: Pick<SubscriptionsService, 'getEnrollmentAlertRequirement' | 'prepareEnrollmentAlertSubscription'>,
+    private readonly schemaName?: string
   ) {}
 
   async listEnrollments(filters: { schoolYearId?: string; levelId?: string; classId?: string; status?: EnrollmentStatus; type?: EnrollmentType; search?: string; page: number; limit: number }) {
@@ -332,15 +368,45 @@ export class EnrollmentsService {
     if (!this.finance) {
       throw new EnrollmentsModuleError('Financial module is unavailable', 503, 'FINANCE_MODULE_UNAVAILABLE');
     }
-    const status = enrollment.status === 'confirmed'
-      ? await this.finance.getFinancialStatus(enrollment.student_id, enrollment.school_year_id)
+    const preview = enrollment.status === 'confirmed'
+      ? null
       : await this.finance.getEnrollmentPaymentPreview(enrollment.student_id, enrollment.school_year_id);
+    const status = preview
+      ?? await this.finance.getFinancialStatus(enrollment.student_id, enrollment.school_year_id);
+    const parentAlerts = this.parentAlerts && this.schemaName
+      ? await this.parentAlerts.getEnrollmentAlertRequirement(this.schemaName, enrollment.student_id)
+      : null;
+    const firstTuitionInstallment = preview?.firstTuitionInstallment ?? 0;
+    const minimumToConfirm = parentAlerts?.required
+      ? firstTuitionInstallment + parentAlerts.amountFcfa
+      : firstTuitionInstallment;
     return {
       enrollment: mapEnrollment(enrollment),
       amountDue: status.remainingDue,
       currency: status.currency ?? 'FCFA',
       totalDue: status.totalDue ?? status.remainingDue,
       confirmedPaid: status.confirmedPaid ?? 0,
+      firstTuitionInstallment,
+      parentAlerts: parentAlerts ? {
+        required: parentAlerts.required,
+        monthlyPriceFcfa: parentAlerts.monthlyPriceFcfa,
+        durationMonths: parentAlerts.durationMonths,
+        amountFcfa: parentAlerts.amountFcfa,
+        showOnSchoolReceipt: parentAlerts.showOnSchoolReceipt,
+        parentContactMissing: parentAlerts.parentContactMissing,
+        parentName: parentAlerts.parentName,
+        parentPhone: parentAlerts.parentPhone,
+      } : {
+        required: false,
+        monthlyPriceFcfa: 0,
+        durationMonths: null,
+        amountFcfa: 0,
+        showOnSchoolReceipt: false,
+        parentContactMissing: false,
+        parentName: null,
+        parentPhone: null,
+      },
+      minimumToConfirm,
     };
   }
 
@@ -508,9 +574,54 @@ export class EnrollmentsService {
     if (!this.finance) {
       throw new EnrollmentsModuleError('Financial module is unavailable', 503, 'FINANCE_MODULE_UNAVAILABLE');
     }
-    const { payment } = await this.finance.recordEnrollmentPayment({
+    let parentAlertsPayment: {
+      amountFcfa: number;
+      minimumTuitionAmount: number;
+      showOnSchoolReceipt: boolean;
+      createSubscription: (
+        executor: TenantSqlExecutor,
+        method: PaymentMethod
+      ) => Promise<{
+        subscriptionId: string;
+        subscriptionPaymentId: string;
+        parentId: string;
+        parentPhone: string | null;
+        startsAt: string;
+        endsAt: string;
+        amountFcfa: number;
+        durationMonths: number;
+      }>;
+    } | undefined;
+    if (this.parentAlerts && this.schemaName) {
+      const prepared = await this.parentAlerts.prepareEnrollmentAlertSubscription(
+        this.schemaName,
+        current.student_id,
+        userId
+      );
+      if (prepared.requirement.required) {
+        const preview = await this.finance.getEnrollmentPaymentPreview(
+          current.student_id,
+          current.school_year_id
+        );
+        if (!prepared.createSubscription) {
+          throw new EnrollmentsModuleError(
+            'Parent alerts subscription could not be prepared',
+            409,
+            'PARENT_ALERTS_SUBSCRIPTION_NOT_PREPARED'
+          );
+        }
+        parentAlertsPayment = {
+          amountFcfa: prepared.requirement.amountFcfa,
+          minimumTuitionAmount: preview.firstTuitionInstallment,
+          showOnSchoolReceipt: prepared.requirement.showOnSchoolReceipt,
+          createSubscription: prepared.createSubscription,
+        };
+      }
+    }
+    const result = await this.finance.recordEnrollmentPayment({
       enrollmentId: id,
       actorUserId: userId,
+      ...(parentAlertsPayment ? { parentAlerts: parentAlertsPayment } : {}),
       ...input,
     });
     const enrollment = await this.repository.findEnrollment(id);
@@ -519,7 +630,20 @@ export class EnrollmentsService {
     const missingMandatoryDocuments = documents.filter((document) => document.is_active && document.is_mandatory && document.status !== 'provided').map(mapDocument);
     return {
       enrollment: mapEnrollment(enrollment!),
-      payment,
+      payment: result.payment,
+      allocation: result.allocation,
+      subscription: result.subscription
+        ? {
+            id: result.subscription.subscriptionId,
+            parentId: result.subscription.parentId,
+            parentPhone: result.subscription.parentPhone,
+            startsAt: result.subscription.startsAt,
+            endsAt: result.subscription.endsAt,
+            amountFcfa: result.subscription.amountFcfa,
+            durationMonths: result.subscription.durationMonths,
+            status: 'active' as const,
+          }
+        : null,
       missingMandatoryDocuments,
       documentWarning: missingMandatoryDocuments.length > 0
         ? 'Paiement confirmé. Des pièces obligatoires restent à fournir.'
@@ -656,5 +780,13 @@ export class EnrollmentsService {
   }
 }
 
-export const buildEnrollmentsService = (db: ConstructorParameters<typeof EnrollmentsRepository>[0]) =>
-  new EnrollmentsService(new EnrollmentsRepository(db), buildFinanceService(db));
+export const buildEnrollmentsService = (
+  db: ConstructorParameters<typeof EnrollmentsRepository>[0],
+  schemaName?: string
+) =>
+  new EnrollmentsService(
+    new EnrollmentsRepository(db),
+    buildFinanceService(db),
+    schemaName ? new SubscriptionsService(new SubscriptionsRepository(db)) : undefined,
+    schemaName
+  );

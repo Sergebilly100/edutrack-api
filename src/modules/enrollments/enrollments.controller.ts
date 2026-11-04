@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError, z } from 'zod';
+import type { Queue } from 'bullmq';
 
 import { withTenantSchema } from '../../shared/database/db.js';
 import { requirePermission } from '../../shared/middleware/auth.middleware.js';
@@ -8,6 +9,8 @@ import { deleteFromR2, isR2Configured, presignDownload, uploadBuffer } from '../
 import { buildEnrollmentsService, EnrollmentsModuleError } from './enrollments.service.js';
 import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
 import { FinanceModuleError } from '../finance/finance.service.js';
+import type { NotificationJobData } from '../notifications/notifications.queue.js';
+import { SubscriptionsModuleError } from '../subscriptions/subscriptions.service.js';
 import { emitEnrollmentDocumentsMissing } from './enrollments.events.js';
 import {
   createEnrollmentBodySchema,
@@ -35,16 +38,17 @@ const handleError = (request: FastifyRequest, reply: FastifyReply, error: unknow
   if (error instanceof ZodError) return reply.code(400).send({ error: 'Invalid request', code: 'VALIDATION_ERROR', statusCode: 400, details: error.issues });
   if (error instanceof EnrollmentsModuleError) return reply.code(error.statusCode).send({ error: error.message, code: error.code, statusCode: error.statusCode });
   if (error instanceof FinanceModuleError) return reply.code(error.statusCode).send({ error: error.message, code: error.code, statusCode: error.statusCode, ...(error.context ? { context: error.context } : {}) });
+  if (error instanceof SubscriptionsModuleError) return reply.code(error.statusCode).send({ error: error.message, code: error.code, statusCode: error.statusCode });
   request.log.error({ err: error }, '[enrollments] Unexpected error');
   return reply.code(500).send({ error: 'Internal server error', code: 'INTERNAL_ERROR', statusCode: 500 });
 };
 
 const withService = <T>(request: FastifyRequest, run: (service: ReturnType<typeof buildEnrollmentsService>) => Promise<T>) =>
-  withTenantSchema(request.claims!.schemaName, (db) => run(buildEnrollmentsService(db)));
+  withTenantSchema(request.claims!.schemaName, (db) => run(buildEnrollmentsService(db, request.claims!.schemaName)));
 
 export default async function enrollmentsController(
   app: FastifyInstance,
-  options: { pdfQueue?: PdfExportQueueHandle } = {}
+  options: { pdfQueue?: PdfExportQueueHandle; smsQueue?: Queue<NotificationJobData> } = {}
 ): Promise<void> {
   app.get('/api/v1/enrollments', { preHandler: requirePermission('enrollments.view') }, async (request, reply) => {
     try {
@@ -146,14 +150,40 @@ export default async function enrollmentsController(
       const { id } = uuidParamsSchema.parse(request.params);
       const body = confirmEnrollmentPaymentBodySchema.parse(request.body);
       const result = await withService(request, (service) => service.confirmPayment(id, request.user!.userId, body));
-      const job = options.pdfQueue
+      const job = options.pdfQueue && result.payment
         ? await options.pdfQueue.add('tuition-receipt', {
             type: 'tuition-receipt',
             schemaName: request.claims!.schemaName,
             paymentId: result.payment.id,
           }, { removeOnComplete: 100, removeOnFail: 100 })
         : null;
-      return reply.send({ ...result, receiptJobId: job?.id });
+      let subscriptionNotificationJobId: string | null = null;
+      if (result.subscription && result.subscription.parentPhone && options.smsQueue) {
+        try {
+          const studentName = `${result.enrollment.studentFirstName} ${result.enrollment.studentLastName}`.trim();
+          const notificationJob = await options.smsQueue.add('send-sms', {
+            type: 'send-sms',
+            to: result.subscription.parentPhone,
+            recipientPhone: result.subscription.parentPhone,
+            message: `Alertes Parents est actif pour ${studentName} pendant ${result.subscription.durationMonths} mois, du ${result.subscription.startsAt} au ${result.subscription.endsAt}. Montant encaissé : ${result.subscription.amountFcfa} FCFA.`,
+            notificationType: 'custom',
+            schemaName: request.claims!.schemaName,
+            relatedId: result.subscription.id,
+            queueRef: `enrollment-subscription-${result.subscription.id}`,
+          }, { removeOnComplete: 100, removeOnFail: 100 });
+          subscriptionNotificationJobId = String(notificationJob.id ?? '');
+        } catch (error) {
+          request.log.error({ err: error, subscriptionId: result.subscription.id }, '[enrollments] Failed to queue parent alerts confirmation');
+        }
+      }
+      return reply.send({
+        ...result,
+        receiptJobId: job?.id,
+        subscriptionNotificationJobId,
+        subscriptionNotificationQueued: !result.subscription || !result.subscription.parentPhone
+          ? null
+          : Boolean(subscriptionNotificationJobId),
+      });
     }
     catch (error) { return handleError(request, reply, error); }
   });

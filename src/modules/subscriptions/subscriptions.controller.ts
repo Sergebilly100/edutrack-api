@@ -35,6 +35,7 @@ import {
   updateParentContactBodySchema,
   subscriptionClassesQuerySchema,
   subscriptionClassStudentsQuerySchema,
+  parentAlertSettingsBodySchema,
   updateSmsPriceBodySchema,
 } from './subscriptions.types.js';
 
@@ -142,6 +143,30 @@ export default async function subscriptionsController(
           return service.updateSchoolSmsUnitPrice({
             schemaName: claims.schemaName,
             smsUnitPriceFcfa: body.sms_unit_price_fcfa,
+          });
+        });
+        return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.patch(
+    '/api/v1/settings/parent-alerts',
+    { preHandler: requirePermission('settings.school') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const body = parentAlertSettingsBodySchema.parse(request.body ?? {});
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+          const service = new SubscriptionsService(new SubscriptionsRepository(tenantDb));
+          return service.updateParentAlertSettings({
+            schemaName: claims.schemaName,
+            smsUnitPriceFcfa: body.sms_unit_price_fcfa,
+            mandatoryAtEnrollment: body.mandatory_at_enrollment,
+            imposedDurationMonths: body.imposed_duration_months,
+            showOnSchoolReceipt: body.show_on_school_receipt,
           });
         });
         return reply.send(result);

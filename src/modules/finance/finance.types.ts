@@ -2,7 +2,6 @@ import { civilDateSchema } from '../../shared/utils/date-validation.js';
 import { z } from 'zod';
 
 export const paymentMethodSchema = z.enum(['mobile_money', 'cash', 'bank_transfer']);
-export const subscriptionPeriodSchema = z.enum(['monthly', 'quarterly', 'semester', 'annual']);
 export const mobileMoneyProviderSchema = z.enum(['orange_money', 'mtn_momo', 'moov_money', 'wave']);
 const moneySchema = z.coerce.number().finite().nonnegative().max(999_999_999.99);
 const positiveMoneySchema = moneySchema.refine((value) => value > 0, 'Amount must be greater than zero');
@@ -12,7 +11,6 @@ export const paymentIdParamsSchema = z.object({ id: uuidSchema }).strict();
 export const studentFinancialParamsSchema = z.object({ studentId: uuidSchema }).strict();
 export const parentReceiptParamsSchema = z.object({ studentId: uuidSchema, id: uuidSchema }).strict();
 export const tuitionPlanLevelParamsSchema = z.object({ levelId: uuidSchema }).strict();
-export const subscriptionPlanParamsSchema = z.object({ id: uuidSchema }).strict();
 
 export const schoolYearQuerySchema = z.object({ school_year_id: uuidSchema });
 const cashJournalFiltersSchema = z.object({
@@ -159,28 +157,9 @@ export const upsertProviderSettingBodySchema = z.object({
   isActive: z.boolean(),
 }).strict();
 
-export const createSubscriptionPlanBodySchema = z.object({
-  amount: moneySchema,
-  period: subscriptionPeriodSchema,
-  label: z.string().trim().min(1).max(255),
-  isMandatoryAtEnrollment: z.boolean().default(false),
-  imposedDuration: subscriptionPeriodSchema.nullable().optional(),
-  showOnReceiptAsSeparateLine: z.boolean().default(false),
-}).strict().superRefine((value, context) => {
-  if (value.isMandatoryAtEnrollment !== Boolean(value.imposedDuration)) {
-    context.addIssue({
-      code: 'custom',
-      message: 'imposedDuration is required only for a mandatory enrollment plan',
-    });
-  }
-});
-
-export const updateSubscriptionPlanBodySchema = createSubscriptionPlanBodySchema;
-
 export type PaymentMethod = z.infer<typeof paymentMethodSchema>;
 export type MobileMoneyProvider = z.infer<typeof mobileMoneyProviderSchema>;
 export type UpsertTuitionPlanInput = z.infer<typeof upsertTuitionPlanBodySchema>;
-export type SubscriptionPlanInput = z.infer<typeof createSubscriptionPlanBodySchema>;
 
 export const financialSummaryQuerySchema = z.object({
   school_year_id: uuidSchema.optional(),

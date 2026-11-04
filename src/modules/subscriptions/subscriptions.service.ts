@@ -1,6 +1,12 @@
 import argon2 from 'argon2';
+import { sql } from 'drizzle-orm';
 
 import { SubscriptionsRepository } from './subscriptions.repository.js';
+import {
+  calculateImposedParentAlertsAmount,
+  isParentAlertsRenewalEligible,
+} from '../../shared/utils/parent-alerts.js';
+import type { TenantSqlExecutor } from '../../shared/database/sql-executor.js';
 import {
   businessDateFromNowPlusDays,
   monthKeyInBusinessTimezone,
@@ -26,6 +32,27 @@ export class SubscriptionsModuleError extends Error {
     this.name = 'SubscriptionsModuleError';
   }
 }
+
+export type EnrollmentAlertRequirement = {
+  studentId: string;
+  required: boolean;
+  monthlyPriceFcfa: number;
+  durationMonths: 1 | 3 | 6 | 12 | null;
+  amountFcfa: number;
+  platformSharePct: number;
+  showOnSchoolReceipt: boolean;
+  studentName: string | null;
+  parentId: string | null;
+  parentName: string | null;
+  parentPhone: string | null;
+  parentEmail: string | null;
+  parentContactMissing: boolean;
+};
+
+const executorRows = <T>(result: unknown): T[] =>
+  typeof result === 'object' && result !== null && 'rows' in result
+    ? (((result as { rows?: T[] }).rows ?? []))
+    : [];
 const EDUTRACK_COMMISSION_PCT = 15;
 
 // Fenêtre pendant laquelle un abonnement peut être annulé (et donc remboursé
@@ -209,12 +236,20 @@ export class SubscriptionsService {
     actorUserId: string;
     payload: CreateParentSubscriptionBody;
   }) {
+    if (!input.payload.paid_now) {
+      throw new SubscriptionsModuleError(
+        'A parent alerts subscription must be paid before it is activated',
+        400,
+        'SUBSCRIPTION_PAYMENT_REQUIRED'
+      );
+    }
+
     const tenantId = await this.repository.getTenantIdBySchemaName(input.schemaName);
     if (!tenantId) {
       throw new SubscriptionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
     }
     const feature = await this.repository.getSmsFeatureByTenantId(tenantId);
-    if (!feature?.is_enabled) {
+    if (!feature?.is_enabled || !feature.monetize_parent_alerts) {
       throw new SubscriptionsModuleError('SMS feature is not enabled', 422, 'SMS_FEATURE_NOT_ENABLED');
     }
     if (!feature.sms_unit_price_fcfa || feature.sms_unit_price_fcfa <= 0) {
@@ -238,9 +273,10 @@ export class SubscriptionsService {
 
     let parentId: string;
     let subscriptionId: string;
+    let subscriptionIds: string[] = [];
     let parentCreated: boolean;
     try {
-      ({ parentId, subscriptionId, parentCreated } = await this.repository.createParentWithSubscriptionTx({
+      const created = await this.repository.createParentWithSubscriptionTx({
         fullName: input.payload.full_name,
         phone: input.payload.phone,
         email: input.payload.email,
@@ -248,6 +284,7 @@ export class SubscriptionsService {
         unitPriceFcfa: feature.sms_unit_price_fcfa,
         studentCount: input.payload.student_ids.length,
         totalAmountFcfa: totalAmount,
+        platformSharePct: Number(feature.commission_pct),
         durationMonths: input.payload.duration_months,
         startsAt,
         endsAt,
@@ -255,7 +292,11 @@ export class SubscriptionsService {
         studentIds: input.payload.student_ids,
         paidNow: input.payload.paid_now,
         paymentMethod: input.payload.payment_method,
-      }));
+      });
+      parentId = created.parentId;
+      subscriptionId = created.subscriptionId;
+      subscriptionIds = created.subscriptionIds ?? [created.subscriptionId];
+      parentCreated = created.parentCreated;
     } catch (error) {
       const code = (error as { code?: string } | null)?.code;
       if (code === '23505') {
@@ -276,6 +317,13 @@ export class SubscriptionsService {
         starts_at: startsAt,
         ends_at: endsAt,
       },
+      subscriptions: (subscriptionIds.length > 0 ? subscriptionIds : [subscriptionId]).map((id, index) => ({
+        id,
+        student_id: input.payload.student_ids[index],
+        total_amount_fcfa: Number(feature.sms_unit_price_fcfa) * input.payload.duration_months,
+        starts_at: startsAt,
+        ends_at: endsAt,
+      })),
       credentials: parentCreated
         ? {
             phone: input.payload.phone,
@@ -335,6 +383,13 @@ export class SubscriptionsService {
     payload: RenewParentSubscriptionBody;
     schemaName: string;
   }) {
+    if (!input.payload.paid_now) {
+      throw new SubscriptionsModuleError(
+        'A parent alerts renewal must be paid when it is requested',
+        400,
+        'SUBSCRIPTION_RENEWAL_PAYMENT_REQUIRED'
+      );
+    }
     const parent = await this.repository.getParentById(input.parentId);
     if (!parent) {
       throw new SubscriptionsModuleError('Parent not found', 404, 'PARENT_NOT_FOUND');
@@ -342,6 +397,13 @@ export class SubscriptionsService {
     const latest = await this.repository.getLatestSubscription(input.parentId);
     if (!latest) {
       throw new SubscriptionsModuleError('No previous subscription found', 404, 'SUBSCRIPTION_NOT_FOUND');
+    }
+    if (!isParentAlertsRenewalEligible(latest.status, latest.ends_at, todayInBusinessTimezone())) {
+      throw new SubscriptionsModuleError(
+        'The subscription can only be renewed after it expires',
+        409,
+        'SUBSCRIPTION_RENEWAL_NOT_ELIGIBLE'
+      );
     }
 
     const students = await this.repository.getSubscriptionStudents(latest.id);
@@ -354,6 +416,9 @@ export class SubscriptionsService {
       throw new SubscriptionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
     }
     const feature = await this.repository.getSmsFeatureByTenantId(tenantId);
+    if (!feature?.is_enabled || !feature.monetize_parent_alerts) {
+      throw new SubscriptionsModuleError('Paid parent alerts are not enabled', 422, 'SMS_FEATURE_NOT_ENABLED');
+    }
     if (!feature?.sms_unit_price_fcfa || feature.sms_unit_price_fcfa <= 0) {
       throw new SubscriptionsModuleError('SMS price is not configured', 422, 'SMS_PRICE_NOT_CONFIGURED');
     }
@@ -365,22 +430,30 @@ export class SubscriptionsService {
     const actorUserId = await this.resolveActorUserId(input.actorUserId);
     const totalAmount = feature.sms_unit_price_fcfa * students.length * input.payload.duration_months;
 
-    const { subscriptionId } = await this.repository.renewSubscriptionTx({
+    const { subscriptionId, subscriptionIds } = await this.repository.renewSubscriptionTx({
       parentId: input.parentId,
       unitPriceFcfa: feature.sms_unit_price_fcfa,
       studentCount: students.length,
       totalAmountFcfa: totalAmount,
+      platformSharePct: Number(feature.commission_pct),
       durationMonths: input.payload.duration_months,
       startsAt,
       endsAt,
       createdBy: actorUserId,
       autoRenewAlert: latest.auto_renew_alert,
       studentIds: students.map((item) => item.id),
+      renewedFromSubscriptionId: latest.id,
       paidNow: input.payload.paid_now,
       paymentMethod: input.payload.payment_method,
     });
 
-    return { id: subscriptionId, starts_at: startsAt, ends_at: endsAt, total_amount_fcfa: totalAmount };
+    return {
+      id: subscriptionId,
+      subscription_ids: subscriptionIds,
+      starts_at: startsAt,
+      ends_at: endsAt,
+      total_amount_fcfa: totalAmount,
+    };
   }
 
   async updateParentContact(input: {
@@ -500,8 +573,11 @@ export class SubscriptionsService {
     return {
       is_enabled: feature?.is_enabled ?? false,
       monetize_parent_alerts: feature?.monetize_parent_alerts ?? false,
-      commission_pct: EDUTRACK_COMMISSION_PCT,
+      commission_pct: Number(feature?.commission_pct ?? EDUTRACK_COMMISSION_PCT),
       sms_unit_price_fcfa: feature?.sms_unit_price_fcfa ?? null,
+      mandatory_at_enrollment: feature?.mandatory_at_enrollment ?? false,
+      imposed_duration_months: feature?.imposed_duration_months ?? null,
+      show_on_school_receipt: feature?.show_on_school_receipt ?? false,
       use_real_hours: feature?.use_real_hours ?? false,
       geo_check_enabled: feature?.geo_check_enabled ?? false,
       checkout_tolerance_minutes: feature?.checkout_tolerance_minutes ?? 5,
@@ -521,11 +597,221 @@ export class SubscriptionsService {
     return {
       is_enabled: feature.is_enabled,
       monetize_parent_alerts: feature.monetize_parent_alerts,
-      commission_pct: EDUTRACK_COMMISSION_PCT,
+      commission_pct: Number(feature.commission_pct ?? EDUTRACK_COMMISSION_PCT),
       sms_unit_price_fcfa: feature.sms_unit_price_fcfa,
+      mandatory_at_enrollment: feature.mandatory_at_enrollment,
+      imposed_duration_months: feature.imposed_duration_months,
+      show_on_school_receipt: feature.show_on_school_receipt,
       use_real_hours: feature.use_real_hours,
       geo_check_enabled: feature.geo_check_enabled,
       checkout_tolerance_minutes: feature.checkout_tolerance_minutes,
+    };
+  }
+
+  async updateParentAlertSettings(input: {
+    schemaName: string;
+    smsUnitPriceFcfa: number;
+    mandatoryAtEnrollment: boolean;
+    imposedDurationMonths: 1 | 3 | 6 | 12 | null;
+    showOnSchoolReceipt: boolean;
+  }) {
+    const tenantId = await this.repository.getTenantIdBySchemaName(input.schemaName);
+    if (!tenantId) {
+      throw new SubscriptionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
+    }
+
+    const current = await this.repository.getSmsFeatureByTenantId(tenantId);
+    if (!current?.is_enabled || !current.monetize_parent_alerts) {
+      throw new SubscriptionsModuleError(
+        'Parent alerts settings are only available when the paid service is enabled',
+        409,
+        'PARENT_ALERTS_PAID_SERVICE_DISABLED'
+      );
+    }
+
+    const feature = await this.repository.updateParentAlertSettingsByTenantId(tenantId, {
+      smsUnitPriceFcfa: input.smsUnitPriceFcfa,
+      mandatoryAtEnrollment: input.mandatoryAtEnrollment,
+      imposedDurationMonths: input.mandatoryAtEnrollment ? input.imposedDurationMonths : null,
+      showOnSchoolReceipt: input.showOnSchoolReceipt,
+    });
+    return {
+      is_enabled: feature.is_enabled,
+      monetize_parent_alerts: feature.monetize_parent_alerts,
+      commission_pct: Number(feature.commission_pct),
+      sms_unit_price_fcfa: feature.sms_unit_price_fcfa,
+      mandatory_at_enrollment: feature.mandatory_at_enrollment,
+      imposed_duration_months: feature.imposed_duration_months,
+      show_on_school_receipt: feature.show_on_school_receipt,
+      use_real_hours: feature.use_real_hours,
+      geo_check_enabled: feature.geo_check_enabled,
+      checkout_tolerance_minutes: feature.checkout_tolerance_minutes,
+    };
+  }
+
+  async getEnrollmentAlertRequirement(schemaName: string, studentId: string): Promise<EnrollmentAlertRequirement> {
+    const tenantId = await this.repository.getTenantIdBySchemaName(schemaName);
+    if (!tenantId) {
+      throw new SubscriptionsModuleError('Tenant not found', 404, 'TENANT_NOT_FOUND');
+    }
+    const feature = await this.repository.getSmsFeatureByTenantId(tenantId);
+    const required = Boolean(
+      feature?.is_enabled
+      && feature.monetize_parent_alerts
+      && feature.mandatory_at_enrollment
+    );
+    const student = required ? await this.repository.getEnrollmentParentContext(studentId) : null;
+    const monthlyPriceFcfa = Number(feature?.sms_unit_price_fcfa ?? 0);
+    const durationMonths = required && [1, 3, 6, 12].includes(Number(feature?.imposed_duration_months))
+      ? Number(feature?.imposed_duration_months) as 1 | 3 | 6 | 12
+      : null;
+    if (required && (monthlyPriceFcfa <= 0 || !durationMonths)) {
+      throw new SubscriptionsModuleError(
+        'The mandatory parent alerts price and period are not configured',
+        409,
+        'PARENT_ALERTS_CONFIGURATION_INVALID'
+      );
+    }
+    const parentName = student?.parent_name?.trim() || null;
+    const parentPhone = student?.parent_phone?.trim() || null;
+    const parentContactMissing = required
+      && (!parentName || !parentPhone || !/^225\d{10}$/.test(parentPhone));
+    return {
+      studentId,
+      required,
+      monthlyPriceFcfa,
+      durationMonths,
+      amountFcfa: required && durationMonths
+        ? calculateImposedParentAlertsAmount(monthlyPriceFcfa, durationMonths)
+        : 0,
+      platformSharePct: Number(feature?.commission_pct ?? EDUTRACK_COMMISSION_PCT),
+      showOnSchoolReceipt: feature?.show_on_school_receipt ?? false,
+      studentName: student?.student_name ?? null,
+      parentId: student?.parent_id ?? null,
+      parentName,
+      parentPhone,
+      parentEmail: student?.parent_email?.trim() || null,
+      parentContactMissing,
+    };
+  }
+
+  async prepareEnrollmentAlertSubscription(schemaName: string, studentId: string, actorUserId: string) {
+    const requirement = await this.getEnrollmentAlertRequirement(schemaName, studentId);
+    if (!requirement.required) {
+      return { requirement, createSubscription: null };
+    }
+    if (requirement.parentContactMissing || !requirement.parentName || !requirement.parentPhone || !requirement.durationMonths) {
+      throw new SubscriptionsModuleError(
+        'A parent name and valid phone number are required before confirming enrollment',
+        409,
+        'PARENT_ALERTS_PARENT_CONTACT_REQUIRED'
+      );
+    }
+    const passwordHash = await argon2.hash(generateInitialPassword(10));
+    return {
+      requirement,
+      createSubscription: (executor: TenantSqlExecutor, method: 'cash' | 'mobile_money' | 'bank_transfer') =>
+        this.createEnrollmentSubscription(executor, {
+          requirement,
+          passwordHash,
+          actorUserId,
+          method,
+        }),
+    };
+  }
+
+  private async createEnrollmentSubscription(
+    executor: TenantSqlExecutor,
+    input: {
+      requirement: EnrollmentAlertRequirement;
+      passwordHash: string;
+      actorUserId: string;
+      method: 'cash' | 'mobile_money' | 'bank_transfer';
+    }
+  ) {
+    const requirement = input.requirement;
+    const parentResult = await executor.execute(sql`
+      INSERT INTO parents (full_name, phone, email, password_hash, must_change_password, is_active)
+      VALUES (
+        ${requirement.parentName}::text,
+        ${requirement.parentPhone}::text,
+        ${requirement.parentEmail}::text,
+        ${input.passwordHash}::text,
+        true,
+        true
+      )
+      ON CONFLICT (phone)
+      DO UPDATE SET
+        full_name = EXCLUDED.full_name,
+        email = COALESCE(EXCLUDED.email, parents.email),
+        is_active = true
+      RETURNING id::text AS id
+    `);
+    const parentId = executorRows<{ id: string }>(parentResult)[0]?.id;
+    if (!parentId) {
+      throw new Error('Failed to resolve parent account during enrollment');
+    }
+    const { startsAt, endsAt } = this.repository.computeStartsAndEnds(requirement.durationMonths!);
+    const platformShareAmountFcfa = Math.round(
+      requirement.amountFcfa * requirement.platformSharePct / 100
+    );
+    const subscriptionResult = await executor.execute(sql`
+      INSERT INTO parent_subscriptions (
+        student_id, parent_id, unit_price_fcfa, student_count, total_amount_fcfa,
+        platform_share_pct, platform_share_amount_fcfa, duration_months,
+        starts_at, ends_at, status, auto_renew_alert, created_by
+      )
+      VALUES (
+        ${requirement.studentId}::uuid, ${parentId}::uuid, ${requirement.monthlyPriceFcfa},
+        1, ${requirement.amountFcfa}, ${requirement.platformSharePct},
+        ${platformShareAmountFcfa}, ${requirement.durationMonths},
+        ${startsAt}::date, ${endsAt}::date, 'active', false, ${input.actorUserId}::uuid
+      )
+      RETURNING id::text AS id
+    `);
+    const subscriptionId = executorRows<{ id: string }>(subscriptionResult)[0]?.id;
+    if (!subscriptionId) {
+      throw new Error('Failed to create parent alerts subscription during enrollment');
+    }
+    const paymentResult = await executor.execute(sql`
+      INSERT INTO subscription_payments (
+        subscription_id, amount_fcfa, platform_share_amount_fcfa, payment_purpose,
+        payment_method, paid_at, recorded_by, notes
+      )
+      VALUES (
+        ${subscriptionId}::uuid, ${requirement.amountFcfa}, ${platformShareAmountFcfa},
+        'enrollment', ${input.method}, NOW(), ${input.actorUserId}::uuid,
+        'Parent alerts subscription paid with enrollment'
+      )
+      RETURNING id::text AS id
+    `);
+    const subscriptionPaymentId = executorRows<{ id: string }>(paymentResult)[0]?.id;
+    if (!subscriptionPaymentId) {
+      throw new Error('Failed to record parent alerts payment during enrollment');
+    }
+    await executor.execute(sql`
+      INSERT INTO parent_student_links (subscription_id, parent_id, student_id)
+      VALUES (${subscriptionId}::uuid, ${parentId}::uuid, ${requirement.studentId}::uuid)
+      ON CONFLICT (parent_id, student_id)
+      DO UPDATE SET subscription_id = EXCLUDED.subscription_id
+    `);
+    await executor.execute(sql`
+      INSERT INTO parent_subscription_events (subscription_id, action, actor_user_id, metadata)
+      VALUES
+        (${subscriptionId}::uuid, 'created', ${input.actorUserId}::uuid,
+          jsonb_build_object('studentId', ${requirement.studentId}, 'parentId', ${parentId})),
+        (${subscriptionId}::uuid, 'activated', ${input.actorUserId}::uuid,
+          jsonb_build_object('startsAt', ${startsAt}, 'endsAt', ${endsAt}, 'amountFcfa', ${requirement.amountFcfa}))
+    `);
+    return {
+      subscriptionId,
+      subscriptionPaymentId,
+      parentId,
+      parentPhone: requirement.parentPhone,
+      startsAt,
+      endsAt,
+      amountFcfa: requirement.amountFcfa,
+      durationMonths: requirement.durationMonths!,
     };
   }
 
@@ -537,8 +823,8 @@ export class SubscriptionsService {
     }
     const feature = await this.repository.getSmsFeatureByTenantId(tenantId);
     const summary = await this.repository.getRevenueSummary({ tenantId, month: targetMonth });
-    const commissionPct = EDUTRACK_COMMISSION_PCT;
-    const due = Math.round((summary.total_collected_fcfa * commissionPct) / 100);
+    const commissionPct = Number(feature?.commission_pct ?? EDUTRACK_COMMISSION_PCT);
+    const due = summary.commission_due_fcfa;
     return {
       month: targetMonth,
       subscriptions_active_count: summary.subscriptions_active_count,
@@ -601,15 +887,19 @@ export class SubscriptionsService {
     return this.repository.listRevenueSubscriptionDetails(month);
   }
 
-  async runDailyMaintenance(): Promise<{ expired: number; alerts: number }> {
+  async runDailyMaintenance(): Promise<{
+    expired: number;
+    alerts: number;
+    reminders: Array<{ subscriptionId: string; studentName: string; parentPhone: string; parentName: string; endsAt: string }>;
+  }> {
     const expired = await this.repository.expireOutdatedSubscriptions();
-    const alerts = await this.repository.listRenewalAlertsInSevenDays();
-    for (const item of alerts) {
+    const reminders = await this.repository.listRenewalAlertsInSevenDays();
+    for (const item of reminders) {
       await this.repository.insertSubscriptionExpiryAlertLog({
         parentPhone: item.parentPhone,
-        message: `Votre souscription SMS expire le ${item.endsAt}. Contactez le secrétariat.`,
+        message: `La souscription Alertes Parents de ${item.studentName} expire le ${item.endsAt}. Vous pouvez la renouveler volontairement depuis le service Alertes Parents.`,
       });
     }
-    return { expired, alerts: alerts.length };
+    return { expired, alerts: reminders.length, reminders };
   }
 }

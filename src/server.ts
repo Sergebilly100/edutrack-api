@@ -93,7 +93,7 @@ const billingPdfQueue = createBillingPdfQueue(sharedRedis)
 const notificationsQueue = createNotificationsQueue(sharedRedis);
 const billingWorker = createBillingPdfWorker(sharedRedis);
 const subscriptionsMaintenanceQueue = createSubscriptionMaintenanceQueue(sharedRedis);
-const subscriptionsMaintenanceWorker = createSubscriptionMaintenanceWorker(sharedRedis);
+const subscriptionsMaintenanceWorker = createSubscriptionMaintenanceWorker(sharedRedis, notificationsQueue);
 const notificationsWorker = createNotificationsWorker(sharedRedis, {
   repository: defaultRepository,
   smsSender: defaultSmsSender,
@@ -323,7 +323,7 @@ app.register(validationsController);
 app.register(scheduleController);
 app.register(roomsController);
 app.register(documentsController);
-app.register(enrollmentsController, { pdfQueue: billingPdfQueue });
+app.register(enrollmentsController, { pdfQueue: billingPdfQueue, smsQueue: notificationsQueue });
 app.register(financeController, { pdfQueue: billingPdfQueue });
 app.register(schoolController);
 app.register(importExportController);

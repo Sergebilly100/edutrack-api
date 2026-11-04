@@ -2,7 +2,7 @@ import { civilMonthSchema } from '../../shared/utils/date-validation.js';
 import { z } from 'zod';
 
 export type SubscriptionStatus = 'active' | 'expired' | 'cancelled';
-export type PaymentMethod = 'cash' | 'momo_mtn' | 'momo_orange';
+export type PaymentMethod = 'cash' | 'momo_mtn' | 'momo_orange' | 'mobile_money' | 'bank_transfer';
 export type NotificationChannel = 'sms' | 'email';
 
 export type CanSendResult =
@@ -12,7 +12,7 @@ export type CanSendResult =
       reason: 'no_active_subscription' | 'feature_disabled' | 'cap_reached' | 'subscription_expired';
     };
 
-export const paymentMethodSchema = z.enum(['cash', 'momo_mtn', 'momo_orange']);
+export const paymentMethodSchema = z.enum(['cash', 'momo_mtn', 'momo_orange', 'mobile_money', 'bank_transfer']);
 export const durationSchema = z.coerce.number().int().min(1).max(120);
 export const ciPhoneSchema = z.string().regex(/^225\d{10}$/);
 
@@ -103,6 +103,20 @@ export const revenuePaymentsQuerySchema = z.object({
 
 export const updateSmsPriceBodySchema = z.object({
   sms_unit_price_fcfa: z.coerce.number().int().min(1).max(50000),
+});
+export const parentAlertSettingsBodySchema = z.object({
+  sms_unit_price_fcfa: z.coerce.number().int().min(1).max(50000),
+  mandatory_at_enrollment: z.boolean(),
+  imposed_duration_months: z.union([z.literal(1), z.literal(3), z.literal(6), z.literal(12)]).nullable(),
+  show_on_school_receipt: z.boolean(),
+}).strict().superRefine((value, context) => {
+  if (value.mandatory_at_enrollment && value.imposed_duration_months === null) {
+    context.addIssue({
+      code: 'custom',
+      path: ['imposed_duration_months'],
+      message: 'A required duration must be selected when parent alerts are mandatory',
+    });
+  }
 });
 
 export type ListParentsQuery = z.infer<typeof listParentsQuerySchema>;

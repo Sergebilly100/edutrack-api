@@ -18,7 +18,6 @@ import { RecoveryRepository } from './recovery.repository.js';
 import { RecoveryService, RecoveryError } from './recovery.service.js';
 import {
   cancelPaymentBodySchema,
-  createSubscriptionPlanBodySchema,
   grantTuitionOverrideBodySchema,
   agreementsRegisterQuerySchema,
   agreementDetailParamsSchema,
@@ -34,10 +33,8 @@ import {
   upsertFinancialAlertRuleBodySchema,
   financialAlertRuleTypeParamsSchema,
   studentFinancialParamsSchema,
-  subscriptionPlanParamsSchema,
   tuitionPlanLevelParamsSchema,
   tuitionPlansQuerySchema,
-  updateSubscriptionPlanBodySchema,
   upsertProviderSettingBodySchema,
   upsertTuitionPlanBodySchema,
   upsertStudentTuitionScheduleBodySchema,
@@ -717,26 +714,4 @@ export default async function financeController(
     } catch (error) { return handleError(request, reply, error); }
   });
 
-  app.get('/api/v1/subscription-plans', { preHandler: requirePermission('subscription_plans.view') }, async (request, reply) => {
-    try {
-      return reply.send({ subscriptionPlans: await withService(request, (service) => service.listSubscriptionPlans()) });
-    } catch (error) { return handleError(request, reply, error); }
-  });
-
-  app.post('/api/v1/subscription-plans', { preHandler: requirePermission('subscription_plans.edit') }, async (request, reply) => {
-    try {
-      const body = createSubscriptionPlanBodySchema.parse(request.body);
-      return reply.code(201).send({ subscriptionPlan: await withService(request, (service) =>
-        service.createSubscriptionPlan(body)) });
-    } catch (error) { return handleError(request, reply, error); }
-  });
-
-  app.put('/api/v1/subscription-plans/:id', { preHandler: requirePermission('subscription_plans.edit') }, async (request, reply) => {
-    try {
-      const { id } = subscriptionPlanParamsSchema.parse(request.params);
-      const body = updateSubscriptionPlanBodySchema.parse(request.body);
-      return reply.send({ subscriptionPlan: await withService(request, (service) =>
-        service.updateSubscriptionPlan(id, body)) });
-    } catch (error) { return handleError(request, reply, error); }
-  });
 }

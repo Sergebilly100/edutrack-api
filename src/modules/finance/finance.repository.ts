@@ -4,10 +4,9 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type {
   MobileMoneyProvider,
   PaymentMethod,
-  SubscriptionPlanInput,
   UpsertTuitionPlanInput,
 } from './finance.types.js';
-import type { CumulativeScheduleStep, PaymentStatus, SubscriptionPeriod } from './finance.calculations.js';
+import type { CumulativeScheduleStep, PaymentStatus } from './finance.calculations.js';
 import { confirmedFinancialStudent } from './finance-scope.js';
 import { confirmedSchoolClassCount } from '../../shared/database/confirmed-school-membership.js';
 
@@ -67,6 +66,7 @@ export type AmountDueContext = {
   school_year_id: string;
   plan_id: string;
   plan_total_amount: string | number;
+  registration_amount: string | number;
   currency: string;
   override_total_amount: string | number | null;
   discount_amount: string | number | null;
@@ -96,20 +96,14 @@ export type StudentTuitionScheduleAgreement = {
   scheduleSteps: CumulativeScheduleStep[];
 };
 
-export type MandatorySubscriptionPlanRow = {
-  id: string;
-  amount: string | number;
-  period: SubscriptionPeriod;
-  imposed_duration: SubscriptionPeriod;
-  label: string;
-  show_on_receipt_as_separate_line: boolean;
-};
-
 export type ReceiptContextRow = PaymentRow & {
   student_name: string;
   class_name: string;
   school_year_label: string;
   currency: string;
+  enrollment_total_amount: string | number | null;
+  enrollment_parent_alerts_amount: string | number | null;
+  show_parent_alerts_on_receipt: boolean | null;
 };
 
 type ReceiptNumberRow = {
@@ -226,6 +220,7 @@ export class FinanceRepository {
         ${schoolYearId}::uuid::text AS school_year_id,
         tp.id::text AS plan_id,
         tp.total_amount AS plan_total_amount,
+        tp.registration_amount,
         tp.currency,
         sto.override_total_amount,
         sto.discount_amount
@@ -251,17 +246,6 @@ export class FinanceRepository {
       LIMIT 1
     `);
     return rows<AmountDueContext>(result)[0] ?? null;
-  }
-
-  async listMandatorySubscriptionPlans(): Promise<MandatorySubscriptionPlanRow[]> {
-    const result = await this.db.execute<MandatorySubscriptionPlanRow>(sql`
-      SELECT id::text, amount, period::text, imposed_duration::text, label,
-             show_on_receipt_as_separate_line
-      FROM subscription_plans
-      WHERE is_mandatory_at_enrollment = true
-      ORDER BY created_at ASC
-    `);
-    return rows<MandatorySubscriptionPlanRow>(result);
   }
 
   /** The same tuition and payment inputs as getAmountDueContext, for a whole origin year. */
@@ -430,6 +414,32 @@ export class FinanceRepository {
     const payment = rows<PaymentRow>(result)[0];
     if (!payment) throw new Error('Failed to insert payment');
     return payment;
+  }
+
+  async insertEnrollmentPaymentAllocation(input: {
+    paymentId: string | null;
+    subscriptionPaymentId: string;
+    studentId: string;
+    schoolYearId: string;
+    totalAmount: number;
+    tuitionAmount: number;
+    parentAlertsAmount: number;
+    showParentAlertsOnReceipt: boolean;
+    actorUserId: string;
+  }): Promise<void> {
+    await this.db.execute(sql`
+      INSERT INTO enrollment_payment_allocations (
+        payment_id, subscription_payment_id, student_id, school_year_id,
+        total_amount, tuition_amount, parent_alerts_amount,
+        show_parent_alerts_on_receipt, allocated_by_user_id
+      )
+      VALUES (
+        ${input.paymentId}::uuid, ${input.subscriptionPaymentId}::uuid,
+        ${input.studentId}::uuid, ${input.schoolYearId}::uuid,
+        ${input.totalAmount}, ${input.tuitionAmount}, ${input.parentAlertsAmount},
+        ${input.showParentAlertsOnReceipt}, ${input.actorUserId}::uuid
+      )
+    `);
   }
 
   async findPayment(id: string): Promise<PaymentRow | null> {
@@ -991,51 +1001,16 @@ export class FinanceRepository {
     return rows(result)[0];
   }
 
-  async listSubscriptionPlans() {
-    const result = await this.db.execute(sql`
-      SELECT id::text, amount, period::text, label, is_mandatory_at_enrollment,
-             imposed_duration::text, show_on_receipt_as_separate_line, created_at, updated_at
-      FROM subscription_plans ORDER BY created_at
-    `);
-    return rows(result);
-  }
-
-  async createSubscriptionPlan(input: SubscriptionPlanInput) {
-    const result = await this.db.execute(sql`
-      INSERT INTO subscription_plans (
-        amount, period, label, is_mandatory_at_enrollment,
-        imposed_duration, show_on_receipt_as_separate_line
-      ) VALUES (
-        ${input.amount}, ${input.period}::subscription_period, ${input.label},
-        ${input.isMandatoryAtEnrollment}, ${input.imposedDuration ?? null}::subscription_period,
-        ${input.showOnReceiptAsSeparateLine}
-      )
-      RETURNING *, id::text, period::text, imposed_duration::text
-    `);
-    return rows(result)[0];
-  }
-
-  async updateSubscriptionPlan(id: string, input: SubscriptionPlanInput) {
-    const result = await this.db.execute(sql`
-      UPDATE subscription_plans SET
-        amount = ${input.amount}, period = ${input.period}::subscription_period,
-        label = ${input.label}, is_mandatory_at_enrollment = ${input.isMandatoryAtEnrollment},
-        imposed_duration = ${input.imposedDuration ?? null}::subscription_period,
-        show_on_receipt_as_separate_line = ${input.showOnReceiptAsSeparateLine},
-        updated_at = NOW()
-      WHERE id = ${id}::uuid
-      RETURNING *, id::text, period::text, imposed_duration::text
-    `);
-    return rows(result)[0] ?? null;
-  }
-
   async getReceiptContext(paymentId: string): Promise<ReceiptContextRow | null> {
     const result = await this.db.execute<ReceiptContextRow>(sql`
       SELECT p.*, p.id::text, p.student_id::text, p.school_year_id::text,
              p.confirmed_by_user_id::text, p.cancelled_by_user_id::text,
              concat_ws(' ', s.first_name, s.last_name) AS student_name,
              c.name AS class_name, sy.label AS school_year_label,
-             COALESCE(tp.currency, 'FCFA') AS currency
+             COALESCE(tp.currency, 'FCFA') AS currency,
+             allocation.total_amount AS enrollment_total_amount,
+             allocation.parent_alerts_amount AS enrollment_parent_alerts_amount,
+             allocation.show_parent_alerts_on_receipt
       FROM payments p
       INNER JOIN students s ON s.id = p.student_id AND s.is_active = true
       INNER JOIN school_years sy ON sy.id = p.school_year_id
@@ -1044,6 +1019,8 @@ export class FinanceRepository {
       LEFT JOIN tuition_plans tp
         ON tp.level_id = c.level_id
        AND tp.school_year_id = p.school_year_id
+      LEFT JOIN enrollment_payment_allocations allocation
+        ON allocation.payment_id = p.id
       WHERE p.id = ${paymentId}::uuid
       ORDER BY e.enrolled_at DESC NULLS LAST
       LIMIT 1
