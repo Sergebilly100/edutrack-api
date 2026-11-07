@@ -12,6 +12,8 @@ import {
 } from './finance.calculations.js';
 import {
   FinanceRepository,
+  type CashJournalFilterInput,
+  type CashJournalRow,
   type FinanceDb,
   type PaymentRow,
   type StudentTuitionScheduleAgreement,
@@ -71,6 +73,19 @@ const mapPayment = (row: PaymentRow) => ({
   cancellationReason: row.cancellation_reason,
   paymentDate: row.payment_date,
   createdAt: iso(row.created_at),
+});
+
+export const ARCHIVED_USER_LABEL = 'Ancien utilisateur (archivé)';
+
+const mapJournalEntry = (row: CashJournalRow) => ({
+  ...mapPayment(row),
+  studentMatricule: row.student_matricule,
+  studentName: row.student_name,
+  classId: row.class_id,
+  className: row.class_name,
+  cancelledBy: row.status === 'cancelled'
+    ? (row.cancelled_by_name && row.cancelled_by_active !== false ? row.cancelled_by_name : ARCHIVED_USER_LABEL)
+    : null,
 });
 
 export class FinanceService {
@@ -355,45 +370,33 @@ export class FinanceService {
     };
   }
 
-  async getCashJournal(filter: {
-    schoolYearId?: string;
-    from?: string;
-    to?: string;
-    classId?: string;
-    method?: PaymentMethod;
-  }) {
-    const entries = (await this.repository.listCashJournal(filter)).map((row) => ({
-      ...mapPayment(row),
-      studentMatricule: row.student_matricule,
-      studentName: row.student_name,
-      classId: row.class_id,
-      className: row.class_name,
-    }));
-    const confirmed = entries.filter((entry) => entry.status === 'confirmed');
+  async getCashJournal(filter: CashJournalFilterInput) {
+    const entries = (await this.repository.listCashJournal(filter)).map(mapJournalEntry);
+    // Totals never depend on the status filter and never include cancelled payments.
+    const basis = filter.status
+      ? (await this.repository.listCashJournal({ ...filter, status: undefined })).map(mapJournalEntry)
+      : entries;
     const totals = {
       cash: 0,
       mobile_money: 0,
       bank_transfer: 0,
       grandTotal: 0,
     };
-    for (const entry of confirmed) {
+    for (const entry of basis) {
+      if (entry.status !== 'confirmed') continue;
       totals[entry.method] += entry.amount;
       totals.grandTotal += entry.amount;
     }
     return { entries, totals, count: entries.length };
   }
 
-  async getPaginatedCashJournal(filter: {
-    schoolYearId?: string;
-    from?: string;
-    to?: string;
-    classId?: string;
-    method?: PaymentMethod;
-    page: number;
-    limit: number;
-  }) {
+  async getPaginatedCashJournal(filter: CashJournalFilterInput & { page: number; limit: number }) {
     const summary = await this.repository.getCashJournalSummary(filter);
-    const total = FinanceRepository.toNumber(summary.total);
+    const confirmedCount = FinanceRepository.toNumber(summary.confirmed_count);
+    const cancelledCount = FinanceRepository.toNumber(summary.cancelled_count);
+    const total = filter.status === 'confirmed'
+      ? confirmedCount
+      : filter.status === 'cancelled' ? cancelledCount : confirmedCount + cancelledCount;
     const totalPages = Math.max(1, Math.ceil(total / filter.limit));
     const page = Math.min(filter.page, totalPages);
     const rows = await this.repository.listCashJournalPage({
@@ -401,22 +404,16 @@ export class FinanceService {
       limit: filter.limit,
       offset: (page - 1) * filter.limit,
     });
-    const entries = rows.map((row) => ({
-      ...mapPayment(row),
-      studentMatricule: row.student_matricule,
-      studentName: row.student_name,
-      classId: row.class_id,
-      className: row.class_name,
-    }));
 
     return {
-      entries,
+      entries: rows.map(mapJournalEntry),
       totals: {
         cash: FinanceRepository.toNumber(summary.cash_total),
         mobile_money: FinanceRepository.toNumber(summary.mobile_money_total),
         bank_transfer: FinanceRepository.toNumber(summary.bank_transfer_total),
         grandTotal: FinanceRepository.toNumber(summary.grand_total),
       },
+      counts: { confirmed: confirmedCount, cancelled: cancelledCount },
       count: total,
       pagination: { page, limit: filter.limit, total, totalPages },
     };
@@ -455,13 +452,7 @@ export class FinanceService {
     };
   }
 
-  async exportCashJournalExcel(filter: {
-    schoolYearId?: string;
-    from?: string;
-    to?: string;
-    classId?: string;
-    method?: PaymentMethod;
-  }): Promise<Buffer> {
+  async exportCashJournalExcel(filter: CashJournalFilterInput): Promise<Buffer> {
     const journal = await this.getCashJournal(filter);
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'IvoirEdu';
@@ -475,6 +466,9 @@ export class FinanceService {
       { header: 'Mode', key: 'method', width: 18 },
       { header: 'Référence', key: 'reference', width: 24 },
       { header: 'Statut', key: 'status', width: 14 },
+      { header: 'Annulé par', key: 'cancelledBy', width: 28 },
+      { header: 'Annulé le', key: 'cancelledAt', width: 20 },
+      { header: 'Motif', key: 'reason', width: 32 },
     ];
     for (const entry of journal.entries) {
       sheet.addRow({
@@ -485,13 +479,18 @@ export class FinanceService {
         amount: entry.amount,
         method: entry.method,
         reference: entry.providerReference ?? entry.schoolReceiptReference ?? '',
-        status: entry.status,
+        status: entry.status === 'cancelled' ? 'Annulé' : 'Confirmé',
+        cancelledBy: entry.cancelledBy ?? '',
+        cancelledAt: entry.cancelledAt ?? '',
+        reason: entry.cancellationReason ?? '',
       });
     }
+    const totalRow = sheet.addRow({ student: 'Total confirmé (annulés exclus)', amount: journal.totals.grandTotal });
+    totalRow.font = { bold: true };
     sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
     sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1D4ED8' } };
     sheet.getColumn('amount').numFmt = '#,##0';
-    sheet.autoFilter = { from: 'A1', to: 'H1' };
+    sheet.autoFilter = { from: 'A1', to: 'K1' };
     const buffer = await workbook.xlsx.writeBuffer();
     return Buffer.from(buffer);
   }

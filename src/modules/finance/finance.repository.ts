@@ -37,6 +37,8 @@ export type PaymentRow = {
 };
 
 export type CashJournalRow = PaymentRow & {
+  cancelled_by_name?: string | null;
+  cancelled_by_active?: boolean | null;
   student_matricule: string | null;
   student_name: string;
   class_id: string;
@@ -49,8 +51,22 @@ export type PaymentHistoryRow = CashJournalRow & {
   financial_status: 'up_to_date' | 'late' | null;
 };
 
+export type CashJournalFilterInput = {
+  schoolYearId?: string;
+  from?: string;
+  to?: string;
+  classId?: string;
+  method?: PaymentMethod;
+  /** Restrict the listed rows to one status (totals ignore it). */
+  status?: 'confirmed' | 'cancelled';
+  /** When false (default) cancelled payments are never returned. */
+  includeCancelled?: boolean;
+};
+
 export type CashJournalSummary = {
   total: string | number;
+  confirmed_count: string | number;
+  cancelled_count: string | number;
   cash_total: string | number;
   mobile_money_total: string | number;
   bank_transfer_total: string | number;
@@ -476,17 +492,26 @@ export class FinanceRepository {
     return rows<PaymentRow>(result);
   }
 
-  async listCashJournal(input: {
-    schoolYearId?: string;
-    from?: string;
-    to?: string;
-    classId?: string;
-    method?: PaymentMethod;
-  }): Promise<CashJournalRow[]> {
+  private cashJournalWhere(input: CashJournalFilterInput, withStatus: boolean) {
+    const status = withStatus ? input.status ?? null : null;
+    return sql`
+      WHERE (${input.schoolYearId ?? null}::uuid IS NULL OR p.school_year_id = ${input.schoolYearId ?? null}::uuid)
+        AND (${input.from ?? null}::date IS NULL OR p.payment_date >= ${input.from ?? null}::date)
+        AND (${input.to ?? null}::date IS NULL OR p.payment_date <= ${input.to ?? null}::date)
+        AND (${input.classId ?? null}::uuid IS NULL OR c.id = ${input.classId ?? null}::uuid)
+        AND (${input.method ?? null}::text IS NULL OR p.method::text = ${input.method ?? null})
+        AND (${input.includeCancelled === true}::boolean OR p.status = 'confirmed')
+        AND (${status}::text IS NULL OR p.status::text = ${status})
+        AND p.source <> 'migration_import'
+    `;
+  }
+
+  async listCashJournal(input: CashJournalFilterInput): Promise<CashJournalRow[]> {
     const result = await this.db.execute<CashJournalRow>(sql`
       SELECT p.*, p.id::text, p.student_id::text, p.school_year_id::text,
              p.confirmed_by_user_id::text, p.cancelled_by_user_id::text,
              p.payment_date::text,
+             cu.name AS cancelled_by_name, cu.is_active AS cancelled_by_active,
              s.matricule AS student_matricule,
              concat_ws(' ', s.first_name, s.last_name) AS student_name,
              c.id::text AS class_id,
@@ -496,30 +521,19 @@ export class FinanceRepository {
       INNER JOIN enrollments e
         ON e.student_id = s.id AND e.school_year_id = p.school_year_id AND e.status = 'confirmed'
       INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = p.school_year_id AND c.is_active = true
-      WHERE (${input.schoolYearId ?? null}::uuid IS NULL OR p.school_year_id = ${input.schoolYearId ?? null}::uuid)
-        AND (${input.from ?? null}::date IS NULL OR p.payment_date >= ${input.from ?? null}::date)
-        AND (${input.to ?? null}::date IS NULL OR p.payment_date <= ${input.to ?? null}::date)
-        AND (${input.classId ?? null}::uuid IS NULL OR c.id = ${input.classId ?? null}::uuid)
-        AND (${input.method ?? null}::text IS NULL OR p.method::text = ${input.method ?? null})
-        AND p.source <> 'migration_import'
+      LEFT JOIN users cu ON cu.id = p.cancelled_by_user_id
+      ${this.cashJournalWhere(input, true)}
       ORDER BY p.payment_date DESC, p.created_at DESC, p.id DESC
     `);
     return rows<CashJournalRow>(result);
   }
 
-  async listCashJournalPage(input: {
-    schoolYearId?: string;
-    from?: string;
-    to?: string;
-    classId?: string;
-    method?: PaymentMethod;
-    limit: number;
-    offset: number;
-  }): Promise<CashJournalRow[]> {
+  async listCashJournalPage(input: CashJournalFilterInput & { limit: number; offset: number }): Promise<CashJournalRow[]> {
     const result = await this.db.execute<CashJournalRow>(sql`
       SELECT p.*, p.id::text, p.student_id::text, p.school_year_id::text,
              p.confirmed_by_user_id::text, p.cancelled_by_user_id::text,
              p.payment_date::text,
+             cu.name AS cancelled_by_name, cu.is_active AS cancelled_by_active,
              s.matricule AS student_matricule,
              concat_ws(' ', s.first_name, s.last_name) AS student_name,
              c.id::text AS class_id,
@@ -529,28 +543,21 @@ export class FinanceRepository {
       INNER JOIN enrollments e
         ON e.student_id = s.id AND e.school_year_id = p.school_year_id AND e.status = 'confirmed'
       INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = p.school_year_id AND c.is_active = true
-      WHERE (${input.schoolYearId ?? null}::uuid IS NULL OR p.school_year_id = ${input.schoolYearId ?? null}::uuid)
-        AND (${input.from ?? null}::date IS NULL OR p.payment_date >= ${input.from ?? null}::date)
-        AND (${input.to ?? null}::date IS NULL OR p.payment_date <= ${input.to ?? null}::date)
-        AND (${input.classId ?? null}::uuid IS NULL OR c.id = ${input.classId ?? null}::uuid)
-        AND (${input.method ?? null}::text IS NULL OR p.method::text = ${input.method ?? null})
-        AND p.source <> 'migration_import'
+      LEFT JOIN users cu ON cu.id = p.cancelled_by_user_id
+      ${this.cashJournalWhere(input, true)}
       ORDER BY p.payment_date DESC, p.created_at DESC, p.id DESC
       LIMIT ${input.limit} OFFSET ${input.offset}
     `);
     return rows<CashJournalRow>(result);
   }
 
-  async getCashJournalSummary(input: {
-    schoolYearId?: string;
-    from?: string;
-    to?: string;
-    classId?: string;
-    method?: PaymentMethod;
-  }): Promise<CashJournalSummary> {
+  /** Totals ignore `status`: only confirmed payments are summed. */
+  async getCashJournalSummary(input: CashJournalFilterInput): Promise<CashJournalSummary> {
     const result = await this.db.execute<CashJournalSummary>(sql`
       SELECT
         COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE p.status = 'confirmed')::int AS confirmed_count,
+        COUNT(*) FILTER (WHERE p.status = 'cancelled')::int AS cancelled_count,
         COALESCE(SUM(CASE WHEN p.status = 'confirmed' AND p.method = 'cash' THEN p.amount ELSE 0 END), 0) AS cash_total,
         COALESCE(SUM(CASE WHEN p.status = 'confirmed' AND p.method = 'mobile_money' THEN p.amount ELSE 0 END), 0) AS mobile_money_total,
         COALESCE(SUM(CASE WHEN p.status = 'confirmed' AND p.method = 'bank_transfer' THEN p.amount ELSE 0 END), 0) AS bank_transfer_total,
@@ -560,15 +567,12 @@ export class FinanceRepository {
       INNER JOIN enrollments e
         ON e.student_id = s.id AND e.school_year_id = p.school_year_id AND e.status = 'confirmed'
       INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = p.school_year_id AND c.is_active = true
-      WHERE (${input.schoolYearId ?? null}::uuid IS NULL OR p.school_year_id = ${input.schoolYearId ?? null}::uuid)
-        AND (${input.from ?? null}::date IS NULL OR p.payment_date >= ${input.from ?? null}::date)
-        AND (${input.to ?? null}::date IS NULL OR p.payment_date <= ${input.to ?? null}::date)
-        AND (${input.classId ?? null}::uuid IS NULL OR c.id = ${input.classId ?? null}::uuid)
-        AND (${input.method ?? null}::text IS NULL OR p.method::text = ${input.method ?? null})
-        AND p.source <> 'migration_import'
+      ${this.cashJournalWhere(input, false)}
     `);
     return rows<CashJournalSummary>(result)[0] ?? {
       total: 0,
+      confirmed_count: 0,
+      cancelled_count: 0,
       cash_total: 0,
       mobile_money_total: 0,
       bank_transfer_total: 0,

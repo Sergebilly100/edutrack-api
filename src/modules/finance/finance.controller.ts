@@ -2,7 +2,8 @@ import { dateValidationProblem } from '../../shared/utils/date-validation.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 
-import { withTenantSchema } from '../../shared/database/db.js';
+import { sql } from 'drizzle-orm';
+import { db as publicDb, withTenantSchema } from '../../shared/database/db.js';
 import {
   authenticateRequest,
   checkStudentAccess,
@@ -45,6 +46,30 @@ import {
   financialAlertLogsQuerySchema,
   paymentMappingProfileBodySchema,
 } from './finance.types.js';
+
+const canSeeCancelledPayments = (request: FastifyRequest): boolean =>
+  request.permissions?.has('payments.cancel') === true;
+
+/** Cancelled payments are only returned with `payments.cancel`; asking for them without it is a 403. */
+const resolveJournalScope = (request: FastifyRequest, reply: FastifyReply, status?: 'confirmed' | 'cancelled') => {
+  const includeCancelled = canSeeCancelledPayments(request);
+  if (status === 'cancelled' && !includeCancelled) {
+    forbiddenCancelled(reply);
+    return null;
+  }
+  return { includeCancelled, status };
+};
+
+const forbiddenCancelled = (reply: FastifyReply) =>
+  reply.code(403).send({ error: 'Permission payments.cancel required', code: 'FORBIDDEN', statusCode: 403 });
+
+const isDataExportAllowed = async (schemaName: string): Promise<boolean> => {
+  const result = await publicDb.execute<{ allowed: boolean }>(sql`
+    SELECT COALESCE(can_export_data, true) AS allowed FROM public.tenants WHERE schema_name = ${schemaName} LIMIT 1
+  `);
+  const list = (Array.isArray(result) ? result : (result as { rows?: Array<{ allowed: boolean }> }).rows ?? []) as Array<{ allowed: boolean }>;
+  return list[0]?.allowed !== false;
+};
 
 const handleError = (request: FastifyRequest, reply: FastifyReply, error: unknown) => {
   if (error instanceof ZodError) {
@@ -273,9 +298,12 @@ export default async function financeController(
   app.get('/api/v1/payments/cash-journal', { preHandler: requirePermission('payments.view') }, async (request, reply) => {
     try {
       const query = cashJournalQuerySchema.parse(request.query ?? {});
+      const scope = resolveJournalScope(request, reply, query.status);
+      if (!scope) return reply;
       return reply.send({ journal: await withService(request, (service) => service.getPaginatedCashJournal({
         schoolYearId: query.school_year_id, from: query.from, to: query.to,
         classId: query.class_id, method: query.method, page: query.page, limit: query.limit,
+        status: scope.status, includeCancelled: scope.includeCancelled,
       })) });
     } catch (error) { return handleError(request, reply, error); }
   });
@@ -299,9 +327,15 @@ export default async function financeController(
   app.get('/api/v1/payments/cash-journal/export', { preHandler: requirePermission('payments.view') }, async (request, reply) => {
     try {
       const query = cashJournalExportQuerySchema.parse(request.query ?? {});
+      const scope = resolveJournalScope(request, reply, query.status);
+      if (!scope) return reply;
+      if (!(await isDataExportAllowed(request.claims!.schemaName))) {
+        return reply.code(403).send({ error: 'Data export is disabled for this school', code: 'EXPORT_DISABLED', statusCode: 403 });
+      }
       const filter = {
         schoolYearId: query.school_year_id, from: query.from, to: query.to,
         classId: query.class_id, method: query.method,
+        status: scope.status, includeCancelled: scope.includeCancelled,
       };
       if (query.format === 'xlsx') {
         const bytes = await withService(request, (service) => service.exportCashJournalExcel(filter));
@@ -313,6 +347,7 @@ export default async function financeController(
         type: 'cash-journal', schemaName: request.claims!.schemaName,
         schoolYearId: query.school_year_id, from: query.from, to: query.to,
         classId: query.class_id, method: query.method,
+        status: filter.status, includeCancelled: filter.includeCancelled,
       }, { removeOnComplete: 100, removeOnFail: 100 });
       return reply.code(202).send({ jobId: job.id });
     } catch (error) { return handleError(request, reply, error); }

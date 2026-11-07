@@ -19,6 +19,7 @@ const cashJournalFiltersSchema = z.object({
   to: civilDateSchema.optional(),
   class_id: uuidSchema.optional(),
   method: paymentMethodSchema.optional(),
+  status: z.enum(['confirmed', 'cancelled']).optional(),
 }).refine((value) => !value.from || !value.to || value.from <= value.to, {
   message: 'La date de fin doit être postérieure ou égale à la date de début.', path: ['from'],
 });

@@ -290,6 +290,8 @@ export type BillingPdfJobData =
       to?: string;
       classId?: string;
       method?: 'cash' | 'mobile_money' | 'bank_transfer';
+      status?: 'confirmed' | 'cancelled';
+      includeCancelled?: boolean;
     };
 
 export type BillingPdfJobResult = {
@@ -510,6 +512,8 @@ export const processBillingPdfJob = async (
         to: job.data.to,
         classId: job.data.classId,
         method: job.data.method,
+        status: job.data.status,
+        includeCancelled: job.data.includeCancelled === true,
       });
       const fileName = `journal_caisse_${toSafeFilePart(job.data.from ?? 'debut')}_${toSafeFilePart(job.data.to ?? 'jour')}.pdf`;
       const bytes = await renderCashJournal(branding, {
@@ -524,6 +528,9 @@ export const processBillingPdfJob = async (
           method: entry.method,
           reference: entry.providerReference ?? entry.schoolReceiptReference ?? '',
           status: entry.status,
+          cancelledBy: entry.cancelledBy,
+          cancelledAt: entry.cancelledAt,
+          cancellationReason: entry.cancellationReason,
         })),
       });
       const result = await persistPdf(bytes, fileName);
