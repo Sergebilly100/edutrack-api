@@ -29,6 +29,10 @@ import {
   type JwtPayload,
 } from '../../shared/auth/jwt.js';
 import { recordPasswordReset, getRevokeAt } from '../../shared/auth/token-version.js';
+import {
+  listEligibleParentStudentIds,
+  ParentPortalAccessDeniedError,
+} from '../../shared/auth/parent-eligibility.js';
 
 type LoginInput = {
   identifier: string;
@@ -627,16 +631,9 @@ export const refreshAccessToken = async (
     throw new Error('Invalid credentials');
   }
 
-  const studentRows = await db.execute(sql`
-    SELECT DISTINCT psl.student_id::text AS student_id
-    FROM parent_student_links psl
-    INNER JOIN students s ON s.id = psl.student_id
-    WHERE psl.parent_id = ${parent.id}::uuid
-      AND s.is_active = true
-  `);
-  const studentIds = getRows<{ student_id: string }>(studentRows).map((row) => row.student_id);
+  const studentIds = await listEligibleParentStudentIds(db, parent.id);
   if (studentIds.length === 0) {
-    throw new Error('Invalid credentials');
+    throw new ParentPortalAccessDeniedError();
   }
 
   const parentClaims: AccessTokenClaims = {

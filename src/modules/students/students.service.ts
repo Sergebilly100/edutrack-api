@@ -325,8 +325,6 @@ export class StudentsService {
 
     let emittedEvents = 0;
     for (const student of absentStudents) {
-      if (!student.parentPhone) continue;
-
       // FIX L8: catch per-event errors so a single failure doesn't silence the rest
       try {
         await this.deps.eventEmitter('student.absent', {
@@ -335,7 +333,8 @@ export class StudentsService {
           studentId: student.id,
           scheduleId: input.scheduleId,
           studentFirstName: student.firstName,
-          parentPhone: student.parentPhone,
+          parentPhone: student.parentPhone ?? student.parentPhone2 ?? '',
+          parentPhone2: student.parentPhone2,
           parentEmail: student.parentEmail,
           subject: schedule.subject,
           date: input.date,

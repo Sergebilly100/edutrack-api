@@ -12,6 +12,14 @@ import {
   authenticateRequest,
   requirePermission,
 } from '../../shared/middleware/auth.middleware.js';
+import { isFreeParentPortalEnabled } from '../../shared/auth/parent-eligibility.js';
+import {
+  ParentAccountsRepository,
+} from '../parents/parent-accounts.repository.js';
+import {
+  ParentAccountsModuleError,
+  ParentAccountsService,
+} from '../parents/parent-accounts.service.js';
 
 const forbidden = (reply: FastifyReply, message: string, code = 'FORBIDDEN'): FastifyReply =>
   reply.code(403).send({ error: message, code, statusCode: 403 });
@@ -104,6 +112,14 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
     });
   }
 
+  if (error instanceof ParentAccountsModuleError) {
+    return reply.code(error.statusCode).send({
+      error: error.message,
+      code: error.code,
+      statusCode: error.statusCode,
+    });
+  }
+
   // Une erreur Drizzle contient la requête et ses paramètres (identité/contact).
   // Conserver uniquement le code technique, le logger porte déjà le requestId.
   const databaseError = error as { code?: unknown; cause?: { code?: unknown } } | null;
@@ -120,6 +136,21 @@ const absenceExportQuerySchema = absenceStatsQuerySchema.extend({
   student_label: z.string().trim().min(1).max(40).default('Élève'),
 });
 
+const studentParentAccessParamsSchema = z.object({ studentId: z.uuid() });
+const studentParentAccessResetParamsSchema = z.object({
+  studentId: z.uuid(),
+  parentId: z.uuid(),
+});
+const studentParentAccessStatusParamsSchema = studentParentAccessResetParamsSchema.extend({
+  rotationId: z.uuid(),
+});
+const studentParentAccessResetBodySchema = z.object({
+  channels: z.array(z.enum(['sms', 'email'])).max(2),
+  manual_only: z.boolean().optional(),
+}).refine((value) => value.channels.length > 0 || value.manual_only === true, {
+  message: 'Select a channel or explicit manual delivery',
+});
+
 export default async function studentsController(
   app: FastifyInstance,
   options: {
@@ -127,6 +158,113 @@ export default async function studentsController(
     smsQueue?: Queue<NotificationJobData>;
   } = {}
 ): Promise<void> {
+  app.get(
+    '/api/v1/students/parent-access/mode',
+    { preHandler: requirePermission('students.edit') },
+    async (request, reply) => {
+      try {
+        const available = await withTenantSchema(request.claims!.schemaName, async (tenantDb) =>
+          isFreeParentPortalEnabled(
+            await new ParentAccountsRepository(tenantDb).getParentPortalMode()
+          )
+        );
+        return reply.send({ available });
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/students/parents/access/send',
+    { preHandler: requirePermission('students.edit') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) =>
+          new ParentAccountsService(
+            new ParentAccountsRepository(tenantDb),
+            { smsQueue: options.smsQueue }
+          ).sendPendingStudentAccess({
+            schemaName: claims.schemaName,
+            actorUserId: claims.sub,
+          })
+        );
+        return reply.send(result);
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.get(
+    '/api/v1/students/:studentId/parent-access',
+    { preHandler: requirePermission('students.edit') },
+    async (request, reply) => {
+      try {
+        const { studentId } = studentParentAccessParamsSchema.parse(request.params ?? {});
+        const result = await withTenantSchema(request.claims!.schemaName, async (tenantDb) =>
+          new ParentAccountsService(new ParentAccountsRepository(tenantDb)).getStudentAccess({
+            studentId,
+          })
+        );
+        return reply.send(result);
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/v1/students/:studentId/parents/:parentId/access/reset',
+    { preHandler: requirePermission('students.edit') },
+    async (request, reply) => {
+      try {
+        const { studentId, parentId } =
+          studentParentAccessResetParamsSchema.parse(request.params ?? {});
+        const body = studentParentAccessResetBodySchema.parse(request.body ?? {});
+        const claims = request.claims!;
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) =>
+          new ParentAccountsService(
+            new ParentAccountsRepository(tenantDb),
+            { smsQueue: options.smsQueue }
+          ).resetStudentAccess({
+            schemaName: claims.schemaName,
+            studentId,
+            parentId,
+            actorUserId: claims.sub,
+            channels: body.channels,
+            manualOnly: body.manual_only,
+          })
+        );
+        return reply
+          .header('Cache-Control', 'no-store')
+          .header('Pragma', 'no-cache')
+          .send(result);
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  app.get(
+    '/api/v1/students/:studentId/parents/:parentId/access/:rotationId/status',
+    { preHandler: requirePermission('students.edit') },
+    async (request, reply) => {
+      try {
+        const { studentId, parentId, rotationId } =
+          studentParentAccessStatusParamsSchema.parse(request.params ?? {});
+        const channels = await withTenantSchema(request.claims!.schemaName, async (tenantDb) =>
+          new ParentAccountsService(new ParentAccountsRepository(tenantDb))
+            .getStudentAccessStatuses({ studentId, parentId, rotationId })
+        );
+        return reply.send({ channels });
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
   // ─── Students CRUD ──────────────────────────────────────────────────────────
 
   app.get(

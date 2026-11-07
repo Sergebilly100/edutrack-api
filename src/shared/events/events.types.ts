@@ -84,6 +84,7 @@ export type StudentAbsentPayload = {
   scheduleId: string;
   studentFirstName: string;
   parentPhone: string;
+  parentPhone2?: string | null;
   parentEmail?: string | null;
   subject: string;
   date: string;

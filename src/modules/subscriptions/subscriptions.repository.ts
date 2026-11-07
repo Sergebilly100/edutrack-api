@@ -144,8 +144,10 @@ export type ParentAlertContactRow = {
   subscription_id: string | null;
   parent_phone: string;
   parent_email: string | null;
+  starts_at?: string | null;
   ends_at: string | null;
   subscription_status: SubscriptionStatus | null;
+  priority?: number;
 };
 
 const firstDayOfMonth = (month: string): string => `${month}-01`;
@@ -366,66 +368,83 @@ export class SubscriptionsRepository {
     return result.rows[0] ?? null;
   }
 
-  async listParentAlertContactsByStudent(studentId: string): Promise<ParentAlertContactRow[]> {
+  async listParentAlertContactsByStudent(
+    studentId: string,
+    options: { primaryParentOnly?: boolean } = {}
+  ): Promise<ParentAlertContactRow[]> {
     const result = await this.tenantDb.execute<ParentAlertContactRow>(sql`
       WITH student_contacts AS (
         SELECT
           NULL::uuid AS parent_id,
           NULL::uuid AS subscription_id,
-          NULLIF(parent_phone, '') AS parent_phone,
+          NULLIF(BTRIM(parent_phone), '') AS parent_phone,
           NULL::varchar(255) AS parent_email,
+          NULL::date AS starts_at,
           NULL::date AS ends_at,
           NULL::varchar(20) AS subscription_status,
           1 AS priority
         FROM students student
         WHERE student.id = ${studentId}::uuid
-          AND parent_phone IS NOT NULL
+          AND NULLIF(BTRIM(parent_phone), '') IS NOT NULL
           AND ${confirmedSchoolStudent(sql`student.id`, sql`(SELECT id FROM school_years WHERE status = 'active' LIMIT 1)`)}
         UNION ALL
         SELECT
           NULL::uuid AS parent_id,
           NULL::uuid AS subscription_id,
-          NULLIF(parent_phone_2, '') AS parent_phone,
+          NULLIF(BTRIM(parent_phone_2), '') AS parent_phone,
           NULL::varchar(255) AS parent_email,
+          NULL::date AS starts_at,
           NULL::date AS ends_at,
           NULL::varchar(20) AS subscription_status,
           2 AS priority
         FROM students student
         WHERE student.id = ${studentId}::uuid
-          AND parent_phone_2 IS NOT NULL
+          AND NULLIF(BTRIM(parent_phone_2), '') IS NOT NULL
+          AND NULLIF(BTRIM(parent_phone), '') IS NULL
           AND ${confirmedSchoolStudent(sql`student.id`, sql`(SELECT id FROM school_years WHERE status = 'active' LIMIT 1)`)}
       ),
       linked_contacts AS (
         SELECT
           p.id AS parent_id,
-          ps.id AS subscription_id,
-          p.phone AS parent_phone,
+          psl.subscription_id,
+          NULLIF(BTRIM(p.phone), '') AS parent_phone,
           p.email AS parent_email,
+          ps.starts_at,
           ps.ends_at,
           ps.status AS subscription_status,
-          CASE WHEN ps.status = 'active' THEN 0 ELSE 3 END AS priority
+          3 AS priority
         FROM parent_student_links psl
         INNER JOIN parents p ON p.id = psl.parent_id
-        INNER JOIN parent_subscriptions ps ON ps.id = psl.subscription_id
+        LEFT JOIN parent_subscriptions ps
+          ON ps.id = psl.subscription_id
+          AND ps.parent_id = p.id
         WHERE psl.student_id = ${studentId}::uuid
           AND p.is_active = true
-          AND p.phone IS NOT NULL
+          AND NULLIF(BTRIM(p.phone), '') IS NOT NULL
+          ${options.primaryParentOnly
+            ? sql`AND EXISTS (
+                SELECT 1 FROM students primary_student
+                WHERE primary_student.id = psl.student_id AND primary_student.parent_phone = p.phone
+              )`
+            : sql``}
           AND ${confirmedSchoolStudent(sql`psl.student_id`, sql`(SELECT id FROM school_years WHERE status = 'active' LIMIT 1)`)}
       )
-      SELECT DISTINCT ON (parent_phone)
+      SELECT
         parent_id::text,
         subscription_id::text,
         parent_phone,
         parent_email,
+        starts_at::text,
         ends_at::text,
-        subscription_status::text
+        subscription_status::text,
+        priority
       FROM (
         SELECT * FROM linked_contacts
         UNION ALL
         SELECT * FROM student_contacts
       ) contacts
       WHERE parent_phone IS NOT NULL
-      ORDER BY parent_phone, priority ASC, ends_at DESC NULLS LAST
+      ORDER BY priority ASC, parent_phone ASC
     `);
     return result.rows;
   }

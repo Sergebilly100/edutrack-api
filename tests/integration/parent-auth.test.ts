@@ -10,6 +10,9 @@ import {
   tenantTable,
   TEST_SCHEMA_NAME,
 } from './setup.js';
+import { NotificationsService } from '../../src/modules/notifications/notifications.service.js';
+import { withTenantSchema } from '../../src/shared/database/db.js';
+import { SubscriptionsRepository } from '../../src/modules/subscriptions/subscriptions.repository.js';
 
 type TenantRow = { id: string };
 type IdRow = { id: string };
@@ -18,6 +21,10 @@ const parentPhone = '2250709991111';
 const parentPassword = '1111';
 const week = '2026-W18';
 const mondayDate = '2026-04-27';
+const freeParentPhone = '2250709995555';
+let tenantIdValue = '';
+let paidSubscriptionId = '';
+let scheduleIdForAlerts = '';
 
 const loginParent = async (password = parentPassword) => {
   return request()
@@ -44,6 +51,7 @@ describe('parent auth + parent routes integration', () => {
       ['Integration Parent School', `integration-parent-${Date.now()}`, TEST_SCHEMA_NAME]
     );
     const tenantId = tenantRows[0]!.id;
+    tenantIdValue = tenantId;
 
     await queryPublic(
       `
@@ -61,18 +69,20 @@ describe('parent auth + parent routes integration', () => {
     const classIdRows = await queryTenant<IdRow>(`SELECT id::text AS id FROM ${tenantTable('classes')} LIMIT 1`);
     const classId = classIdRows[0]!.id;
     const yearId = (await queryTenant<IdRow>(`INSERT INTO ${tenantTable('school_years')}
-      (label,start_date,end_date,status) VALUES ('Parent auth','2026-09-01','2027-06-30','active') RETURNING id::text`))[0]!.id;
+      (label,start_date,end_date,status) VALUES ('Parent auth','2026-01-01','2028-12-31','active') RETURNING id::text`))[0]!.id;
     await queryTenant(`UPDATE ${tenantTable('classes')} SET school_year_id=$1::uuid WHERE id=$2::uuid`, [yearId, classId]);
 
     const studentRows = await queryTenant<IdRow>(
       `
-        INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, parent_phone, is_active)
+        INSERT INTO ${tenantTable('students')} (
+          class_id, first_name, last_name, parent_phone, parent_phone_2, is_active
+        )
         VALUES
-          ($1::uuid, 'Linked', 'Student', '2250700000001', true),
-          ($1::uuid, 'Other', 'Student', '2250700000002', true)
+          ($1::uuid, 'Linked', 'Student', '2250700000001', NULL, true),
+          ($1::uuid, 'Other', 'Student', $2, NULL, true)
         RETURNING id::text
       `,
-      [classId]
+      [classId, freeParentPhone]
     );
     linkedStudentId = studentRows[0]!.id;
     otherStudentId = studentRows[1]!.id;
@@ -113,6 +123,7 @@ describe('parent auth + parent routes integration', () => {
       [parentId, context.directorUserId]
     );
     const subscriptionId = subscriptionRows[0]!.id;
+    paidSubscriptionId = subscriptionId;
 
     await queryTenant(
       `
@@ -120,6 +131,11 @@ describe('parent auth + parent routes integration', () => {
         VALUES ($1::uuid, $2::uuid, $3::uuid)
       `,
       [subscriptionId, parentId, linkedStudentId]
+    );
+    await queryTenant(
+      `INSERT INTO ${tenantTable('parent_student_links')} (subscription_id, parent_id, student_id)
+       VALUES (NULL, $1::uuid, $2::uuid)`,
+      [parentId, otherStudentId]
     );
 
     const slotRows = await queryTenant<IdRow>(
@@ -141,7 +157,20 @@ describe('parent auth + parent routes integration', () => {
     );
     const periodId = periodRows[0]!.id;
 
+    const levelId = (await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('levels')} (name, order_index) VALUES ('Parent auth level', 1) RETURNING id::text AS id`
+    ))[0]!.id;
+    await queryTenant(`UPDATE ${tenantTable('classes')} SET level_id = $1::uuid WHERE id = $2::uuid`, [levelId, classId]);
+    const subjectId = (await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('subjects')} (level_id, name, coefficient) VALUES ($1::uuid, 'Mathematiques', 1) RETURNING id::text AS id`,
+      [levelId]
+    ))[0]!.id;
     await queryTenant(
+      `INSERT INTO ${tenantTable('teacher_subject_assignments')} (teacher_id, class_id, subject_id) VALUES ($1::uuid, $2::uuid, $3::uuid)`,
+      [context.teacherId, classId, subjectId]
+    );
+
+    const scheduleRows = await queryTenant<IdRow>(
       `
         INSERT INTO ${tenantTable('schedules')} (
           schedule_period_id,
@@ -151,6 +180,7 @@ describe('parent auth + parent routes integration', () => {
           time_slot_id,
           day_of_week,
           subject,
+          subject_id,
           is_active
         )
         VALUES (
@@ -161,11 +191,14 @@ describe('parent auth + parent routes integration', () => {
           $4::uuid,
           1,
           'Mathematiques',
+          $5::uuid,
           true
         )
+        RETURNING id::text AS id
       `,
-      [periodId, context.teacherId, classId, slotId]
+      [periodId, context.teacherId, classId, slotId, subjectId]
     );
+    scheduleIdForAlerts = scheduleRows[0]!.id;
 
     await queryTenant(
       `
@@ -192,7 +225,7 @@ describe('parent auth + parent routes integration', () => {
     expect(response.status).toBe(401);
   });
 
-  it('POST /auth/login/parent avec souscription expirée → accès de base autorisé', async () => {
+  it('POST /auth/login/parent refuse un lien dont la souscription est expirée', async () => {
     const expiredPhone = '2250709992222';
     const expiredHash = await argon2.hash('2222');
 
@@ -230,23 +263,26 @@ describe('parent auth + parent routes integration', () => {
       .set('x-tenant-schema', TEST_SCHEMA_NAME)
       .send({ phone: expiredPhone, password: '2222' });
 
-    expect(response.status).toBe(200);
-    expect(response.body.user?.studentIds).toContain(otherStudentId);
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe('PARENT_PORTAL_ACCESS_DENIED');
   });
 
-  it('POST /auth/login/parent feature SMS désactivée → accès de base autorisé', async () => {
+  it('POST /auth/login/parent refuse l’accès quand la fonctionnalité parent est désactivée', async () => {
     await queryPublic(
       `UPDATE public.school_sms_features SET is_enabled = false WHERE tenant_id = (SELECT id FROM public.tenants WHERE schema_name = $1 LIMIT 1)`,
       [TEST_SCHEMA_NAME]
     );
 
-    const response = await loginParent();
-    expect(response.status).toBe(200);
-
-    await queryPublic(
-      `UPDATE public.school_sms_features SET is_enabled = true WHERE tenant_id = (SELECT id FROM public.tenants WHERE schema_name = $1 LIMIT 1)`,
-      [TEST_SCHEMA_NAME]
-    );
+    try {
+      const response = await loginParent();
+      expect(response.status).toBe(403);
+      expect(response.body.code).toBe('PARENT_PORTAL_ACCESS_DENIED');
+    } finally {
+      await queryPublic(
+        `UPDATE public.school_sms_features SET is_enabled = true WHERE tenant_id = (SELECT id FROM public.tenants WHERE schema_name = $1 LIMIT 1)`,
+        [TEST_SCHEMA_NAME]
+      );
+    }
   });
 
   it('GET /parent/students retourne seulement les élèves du parent', async () => {
@@ -273,6 +309,70 @@ describe('parent auth + parent routes integration', () => {
 
     expect(response.status).toBe(403);
     expect(response.body.code).toBe('STUDENT_ACCESS_DENIED');
+  });
+
+  it('autorise un parent lié sans souscription en mode gratuit actif', async () => {
+    const hash = await argon2.hash(parentPassword);
+    const parentRows = await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('parents')}
+        (full_name, phone, password_hash, must_change_password, is_active)
+       VALUES ('Parent Free', $1, $2, false, true)
+       RETURNING id::text AS id`,
+      [freeParentPhone, hash]
+    );
+    await queryTenant(
+      `INSERT INTO ${tenantTable('parent_student_links')} (parent_id, student_id, subscription_id)
+       VALUES ($1::uuid, $2::uuid, NULL)`,
+      [parentRows[0]!.id, otherStudentId]
+    );
+    await queryPublic(
+      `UPDATE public.school_sms_features SET is_enabled = true, monetize_parent_alerts = false
+       WHERE tenant_id = $1::uuid`,
+      [tenantIdValue]
+    );
+
+    try {
+      const login = await request()
+        .post('/api/v1/auth/login/parent')
+        .set('x-tenant-schema', TEST_SCHEMA_NAME)
+        .send({ phone: freeParentPhone, password: parentPassword });
+      expect(login.status).toBe(200);
+      expect(login.body.user.studentIds).toEqual([otherStudentId]);
+
+      const students = await request()
+        .get('/api/v1/parent/students')
+        .set('authorization', `Bearer ${login.body.accessToken}`);
+      expect(students.status).toBe(200);
+      expect(students.body.data.map((student: { id: string }) => student.id)).toEqual([otherStudentId]);
+    } finally {
+      await queryPublic(
+        `UPDATE public.school_sms_features SET is_enabled = true, monetize_parent_alerts = true
+         WHERE tenant_id = $1::uuid`,
+        [tenantIdValue]
+      );
+    }
+  });
+
+  it('réévalue l’accès protégé après annulation de la souscription', async () => {
+    const login = await loginParent();
+    expect(login.status).toBe(200);
+
+    await queryTenant(
+      `UPDATE ${tenantTable('parent_subscriptions')} SET status = 'cancelled' WHERE id = $1::uuid`,
+      [paidSubscriptionId]
+    );
+    try {
+      const response = await request()
+        .get('/api/v1/parent/students')
+        .set('authorization', `Bearer ${login.body.accessToken}`);
+      expect(response.status).toBe(403);
+      expect(response.body.code).toBe('PARENT_PORTAL_ACCESS_DENIED');
+    } finally {
+      await queryTenant(
+        `UPDATE ${tenantTable('parent_subscriptions')} SET status = 'active' WHERE id = $1::uuid`,
+        [paidSubscriptionId]
+      );
+    }
   });
 
   it('GET /parent/subscription/status retourne les données attendues', async () => {
@@ -308,8 +408,8 @@ describe('parent auth + parent routes integration', () => {
     expect(allSlots.every((slot: { status: string }) => allowedStatuses.has(slot.status))).toBe(true);
   });
 
-  it('retourne subscription:null et expose un tarif uniquement lorsque l’offre SMS est disponible', async () => {
-    const phone = '2250709994444';
+  it('refuse sans souscription en mode payant et retourne subscription:null en mode gratuit', async () => {
+    const phone = '2250700000001'; // contact 1 de linkedStudent
     const parents = await queryTenant<IdRow>(
       `INSERT INTO ${tenantTable('parents')} (full_name, phone, password_hash, must_change_password, is_active)
        VALUES ('Parent sans abonnement', $1, $2, false, true) RETURNING id::text`,
@@ -319,13 +419,22 @@ describe('parent auth + parent routes integration', () => {
       `INSERT INTO ${tenantTable('parent_student_links')} (parent_id, student_id, subscription_id) VALUES ($1, $2, NULL)`,
       [parents[0]!.id, linkedStudentId]
     );
+    const paidLogin = await request().post('/api/v1/auth/login/parent').set('x-tenant-schema', TEST_SCHEMA_NAME)
+      .send({ phone, password: parentPassword });
+    expect(paidLogin.status).toBe(403);
+    expect(paidLogin.body.code).toBe('PARENT_PORTAL_ACCESS_DENIED');
+
+    await queryPublic(
+      `UPDATE public.school_sms_features SET is_enabled = true, monetize_parent_alerts = false
+       WHERE tenant_id = $1::uuid`,
+      [tenantIdValue]
+    );
     const login = await request().post('/api/v1/auth/login/parent').set('x-tenant-schema', TEST_SCHEMA_NAME)
       .send({ phone, password: parentPassword });
     expect(login.status).toBe(200);
     try {
       for (const [enabled, monetized, price, available] of [
-        [true, true, 1250, true], [false, true, 1250, false],
-        [true, false, 1250, false], [true, true, 0, false],
+        [true, false, 1250, false],
       ] as const) {
         await queryPublic(`UPDATE public.school_sms_features SET is_enabled=$1, monetize_parent_alerts=$2, sms_unit_price_fcfa=$3
           WHERE tenant_id=(SELECT id FROM public.tenants WHERE schema_name=$4)`, [enabled, monetized, price, TEST_SCHEMA_NAME]);
@@ -339,6 +448,34 @@ describe('parent auth + parent routes integration', () => {
     } finally {
       await queryPublic(`UPDATE public.school_sms_features SET is_enabled=true, monetize_parent_alerts=true, sms_unit_price_fcfa=1000
         WHERE tenant_id=(SELECT id FROM public.tenants WHERE schema_name=$1)`, [TEST_SCHEMA_NAME]);
+    }
+  });
+
+  it('mode gratuit : un parent lié qui n’est pas le contact 1 est refusé au portail', async () => {
+    const phone = '2250709997777';
+    const [{ id }] = await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('parents')} (full_name, phone, password_hash, must_change_password, is_active)
+       VALUES ('Lié non principal', $1, $2, false, true) RETURNING id::text AS id`,
+      [phone, await argon2.hash(parentPassword)]
+    );
+    await queryTenant(
+      `INSERT INTO ${tenantTable('parent_student_links')} (parent_id, student_id, subscription_id) VALUES ($1::uuid, $2::uuid, NULL)`,
+      [id, linkedStudentId]
+    );
+    await queryPublic(
+      `UPDATE public.school_sms_features SET is_enabled = true, monetize_parent_alerts = false WHERE tenant_id = $1::uuid`,
+      [tenantIdValue]
+    );
+    try {
+      const login = await request().post('/api/v1/auth/login/parent').set('x-tenant-schema', TEST_SCHEMA_NAME)
+        .send({ phone, password: parentPassword });
+      expect(login.status).toBe(403);
+      expect(login.body.code).toBe('PARENT_PORTAL_ACCESS_DENIED');
+    } finally {
+      await queryPublic(
+        `UPDATE public.school_sms_features SET is_enabled = true, monetize_parent_alerts = true WHERE tenant_id = $1::uuid`,
+        [tenantIdValue]
+      );
     }
   });
 
@@ -418,10 +555,140 @@ describe('parent auth + parent routes integration', () => {
       .set('authorization', `Bearer ${token}`);
     expect(allowed.status).toBe(200);
   });
+
+  it('file le contact 2 et les parents liés en gratuit, puis filtre par abonnement actif en payant', async () => {
+    const unbilledPhone = '2250709996666';
+    const [{ id: linkedClassId }] = await queryTenant<IdRow>(
+      `SELECT class_id::text AS id FROM ${tenantTable('students')} WHERE id = $1::uuid`,
+      [linkedStudentId]
+    );
+    const alertStudent = await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('students')}
+        (class_id, first_name, last_name, parent_phone, parent_phone_2, is_active)
+       VALUES ($1::uuid, 'Alert', 'Student', NULL, $2, true)
+       RETURNING id::text AS id`,
+      [linkedClassId, parentPhone]
+    );
+    const alertStudentId = alertStudent[0]!.id;
+    await queryTenant(
+      `INSERT INTO ${tenantTable('enrollments')} (student_id, class_id, school_year_id, type, status)
+       VALUES (
+         $1::uuid,
+         $2::uuid,
+         (SELECT id FROM ${tenantTable('school_years')} WHERE status = 'active' LIMIT 1),
+         'new_registration',
+         'confirmed'
+       )`,
+      [alertStudentId, linkedClassId]
+    );
+    const [{ id: billedParentId }] = await queryTenant<IdRow>(
+      `SELECT id::text AS id FROM ${tenantTable('parents')} WHERE phone = $1`,
+      [parentPhone]
+    );
+    await queryTenant(
+      `INSERT INTO ${tenantTable('parent_student_links')} (parent_id, student_id, subscription_id)
+       VALUES ($1::uuid, $2::uuid, $3::uuid)`,
+      [billedParentId, alertStudentId, paidSubscriptionId]
+    );
+    const unbilledParent = await queryTenant<IdRow>(
+      `INSERT INTO ${tenantTable('parents')}
+        (full_name, phone, password_hash, must_change_password, is_active)
+       VALUES ('Parent sans abonnement alerte', $1, $2, false, true)
+       RETURNING id::text AS id`,
+      [unbilledPhone, await argon2.hash(parentPassword)]
+    );
+    await queryTenant(
+      `INSERT INTO ${tenantTable('parent_student_links')} (parent_id, student_id, subscription_id)
+       VALUES ($1::uuid, $2::uuid, NULL)`,
+      [unbilledParent[0]!.id, alertStudentId]
+    );
+
+    const queuedJobs: Array<{ name: string; data: { to?: string } }> = [];
+    const service = new NotificationsService({
+      withTenantSchema,
+      smsQueue: {
+        add: async (name: string, data: { to?: string }) => {
+          queuedJobs.push({ name, data });
+          return { id: `test-${queuedJobs.length}` };
+        },
+      } as never,
+    });
+    const payload = {
+      tenantId: tenantIdValue,
+      schemaName: TEST_SCHEMA_NAME,
+      studentId: alertStudentId,
+      scheduleId: scheduleIdForAlerts,
+      studentFirstName: 'Linked',
+      parentPhone: '',
+      parentPhone2: parentPhone,
+      subject: 'Mathematiques',
+      date: mondayDate,
+      schoolPhone: '2250701234567',
+    };
+
+    try {
+      await queryPublic(
+        `UPDATE public.school_sms_features SET is_enabled = true, monetize_parent_alerts = false
+         WHERE tenant_id = $1::uuid`,
+        [tenantIdValue]
+      );
+      await service.handleStudentAbsent(payload);
+
+      const freeSms = queuedJobs.filter((job) => job.name === 'send-sms');
+      // Gratuit : le parent lié non principal n'est pas alerté ; le contact 2 sert de repli (contact 1 vide).
+      expect(freeSms.map((job) => job.data.to)).toEqual([parentPhone]);
+      expect(new Set(freeSms.map((job) => job.data.to)).size).toBe(freeSms.length);
+
+      const freeStatuses = await queryTenant<{ recipient_phone: string; status: string }>(
+        `SELECT recipient_phone, status FROM ${tenantTable('notifications_log')}
+         WHERE related_id = $1::uuid AND type = 'student_absent_parent' AND channel = 'sms'
+         ORDER BY created_at`,
+        [scheduleIdForAlerts]
+      );
+      expect(freeStatuses).toContainEqual({ recipient_phone: parentPhone, status: 'queued' });
+      expect(freeStatuses.map((row) => row.recipient_phone)).not.toContain(unbilledPhone);
+
+      queuedJobs.length = 0;
+      await queryPublic(
+        `UPDATE public.school_sms_features SET is_enabled = true, monetize_parent_alerts = true
+         WHERE tenant_id = $1::uuid`,
+        [tenantIdValue]
+      );
+      await service.handleStudentAbsent(payload);
+
+      const paidSms = queuedJobs.filter((job) => job.name === 'send-sms');
+      expect(paidSms.map((job) => job.data.to)).toEqual([parentPhone]);
+      const paidStatuses = await queryTenant<{ recipient_phone: string; status: string }>(
+        `SELECT recipient_phone, status FROM ${tenantTable('notifications_log')}
+         WHERE related_id = $1::uuid AND type = 'student_absent_parent' AND channel = 'sms'
+           AND status IN ('skipped_no_active_subscription', 'skipped_subscription_expired')
+         ORDER BY created_at`,
+        [scheduleIdForAlerts]
+      );
+      expect(paidStatuses).toContainEqual({
+        recipient_phone: unbilledPhone,
+        status: 'skipped_no_active_subscription',
+      });
+    } finally {
+      await queryPublic(
+        `UPDATE public.school_sms_features SET is_enabled = true, monetize_parent_alerts = true
+         WHERE tenant_id = $1::uuid`,
+        [tenantIdValue]
+      );
+    }
+  });
 });
 
 describe('parent provisioning on student enrollment', () => {
   let pendingParentId = '';
+
+  // L'envoi des accès par l'école n'existe qu'en mode gratuit (C46) ; en payant, il passe par les abonnements.
+  beforeAll(async () => {
+    await queryPublic(
+      `UPDATE public.school_sms_features SET is_enabled = true, monetize_parent_alerts = false WHERE tenant_id = $1::uuid`,
+      [tenantIdValue]
+    );
+  });
 
   it('création élève → parent créé, lié et SMS d’accès mis en file', async () => {
     const headers = await getAuthHeaders('director');
@@ -579,5 +846,157 @@ describe('parent provisioning on student enrollment', () => {
       [phone, created.body.data.id]
     );
     expect(count).toBe(1);
+  });
+  it('mode gratuit : crée le compte du seul parent principal (jamais du contact 2) sans erreur 500 (liste, détail, envoi groupé)', async () => {
+    const headers = await getAuthHeaders('director');
+    try {
+      const [{ id: classId, school_year_id: yearId }] = await queryTenant<{ id: string; school_year_id: string }>(
+        `SELECT c.id::text AS id, c.school_year_id::text AS school_year_id
+         FROM ${tenantTable('classes')} c
+         INNER JOIN ${tenantTable('school_years')} sy ON sy.id = c.school_year_id AND sy.status = 'active'
+         ORDER BY c.created_at ASC LIMIT 1`
+      );
+      const suffix = Math.random().toString().slice(2, 8).padEnd(6, '0');
+      const phone1 = `22507${suffix}11`;
+      const phone2 = `22505${suffix}22`;
+      // Élève confirmé dont les contacts existent mais sans compte parent ni lien
+      // (création hors parcours standard : import historique, seed, contact 2).
+      const [{ id: studentId }] = await queryTenant<{ id: string }>(
+        `INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, parent_name, parent_phone, parent_name_2, parent_phone_2, is_active)
+         VALUES ($1::uuid, 'Legacy', $2, 'Parent Un', $3, NULL, $4, true) RETURNING id::text AS id`,
+        [classId, `Contacts-${suffix}`, phone1, phone2]
+      );
+      await queryTenant(
+        `INSERT INTO ${tenantTable('enrollments')} (student_id,class_id,school_year_id,type,status)
+         VALUES ($1::uuid,$2::uuid,$3::uuid,'new_registration','confirmed')`,
+        [studentId, classId, yearId]
+      );
+
+      const detail = await request().get(`/api/v1/students/${studentId}/parent-access`).set(headers);
+      expect(detail.status, JSON.stringify(detail.body)).toBe(200);
+      expect(detail.body.available).toBe(true);
+      expect((detail.body.parents as Array<{ phone: string }>).map((parent) => parent.phone))
+        .toEqual([phone1]);
+
+      // Un compte lié à l'élève mais qui n'est pas le contact 1 n'est jamais proposé.
+      const [{ id: strayId }] = await queryTenant<{ id: string }>(
+        `INSERT INTO ${tenantTable('parents')} (full_name, phone, password_hash, must_change_password, is_active)
+         VALUES ('Contact 2 legacy', $1, 'x', true, true) RETURNING id::text AS id`, [phone2]
+      );
+      await queryTenant(
+        `INSERT INTO ${tenantTable('parent_student_links')} (parent_id, student_id, subscription_id) VALUES ($1::uuid, $2::uuid, NULL)`,
+        [strayId, studentId]
+      );
+      const detailAgain = await request().get(`/api/v1/students/${studentId}/parent-access`).set(headers);
+      expect((detailAgain.body.parents as Array<{ phone: string }>).map((parent) => parent.phone)).toEqual([phone1]);
+      const resetStray = await request()
+        .post(`/api/v1/students/${studentId}/parents/${strayId}/access/reset`).set(headers)
+        .send({ channels: [], manual_only: true });
+      expect(resetStray.status).toBe(404);
+      await queryTenant(`DELETE FROM ${tenantTable('parent_student_links')} WHERE parent_id = $1::uuid`, [strayId]);
+      await queryTenant(`DELETE FROM ${tenantTable('parents')} WHERE id = $1::uuid`, [strayId]);
+
+      const send = await request().post('/api/v1/students/parents/access/send').set(headers);
+      expect(send.status, JSON.stringify(send.body)).toBe(200);
+      expect(send.body.items.length).toBeGreaterThanOrEqual(2);
+
+      const [{ count }] = await queryTenant<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM ${tenantTable('parent_student_links')} WHERE student_id = $1::uuid`,
+        [studentId]
+      );
+      expect(count).toBe(1);
+      const [{ count: contact2Accounts }] = await queryTenant<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM ${tenantTable('parents')} WHERE phone = $1`,
+        [phone2]
+      );
+      expect(contact2Accounts).toBe(0);
+    } finally {
+      await queryTenant(`DELETE FROM ${tenantTable('students')} WHERE last_name LIKE 'Contacts-%'`);
+    }
+  });
+  it('contact 2 : destinataire d’alerte uniquement si le contact 1 est vide', async () => {
+    const [{ id: classId, school_year_id: yearId }] = await queryTenant<{ id: string; school_year_id: string }>(
+      `SELECT c.id::text AS id, c.school_year_id::text AS school_year_id
+       FROM ${tenantTable('classes')} c
+       INNER JOIN ${tenantTable('school_years')} sy ON sy.id = c.school_year_id AND sy.status = 'active'
+       ORDER BY c.created_at ASC LIMIT 1`
+    );
+    const suffix = Math.random().toString().slice(2, 8).padEnd(6, '0');
+    const phone1 = `22507${suffix}33`;
+    const phone2 = `22505${suffix}44`;
+    const create = async (name: string, p1: string | null) => {
+      const [{ id }] = await queryTenant<{ id: string }>(
+        `INSERT INTO ${tenantTable('students')} (class_id, first_name, last_name, parent_phone, parent_phone_2, is_active)
+         VALUES ($1::uuid, $2, $3, $4, $5, true) RETURNING id::text AS id`,
+        [classId, name, `Fallback-${suffix}`, p1, phone2]
+      );
+      await queryTenant(
+        `INSERT INTO ${tenantTable('enrollments')} (student_id,class_id,school_year_id,type,status)
+         VALUES ($1::uuid,$2::uuid,$3::uuid,'new_registration','confirmed')`,
+        [id, classId, yearId]
+      );
+      return id;
+    };
+    try {
+      const withContact1 = await create('WithC1', phone1);
+      const withoutContact1 = await create('NoC1', null);
+      const phonesOf = (studentId: string) => withTenantSchema(TEST_SCHEMA_NAME, async (tenantDb) =>
+        (await new SubscriptionsRepository(tenantDb as never).listParentAlertContactsByStudent(studentId))
+          .map((contact) => contact.parent_phone));
+      expect(await phonesOf(withContact1)).toEqual([phone1]);
+      expect(await phonesOf(withoutContact1)).toEqual([phone2]);
+    } finally {
+      await queryTenant(`DELETE FROM ${tenantTable('students')} WHERE last_name = $1`, [`Fallback-${suffix}`]);
+    }
+  });
+  it('changement du contact 1 : l’ancien parent perd l’accès, le nouveau a un mot de passe temporaire', async () => {
+    const headers = await getAuthHeaders('director');
+    const [{ id: classId, school_year_id: yearId }] = await queryTenant<{ id: string; school_year_id: string }>(
+      `SELECT c.id::text AS id, c.school_year_id::text AS school_year_id
+       FROM ${tenantTable('classes')} c
+       INNER JOIN ${tenantTable('school_years')} sy ON sy.id = c.school_year_id AND sy.status = 'active'
+       ORDER BY c.created_at ASC LIMIT 1`
+    );
+    const suffix = Math.random().toString().slice(2, 8).padEnd(6, '0');
+    const oldPhone = `22507${suffix}55`;
+    const newPhone = `22505${suffix}66`;
+    const created = await request().post('/api/v1/students').set(headers).send({
+      class_id: classId, first_name: 'Swap', last_name: `Primary-${suffix}`,
+      parent_name: 'Ancien Parent', parent_phone: oldPhone,
+    });
+    expect(created.status).toBe(201);
+    const studentId = created.body.data.id as string;
+    await queryTenant(
+      `INSERT INTO ${tenantTable('enrollments')} (student_id,class_id,school_year_id,type,status)
+       VALUES ($1::uuid,$2::uuid,$3::uuid,'new_registration','confirmed')`,
+      [studentId, classId, yearId]
+    );
+    await queryTenant(
+      `UPDATE ${tenantTable('parents')} SET password_hash = $2, must_change_password = false WHERE phone = $1`,
+      [oldPhone, await argon2.hash('OldPass-1234')]
+    );
+    const login = (phone: string, password: string) => request().post('/api/v1/auth/login/parent')
+      .set('x-tenant-schema', TEST_SCHEMA_NAME).send({ phone, password });
+    try {
+      expect((await login(oldPhone, 'OldPass-1234')).status).toBe(200);
+
+      const updated = await request().put(`/api/v1/students/${studentId}`).set(headers)
+        .send({ parent_name: 'Nouveau Parent', parent_phone: newPhone });
+      expect(updated.status).toBe(200);
+
+      expect((await login(oldPhone, 'OldPass-1234')).status).not.toBe(200);
+      const links = await queryTenant<{ phone: string }>(
+        `SELECT p.phone FROM ${tenantTable('parent_student_links')} psl
+         INNER JOIN ${tenantTable('parents')} p ON p.id = psl.parent_id WHERE psl.student_id = $1::uuid`,
+        [studentId]
+      );
+      expect(links.map((row) => row.phone)).toEqual([newPhone]);
+      const [fresh] = await queryTenant<{ must_change_password: boolean }>(
+        `SELECT must_change_password FROM ${tenantTable('parents')} WHERE phone = $1`, [newPhone]
+      );
+      expect(fresh?.must_change_password).toBe(true);
+    } finally {
+      await queryTenant(`DELETE FROM ${tenantTable('students')} WHERE last_name = $1`, [`Primary-${suffix}`]);
+    }
   });
 });

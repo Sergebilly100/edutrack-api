@@ -2,6 +2,7 @@ import argon2 from 'argon2';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
+import { isFreeParentPortalEnabled } from '../../shared/auth/parent-eligibility.js';
 import type { NotificationJobData } from '../notifications/notifications.queue.js';
 import { generateInitialPassword } from '../../shared/utils/password-generator.js';
 import {
@@ -197,6 +198,14 @@ export class ParentAccountsService {
     phone: string;
     temporaryPassword: string;
   }): Promise<void> {
+    if (!isFreeParentPortalEnabled(await this.repository.getParentPortalMode())) {
+      throw new ParentAccountsModuleError(
+        'Parent access credentials are managed through subscriptions',
+        403,
+        'PARENT_ACCESS_MANAGED_VIA_SUBSCRIPTIONS'
+      );
+    }
+
     if (!this.deps.smsQueue) {
       throw new ParentAccountsModuleError(
         'SMS queue is unavailable',
@@ -270,6 +279,10 @@ export class ParentAccountsService {
         items.push({ parentId, status: 'already_sent' });
         continue;
       }
+      if (parent.accessPending) {
+        items.push({ parentId, status: 'queued' });
+        continue;
+      }
 
       try {
         await this.resetAccess({ schemaName: input.schemaName, parentId: parent.id, actorUserId: input.actorUserId ?? null, channels: ['sms'] });
@@ -285,5 +298,125 @@ export class ParentAccountsService {
       items,
       queued: items.filter((item) => item.status === 'queued').length,
     };
+  }
+
+  async getStudentAccess(input: { studentId: string }): Promise<{
+    available: boolean;
+    parents: Array<{
+      id: string;
+      fullName: string;
+      phone: string;
+      email: string | null;
+      accessSentAt: string | null;
+      accessPending: boolean;
+    }>;
+  }> {
+    const available = isFreeParentPortalEnabled(
+      await this.repository.getParentPortalMode()
+    );
+    if (available) await this.provisionMissingContacts(input.studentId);
+    return {
+      available,
+      parents: available ? await this.repository.listByStudentId(input.studentId) : [],
+    };
+  }
+
+  /**
+   * Crée les comptes/liens manquants du parent principal (contact 1) des élèves.
+   * Le contact 2 n'a jamais de compte ni d'accès portail.
+   * Les mots de passe générés ici ne sont jamais transmis : l'envoi ou la
+   * réinitialisation en génère toujours un nouveau.
+   */
+  private async provisionMissingContacts(studentId?: string): Promise<void> {
+    const missing = await this.repository.listContactsWithoutParentLink(studentId);
+    if (missing.length === 0) return;
+    await this.repository.transaction(async (repository) => {
+      for (const contact of missing) {
+        await repository.ensureParentAccount(
+          { ...contact, email: isUsableParentEmail(contact.email) ? contact.email : null },
+          () => createTemporaryParentCredentials(this.deps)
+        );
+      }
+    });
+  }
+
+  async sendPendingStudentAccess(input: {
+    schemaName: string;
+    actorUserId: string;
+  }): Promise<{ items: ParentAccessDispatchItem[]; queued: number }> {
+    const available = isFreeParentPortalEnabled(
+      await this.repository.getParentPortalMode()
+    );
+    if (!available) {
+      throw new ParentAccountsModuleError(
+        'Parent access credentials are managed through subscriptions',
+        403,
+        'PARENT_ACCESS_MANAGED_VIA_SUBSCRIPTIONS'
+      );
+    }
+
+    await this.provisionMissingContacts();
+    return this.sendPendingAccess({
+      schemaName: input.schemaName,
+      parentIds: await this.repository.listEligibleStudentParentIds(),
+      actorUserId: input.actorUserId,
+    });
+  }
+
+  async resetStudentAccess(input: {
+    schemaName: string;
+    studentId: string;
+    parentId: string;
+    actorUserId: string;
+    channels: ParentAccessChannel[];
+    manualOnly?: boolean;
+  }): Promise<ParentAccessResult> {
+    const available = isFreeParentPortalEnabled(
+      await this.repository.getParentPortalMode()
+    );
+    if (!available) {
+      throw new ParentAccountsModuleError(
+        'Parent access credentials are managed through subscriptions',
+        403,
+        'PARENT_ACCESS_MANAGED_VIA_SUBSCRIPTIONS'
+      );
+    }
+    await this.provisionMissingContacts(input.studentId);
+    if (!(await this.repository.isLinkedToConfirmedStudent(input.parentId, input.studentId))) {
+      throw new ParentAccountsModuleError(
+        'Parent access is unavailable for this student',
+        404,
+        'PARENT_ACCESS_NOT_FOUND'
+      );
+    }
+
+    return this.resetAccess({
+      schemaName: input.schemaName,
+      parentId: input.parentId,
+      actorUserId: input.actorUserId,
+      channels: input.channels,
+      manualOnly: input.manualOnly,
+    });
+  }
+
+  async getStudentAccessStatuses(input: {
+    studentId: string;
+    parentId: string;
+    rotationId: string;
+  }): Promise<Array<{ channel: 'sms' | 'email'; status: string }>> {
+    const available = isFreeParentPortalEnabled(
+      await this.repository.getParentPortalMode()
+    );
+    if (
+      !available ||
+      !(await this.repository.isLinkedToConfirmedStudent(input.parentId, input.studentId))
+    ) {
+      throw new ParentAccountsModuleError(
+        'Parent access is unavailable for this student',
+        404,
+        'PARENT_ACCESS_NOT_FOUND'
+      );
+    }
+    return this.getRotationStatuses(input.parentId, input.rotationId);
   }
 }

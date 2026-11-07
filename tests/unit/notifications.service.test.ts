@@ -11,7 +11,10 @@ vi.mock('../../src/shared/database/db.js', () => ({
 }));
 
 import { SMS_MAX_LENGTH } from '../../src/modules/notifications/notifications.sms.js';
-import { NotificationsService } from '../../src/modules/notifications/notifications.service.js';
+import {
+  deduplicateParentAlertContacts,
+  NotificationsService,
+} from '../../src/modules/notifications/notifications.service.js';
 import { SubscriptionsRepository } from '../../src/modules/subscriptions/subscriptions.repository.js';
 import type {
   StudentAbsentPayload,
@@ -58,15 +61,19 @@ const makeActiveContact = (overrides: Partial<{
   subscription_id: string | null;
   parent_phone: string;
   parent_email: string | null;
+  starts_at: string | null;
   ends_at: string | null;
   subscription_status: string | null;
+  priority: number;
 }> = {}) => ({
   parent_id: 'parent-1',
   subscription_id: 'sub-1',
   parent_phone: '2250700000001',
   parent_email: null,
+  starts_at: '2020-01-01',
   ends_at: '2099-12-31',
   subscription_status: 'active',
+  priority: 3,
   ...overrides,
 });
 
@@ -471,6 +478,48 @@ describe('handleStudentAbsent - feature activée, non-monétisée', () => {
     const smsCalls = smsQueue.add.mock.calls.filter((c) => c[0] === 'send-sms');
     expect(smsCalls).toHaveLength(2);
   });
+
+  it('notifie un parent lié sans souscription en mode gratuit', async () => {
+    vi.spyOn(SubscriptionsRepository.prototype, 'listParentAlertContactsByStudent').mockResolvedValue([
+      makeActiveContact({
+        subscription_id: null,
+        subscription_status: null,
+        starts_at: null,
+        ends_at: null,
+      }),
+    ]);
+
+    await makeService().handleStudentAbsent(baseStudentPayload);
+
+    expect(smsQueue.add).toHaveBeenCalledWith(
+      'send-sms',
+      expect.objectContaining({ to: '2250700000001' }),
+      expect.any(Object)
+    );
+    expect(repository.insertNotificationLog).toHaveBeenCalledWith(
+      tenantDb,
+      expect.objectContaining({ status: 'queued', recipientPhone: '2250700000001' })
+    );
+  });
+
+  it('prioritizes contact 1 and de-duplicates normalized phone numbers', async () => {
+    vi.spyOn(SubscriptionsRepository.prototype, 'listParentAlertContactsByStudent').mockResolvedValue([
+      makeActiveContact({ parent_phone: '+225 070 000 0001', priority: 2 }),
+      makeActiveContact({ parent_phone: '2250700000002', priority: 3 }),
+      makeActiveContact({ parent_phone: '2250700000001', priority: 1 }),
+    ]);
+
+    await makeService().handleStudentAbsent(baseStudentPayload);
+
+    const smsRecipients = smsQueue.add.mock.calls
+      .filter((call) => call[0] === 'send-sms')
+      .map((call) => (call[1] as { to: string }).to);
+    expect(smsRecipients).toEqual(['2250700000001', '2250700000002']);
+    expect(repository.insertNotificationLog).toHaveBeenCalledWith(
+      tenantDb,
+      expect.objectContaining({ status: 'skipped_duplicate' })
+    );
+  });
 });
 
 // =====================================================================
@@ -532,6 +581,38 @@ describe('handleStudentAbsent - feature monétisée', () => {
       'send-sms',
       expect.objectContaining({ notificationType: 'student_absent_parent' }),
       expect.any(Object)
+    );
+  });
+
+  it('ne laisse pas un numéro de fiche élève contourner la souscription payante', async () => {
+    vi.spyOn(SubscriptionsRepository.prototype, 'listParentAlertContactsByStudent').mockResolvedValue([
+      makeActiveContact({
+        parent_id: null,
+        subscription_id: null,
+        parent_phone: '2250700000001',
+        subscription_status: null,
+        starts_at: null,
+        ends_at: null,
+        priority: 1,
+      }),
+      makeActiveContact({
+        parent_phone: '+225 070 000 0001',
+        subscription_id: 'sub-1',
+        subscription_status: 'active',
+        starts_at: '2020-01-01',
+        ends_at: '2099-12-31',
+        priority: 3,
+      }),
+    ]);
+
+    await makeService().handleStudentAbsent(baseStudentPayload);
+
+    const smsCalls = smsQueue.add.mock.calls.filter((call) => call[0] === 'send-sms');
+    expect(smsCalls).toHaveLength(1);
+    expect((smsCalls[0]?.[1] as { to: string }).to).toBe('+225 070 000 0001');
+    expect(repository.insertNotificationLog).toHaveBeenCalledWith(
+      tenantDb,
+      expect.objectContaining({ status: 'skipped_no_active_subscription', recipientPhone: '2250700000001' })
     );
   });
 

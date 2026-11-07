@@ -1,5 +1,10 @@
 import { sql } from 'drizzle-orm';
 import type { TenantDb } from '../../shared/database/db.js';
+import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
+import {
+  getParentPortalMode,
+  type ParentPortalMode,
+} from '../../shared/auth/parent-eligibility.js';
 
 export type ParentAccountsQueryExecutor = {
   execute: (query: ReturnType<typeof sql>) => Promise<unknown>;
@@ -31,6 +36,30 @@ const getRows = <T>(result: unknown): T[] => {
   }
   const rows = (result as { rows?: T[] }).rows;
   return Array.isArray(rows) ? rows : [];
+};
+
+/**
+ * Un seul parent principal (contact 1) a accès au portail d'un élève. Quand le
+ * contact 1 change, les anciens liens créés par l'école (sans souscription) sont
+ * supprimés : l'ancien parent perd l'accès à cet élève (le portail réévalue
+ * l'éligibilité à chaque requête). Les liens portés par une souscription active
+ * restent gérés depuis le menu abonnements.
+ */
+export const revokeStalePrimaryParentLinks = async (
+  db: ParentAccountsQueryExecutor,
+  studentId: string,
+  primaryPhone: string | null
+): Promise<number> => {
+  const result = await db.execute(sql`
+    DELETE FROM parent_student_links psl
+    USING parents p
+    WHERE p.id = psl.parent_id
+      AND psl.student_id = ${studentId}::uuid
+      AND psl.subscription_id IS NULL
+      AND p.phone IS DISTINCT FROM ${primaryPhone}
+    RETURNING psl.id
+  `);
+  return getRows<{ id: string }>(result).length;
 };
 
 /**
@@ -104,6 +133,27 @@ export const ensureParentAccountForStudent = async (
     throw new Error('Unable to create or find parent account');
   }
 
+  // Compte existant mais orphelin (aucun lien, ex. ancien contact 1 révoqué) :
+  // aucun autre enfant n'est impacté, on renouvelle donc le mot de passe pour
+  // que l'ancien secret ne serve jamais au nouveau parent principal.
+  if (!created) {
+    const linksResult = await db.execute(sql`
+      SELECT 1 FROM parent_student_links WHERE parent_id = ${parent.id}::uuid LIMIT 1
+    `);
+    if (getRows<unknown>(linksResult).length === 0) {
+      const credentials = await createCredentials();
+      await db.execute(sql`
+        UPDATE parents
+        SET password_hash = ${credentials.passwordHash},
+            must_change_password = true,
+            access_sent_at = NULL
+        WHERE id = ${parent.id}::uuid
+      `);
+      temporaryPassword = credentials.plainPassword;
+      created = true;
+    }
+  }
+
   await db.execute(sql`
     INSERT INTO parent_student_links (subscription_id, parent_id, student_id)
     VALUES (NULL, ${parent.id}::uuid, ${input.studentId}::uuid)
@@ -125,10 +175,15 @@ export type ParentAccessRecord = {
   phone: string;
   email: string | null;
   accessSentAt: string | null;
+  accessPending: boolean;
 };
 
 export class ParentAccountsRepository {
   constructor(private readonly db: ParentAccountsQueryExecutor) {}
+
+  getParentPortalMode(): Promise<ParentPortalMode> {
+    return getParentPortalMode(this.db);
+  }
 
   async getTenantSubdomain(schemaName: string): Promise<string | null> {
     const result = await this.db.execute(sql`
@@ -178,7 +233,15 @@ export class ParentAccountsRepository {
         full_name,
         phone,
         email,
-        access_sent_at::text AS access_sent_at
+        access_sent_at::text AS access_sent_at,
+        EXISTS (
+          SELECT 1
+          FROM notifications_log n
+          WHERE n.related_id = parents.id
+            AND n.type = 'parent_access_credentials'
+            AND n.status = 'queued'
+            AND n.channel IN ('sms', 'email')
+        ) AS access_pending
       FROM parents
       WHERE id IN (${sql.join(parentIds.map((id) => sql`${id}::uuid`), sql`, `)})
       ORDER BY created_at ASC
@@ -190,13 +253,154 @@ export class ParentAccountsRepository {
       phone: string;
       email: string | null;
       access_sent_at: string | null;
+      access_pending: boolean;
     }>(result).map((row) => ({
       id: row.id,
       fullName: row.full_name,
       phone: row.phone,
       email: row.email,
       accessSentAt: row.access_sent_at,
+      accessPending: row.access_pending,
     }));
+  }
+
+  async listByStudentId(studentId: string): Promise<ParentAccessRecord[]> {
+    const result = await this.db.execute(sql`
+      SELECT DISTINCT
+        p.id::text AS id,
+        p.full_name,
+        p.phone,
+        p.email,
+        p.access_sent_at::text AS access_sent_at,
+        EXISTS (
+          SELECT 1
+          FROM notifications_log n
+          WHERE n.related_id = p.id
+            AND n.type = 'parent_access_credentials'
+            AND n.status = 'queued'
+            AND n.channel IN ('sms', 'email')
+        ) AS access_pending
+      FROM parent_student_links psl
+      INNER JOIN parents p ON p.id = psl.parent_id
+      INNER JOIN students s ON s.id = psl.student_id
+      INNER JOIN classes c
+        ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
+      INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
+      WHERE psl.student_id = ${studentId}::uuid
+        AND p.phone = s.parent_phone
+        AND p.is_active = true
+        AND s.is_active = true
+        AND s.lifecycle_status = 'active'
+      ORDER BY p.full_name ASC, p.phone ASC
+    `);
+    return getRows<{
+      id: string;
+      full_name: string;
+      phone: string;
+      email: string | null;
+      access_sent_at: string | null;
+      access_pending: boolean;
+    }>(result).map((row) => ({
+      id: row.id,
+      fullName: row.full_name,
+      phone: row.phone,
+      email: row.email,
+      accessSentAt: row.access_sent_at,
+      accessPending: row.access_pending,
+    }));
+  }
+
+  async listEligibleStudentParentIds(): Promise<string[]> {
+    const result = await this.db.execute(sql`
+      SELECT DISTINCT p.id::text AS id
+      FROM parent_student_links psl
+      INNER JOIN parents p ON p.id = psl.parent_id
+      INNER JOIN students s ON s.id = psl.student_id
+      INNER JOIN classes c
+        ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
+      INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
+      WHERE p.phone = s.parent_phone
+        AND p.is_active = true
+        AND s.is_active = true
+        AND s.lifecycle_status = 'active'
+      ORDER BY 1
+    `);
+    return getRows<{ id: string }>(result).map((row) => row.id);
+  }
+
+  /**
+   * Contact principal (contact 1) d'élèves confirmés dont le numéro n'est lié à
+   * aucun compte parent. Seul le parent principal a un compte et accède au
+   * portail : le contact 2 n'est jamais provisionné (il ne sert qu'aux alertes
+   * lorsque le contact 1 est vide).
+   */
+  async listContactsWithoutParentLink(studentId?: string): Promise<Array<{
+    studentId: string;
+    fullName: string;
+    phone: string;
+    email: string | null;
+  }>> {
+    const result = await this.db.execute(sql`
+      SELECT DISTINCT
+        s.id::text AS student_id,
+        COALESCE(NULLIF(BTRIM(s.parent_name), ''), 'Parent') AS full_name,
+        s.parent_phone AS phone,
+        s.parent_email AS email
+      FROM students s
+      INNER JOIN classes c
+        ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
+      INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
+      WHERE s.is_active = true
+        AND s.lifecycle_status = 'active'
+        ${studentId ? sql`AND s.id = ${studentId}::uuid` : sql``}
+        AND s.parent_phone ~ '^225[0-9]{10}$'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM parent_student_links psl
+          INNER JOIN parents p ON p.id = psl.parent_id
+          WHERE psl.student_id = s.id AND p.phone = s.parent_phone
+        )
+      ORDER BY 1
+    `);
+    return getRows<{
+      student_id: string;
+      full_name: string;
+      phone: string;
+      email: string | null;
+    }>(result).map((row) => ({
+      studentId: row.student_id,
+      fullName: row.full_name,
+      phone: row.phone,
+      email: row.email,
+    }));
+  }
+
+  ensureParentAccount(
+    input: { studentId: string; fullName: string; phone: string; email?: string | null },
+    createCredentials: () => Promise<TemporaryCredentials>
+  ): Promise<ParentProvisioningResult> {
+    return ensureParentAccountForStudent(this.db, input, createCredentials);
+  }
+
+  async isLinkedToConfirmedStudent(parentId: string, studentId: string): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      SELECT EXISTS (
+        SELECT 1
+        FROM parent_student_links psl
+        INNER JOIN parents p ON p.id = psl.parent_id
+        INNER JOIN students s ON s.id = psl.student_id
+        INNER JOIN classes c
+          ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
+        INNER JOIN school_years sy ON sy.id = c.school_year_id AND sy.status = 'active'
+        WHERE psl.parent_id = ${parentId}::uuid
+          AND psl.student_id = ${studentId}::uuid
+          AND p.phone = s.parent_phone
+          AND p.is_active = true
+          AND s.is_active = true
+          AND s.lifecycle_status = 'active'
+      ) AS allowed
+    `);
+    return getRows<{ allowed: boolean }>(result)[0]?.allowed ?? false;
   }
 
   async updateTemporaryPassword(parentId: string, passwordHash: string): Promise<void> {

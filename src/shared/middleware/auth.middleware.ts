@@ -2,6 +2,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { sql } from 'drizzle-orm';
 
 import { withTenantSchema } from '../database/db.js';
+import { listEligibleParentStudentIds } from '../auth/parent-eligibility.js';
 import type { PermissionKey } from '../types/index.js';
 import {
   PermissionsRepository,
@@ -359,16 +360,31 @@ export const requireParent = async (
   const allowsPasswordChangeRoute =
     request.method.toUpperCase() === 'POST' &&
     request.url.startsWith('/api/v1/parent/auth/change-password');
+  const parentState = await withTenantSchema(claims.schemaName, async (tenantDb) => {
+    const result = await tenantDb.execute<{ must_change_password: boolean }>(sql`
+      SELECT COALESCE(must_change_password, false) AS must_change_password
+      FROM parents
+      WHERE id = ${claims.sub}::uuid
+        AND is_active = true
+      LIMIT 1
+    `);
+    return {
+      mustChangePassword: result.rows[0]?.must_change_password ?? false,
+      allowedStudentIds: await listEligibleParentStudentIds(tenantDb, claims.sub),
+    };
+  });
+
+  if (parentState.allowedStudentIds.length === 0) {
+    reply.code(403).send({
+      error: 'Parent portal access denied',
+      code: 'PARENT_PORTAL_ACCESS_DENIED',
+      statusCode: 403,
+    });
+    return;
+  }
+
   if (!allowsPasswordChangeRoute) {
-    const result = await withTenantSchema(claims.schemaName, async (tenantDb) =>
-      tenantDb.execute<{ must_change_password: boolean }>(sql`
-        SELECT must_change_password
-        FROM parents
-        WHERE id = ${claims.sub}::uuid
-        LIMIT 1
-      `)
-    );
-    const mustChangePassword = result.rows[0]?.must_change_password ?? false;
+    const mustChangePassword = parentState.mustChangePassword;
     if (mustChangePassword) {
       reply.code(403).send({
         error: 'Password change required',
@@ -379,8 +395,6 @@ export const requireParent = async (
     }
   }
 
-  const allowedStudentIds = Array.isArray(claims.studentIds) ? claims.studentIds : [];
-
   request.claims = claims;
   request.auth = claims;
   request.user = {
@@ -388,7 +402,7 @@ export const requireParent = async (
     schemaName: claims.schemaName,
   };
   request.parentId = claims.sub;
-  request.allowedStudentIds = allowedStudentIds;
+  request.allowedStudentIds = parentState.allowedStudentIds;
 };
 
 export const checkStudentAccess = (request: FastifyRequest, studentId: string): void => {

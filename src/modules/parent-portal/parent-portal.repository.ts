@@ -3,6 +3,7 @@ import { visibleReportCardRank } from '../../shared/database/report-card-visible
 import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { todayInBusinessTimezone } from '../../shared/utils/business-time.js';
+import { listEligibleParentStudentIds } from '../../shared/auth/parent-eligibility.js';
 
 export type TenantDb = Pick<NodePgDatabase<Record<string, unknown>>, 'execute'>;
 
@@ -403,17 +404,7 @@ export class ParentPortalRepository {
   }
 
   async listLinkedStudentIds(parentId: string): Promise<string[]> {
-    const result = await this.db.execute<{ student_id: string }>(sql`
-      SELECT DISTINCT psl.student_id::text AS student_id
-      FROM parent_student_links psl
-      INNER JOIN students s ON s.id = psl.student_id
-      WHERE psl.parent_id = ${parentId}::uuid
-        AND s.is_active = true
-        AND s.lifecycle_status = 'active'
-        AND ${confirmedSchoolStudent(sql`s.id`, sql`(SELECT id FROM school_years WHERE status = 'active' LIMIT 1)`)}
-    `);
-
-    return result.rows.map((row) => row.student_id);
+    return listEligibleParentStudentIds(this.db, parentId);
   }
 
   async listStudentsByParent(parentId: string): Promise<StudentSummaryRow[]> {
@@ -437,19 +428,7 @@ export class ParentPortalRepository {
   }
 
   async parentCanAccessStudent(parentId: string, studentId: string): Promise<boolean> {
-    const result = await this.db.execute<{ allowed: boolean }>(sql`
-      SELECT EXISTS (
-        SELECT 1
-        FROM parent_student_links psl
-        INNER JOIN students s ON s.id = psl.student_id
-        WHERE psl.parent_id = ${parentId}::uuid
-          AND psl.student_id = ${studentId}::uuid
-          AND s.is_active = true
-          AND s.lifecycle_status = 'active'
-          AND ${confirmedSchoolStudent(sql`s.id`, sql`(SELECT id FROM school_years WHERE status = 'active' LIMIT 1)`)}
-      ) AS allowed
-    `);
-    return result.rows[0]?.allowed ?? false;
+    return (await listEligibleParentStudentIds(this.db, parentId)).includes(studentId);
   }
 
   async getStudentClassId(studentId: string): Promise<string | null> {

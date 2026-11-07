@@ -49,5 +49,6 @@ describe('isolated demo guards', () => {
     expect(source).toContain('"school_demo_guard"."student_tuition_schedule_agreements"');
     expect(source).toContain('"school_demo_guard"."student_tuition_schedule_steps" ADD COLUMN "agreement_id"');
     expect(source).toContain('"student_tuition_schedule_agreements_status"');
+    expect(source).toContain("ADD VALUE IF NOT EXISTS 'skipped_duplicate'");
   });
 });

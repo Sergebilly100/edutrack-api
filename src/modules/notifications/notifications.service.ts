@@ -5,11 +5,11 @@ import type { Queue } from 'bullmq';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import { db, withTenantSchema } from '../../shared/database/db.js';
+import { isParentStudentEligible } from '../../shared/auth/parent-eligibility.js';
 import { off as defaultOff, on as defaultOn } from '../../shared/events/event-bus.js';
 import { logger } from '../../shared/observability/logger.js';
 import {
   monthKeyInBusinessTimezone,
-  todayInBusinessTimezone,
 } from '../../shared/utils/business-time.js';
 import type {
   EventMap,
@@ -46,7 +46,10 @@ import {
   type NotificationsRepository,
   type TenantDbLike,
 } from './notifications.repository.js';
-import { SubscriptionsRepository } from '../subscriptions/subscriptions.repository.js';
+import {
+  SubscriptionsRepository,
+  type ParentAlertContactRow,
+} from '../subscriptions/subscriptions.repository.js';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js';
 import { formatDecimalHours } from '../../shared/utils/time.js';
 
@@ -238,7 +241,7 @@ const sendInfobipSms = async (params: {
   return { status: 'sent', providerRef };
 };
 
-const normalizeSmsRecipient = (phone: string): string => {
+export const normalizeSmsRecipient = (phone: string): string => {
   const digits = phone.replace(/\D/g, '');
   if (!digits) {
     return phone;
@@ -257,6 +260,41 @@ const normalizeSmsRecipient = (phone: string): string => {
   }
 
   return phone.trim().startsWith('+') ? phone.trim() : `+${digits}`;
+};
+
+export const deduplicateParentAlertContacts = (
+  contacts: ParentAlertContactRow[]
+): {
+  contacts: ParentAlertContactRow[];
+  duplicates: ParentAlertContactRow[];
+  missingPhones: ParentAlertContactRow[];
+} => {
+  const ordered = contacts
+    .map((contact, index) => ({ contact, index }))
+    .sort((left, right) =>
+      (left.contact.priority ?? 10 + left.index) -
+      (right.contact.priority ?? 10 + right.index)
+    );
+  const seen = new Set<string>();
+  const unique: ParentAlertContactRow[] = [];
+  const duplicates: ParentAlertContactRow[] = [];
+  const missingPhones: ParentAlertContactRow[] = [];
+
+  for (const { contact } of ordered) {
+    if (!contact.parent_phone.trim()) {
+      missingPhones.push(contact);
+      continue;
+    }
+    const key = normalizeSmsRecipient(contact.parent_phone);
+    if (seen.has(key)) {
+      duplicates.push(contact);
+      continue;
+    }
+    seen.add(key);
+    unique.push(contact);
+  }
+
+  return { contacts: unique, duplicates, missingPhones };
 };
 
 const sendAfricasTalkingSms = async (params: {
@@ -1549,16 +1587,6 @@ export class NotificationsService {
     }
   }
 
-  // La méthode handleStudentAbsent est une fonction asynchrone qui traite les événements de type 'student.absent'.
-  // elle envoie une notification SMS et/ou email aux parents de l'élève lorsqu'il est absent à un cours prévu, avec des détails sur le cours, la date et les coordonnées de contact de l'école.
-  // elle envoie les notification si l'école a activé la fonctionnalité pour les parents et si les parents ont un abonnement actif (ou si la fonctionnalité n'est pas monétisée).
-  // voici les étapes principales de la méthode :
-  // 1. Récupérer les informations d'abonnement de l'école et vérifier si la fonctionnalité de notifications pour les parents est activée.
-  // 2. Si la fonctionnalité est désactivée, enregistrer une entrée dans le journal des notifications avec le statut "skipped_feature_disabled" et ne pas envoyer de notification.
-  // 3. Si la fonctionnalité est activée, construire le message à envoyer en utilisant un template et les données de l'événement.
-  // 4. Récupérer les contacts des parents à notifier depuis la base de données. Si aucun contact n'est trouvé, utiliser les coordonnées fournies dans l'événement.
-  // 5. Pour chaque contact, vérifier si l'envoi de notifications est autorisé en fonction de l'abonnement du parent (si la fonctionnalité est monétisée). Si l'envoi n'est pas autorisé, enregistrer une entrée dans le journal des notifications avec le statut approprié et ne pas envoyer de notification.
-  // 6. Si l'envoi est autorisé, ajouter une tâche à la file d'attente pour envoyer la notification SMS et/ou email, et enregistrer une entrée dans le journal des notifications avec le statut "queued".
   async handleStudentAbsent(payload: StudentAbsentPayload): Promise<void> {
     await this.deps.withTenantSchema(payload.schemaName, async (tenantDb) => {
       const subscriptionsRepository = new SubscriptionsRepository(
@@ -1575,23 +1603,132 @@ export class NotificationsService {
         return;
       }
 
-      if (!feature?.is_enabled) {
+      const contactsFromDb =
+        await subscriptionsRepository.listParentAlertContactsByStudent(payload.studentId, {
+          primaryParentOnly: Boolean(feature?.is_enabled && !feature.monetize_parent_alerts),
+        });
+      const sources: ParentAlertContactRow[] = contactsFromDb.length > 0
+        ? contactsFromDb
+        : [
+            {
+              parent_id: null,
+              subscription_id: null,
+              parent_phone: payload.parentPhone,
+              parent_email: payload.parentEmail ?? null,
+              starts_at: null,
+              ends_at: null,
+              subscription_status: null,
+              priority: 1,
+            },
+            ...(payload.parentPhone2 && !payload.parentPhone?.trim()
+              ? [{
+                  parent_id: null,
+                  subscription_id: null,
+                  parent_phone: payload.parentPhone2,
+                  parent_email: null,
+                  starts_at: null,
+                  ends_at: null,
+                  subscription_status: null,
+                  priority: 2,
+                }]
+              : []),
+          ];
+      const portalMode = {
+        isEnabled: feature?.is_enabled ?? false,
+        monetizeParentAlerts: feature?.monetize_parent_alerts ?? false,
+      };
+      const excludedForSubscription = feature?.is_enabled && feature.monetize_parent_alerts
+        ? sources.filter((contact) =>
+            !isParentStudentEligible(portalMode, {
+              status: contact.subscription_status,
+              startsAt: contact.starts_at ?? null,
+              endsAt: contact.ends_at,
+            })
+          )
+        : [];
+      const alertableSources = sources.filter((contact) =>
+        !excludedForSubscription.includes(contact)
+      );
+      const { contacts, duplicates, missingPhones } =
+        deduplicateParentAlertContacts(alertableSources);
+
+      for (const contact of excludedForSubscription) {
+        const skippedStatus =
+          contact.subscription_status === 'active'
+            ? 'skipped_subscription_expired'
+            : 'skipped_no_active_subscription';
         await this.deps.repository.insertNotificationLog(tenantDb, {
           type: 'student_absent_parent',
           channel: 'sms',
-          recipientPhone: payload.parentPhone,
+          recipientPhone: contact.parent_phone,
           message: '',
-          status: 'skipped_feature_disabled',
+          status: skippedStatus,
           relatedId: payload.scheduleId,
         });
-        await this.deps.repository.insertNotificationLog(tenantDb, {
-          type: 'student_absent_parent',
-          channel: 'email',
-          recipientPhone: payload.parentPhone,
-          message: '',
-          status: 'skipped_feature_disabled',
-          relatedId: payload.scheduleId,
-        });
+        if (contact.parent_email) {
+          await this.deps.repository.insertNotificationLog(tenantDb, {
+            type: 'student_absent_parent',
+            channel: 'email',
+            recipientPhone: contact.parent_phone,
+            recipientEmail: contact.parent_email,
+            message: '',
+            status: skippedStatus,
+            relatedId: payload.scheduleId,
+          });
+        }
+      }
+
+      if (!feature?.is_enabled) {
+        for (const contact of contacts) {
+          await this.deps.repository.insertNotificationLog(tenantDb, {
+            type: 'student_absent_parent',
+            channel: 'sms',
+            recipientPhone: contact.parent_phone,
+            message: '',
+            status: 'skipped_feature_disabled',
+            relatedId: payload.scheduleId,
+          });
+          await this.deps.repository.insertNotificationLog(tenantDb, {
+            type: 'student_absent_parent',
+            channel: 'email',
+            recipientPhone: contact.parent_phone,
+            recipientEmail: contact.parent_email ?? undefined,
+            message: '',
+            status: 'skipped_feature_disabled',
+            relatedId: payload.scheduleId,
+          });
+        }
+        for (const contact of duplicates) {
+          await this.deps.repository.insertNotificationLog(tenantDb, {
+            type: 'student_absent_parent',
+            channel: 'sms',
+            recipientPhone: contact.parent_phone,
+            message: '',
+            status: 'skipped_duplicate',
+            relatedId: payload.scheduleId,
+          });
+          if (contact.parent_email) {
+            await this.deps.repository.insertNotificationLog(tenantDb, {
+              type: 'student_absent_parent',
+              channel: 'email',
+              recipientPhone: contact.parent_phone,
+              recipientEmail: contact.parent_email,
+              message: '',
+              status: 'skipped_duplicate',
+              relatedId: payload.scheduleId,
+            });
+          }
+        }
+        for (const contact of missingPhones) {
+          await this.deps.repository.insertNotificationLog(tenantDb, {
+            type: 'student_absent_parent',
+            channel: 'sms',
+            recipientPhone: contact.parent_phone,
+            message: '',
+            status: 'skipped_unknown',
+            relatedId: payload.scheduleId,
+          });
+        }
         return;
       }
 
@@ -1622,52 +1759,41 @@ export class NotificationsService {
         studentLabel,
       });
 
-      const contactsFromDb = await subscriptionsRepository.listParentAlertContactsByStudent(payload.studentId);
-      const contacts = contactsFromDb.length > 0
-        ? contactsFromDb
-        : [
-            {
-              parent_id: null,
-              subscription_id: null,
-              parent_phone: payload.parentPhone,
-              parent_email: payload.parentEmail ?? null,
-              ends_at: null,
-              subscription_status: null,
-            },
-          ];
-      const today = todayInBusinessTimezone();
       const currentMonth = monthKeyInBusinessTimezone();
-
-      for (const contact of contacts) {
-        const hasActiveSubscription =
-          contact.subscription_status === 'active' &&
-          contact.subscription_id !== null &&
-          contact.ends_at !== null &&
-          contact.ends_at >= today;
-
-        if (feature.monetize_parent_alerts && !hasActiveSubscription) {
+      for (const contact of duplicates) {
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'student_absent_parent',
+          channel: 'sms',
+          recipientPhone: contact.parent_phone,
+          message: '',
+          status: 'skipped_duplicate',
+          relatedId: payload.scheduleId,
+        });
+        if (contact.parent_email) {
           await this.deps.repository.insertNotificationLog(tenantDb, {
             type: 'student_absent_parent',
-            channel: 'sms',
+            channel: 'email',
             recipientPhone: contact.parent_phone,
+            recipientEmail: contact.parent_email,
             message: '',
-            status: contact.subscription_status === 'active' ? 'skipped_subscription_expired' : 'skipped_no_active_subscription',
+            status: 'skipped_duplicate',
             relatedId: payload.scheduleId,
           });
-          if (contact.parent_email) {
-            await this.deps.repository.insertNotificationLog(tenantDb, {
-              type: 'student_absent_parent',
-              channel: 'email',
-              recipientPhone: contact.parent_phone,
-              recipientEmail: contact.parent_email,
-              message: '',
-              status: contact.subscription_status === 'active' ? 'skipped_subscription_expired' : 'skipped_no_active_subscription',
-              relatedId: payload.scheduleId,
-            });
-          }
-          continue;
         }
+      }
 
+      for (const contact of missingPhones) {
+        await this.deps.repository.insertNotificationLog(tenantDb, {
+          type: 'student_absent_parent',
+          channel: 'sms',
+          recipientPhone: contact.parent_phone,
+          message: '',
+          status: 'skipped_unknown',
+          relatedId: payload.scheduleId,
+        });
+      }
+
+      for (const contact of contacts) {
         if (feature.monetize_parent_alerts) {
           const usage = await subscriptionsRepository.getUsageByStudentMonth(payload.studentId, currentMonth);
           if (usage.sms >= feature.sms_cap_per_student) {
@@ -1694,26 +1820,35 @@ export class NotificationsService {
           relatedId: payload.scheduleId,
         });
 
-        await this.deps.smsQueue.add(
-          'send-sms',
-          toSmsJobData({
+        let smsQueued = false;
+        try {
+          await this.deps.smsQueue.add(
+            'send-sms',
+            toSmsJobData({
+              queueRef,
+              to: contact.parent_phone,
+              message,
+              notificationType: 'student_absent_parent',
+              schemaName: payload.schemaName,
+              relatedId: payload.scheduleId,
+            }),
+            {
+              jobId: queueRef,
+              attempts: 3,
+              backoff: { type: 'exponential', delay: 5_000 },
+              removeOnComplete: true,
+              removeOnFail: { count: 1000 },
+            }
+          );
+          smsQueued = true;
+        } catch {
+          await this.deps.repository.updateNotificationLogStatus(tenantDb, {
             queueRef,
-            to: contact.parent_phone,
-            message,
-            notificationType: 'student_absent_parent',
-            schemaName: payload.schemaName,
-            relatedId: payload.scheduleId,
-          }),
-          {
-            jobId: queueRef,
-            attempts: 3,
-            backoff: { type: 'exponential', delay: 5_000 },
-            removeOnComplete: true,
-            removeOnFail: { count: 1000 },
-          }
-        );
+            status: 'failed',
+          });
+        }
 
-        if (feature.monetize_parent_alerts && contact.subscription_id) {
+        if (smsQueued && feature.monetize_parent_alerts && contact.subscription_id) {
           await subscriptionsRepository.incrementUsage({
             studentId: payload.studentId,
             subscriptionId: contact.subscription_id,
@@ -1765,7 +1900,12 @@ export class NotificationsService {
             removeOnComplete: true,
             removeOnFail: { count: 1000 },
           }
-        );
+        ).catch(async () => {
+          await this.deps.repository.updateNotificationLogStatus(tenantDb, {
+            queueRef: emailQueueRef,
+            status: 'failed',
+          });
+        });
 
         if (feature.monetize_parent_alerts && contact.subscription_id) {
           await subscriptionsRepository.incrementUsage({

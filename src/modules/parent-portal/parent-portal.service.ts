@@ -112,9 +112,9 @@ export class ParentPortalService {
     const studentIds = await this.repository.listLinkedStudentIds(parent.id);
     if (studentIds.length === 0) {
       throw new ParentPortalError(
-        "Aucun élève n'est rattaché à ce compte. Contactez l'établissement.",
+        "Accès au portail parent non autorisé. Contactez l'établissement.",
         403,
-        'NO_STUDENTS_LINKED'
+        'PARENT_PORTAL_ACCESS_DENIED'
       );
     }
 
@@ -140,9 +140,9 @@ export class ParentPortalService {
     const studentIds = await this.repository.listLinkedStudentIds(parent.id);
     if (studentIds.length === 0) {
       throw new ParentPortalError(
-        "Aucun élève n'est rattaché à ce compte. Contactez l'établissement.",
+        "Accès au portail parent non autorisé. Contactez l'établissement.",
         403,
-        'NO_STUDENTS_LINKED'
+        'PARENT_PORTAL_ACCESS_DENIED'
       );
     }
 
@@ -155,7 +155,10 @@ export class ParentPortalService {
   }
 
   async listStudents(context: ServiceContext): Promise<ParentStudentSummary[]> {
-    return this.repository.listStudentsByParent(context.parentId);
+    const allowed = new Set(context.allowedStudentIds);
+    return (await this.repository.listStudentsByParent(context.parentId)).filter((student) =>
+      allowed.has(student.id)
+    );
   }
 
   async listNotifications(input: { limit: number }, context: ServiceContext): Promise<{

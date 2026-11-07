@@ -39,7 +39,8 @@ export type NotificationLogRow = {
     | 'skipped_feature_disabled'
     | 'skipped_cap_reached'
     | 'skipped_subscription_expired'
-    | 'skipped_unknown';
+    | 'skipped_unknown'
+    | 'skipped_duplicate';
 };
 
 export type TeacherDailySummaryContext = {
@@ -84,7 +85,8 @@ export type NotificationsRepository = {
         | 'skipped_feature_disabled'
         | 'skipped_cap_reached'
         | 'skipped_subscription_expired'
-        | 'skipped_unknown';
+        | 'skipped_unknown'
+        | 'skipped_duplicate';
       providerRef?: string;
       relatedId?: string;
       sentAt?: Date;

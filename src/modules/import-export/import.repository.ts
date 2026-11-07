@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 
 import {
   ensureParentAccountForStudent,
+  revokeStalePrimaryParentLinks,
   type ParentProvisioningResult,
   type TemporaryCredentials,
 } from '../parents/parent-accounts.repository.js';
@@ -588,6 +589,8 @@ export const defaultImportRepository: ImportRepository = {
           is_active = true
         WHERE id = ${existing.id}
       `);
+
+      await revokeStalePrimaryParentLinks(db, existing.id, row.parentPhone || null);
 
       let parentProvisioning: ParentProvisioningResult | undefined;
       if (row.parentName && row.parentPhone) {

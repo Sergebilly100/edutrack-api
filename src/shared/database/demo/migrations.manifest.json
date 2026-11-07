@@ -98,5 +98,7 @@
   "0093_student_tuition_schedule_agreements.sql": "b1f6ac79f56871eb485941afd2a01585cba3eba823626d3bec67b86ae78b7784",
   "0094_tuition_override_withdrawal_history.sql": "65a4e1cea3ddfa8436d9a60c48ed95049af4268b6da95fb8f60e9f2350176d6c",
   "0095_tuition_schedule_agreement_history.sql": "57da8f9be42096ea5bb166876c1077bdbe617420c1143bf9f72af87196ca8856",
-  "0096_tuition_registration_amount.sql": "c440235345f22b92771c39451486d2486e104ced8ca2ea5b994612664367ab94"
+  "0096_tuition_registration_amount.sql": "c440235345f22b92771c39451486d2486e104ced8ca2ea5b994612664367ab94",
+  "0097_parent_alerts_enrollment.sql": "99d9c815fa0d8563c61867708ea19d40981ff0c787abeebdc34d99ed5c43c1eb",
+  "0098_parent_alert_dedup_status.sql": "7b6ae76404e939c2f8660a5fa123ded963d7dc97319a651b6dfc00d2d242c8f2"
 }

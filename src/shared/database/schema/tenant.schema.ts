@@ -86,6 +86,7 @@ export const notificationStatusEnum = tenant.enum('notification_status', [
   'skipped_cap_reached',
   'skipped_subscription_expired',
   'skipped_unknown',
+  'skipped_duplicate',
 ]);
 
 export const importTypeEnum = tenant.enum('import_type', [

@@ -4,6 +4,7 @@ import { teacherClassRelation } from '../../shared/database/teacher-class-relati
 
 import {
   ensureParentAccountForStudent,
+  revokeStalePrimaryParentLinks,
   type ParentProvisioningResult,
   type TemporaryCredentials,
 } from '../parents/parent-accounts.repository.js';
@@ -100,6 +101,7 @@ type StudentAbsenceSourceRow = {
   id: string;
   first_name: string;
   parent_phone: string | null;
+  parent_phone_2: string | null;
   parent_email: string | null;
 };
 
@@ -764,6 +766,10 @@ export class StudentsRepository {
     const student = await this.findStudentByIdWithExecutor(studentId, executor);
     if (!student) return null;
 
+    if (nextParentPhone !== current.parent_phone) {
+      await revokeStalePrimaryParentLinks(executor, studentId, nextParentPhone || null);
+    }
+
     const parentProvisioning =
       nextParentName && nextParentPhone
         ? await ensureParentAccountForStudent(
@@ -1031,7 +1037,13 @@ export class StudentsRepository {
     classId: string,
     studentIds: string[]
   ): Promise<
-    Array<{ id: string; firstName: string; parentPhone: string | null; parentEmail: string | null }>
+    Array<{
+      id: string;
+      firstName: string;
+      parentPhone: string | null;
+      parentPhone2: string | null;
+      parentEmail: string | null;
+    }>
   > {
     const ids = deduplicateIds(studentIds);
     if (ids.length === 0) return [];
@@ -1046,6 +1058,7 @@ export class StudentsRepository {
         st.id,
         st.first_name,
         st.parent_phone,
+        st.parent_phone_2,
         parent_contact.email AS parent_email
       FROM students st
       INNER JOIN classes c ON c.id = ${classId}::uuid
@@ -1068,6 +1081,7 @@ export class StudentsRepository {
       id: row.id,
       firstName: row.first_name,
       parentPhone: row.parent_phone,
+      parentPhone2: row.parent_phone_2,
       parentEmail: row.parent_email,
     }));
   }

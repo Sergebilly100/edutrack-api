@@ -25,6 +25,7 @@ import {
   verifyRefreshToken,
 } from './auth.service.js';
 import { buildParentPortalService, ParentPortalError } from '../parent-portal/parent-portal.service.js';
+import { ParentPortalAccessDeniedError } from '../../shared/auth/parent-eligibility.js';
 import { parentLoginSchema } from '../parent-portal/parent-portal.types.js';
 import {
   clearFailedLogins,
@@ -299,6 +300,14 @@ const handleError = (reply: FastifyReply, error: unknown): FastifyReply => {
       error: 'Validation error',
       code: 'BAD_REQUEST',
       statusCode: 400,
+    });
+  }
+
+  if (error instanceof ParentPortalAccessDeniedError) {
+    return reply.code(error.statusCode).send({
+      error: error.message,
+      code: error.code,
+      statusCode: error.statusCode,
     });
   }
 

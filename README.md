@@ -30,6 +30,11 @@ Voir le [guide de provisionnement isolé](docs/demo/README.md) et le
   fiche de salaire).
 - **Abonnements parents & revenus** : souscriptions SMS/email, commission plateforme.
 - **Portail parent** : consultation des présences, absences et emploi du temps des enfants.
+- **Accès parent selon l’offre de l’école** : quand les alertes sont activées sans monétisation,
+  tous les parents actifs liés à un élève confirmé accèdent au portail et reçoivent les alertes.
+  Quand elles sont monétisées, chaque élève exige un abonnement actif et non expiré. Les alertes
+  priorisent les deux contacts de la fiche élève, incluent les parents liés éligibles et dédupliquent
+  les numéros avant leur mise en file BullMQ. Les accès temporaires sont gérés par l’école.
 - **Notifications multi-canal** : SMS (AfricasTalking), e-mail (Brevo), in-app, et
   **notifications push PWA** (prof + parent) via Web Push/VAPID - en complément, jamais
   en remplacement des SMS/email. L'app guide l'utilisateur pour s'installer sur son

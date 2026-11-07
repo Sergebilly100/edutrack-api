@@ -11,11 +11,24 @@ import {
 import type { ParentAccountsRepository } from '../../src/modules/parents/parent-accounts.repository.js';
 
 const parentId = '11111111-1111-4111-8111-111111111111';
-const parent = { id: parentId, fullName: 'Parent', phone: '2250700000001', email: 'parent@example.ci', accessSentAt: null };
+const parent = {
+  id: parentId,
+  fullName: 'Parent',
+  phone: '2250700000001',
+  email: 'parent@example.ci',
+  accessSentAt: null,
+  accessPending: false,
+};
 
 const setup = (record = parent) => {
   const repository = {
     listByIds: vi.fn().mockResolvedValue([record]),
+    listByStudentId: vi.fn().mockResolvedValue([record]),
+    listEligibleStudentParentIds: vi.fn().mockResolvedValue([parentId]),
+    isLinkedToConfirmedStudent: vi.fn().mockResolvedValue(true),
+    listContactsWithoutParentLink: vi.fn().mockResolvedValue([]),
+    ensureParentAccount: vi.fn().mockResolvedValue({}),
+    getParentPortalMode: vi.fn().mockResolvedValue({ isEnabled: true, monetizeParentAlerts: false }),
     getTenantSubdomain: vi.fn().mockResolvedValue('sainte-marie'),
     getPasswordHashForUpdate: vi.fn(),
     updateTemporaryPassword: vi.fn(),
@@ -110,5 +123,86 @@ describe('rotation des accès parent', () => {
     await expect(service.queuePreparedAccess({ schemaName: 'school_test', parentId, phone: parent.phone, temporaryPassword: 'SAFE234567' }))
       .rejects.toMatchObject({ code: 'PARENT_ACCESS_SUPERSEDED' });
     expect(queue.add).toHaveBeenCalledOnce();
+  });
+
+  it('limite les actions des écrans élèves au portail gratuit actif', async () => {
+    const { service, repository } = setup();
+    await expect(service.getStudentAccess({ studentId: 'student-id' })).resolves.toMatchObject({
+      available: true,
+      parents: [{ id: parentId, accessPending: false }],
+    });
+    await expect(service.sendPendingStudentAccess({
+      schemaName: 'school_test',
+      actorUserId: 'actor-id',
+    })).resolves.toMatchObject({ queued: 1, items: [{ parentId, status: 'queued' }] });
+    await expect(service.resetStudentAccess({
+      schemaName: 'school_test',
+      studentId: 'student-id',
+      parentId,
+      actorUserId: 'actor-id',
+      channels: ['sms'],
+    })).resolves.toMatchObject({ parent_id: parentId });
+    expect(repository.isLinkedToConfirmedStudent).toHaveBeenCalledWith(parentId, 'student-id');
+  });
+
+  it('refuse les actions écran élève en mode payant ou pour un lien absent', async () => {
+    const paid = setup();
+    paid.repository.getParentPortalMode.mockResolvedValue({
+      isEnabled: true,
+      monetizeParentAlerts: true,
+    });
+    await expect(paid.service.sendPendingStudentAccess({
+      schemaName: 'school_test',
+      actorUserId: 'actor-id',
+    })).rejects.toMatchObject({ code: 'PARENT_ACCESS_MANAGED_VIA_SUBSCRIPTIONS' });
+    await expect(paid.service.resetStudentAccess({
+      schemaName: 'school_test',
+      studentId: 'student-id',
+      parentId,
+      actorUserId: 'actor-id',
+      channels: ['sms'],
+    })).rejects.toMatchObject({ code: 'PARENT_ACCESS_MANAGED_VIA_SUBSCRIPTIONS' });
+
+    const missingLink = setup();
+    missingLink.repository.isLinkedToConfirmedStudent.mockResolvedValue(false);
+    await expect(missingLink.service.resetStudentAccess({
+      schemaName: 'school_test',
+      studentId: 'student-id',
+      parentId,
+      actorUserId: 'actor-id',
+      channels: ['sms'],
+    })).rejects.toMatchObject({ code: 'PARENT_ACCESS_NOT_FOUND' });
+  });
+});
+
+describe('rattrapage des comptes parents depuis les contacts élève', () => {
+  const missing = [
+    { studentId: 'student-id', fullName: 'Parent 1', phone: '2250701020304', email: 'invalide' },
+  ];
+
+  it('crée le compte manquant du parent principal avant de lister le détail élève', async () => {
+    const { repository, service } = setup();
+    repository.listContactsWithoutParentLink.mockResolvedValue(missing);
+
+    const result = await service.getStudentAccess({ studentId: 'student-id' });
+
+    expect(repository.listContactsWithoutParentLink).toHaveBeenCalledWith('student-id');
+    expect(repository.ensureParentAccount).toHaveBeenCalledTimes(1);
+    expect(repository.ensureParentAccount.mock.calls[0]?.[0]).toMatchObject({ phone: '2250701020304', email: null });
+    expect(result.parents).toHaveLength(1);
+  });
+
+  it('rattrape aussi avant l’envoi groupé, sans créer de compte en mode payant', async () => {
+    const free = setup();
+    free.repository.listContactsWithoutParentLink.mockResolvedValue(missing);
+    await free.service.sendPendingStudentAccess({ schemaName: 'school_test', actorUserId: 'actor' });
+    expect(free.repository.listContactsWithoutParentLink).toHaveBeenCalledWith(undefined);
+    expect(free.repository.ensureParentAccount).toHaveBeenCalledTimes(1);
+
+    const paid = setup();
+    paid.repository.getParentPortalMode.mockResolvedValue({ isEnabled: true, monetizeParentAlerts: true });
+    paid.repository.listContactsWithoutParentLink.mockResolvedValue(missing);
+    await paid.service.getStudentAccess({ studentId: 'student-id' });
+    expect(paid.repository.ensureParentAccount).not.toHaveBeenCalled();
   });
 });

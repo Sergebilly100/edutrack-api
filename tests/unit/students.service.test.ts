@@ -439,10 +439,10 @@ describe('bulkMarkAbsences()', () => {
     repository.upsertStudentAbsences.mockResolvedValue(3);
   });
 
-  it('crée les absences et émet seulement pour les parents avec téléphone', async () => {
+  it('crée les absences et émet pour chaque élève confirmé, même avec seulement le second contact', async () => {
     repository.findStudentsForAbsence.mockResolvedValue([
       { id: 'student-1', firstName: 'Awa', parentPhone: '2250700000001', parentEmail: null },
-      { id: 'student-2', firstName: 'Yao', parentPhone: null, parentEmail: null },
+      { id: 'student-2', firstName: 'Yao', parentPhone: null, parentPhone2: '2250700000002', parentEmail: null },
       { id: 'student-3', firstName: 'Mariam', parentPhone: '2250700000003', parentEmail: null },
     ]);
 
@@ -451,18 +451,27 @@ describe('bulkMarkAbsences()', () => {
       context
     );
 
-    expect(result).toEqual({ createdAttendances: 3, emittedEvents: 2 });
+    expect(result).toEqual({ createdAttendances: 3, emittedEvents: 3 });
     expect(repository.upsertStudentAbsences).toHaveBeenCalledWith({
       scheduleId: 'schedule-1',
       date: '2026-04-13',
       studentIds: ['student-1', 'student-2', 'student-3'],
       markedBy: 'user-1',
     });
-    expect(eventEmitter).toHaveBeenCalledTimes(2);
+    expect(eventEmitter).toHaveBeenCalledTimes(3);
     expect(eventEmitter).toHaveBeenNthCalledWith(
       1,
       'student.absent',
       expect.objectContaining({ tenantId: 'tenant-1', studentId: 'student-1' })
+    );
+    expect(eventEmitter).toHaveBeenNthCalledWith(
+      2,
+      'student.absent',
+      expect.objectContaining({
+        studentId: 'student-2',
+        parentPhone: '2250700000002',
+        parentPhone2: '2250700000002',
+      })
     );
   });
 
@@ -641,6 +650,7 @@ describe('parent accounts provisioning', () => {
             },
           ],
         })
+        .mockResolvedValueOnce({ rows: [{ '?column?': 1 }] })
         .mockResolvedValueOnce({ rows: [] }),
     };
     const createCredentials = vi.fn();
@@ -658,7 +668,28 @@ describe('parent accounts provisioning', () => {
 
     expect(result).toMatchObject({ parentId: 'parent-1', created: false });
     expect(createCredentials).not.toHaveBeenCalled();
-    expect(db.execute).toHaveBeenCalledTimes(2);
+    expect(db.execute).toHaveBeenCalledTimes(3);
+  });
+
+  it('renouvelle le mot de passe d’un compte existant sans aucun lien (nouveau parent principal)', async () => {
+    const db = {
+      execute: vi
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ id: 'parent-1', full_name: 'Orphelin', phone: '2250700000001', access_sent_at: null }] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [] }),
+    };
+    const createCredentials = vi.fn().mockResolvedValue({ plainPassword: 'TEMP234567', passwordHash: 'hash' });
+
+    const result = await ensureParentAccountForStudent(
+      db,
+      { studentId: 'student-2', fullName: 'Orphelin', phone: '2250700000001' },
+      createCredentials
+    );
+
+    expect(createCredentials).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ parentId: 'parent-1', created: true, temporaryPassword: 'TEMP234567' });
   });
 
   it('crée un parent avec mot de passe temporaire puis le lie à l’élève', async () => {
