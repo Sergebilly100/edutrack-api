@@ -31,6 +31,9 @@ async function seedFamilies(repo: DemoRepository, klass: DemoClass, classIndex: 
       class_id: klass.id, first_name: firstNames[index]!, last_name: lastName,
       matricule: `DEMO-${String(number + 1).padStart(4, '0')}`,
       birth_date: `${Number(calendar.start.slice(0, 4)) - 12 - classIndex * 2}-02-${String(index + 1).padStart(2, '0')}`,
+      // Prénoms de firstNames alternent féminin (index pair) / masculin (index impair).
+      sex: index % 2 === 0 ? 'F' : 'M', nationality: index % 8 === 3 ? 'BF' : 'CI',
+      birth_place: ['Abidjan', 'Bouaké', 'Yamoussoukro', 'Daloa'][index % 4],
       parent_name: `Parent ${lastName}`, parent_phone: phone, parent_email: `parent${number + 1}@demo.example`,
       created_at: calendar.start,
       notes: index === 0 ? 'Baisse des résultats et absences récentes : entretien famille à prévoir.' : null,
@@ -38,7 +41,7 @@ async function seedFamilies(repo: DemoRepository, klass: DemoClass, classIndex: 
     klass.students.push(studentId);
     await repo.insert('enrollments', { student_id: studentId, class_id: klass.id, school_year_id: yearId,
       type: classIndex === 0 ? 'new_registration' : 're_registration', status: 'confirmed',
-      confirmed_by_user_id: directorId, enrolled_at: calendar.start, created_at: calendar.start });
+      confirmed_by_user_id: directorId, is_repeating: index % 10 === 7, enrolled_at: calendar.start, created_at: calendar.start });
     const parentId = await repo.insert('parents', { full_name: `Parent ${lastName}`, phone,
       email: `parent${number + 1}@demo.example`, password_hash: passwordHash, must_change_password: false,
       access_sent_at: calendar.start, created_at: calendar.start });

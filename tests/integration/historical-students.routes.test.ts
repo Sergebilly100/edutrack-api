@@ -241,7 +241,7 @@ describe('director historical import C7', () => {
       targetField: target.key, sourceColumnLabel: target.key === 'historical_class' ? 'Classe*' : target.required ? `${target.label}*` : target.label, isRequired: target.required, translations: [],
     }));
     // The standard workbook columns are identity, class, DOB and all supported parents.
-    expect(labels).toEqual(['Matricule', 'Prénom*', 'Nom*', 'Classe*', 'Date de naissance', 'Nom parent', 'Téléphone parent', 'Email parent', 'Nom parent 2', 'Téléphone parent 2']);
+    expect(labels).toEqual(['Matricule', 'Prénom*', 'Nom*', 'Classe*', 'Date de naissance', 'Nom parent', 'Téléphone parent', 'Email parent', 'Nom parent 2', 'Téléphone parent 2', 'Sexe', 'Nationalité', 'Lieu de naissance']);
     for (const sheet of dataSheets) sheet.spliceRows(2, sheet.rowCount);
     dataSheets[0]!.addRow(['C7-PARENTS', 'Test', 'Parents', 'Ancienne 4e A', new Date('2010-03-04T00:00:00Z'), 'Parent A', '2250700000000', 'parent@example.ci', 'Parent B', '2250100000000']);
     dataSheets[1]!.addRow(['C7-SHEET', 'Test', 'Feuille', '', '', 'Parent C', '', '', '', '']);
@@ -250,7 +250,9 @@ describe('director historical import C7', () => {
     expect(checked.status, JSON.stringify(checked.body)).toBe(200);
     expect(checked.body).toMatchObject({ schoolYearLabel: '2023-2024', validCount: 2, rowCount: 2, missingTargets: [] });
     expect(checked.body.matchedFields).toEqual(expect.arrayContaining(mapping.map((field) => expect.objectContaining(field))));
-    expect(checked.body.matchedFields).toHaveLength(10);
+    // 10 colonnes historiques + Sexe, Nationalité, Lieu de naissance reconnues automatiquement.
+    expect(checked.body.matchedFields).toHaveLength(13);
+    expect(checked.body.matchedFields.map((field: { targetField: string }) => field.targetField)).toEqual(expect.arrayContaining(['sex', 'nationality', 'birth_place']));
     expect((await request().put(`${root}/profile`).set(headers).send({ fields: mapping })).status).toBe(200);
     const confirmed = await request().post(`${root}/confirm`).set(headers).field('schoolYearLabel', '2023-2024').attach('file', buffer, 'students.xlsx');
     expect(confirmed.body).toMatchObject({ createdCount: 2, reusedCount: 0, errors: [] });

@@ -7,6 +7,8 @@ import {
 import { parseMappingWorkbook, type ParsedMappingWorkbook } from '../../shared/import-mapping/workbook.js';
 import type { TenantDb } from '../../shared/database/db.js';
 import { isMatriculeUniqueViolation, matriculeKey } from '../../shared/utils/matricule.js';
+import { birthDateIssue } from '../../shared/utils/date-validation.js';
+import { parseBirthPlaceCell, parseNationalityCell, parseRepeatingCell, parseSexCell } from '../../shared/utils/identity-parsing.js';
 import {
   MidyearImportError, type RecoveryImpact, type RecoveryPreview, type RecoveryRow,
 } from '../../shared/import-mapping/midyear.types.js';
@@ -23,6 +25,9 @@ export const MIDYEAR_IMPORTS: Record<string, { targets: TargetDef[] }> = {
   students: { targets: [
     { key: 'matricule', required: true }, { key: 'nom', required: true }, { key: 'prenom', required: true },
     { key: 'niveau', required: true }, { key: 'classe', required: true }, { key: 'parent_phone', required: false },
+    // Identité (facultatif). `repeating` est porté par l'inscription que cet import crée.
+    { key: 'birth_date', required: false }, { key: 'sex', required: false }, { key: 'nationality', required: false },
+    { key: 'birth_place', required: false }, { key: 'repeating', required: false },
   ] },
   teacher_assignments: { targets: ['matricule', 'matiere', 'classes'].map((key) => ({ key, required: true })) },
   payments: { targets: ['matricule', 'montant', 'date', 'reference', 'method'].map((key) => ({ key, required: true })) },
@@ -109,6 +114,19 @@ export function validateRecoveryRows(importType: string, rows: RecoveryRow[], sn
         if (!classes[0].isActive || classes[0].levelId !== row.levelId) reasons.push('Classe inactive ou rattachée à un autre niveau');
         else { row.classId = classes[0].id; row.reused = true; }
       }
+    }
+    if (importType === 'students') {
+      // Valeurs d'identité normalisées en place ('' = non renseigné, ne remplace rien à l'écriture).
+      if (v.birth_date && birthDateIssue(v.birth_date)) reasons.push(birthDateIssue(v.birth_date)!);
+      const sexCell = parseSexCell(v.sex ?? '');
+      const nationalityCell = parseNationalityCell(v.nationality ?? '');
+      const birthPlaceCell = parseBirthPlaceCell(v.birth_place ?? '');
+      const repeatingCell = parseRepeatingCell(v.repeating ?? '');
+      for (const cell of [sexCell, nationalityCell, birthPlaceCell, repeatingCell]) if (cell.error) reasons.push(cell.error);
+      v.sex = sexCell.value ?? '';
+      v.nationality = nationalityCell.value ?? '';
+      v.birth_place = birthPlaceCell.value ?? '';
+      v.repeating = repeatingCell.value === null ? '' : String(repeatingCell.value);
     }
     if (importType === 'students') {
       if ((classLevels.get(key(v.classe))?.size ?? 0) > 1) reasons.push('La même classe est associée à plusieurs niveaux dans le fichier');
@@ -254,6 +272,7 @@ export class MidyearImportService {
       // Preserve school references verbatim. Excel dates may be serial numbers.
       let value = target.key === 'reference' ? String(raw ?? '') : text(raw);
       if (importType === 'payments' && target.key === 'date') value = parseRecoveryDate(raw) ?? value;
+      if (importType === 'students' && target.key === 'birth_date' && value) value = parseRecoveryDate(raw as string | number) ?? value;
       if (field?.translations.length) value = translateMappedValue(field, value) ?? value;
       return [target.key, value];
     })) }));

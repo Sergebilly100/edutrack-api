@@ -18,6 +18,7 @@ const repository = {
   createStudent: vi.fn(),
   findStudentDetailById: vi.fn(),
   findCurrentConfirmedSchoolYear: vi.fn(),
+  findEnrollmentRepeating: vi.fn().mockResolvedValue(null),
   findLatestHistoricalConfirmedSchoolYear: vi.fn(),
   findActiveSchoolYear: vi.fn(),
   hasConfirmedEnrollmentInActiveSchoolYear: vi.fn(),

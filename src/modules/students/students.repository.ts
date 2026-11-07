@@ -54,6 +54,9 @@ type StudentRow = {
   last_name: string;
   matricule: string | null;
   birth_date: string | null;
+  sex?: 'M' | 'F' | null;
+  nationality?: string | null;
+  birth_place?: string | null;
   parent_name: string | null;
   parent_phone: string | null;
   parent_email: string | null;
@@ -80,6 +83,9 @@ type ExistingStudentRow = {
   last_name: string;
   matricule: string | null;
   birth_date: string | null;
+  sex?: 'M' | 'F' | null;
+  nationality?: string | null;
+  birth_place?: string | null;
   parent_name: string | null;
   parent_phone: string | null;
   parent_email: string | null;
@@ -246,6 +252,7 @@ const mapStudent = (row: StudentRow): StudentRecord => ({
   lastName: row.last_name,
   matricule: row.matricule,
   birthDate: row.birth_date,
+  ...(row.sex !== undefined ? { sex: row.sex, nationality: row.nationality ?? null, birthPlace: row.birth_place ?? null } : {}),
   parentName: row.parent_name,
   parentPhone: row.parent_phone,
   parentEmail: row.parent_email,
@@ -616,6 +623,7 @@ export class StudentsRepository {
       const result = await executor.execute(sql`
         INSERT INTO students (
           class_id, first_name, last_name, matricule, birth_date,
+          sex, nationality, birth_place,
           parent_name, parent_phone, parent_email,
           parent_name_2, parent_phone_2,
           notes, is_active, is_assigned, lifecycle_status
@@ -623,6 +631,7 @@ export class StudentsRepository {
         VALUES (
           ${input.class_id}, ${input.first_name}, ${input.last_name},
           ${input.matricule ?? null}, ${input.birth_date ?? null},
+          ${input.sex ?? null}, ${input.nationality ?? null}, ${input.birth_place ?? null},
           ${input.parent_name}, ${input.parent_phone}, ${input.parent_email ?? null},
           ${input.parent_name_2}, ${input.parent_phone_2},
           ${input.notes}, ${input.lifecycle_status === 'active' ? input.is_active : false},
@@ -632,6 +641,7 @@ export class StudentsRepository {
           id, class_id,
           (SELECT name FROM classes WHERE id = class_id) AS class_name,
           first_name, last_name, matricule, birth_date::text AS birth_date,
+          sex, nationality, birth_place,
           parent_name, parent_phone, parent_email,
           parent_name_2, parent_phone_2,
           notes, is_active, is_assigned, lifecycle_status, created_at
@@ -663,15 +673,28 @@ export class StudentsRepository {
     });
   }
 
+  /** Redoublant de l'inscription confirmée de l'année donnée ; null = non renseigné ou aucune inscription. */
+  async findEnrollmentRepeating(studentId: string, schoolYearId: string | null | undefined): Promise<boolean | null> {
+    if (!schoolYearId) return null;
+    const result = await this.db.execute(sql`
+      SELECT is_repeating FROM enrollments
+      WHERE student_id = ${studentId}::uuid AND school_year_id = ${schoolYearId}::uuid AND status = 'confirmed'
+      LIMIT 1
+    `);
+    return getRows<{ is_repeating: boolean | null }>(result)[0]?.is_repeating ?? null;
+  }
+
   async findStudentById(studentId: string): Promise<StudentRecord | null> {
     const result = await this.db.execute(sql`
       SELECT
         s.id, s.class_id, c.name AS class_name,
         s.first_name, s.last_name, s.matricule, s.birth_date::text AS birth_date,
+        identity.sex, identity.nationality, identity.birth_place,
         s.parent_name, s.parent_phone, s.parent_email,
         s.parent_name_2, s.parent_phone_2,
         s.notes, s.is_active, s.is_assigned, s.lifecycle_status, s.created_at
       FROM students_with_class s
+      INNER JOIN students identity ON identity.id = s.id
       LEFT JOIN classes c ON c.id = s.class_id
       WHERE s.id = ${studentId}
       LIMIT 1
@@ -692,6 +715,7 @@ export class StudentsRepository {
              (SELECT class_id FROM students_with_class WHERE id = students.id) AS resolved_class_id,
              EXISTS (SELECT 1 FROM enrollments WHERE student_id = students.id) AS has_enrollment,
              first_name, last_name, matricule, birth_date::text AS birth_date,
+             sex, nationality, birth_place,
              parent_name, parent_phone, parent_email,
              parent_name_2, parent_phone_2,
              notes, is_active, is_assigned, lifecycle_status
@@ -721,6 +745,10 @@ export class StudentsRepository {
     const matriculeSql = nextMatricule === null ? sql`NULL` : sql`${nextMatricule}`;
     const nextBirthDate = input.birth_date === undefined ? current.birth_date : input.birth_date;
     const birthDateSql = nextBirthDate === null ? sql`NULL` : sql`${nextBirthDate}::date`;
+    // Identité : undefined = conserver ; null = remettre à « non renseigné ».
+    const nextSex = input.sex === undefined ? current.sex ?? null : input.sex;
+    const nextNationality = input.nationality === undefined ? current.nationality ?? null : input.nationality;
+    const nextBirthPlace = input.birth_place === undefined ? current.birth_place ?? null : input.birth_place;
     const nextParentName =
       input.parent_name !== undefined ? input.parent_name : current.parent_name;
     const nextParentPhone =
@@ -741,6 +769,9 @@ export class StudentsRepository {
         last_name = ${input.last_name ?? current.last_name},
         matricule = ${matriculeSql},
         birth_date = ${birthDateSql},
+        sex = ${nextSex},
+        nationality = ${nextNationality},
+        birth_place = ${nextBirthPlace},
         parent_name = ${nextParentName},
         parent_phone = ${nextParentPhone},
         parent_email = ${nextParentEmail},
@@ -947,6 +978,9 @@ export class StudentsRepository {
       lastName: student.lastName,
       matricule: student.matricule,
       birthDate: student.birthDate,
+      sex: student.sex ?? null,
+      nationality: student.nationality ?? null,
+      birthPlace: student.birthPlace ?? null,
       className: student.className,
       classId: student.classId,
       isActive: student.isActive,
@@ -1572,10 +1606,12 @@ export class StudentsRepository {
       SELECT
         s.id, s.class_id, c.name AS class_name,
         s.first_name, s.last_name, s.matricule, s.birth_date::text AS birth_date,
+        identity.sex, identity.nationality, identity.birth_place,
         s.parent_name, s.parent_phone, s.parent_email,
         s.parent_name_2, s.parent_phone_2,
         s.notes, s.is_active, s.is_assigned, s.lifecycle_status, s.created_at
       FROM students_with_class s
+      INNER JOIN students identity ON identity.id = s.id
       LEFT JOIN classes c ON c.id = s.class_id
       WHERE s.id = ${studentId}
       LIMIT 1

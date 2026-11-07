@@ -13,7 +13,7 @@ const rows = <T>(result: unknown): T[] =>
 export type EnrollmentRow = {
   id: string; student_id: string; class_id: string; school_year_id: string;
   type: EnrollmentType; status: EnrollmentStatus; enrolled_at: Date | string;
-  confirmed_by_user_id: string | null; class_name: string; school_year_label: string;
+  confirmed_by_user_id: string | null; is_repeating: boolean | null; class_name: string; school_year_label: string;
   student_first_name: string; student_last_name: string;
   required_document_count: number; missing_mandatory_document_count: number;
 };
@@ -514,10 +514,10 @@ export class EnrollmentsRepository {
     return rows<{ id: string; level_id: string | null; school_year_id: string | null; is_active: boolean; school_year_status: string | null }>(result)[0] ?? null;
   }
 
-  async createEnrollment(input: { studentId: string; classId: string; schoolYearId: string; type: EnrollmentType; status: EnrollmentStatus; levelId?: string; expectedActiveSchoolYearId?: string }) {
+  async createEnrollment(input: { studentId: string; classId: string; schoolYearId: string; type: EnrollmentType; status: EnrollmentStatus; isRepeating?: boolean | null; levelId?: string; expectedActiveSchoolYearId?: string }) {
     const result = await this.db.execute<{ id: string }>(sql`
-      INSERT INTO enrollments (student_id, class_id, school_year_id, type, status)
-      SELECT ${input.studentId}::uuid, c.id, sy.id, ${input.type}::enrollment_type, ${input.status}::enrollment_status
+      INSERT INTO enrollments (student_id, class_id, school_year_id, type, status, is_repeating)
+      SELECT ${input.studentId}::uuid, c.id, sy.id, ${input.type}::enrollment_type, ${input.status}::enrollment_status, ${input.isRepeating ?? null}::boolean
       FROM classes c INNER JOIN school_years sy ON sy.id = c.school_year_id
       WHERE c.id = ${input.classId}::uuid AND sy.id = ${input.schoolYearId}::uuid AND c.is_active
         AND sy.status = 'active'
@@ -530,11 +530,12 @@ export class EnrollmentsRepository {
     return created ? this.findEnrollment(created.id) : null;
   }
 
-  async updateEnrollment(id: string, input: { classId?: string; status?: EnrollmentStatus; confirmedByUserId?: string | null; levelId?: string; expectedActiveSchoolYearId?: string }) {
+  async updateEnrollment(id: string, input: { classId?: string; status?: EnrollmentStatus; isRepeating?: boolean | null; confirmedByUserId?: string | null; levelId?: string; expectedActiveSchoolYearId?: string }) {
     const result = await this.db.execute<{ id: string }>(sql`
       UPDATE enrollments SET
         class_id = CASE WHEN ${input.classId !== undefined} THEN ${input.classId ?? null}::uuid ELSE class_id END,
         status = CASE WHEN ${input.status !== undefined} THEN ${input.status ?? null}::enrollment_status ELSE status END,
+        is_repeating = CASE WHEN ${input.isRepeating !== undefined} THEN ${input.isRepeating ?? null}::boolean ELSE is_repeating END,
         confirmed_by_user_id = CASE WHEN ${input.confirmedByUserId !== undefined} THEN ${input.confirmedByUserId ?? null}::uuid ELSE confirmed_by_user_id END,
         updated_at = NOW()
       WHERE id = ${id}::uuid

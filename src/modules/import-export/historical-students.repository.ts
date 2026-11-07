@@ -66,13 +66,23 @@ export class HistoricalStudentsRepository extends MappingRepository {
             const reused = Boolean(studentId);
             if (!studentId) {
               const inserted = await lineTx.execute<{ id: string }>(sql`
-                INSERT INTO students (matricule, first_name, last_name, birth_date,
+                INSERT INTO students (matricule, first_name, last_name, birth_date, sex, nationality, birth_place,
                   parent_name, parent_phone, parent_email, parent_name_2, parent_phone_2)
                 VALUES (${row.matricule || null}, ${row.prenom}, ${row.nom}, ${row.birth_date || null}::date,
+                  ${row.sex || null}, ${row.nationality || null}, ${row.birth_place || null},
                   ${row.parent_name || null}, ${row.parent_phone || null}, ${row.parent_email || null},
                   ${row.parent_name_2 || null}, ${row.parent_phone_2 || null}) RETURNING id
               `);
               studentId = inserted.rows[0]!.id;
+            } else {
+              // Profil réutilisé : on complète seulement les champs d'identité encore vides.
+              await lineTx.execute(sql`
+                UPDATE students SET
+                  sex = COALESCE(sex, ${row.sex || null}),
+                  nationality = COALESCE(nationality, ${row.nationality || null}),
+                  birth_place = COALESCE(birth_place, ${row.birth_place || null})
+                WHERE id = ${studentId}::uuid
+              `);
             }
             await lineTx.execute(sql`
               INSERT INTO student_historical_sources (student_id, school_year_label, old_class_name, row_key, import_history_id)

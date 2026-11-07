@@ -34,6 +34,10 @@ type TeacherRow = {
   first_name: string;
   last_name: string;
   matricule: string | null;
+  birth_date: string | null;
+  sex: 'M' | 'F' | null;
+  nationality: string | null;
+  birth_place: string | null;
   phone: string | null;
   email: string | null;
   type: 'vacataire' | 'permanent';
@@ -166,6 +170,10 @@ const TEACHER_SELECT = sql`
     split_part(u.name, ' ', 1)                                               AS first_name,
     trim(substring(u.name FROM length(split_part(u.name, ' ', 1)) + 1))     AS last_name,
     t.matricule,
+    t.birth_date::text AS birth_date,
+    t.sex,
+    t.nationality,
+    t.birth_place,
     u.phone,
     u.email,
     t.type::text                                                              AS type,
@@ -398,6 +406,10 @@ export class TeachersRepository {
           user_id,
           username,
           matricule,
+          birth_date,
+          sex,
+          nationality,
+          birth_place,
           type,
           subjects,
           hourly_rate,
@@ -408,6 +420,10 @@ export class TeachersRepository {
           ${user.id},
           ${username},
           ${input.matricule ?? null},
+          ${input.birth_date ?? null}::date,
+          ${input.sex ?? null},
+          ${input.nationality ?? null},
+          ${input.birth_place ?? null},
           ${input.type},
           ${subjectsLiteral},
           ${input.hourly_rate},
@@ -512,12 +528,22 @@ export class TeachersRepository {
       const monthlySalarySql = monthlySalaryVal === null ? sql`NULL` : sql`${monthlySalaryVal}`;
       const hourlyRateSql = hourlyRateVal === null ? sql`NULL` : sql`${hourlyRateVal}`;
 
+      // Identité : undefined = conserver ; null = remettre à « non renseigné ».
+      const nextBirthDate = input.birth_date === undefined ? current.birth_date : input.birth_date;
+      const nextSex = input.sex === undefined ? current.sex : input.sex;
+      const nextNationality = input.nationality === undefined ? current.nationality : input.nationality;
+      const nextBirthPlace = input.birth_place === undefined ? current.birth_place : input.birth_place;
+
       const updatedBySql = actorId ? sql`${actorId}::uuid` : sql`NULL`;
 
       await tx.execute(sql`
         UPDATE teachers
         SET
           matricule      = ${matriculeSql},
+          birth_date     = ${nextBirthDate}::date,
+          sex            = ${nextSex},
+          nationality    = ${nextNationality},
+          birth_place    = ${nextBirthPlace},
           type           = ${input.type ?? current.type},
           subjects       = ${subjectsLiteral},
           hourly_rate    = ${hourlyRateSql},

@@ -66,6 +66,9 @@ export type StudentImportRow = {
   lastName: string;
   className: string;
   birthDate: string | null;
+  sex: 'M' | 'F' | null;
+  nationality: string | null;
+  birthPlace: string | null;
   parentName: string | null;
   parentPhone: string | null;
   parentEmail: string | null;
@@ -75,6 +78,10 @@ export type StudentImportRow = {
 
 export type TeacherImportRow = {
   matricule: string | null;
+  birthDate: string | null;
+  sex: 'M' | 'F' | null;
+  nationality: string | null;
+  birthPlace: string | null;
   lastName: string;
   firstName: string;
   phone: string | null;

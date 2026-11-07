@@ -54,6 +54,8 @@ export const createEnrollmentBodySchema = z
     sourceSchoolYearLabel: z.string().regex(/^\d{4}-\d{4}$/).optional(),
     type: enrollmentTypeSchema,
     hasPreviousYearUnpaid: z.boolean().default(false),
+    // Absent ou null = non renseigné (anciens clients). Le formulaire envoie false par défaut.
+    isRepeating: z.boolean().nullable().optional(),
   })
   .strict();
 
@@ -63,9 +65,11 @@ export const updateEnrollmentBodySchema = z
     levelId: z.string().uuid().optional(),
     expectedActiveSchoolYearId: z.string().uuid().optional(),
     status: z.enum(['pending_cashier', 'pending_dossier']).optional(),
+    // undefined = conserver ; null = remettre à « non renseigné ».
+    isRepeating: z.boolean().nullable().optional(),
   })
   .strict()
-  .refine((value) => value.classId !== undefined || value.status !== undefined, {
+  .refine((value) => value.classId !== undefined || value.status !== undefined || value.isRepeating !== undefined, {
     message: 'At least one field must be provided',
   })
   .refine((value) => (!value.levelId && !value.expectedActiveSchoolYearId) || Boolean(value.classId), {

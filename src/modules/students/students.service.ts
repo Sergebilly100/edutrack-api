@@ -237,7 +237,8 @@ export class StudentsService {
     }
     const student = await this.repository.findStudentDetailById(studentId);
     if (!student) throw new StudentsModuleError('Student not found', 404, 'STUDENT_NOT_FOUND');
-    return { ...visibleStudentDetail(student, visibility), activeSchoolYear };
+    const isRepeating = await this.repository.findEnrollmentRepeating(studentId, activeSchoolYear.id);
+    return { ...visibleStudentDetail(student, visibility), activeSchoolYear, isRepeating };
   }
 
   async getHistoricalStudentProfile(studentId: string, visibility: StudentProfileVisibility = fullStudentProfileVisibility): Promise<HistoricalStudentProfile> {
@@ -248,7 +249,8 @@ export class StudentsService {
       this.repository.findLatestHistoricalConfirmedSchoolYear(studentId),
     ]);
     if (!student) throw new StudentsModuleError('Student not found', 404, 'STUDENT_NOT_FOUND');
-    return { ...visibleStudentDetail(student, visibility), activeSchoolYear, latestConfirmedSchoolYear, confirmedInActiveYear };
+    const isRepeating = await this.repository.findEnrollmentRepeating(studentId, latestConfirmedSchoolYear?.id);
+    return { ...visibleStudentDetail(student, visibility), activeSchoolYear, latestConfirmedSchoolYear, confirmedInActiveYear, isRepeating };
   }
 
   async excuseAbsence(

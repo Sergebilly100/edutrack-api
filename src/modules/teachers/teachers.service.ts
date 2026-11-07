@@ -68,6 +68,10 @@ type TeacherDTO = {
   first_name: string;
   last_name: string;
   matricule: string | null;
+  birth_date: string | null;
+  sex: 'M' | 'F' | null;
+  nationality: string | null;
+  birth_place: string | null;
   phone: string | null;
   email: string | null;
   type: 'vacataire' | 'permanent';
@@ -97,6 +101,10 @@ const toDTO = (row: {
   first_name: string;
   last_name: string;
   matricule: string | null;
+  birth_date: string | null;
+  sex: 'M' | 'F' | null;
+  nationality: string | null;
+  birth_place: string | null;
   phone: string | null;
   email: string | null;
   type: 'vacataire' | 'permanent';
@@ -124,6 +132,10 @@ const toDTO = (row: {
   first_name: row.first_name,
   last_name: row.last_name,
   matricule: row.matricule,
+  birth_date: row.birth_date,
+  sex: row.sex,
+  nationality: row.nationality,
+  birth_place: row.birth_place,
   phone: row.phone,
   email: row.email,
   type: row.type,

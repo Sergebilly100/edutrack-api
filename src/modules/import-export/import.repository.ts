@@ -125,6 +125,9 @@ export type ImportRepository = {
       lastName: string;
       className: string;
       birthDate: string | null;
+      sex: 'M' | 'F' | null;
+      nationality: string | null;
+      birthPlace: string | null;
       parentName: string | null;
       parentPhone: string | null;
       parentEmail: string | null;
@@ -144,6 +147,10 @@ export type ImportRepository = {
       name: string;
       username: string;
       matricule: string | null;
+      birthDate: string | null;
+      sex: 'M' | 'F' | null;
+      nationality: string | null;
+      birthPlace: string | null;
       phone: string | null;
       email: string | null;
       type: 'vacataire' | 'permanent';
@@ -412,6 +419,9 @@ export const defaultImportRepository: ImportRepository = {
         s.last_name,
         c.name AS class_name,
         s.birth_date::text AS birth_date,
+        identity.sex,
+        identity.nationality,
+        identity.birth_place,
         s.parent_name,
         s.parent_phone,
         s.parent_email,
@@ -419,6 +429,7 @@ export const defaultImportRepository: ImportRepository = {
         s.parent_phone_2,
         s.is_active
       FROM students_with_class s
+      INNER JOIN students identity ON identity.id = s.id
       INNER JOIN classes c ON c.id = s.class_id
     `);
 
@@ -430,6 +441,9 @@ export const defaultImportRepository: ImportRepository = {
       last_name: string;
       class_name: string;
       birth_date: string | null;
+      sex: 'M' | 'F' | null;
+      nationality: string | null;
+      birth_place: string | null;
       parent_name: string | null;
       parent_phone: string | null;
       parent_email: string | null;
@@ -444,6 +458,9 @@ export const defaultImportRepository: ImportRepository = {
       lastName: row.last_name,
       className: row.class_name,
       birthDate: row.birth_date,
+      sex: row.sex,
+      nationality: row.nationality,
+      birthPlace: row.birth_place,
       parentName: row.parent_name,
       parentPhone: row.parent_phone,
       parentEmail: row.parent_email,
@@ -483,6 +500,10 @@ export const defaultImportRepository: ImportRepository = {
         u.name,
         t.username,
         t.matricule,
+        t.birth_date::text AS birth_date,
+        t.sex,
+        t.nationality,
+        t.birth_place,
         u.phone,
         u.email,
         t.type,
@@ -501,6 +522,10 @@ export const defaultImportRepository: ImportRepository = {
       name: string;
       username: string;
       matricule: string | null;
+      birth_date: string | null;
+      sex: 'M' | 'F' | null;
+      nationality: string | null;
+      birth_place: string | null;
       phone: string | null;
       email: string | null;
       type: 'vacataire' | 'permanent';
@@ -515,6 +540,10 @@ export const defaultImportRepository: ImportRepository = {
       name: row.name,
       username: row.username,
       matricule: row.matricule,
+      birthDate: row.birth_date,
+      sex: row.sex,
+      nationality: row.nationality,
+      birthPlace: row.birth_place,
       phone: row.phone,
       email: row.email,
       type: row.type,
@@ -581,6 +610,9 @@ export const defaultImportRepository: ImportRepository = {
         SET
           matricule = COALESCE(${row.matricule}, matricule),
           birth_date = COALESCE(${row.birthDate}::date, birth_date),
+          sex = COALESCE(${row.sex}, sex),
+          nationality = COALESCE(${row.nationality}, nationality),
+          birth_place = COALESCE(${row.birthPlace}, birth_place),
           parent_name = ${row.parentName},
           parent_phone = ${row.parentPhone},
           parent_email = ${row.parentEmail ?? null},
@@ -619,6 +651,9 @@ export const defaultImportRepository: ImportRepository = {
         first_name,
         last_name,
         birth_date,
+        sex,
+        nationality,
+        birth_place,
         parent_name,
         parent_phone,
         parent_email,
@@ -642,6 +677,9 @@ export const defaultImportRepository: ImportRepository = {
         ${row.firstName},
         ${row.lastName},
         ${row.birthDate},
+        ${row.sex},
+        ${row.nationality},
+        ${row.birthPlace},
         ${row.parentName},
         ${row.parentPhone},
         ${row.parentEmail ?? null},
@@ -702,6 +740,10 @@ export const defaultImportRepository: ImportRepository = {
         UPDATE teachers
         SET
           matricule = COALESCE(${row.matricule}, matricule),
+          birth_date = COALESCE(${row.birthDate}::date, birth_date),
+          sex = COALESCE(${row.sex}, sex),
+          nationality = COALESCE(${row.nationality}, nationality),
+          birth_place = COALESCE(${row.birthPlace}, birth_place),
           type = ${row.type},
           hourly_rate = ${row.hourlyRate},
           monthly_salary = ${row.monthlySalary}
@@ -752,6 +794,10 @@ export const defaultImportRepository: ImportRepository = {
         user_id,
         username,
         matricule,
+        birth_date,
+        sex,
+        nationality,
+        birth_place,
         type,
         hourly_rate,
         monthly_salary
@@ -760,6 +806,10 @@ export const defaultImportRepository: ImportRepository = {
         ${user.id},
         ${row.username},
         ${row.matricule},
+        ${row.birthDate}::date,
+        ${row.sex},
+        ${row.nationality},
+        ${row.birthPlace},
         ${row.type},
         ${row.hourlyRate},
         ${row.monthlySalary}

@@ -130,15 +130,31 @@ export class MidyearImportRepository extends MappingRepository {
         let studentId = row.studentId;
         if (!studentId) {
           const result = await this.db.execute<{ id: string }>(sql`
-            INSERT INTO students (matricule, first_name, last_name, parent_phone)
-            VALUES (${trimMatricule(v.matricule)}, ${v.prenom}, ${v.nom}, ${v.parent_phone || null}) RETURNING id::text
+            INSERT INTO students (matricule, first_name, last_name, parent_phone, birth_date, sex, nationality, birth_place)
+            VALUES (${trimMatricule(v.matricule)}, ${v.prenom}, ${v.nom}, ${v.parent_phone || null},
+              ${v.birth_date || null}::date, ${v.sex || null}, ${v.nationality || null}, ${v.birth_place || null}) RETURNING id::text
           `);
           studentId = result.rows[0]!.id;
+        } else {
+          // Profil réutilisé : une cellule vide n'efface rien ; une valeur fournie complète/remplace.
+          await this.db.execute(sql`
+            UPDATE students SET
+              birth_date = COALESCE(${v.birth_date || null}::date, birth_date),
+              sex = COALESCE(${v.sex || null}, sex),
+              nationality = COALESCE(${v.nationality || null}, nationality),
+              birth_place = COALESCE(${v.birth_place || null}, birth_place)
+            WHERE id = ${studentId}::uuid
+          `);
         }
+        const isRepeating = v.repeating === 'true' ? true : v.repeating === 'false' ? false : null;
         if (!row.enrollmentId) {
           await this.db.execute(sql`
-            INSERT INTO enrollments (student_id, class_id, school_year_id, type, status, confirmed_by_user_id)
-            VALUES (${studentId}::uuid, ${classId}::uuid, ${yearId}::uuid, 'new_registration', 'confirmed', ${localActorId}::uuid)
+            INSERT INTO enrollments (student_id, class_id, school_year_id, type, status, confirmed_by_user_id, is_repeating)
+            VALUES (${studentId}::uuid, ${classId}::uuid, ${yearId}::uuid, 'new_registration', 'confirmed', ${localActorId}::uuid, ${isRepeating}::boolean)
+          `);
+        } else if (isRepeating !== null) {
+          await this.db.execute(sql`
+            UPDATE enrollments SET is_repeating = ${isRepeating}::boolean, updated_at = NOW() WHERE id = ${row.enrollmentId}::uuid
           `);
         }
         if (v.parent_phone) {

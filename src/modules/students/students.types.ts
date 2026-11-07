@@ -1,5 +1,6 @@
 import { civilDateSchema, orderedDateRange, studentBirthDateSchema } from '../../shared/utils/date-validation.js';
 import { z } from 'zod';
+import { optionalBirthPlaceSchema, optionalNationalitySchema, optionalSexSchema } from '../../shared/utils/identity-schemas.js';
 
 export const PHONE_CI_REGEX = /^225\d{10}$/;
 export const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
@@ -44,6 +45,9 @@ export const createStudentBodySchema = z.object({
   last_name: z.string().trim().min(1).max(100),
   matricule: z.string().trim().min(1).max(50).nullable().optional().default(null),
   birth_date: studentBirthDateSchema.nullable().optional().default(null),
+  sex: optionalSexSchema.default(null),
+  nationality: optionalNationalitySchema.default(null),
+  birth_place: optionalBirthPlaceSchema.default(null),
   parent_name: parentNameSchema.optional().default(null),
   parent_phone: parentPhoneSchema.default(null),
   parent_email: z.string().trim().email().nullable().optional().default(null),
@@ -66,6 +70,9 @@ export const updateStudentBodySchema = z
     last_name: z.string().trim().min(1).max(100).optional(),
     matricule: z.string().trim().min(1).max(50).nullable().optional(),
     birth_date: studentBirthDateSchema.nullable().optional(),
+    sex: optionalSexSchema,
+    nationality: optionalNationalitySchema,
+    birth_place: optionalBirthPlaceSchema,
     parent_name: parentNameSchema.optional(),
     parent_phone: parentPhoneSchema.optional(),
     parent_email: z.string().trim().email().nullable().optional(),
@@ -153,6 +160,10 @@ export type StudentRecord = {
   lastName: string;
   matricule: string | null;
   birthDate: string | null;
+  // Identité : présent uniquement sur les lectures de fiche (jamais dans les listes).
+  sex?: 'M' | 'F' | null;
+  nationality?: string | null;
+  birthPlace?: string | null;
   parentName?: string | null;
   parentPhone: string | null;
   parentEmail?: string | null;
@@ -203,6 +214,9 @@ export type StudentDetailRecord = {
   lastName: string;
   matricule: string | null;
   birthDate: string | null;
+  sex: 'M' | 'F' | null;
+  nationality: string | null;
+  birthPlace: string | null;
   className: string | null;
   classId: string | null;
   isActive: boolean;
@@ -227,10 +241,12 @@ export type StudentDetailRecord = {
 };
 
 export type CurrentStudentProfile = StudentDetailRecord & {
+  isRepeating: boolean | null;
   activeSchoolYear: { id: string; label: string };
 };
 
 export type HistoricalStudentProfile = StudentDetailRecord & {
+  isRepeating: boolean | null;
   activeSchoolYear: { id: string; label: string } | null;
   latestConfirmedSchoolYear: { id: string; label: string; className: string } | null;
   confirmedInActiveYear: boolean;

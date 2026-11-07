@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { TenantDb } from '../../shared/database/db.js';
 import { normalizeMappingLabel, resolveMappingByHeaders, translateMappedValue, type MappingFieldDefinition } from '../../shared/import-mapping/engine.js';
 import { parseMappingWorkbook, type ParsedMappingWorkbook } from '../../shared/import-mapping/workbook.js';
+import { parseBirthPlaceCell, parseNationalityCell, parseSexCell } from '../../shared/utils/identity-parsing.js';
 import { ImportModuleError } from './import.service.js';
 import { HistoricalStudentsRepository } from './historical-students.repository.js';
 import { historicalStudentKey } from './historical-students.identity.js';
@@ -78,6 +79,18 @@ export const validateHistoricalRows = (workbook: ParsedMappingWorkbook, fields: 
       return [target.key, field ? translateMappedValue(field, raw) ?? raw : raw];
     }));
     values.birth_date = normalizeBirthDate(values.birth_date!);
+    const identityCells = [
+      ['sex', 'Sexe', parseSexCell(values.sex!)],
+      ['nationality', 'Nationalité', parseNationalityCell(values.nationality!)],
+      ['birth_place', 'Lieu de naissance', parseBirthPlaceCell(values.birth_place!)],
+    ] as const;
+    const identityIssues = identityCells.filter(([, , cell]) => cell.error);
+    if (identityIssues.length) {
+      if (preview.length < 10) preview.push({ ...location, values });
+      errors.push(...identityIssues.map(([field, , cell]) => ({ ...location, field, reason: cell.error! })));
+      continue;
+    }
+    for (const [field, , cell] of identityCells) values[field] = cell.value ?? '';
     const sheetName = row.sheetName ?? workbook.sheetName;
     if (!values.historical_class && !GENERIC_SHEETS.includes(normalizeMappingLabel(sheetName))) values.historical_class = sheetName;
     if (preview.length < 10) preview.push({ ...location, values });

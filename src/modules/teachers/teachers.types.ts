@@ -1,4 +1,5 @@
-import { civilDateSchema, orderedDateRange } from '../../shared/utils/date-validation.js';
+import { civilDateSchema, orderedDateRange, studentBirthDateSchema } from '../../shared/utils/date-validation.js';
+import { optionalBirthPlaceSchema, optionalNationalitySchema, optionalSexSchema } from '../../shared/utils/identity-schemas.js';
 import { z } from 'zod';
 
 export class TeachersModuleError extends Error {
@@ -64,6 +65,10 @@ const fullPayloadSchema = z
     first_name: z.string().trim().min(1).max(100),
     last_name: z.string().trim().min(1).max(100),
     matricule: z.string().trim().min(1).max(50).nullable().optional().default(null),
+    birth_date: studentBirthDateSchema.nullable().optional().default(null),
+    sex: optionalSexSchema.default(null),
+    nationality: optionalNationalitySchema.default(null),
+    birth_place: optionalBirthPlaceSchema.default(null),
     phone: optionalPhoneSchema,
     email: optionalEmailSchema,
     type: teacherTypeSchema,
@@ -116,6 +121,10 @@ export const updateTeacherBodySchema = z
     first_name: z.string().trim().min(1).max(100).optional(),
     last_name: z.string().trim().min(1).max(100).optional(),
     matricule: z.string().trim().min(1).max(50).nullable().optional(),
+    birth_date: studentBirthDateSchema.nullable().optional(),
+    sex: optionalSexSchema,
+    nationality: optionalNationalitySchema,
+    birth_place: optionalBirthPlaceSchema,
     phone: updatePhoneSchema,
     email: updateEmailSchema,
     type: teacherTypeSchema.optional(),

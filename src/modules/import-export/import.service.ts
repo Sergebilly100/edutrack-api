@@ -4,6 +4,13 @@ import ExcelJS from 'exceljs';
 
 import { weeklyPeriodSchema } from '../../shared/utils/schedule-period.js';
 import { birthDateIssue, isCivilDate } from '../../shared/utils/date-validation.js';
+import {
+  IDENTITY_COLUMN_ALIASES,
+  parseBirthPlaceCell,
+  parseNationalityCell,
+  parseSexCell,
+  readColumn,
+} from '../../shared/utils/identity-parsing.js';
 import { isValidScheduleInterval, parseScheduleTime } from '../../shared/utils/schedule-time.js';
 import { emit } from '../../shared/events/event-bus.js';
 import { generateUsername } from '../../shared/utils/username.js';
@@ -469,6 +476,18 @@ const runInTransaction = async <T>(
 // Row-level validation helpers
 // ---------------------------------------------------------------------------
 
+// Ajoute une erreur de ligne par cellule d'identité non reconnue. Ne bloque que cette ligne.
+const pushIdentityCellErrors = (
+  errors: ImportError[],
+  sheetRow: ParsedWorkbookRow,
+  cells: Array<[column: string, rawValue: string, error: string | undefined]>
+): void => {
+  for (const [column, rawValue, error] of cells) {
+    if (!error) continue;
+    errors.push({ ...makeError({ row: sheetRow.line, column, message: error, value: rawValue }), sheet: sheetRow.sheetName });
+  }
+};
+
 const IMPORT_EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // validateStudentRow valide une ligne du fichier Excel pour les étudiants, en vérifiant la présence des données requises,
@@ -485,6 +504,9 @@ const validateStudentRow = (
   lastName: string;
   className: string;
   birthDate: string | null;
+  sex: 'M' | 'F' | null;
+  nationality: string | null;
+  birthPlace: string | null;
   parentName: string | null;
   parentPhone: string | null;
   parentEmail: string | null;
@@ -496,8 +518,16 @@ const validateStudentRow = (
   const firstName = normalizeCell(sheetRow.values['Prénom*']);
   const lastName = normalizeCell(sheetRow.values['Nom*']);
   const className = normalizeCell(sheetRow.values['Classe*']) || normalizeCell(sheetRow.sheetName);
-  const birthDateRaw = normalizeCell(sheetRow.values['Date de naissance']);
+  const birthDateRaw = normalizeCell(readColumn(sheetRow.values, IDENTITY_COLUMN_ALIASES.birthDate));
   const birthDate = parseDateToIso(birthDateRaw);
+  const sexCell = parseSexCell(readColumn(sheetRow.values, IDENTITY_COLUMN_ALIASES.sex));
+  const nationalityCell = parseNationalityCell(readColumn(sheetRow.values, IDENTITY_COLUMN_ALIASES.nationality));
+  const birthPlaceCell = parseBirthPlaceCell(readColumn(sheetRow.values, IDENTITY_COLUMN_ALIASES.birthPlace));
+  pushIdentityCellErrors(errors, sheetRow, [
+    ['Sexe', readColumn(sheetRow.values, IDENTITY_COLUMN_ALIASES.sex), sexCell.error],
+    ['Nationalité', readColumn(sheetRow.values, IDENTITY_COLUMN_ALIASES.nationality), nationalityCell.error],
+    ['Lieu de naissance', readColumn(sheetRow.values, IDENTITY_COLUMN_ALIASES.birthPlace), birthPlaceCell.error],
+  ]);
   const parentName = normalizeCell(sheetRow.values['Nom parent']) || null;
   const parentPhoneRaw = normalizeCell(sheetRow.values['Téléphone parent']);
   const parentEmailRaw = normalizeCell(sheetRow.values['Email parent']) || null;
@@ -618,6 +648,9 @@ const validateStudentRow = (
     lastName,
     className,
     birthDate,
+    sex: sexCell.value,
+    nationality: nationalityCell.value,
+    birthPlace: birthPlaceCell.value,
     parentName,
     parentPhone: parentPhoneRaw || null,
     parentEmail: parentEmailRaw,
@@ -809,6 +842,15 @@ export class ImportService {
       if (fields.birthDate !== null && (existing.birthDate ?? null) !== fields.birthDate) {
         changes.birthDate = { before: existing.birthDate ?? null, after: fields.birthDate ?? null };
       }
+      if (fields.sex !== null && (existing.sex ?? null) !== fields.sex) {
+        changes.sex = { before: existing.sex ?? null, after: fields.sex };
+      }
+      if (fields.nationality !== null && (existing.nationality ?? null) !== fields.nationality) {
+        changes.nationality = { before: existing.nationality ?? null, after: fields.nationality };
+      }
+      if (fields.birthPlace !== null && (existing.birthPlace ?? null) !== fields.birthPlace) {
+        changes.birthPlace = { before: existing.birthPlace ?? null, after: fields.birthPlace };
+      }
       if ((existing.parentName ?? null) !== (fields.parentName ?? null)) {
         changes.parentName = { before: existing.parentName ?? null, after: fields.parentName ?? null };
       }
@@ -913,6 +955,29 @@ export class ImportService {
       const hourlyRateRaw = normalizeCell(sheetRow.values['Taux horaire FCFA']);
       const monthlySalaryRaw = normalizeCell(sheetRow.values['Salaire mensuel FCFA']);
       const normalizedMatricule = matriculeKey(matricule);
+      const birthDateRaw = normalizeCell(readColumn(sheetRow.values, IDENTITY_COLUMN_ALIASES.birthDate));
+      const birthDate = parseDateToIso(birthDateRaw);
+      const sexRaw = readColumn(sheetRow.values, IDENTITY_COLUMN_ALIASES.sex);
+      const nationalityRaw = readColumn(sheetRow.values, IDENTITY_COLUMN_ALIASES.nationality);
+      const birthPlaceRaw = readColumn(sheetRow.values, IDENTITY_COLUMN_ALIASES.birthPlace);
+      const sexCell = parseSexCell(sexRaw);
+      const nationalityCell = parseNationalityCell(nationalityRaw);
+      const birthPlaceCell = parseBirthPlaceCell(birthPlaceRaw);
+      if (birthDateRaw && (!birthDate || birthDateIssue(birthDate))) {
+        errors.push(makeError({
+          row: line,
+          column: 'Date de naissance',
+          message: birthDate ? birthDateIssue(birthDate)! : 'Date de naissance invalide (formats acceptés : YYYY-MM-DD ou JJ/MM/AAAA)',
+          value: birthDateRaw,
+        }));
+      }
+      for (const [column, rawValue, error] of [
+        ['Sexe', sexRaw, sexCell.error],
+        ['Nationalité', nationalityRaw, nationalityCell.error],
+        ['Lieu de naissance', birthPlaceRaw, birthPlaceCell.error],
+      ] as const) {
+        if (error) errors.push(makeError({ row: line, column, message: error, value: rawValue }));
+      }
 
       if (normalizedMatricule) {
         const existingInBatch = batchTeacherMatricules.get(normalizedMatricule);
@@ -1077,6 +1142,10 @@ export class ImportService {
 
       validRows.push({
         matricule: matricule || null,
+        birthDate,
+        sex: sexCell.value,
+        nationality: nationalityCell.value,
+        birthPlace: birthPlaceCell.value,
         lastName,
         firstName,
         phone: phone || null,
@@ -1099,6 +1168,18 @@ export class ImportService {
       const changes: DiffPreviewItem['changes'] = {};
       if ((existing.matricule ?? null) !== (matricule || null)) {
         changes.matricule = { before: existing.matricule ?? null, after: matricule || null };
+      }
+      if (birthDate !== null && (existing.birthDate ?? null) !== birthDate) {
+        changes.birthDate = { before: existing.birthDate ?? null, after: birthDate };
+      }
+      if (sexCell.value !== null && (existing.sex ?? null) !== sexCell.value) {
+        changes.sex = { before: existing.sex ?? null, after: sexCell.value };
+      }
+      if (nationalityCell.value !== null && (existing.nationality ?? null) !== nationalityCell.value) {
+        changes.nationality = { before: existing.nationality ?? null, after: nationalityCell.value };
+      }
+      if (birthPlaceCell.value !== null && (existing.birthPlace ?? null) !== birthPlaceCell.value) {
+        changes.birthPlace = { before: existing.birthPlace ?? null, after: birthPlaceCell.value };
       }
       if ((existing.phone ?? null) !== (phone || null)) {
         changes.phone = { before: existing.phone ?? null, after: phone || null };

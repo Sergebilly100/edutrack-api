@@ -27,6 +27,7 @@ const mapEnrollment = (row: EnrollmentRow) => ({
   status: row.status,
   enrolledAt: iso(row.enrolled_at),
   confirmedByUserId: row.confirmed_by_user_id,
+  isRepeating: row.is_repeating ?? null,
   documentStatus: Number(row.required_document_count ?? 0) === 0
     ? 'not_configured' as const
     : Number(row.missing_mandatory_document_count ?? 0) === 0
@@ -412,7 +413,7 @@ export class EnrollmentsService {
 
   async createEnrollment(input: {
     studentId: string; classId: string; schoolYearId: string; type: EnrollmentType;
-    hasPreviousYearUnpaid: boolean;
+    hasPreviousYearUnpaid: boolean; isRepeating?: boolean | null;
     levelId?: string; expectedActiveSchoolYearId?: string; sourceSchoolYearLabel?: string;
   }) {
     const [student, targetClass] = await Promise.all([
@@ -523,14 +524,16 @@ export class EnrollmentsService {
     }
   }
 
-  async updateEnrollment(id: string, input: { classId?: string; status?: 'pending_cashier' | 'pending_dossier'; levelId?: string; expectedActiveSchoolYearId?: string }) {
+  async updateEnrollment(id: string, input: { classId?: string; status?: 'pending_cashier' | 'pending_dossier'; isRepeating?: boolean | null; levelId?: string; expectedActiveSchoolYearId?: string }) {
     const current = await this.repository.findEnrollment(id);
     if (!current) throw new EnrollmentsModuleError('Enrollment not found', 404, 'ENROLLMENT_NOT_FOUND');
     const enrollmentClass = await this.repository.getClassContext(current.class_id);
     if (enrollmentClass?.school_year_status !== 'active') {
       throw new EnrollmentsModuleError('L’année scolaire doit être ouverte par le support avant toute modification d’inscription.', 409, 'SCHOOL_YEAR_NOT_OPEN');
     }
-    if (current.status === 'confirmed') {
+    // Le statut redoublant est descriptif : il reste modifiable après confirmation, mais seul.
+    const isRepeatingOnlyPatch = input.isRepeating !== undefined && input.classId === undefined && input.status === undefined;
+    if (current.status === 'confirmed' && !isRepeatingOnlyPatch) {
       throw new EnrollmentsModuleError('A confirmed enrollment cannot be edited', 409, 'CONFIRMED_ENROLLMENT_IMMUTABLE');
     }
     if (input.status && !canTransitionEnrollment(current.status, input.status)) {
