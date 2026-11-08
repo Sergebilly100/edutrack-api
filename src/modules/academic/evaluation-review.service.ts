@@ -38,8 +38,8 @@ export class EvaluationReviewService {
     return this.repository.listSpontaneous(query);
   }
 
-  async remind(evaluationId: string) {
-    const result = await this.repository.remind(evaluationId);
+  async remind(evaluationId: string, force = false) {
+    const result = await this.repository.remind(evaluationId, force);
     if (result === 'not_found') throw new EvaluationReviewError('Évaluation introuvable', 'EVALUATION_NOT_FOUND');
     if (result === 'not_due') throw new EvaluationReviewError('Relance indisponible pour cette évaluation', 'EVALUATION_NOT_DUE');
     if (result === 'too_soon') throw new EvaluationReviewError('Une relance a déjà été envoyée dans les dernières 24 h', 'EVALUATION_REMINDER_TOO_SOON');

@@ -204,13 +204,13 @@ export class EvaluationReviewRepository {
     };
   }
 
-  async remind(evaluationId: string): Promise<string | 'not_found' | 'not_due' | 'too_soon'> {
+  async remind(evaluationId: string, force = false): Promise<string | 'not_found' | 'not_due' | 'too_soon'> {
     return this.db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${evaluationId}, 0))`);
       const context = rows(await tx.execute<{
         label: string; subject_name: string; class_name: string; teacher_user_id: string;
         expected_count: string; entered_count: string; days_since: number | null;
-        grace_days: number; last_reminder_at: Date | null; reminded_recently: boolean;
+        grace_days: number; last_reminder_at: Date | null; reminded_recently: boolean; reminded_just_now: boolean;
       }>(sql`
         SELECT e.label, s.name AS subject_name, c.name AS class_name, t.user_id::text AS teacher_user_id,
           (SELECT COUNT(DISTINCT st.id)::text FROM enrollments en
@@ -230,7 +230,11 @@ export class EvaluationReviewRepository {
           EXISTS (SELECT 1 FROM notifications_log nl WHERE nl.related_id = e.id
             AND nl.channel = 'in_app' AND nl.type = 'custom'
             AND nl.metadata->>'kind' = 'evaluation_reminder'
-            AND nl.created_at > NOW() - INTERVAL '24 hours') AS reminded_recently
+            AND nl.created_at > NOW() - INTERVAL '24 hours') AS reminded_recently,
+          EXISTS (SELECT 1 FROM notifications_log nl WHERE nl.related_id = e.id
+            AND nl.channel = 'in_app' AND nl.type = 'custom'
+            AND nl.metadata->>'kind' = 'evaluation_reminder'
+            AND nl.created_at > NOW() - INTERVAL '60 seconds') AS reminded_just_now
         FROM evaluations e JOIN classes c ON c.id = e.class_id
         JOIN subjects s ON s.id = e.subject_id JOIN teachers t ON t.id = e.teacher_id
         JOIN users u ON u.id = t.user_id AND u.is_active = true
@@ -239,7 +243,8 @@ export class EvaluationReviewRepository {
       if (!context) return 'not_found';
       if (Number(context.expected_count) === 0 || Number(context.expected_count) <= Number(context.entered_count)
         || context.days_since === null || context.days_since <= context.grace_days) return 'not_due';
-      if (context.reminded_recently) return 'too_soon';
+      // Anti-doublon : plancher de 60 s même confirmé ; 24 h sauf confirmation renforcée (force).
+      if (context.reminded_just_now || (context.reminded_recently && !force)) return 'too_soon';
       const message = `Merci de saisir les notes de ${context.label} en ${context.subject_name} (${context.class_name}).`;
       const inserted = rows(await tx.execute<{ created_at: Date }>(sql`
         INSERT INTO notifications_log (type, channel, recipient_id, recipient_phone, message, status, related_id, metadata, sent_at)

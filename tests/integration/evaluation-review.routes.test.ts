@@ -148,6 +148,8 @@ describe('consultation direction des évaluations', () => {
     expect(reminder.status, JSON.stringify(reminder.body)).toBe(200);
     expect(reminder.body.lastReminderAt).toBeTruthy();
     expect((await request().post(`${path}/${first}/remind`).set(director)).status).toBe(409);
+    // La confirmation renforcée ne contourne pas le plancher anti-doublon de 60 s.
+    expect((await request().post(`${path}/${first}/remind`).set(director).send({ force: true })).status).toBe(409);
     const teacherInbox = await request().get('/api/v1/teacher/notifications').set(teacher);
     expect(teacherInbox.status).toBe(200);
     expect(teacherInbox.body).toEqual(expect.arrayContaining([expect.objectContaining({

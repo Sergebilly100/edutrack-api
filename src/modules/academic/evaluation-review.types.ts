@@ -14,6 +14,7 @@ export const evaluationReviewQuerySchema = z.object({
 });
 
 export const evaluationReminderParamsSchema = z.object({ id: z.string().uuid() });
+export const evaluationReminderBodySchema = z.object({ force: z.boolean().optional() }).default({});
 
 export const evaluationReviewOptionsSchema = z.object({
   schoolYearId: z.string().uuid().optional(),
