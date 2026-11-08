@@ -11,7 +11,22 @@ export const ensureAdminPublicInfrastructure = async (publicDb: TenantDb): Promi
       ADD COLUMN IF NOT EXISTS can_edit_sms_template boolean DEFAULT false,
       ADD COLUMN IF NOT EXISTS can_export_data boolean DEFAULT true,
       ADD COLUMN IF NOT EXISTS active_school_year varchar(20),
-      ADD COLUMN IF NOT EXISTS logo_url text;
+      ADD COLUMN IF NOT EXISTS logo_url text,
+      ADD COLUMN IF NOT EXISTS seal_original_key text,
+      ADD COLUMN IF NOT EXISTS seal_processed_key text,
+      ADD COLUMN IF NOT EXISTS seal_file_name varchar(255),
+      ADD COLUMN IF NOT EXISTS seal_mime varchar(50),
+      ADD COLUMN IF NOT EXISTS seal_size_bytes integer,
+      ADD COLUMN IF NOT EXISTS seal_width integer,
+      ADD COLUMN IF NOT EXISTS seal_height integer,
+      ADD COLUMN IF NOT EXISTS seal_remove_white boolean DEFAULT false,
+      ADD COLUMN IF NOT EXISTS seal_updated_at timestamptz,
+      ADD COLUMN IF NOT EXISTS logo_file_name varchar(255),
+      ADD COLUMN IF NOT EXISTS logo_mime varchar(50),
+      ADD COLUMN IF NOT EXISTS logo_size_bytes integer,
+      ADD COLUMN IF NOT EXISTS logo_width integer,
+      ADD COLUMN IF NOT EXISTS logo_height integer,
+      ADD COLUMN IF NOT EXISTS logo_updated_at timestamptz;
   `));
 
   await publicDb.execute(sql.raw(`

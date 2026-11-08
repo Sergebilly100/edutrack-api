@@ -174,6 +174,8 @@ export const recoveryQuerySchema = z.object({
 
 export const recoveryStudentsQuerySchema = recoveryQuerySchema.extend({
   class_id: uuidSchema,
+  search: z.string().trim().max(100).optional(),
+  status: z.enum(['late', 'up_to_date']).optional(),
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });

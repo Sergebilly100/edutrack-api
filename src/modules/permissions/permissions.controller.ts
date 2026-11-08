@@ -1,5 +1,4 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { randomUUID } from 'node:crypto';
 import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
@@ -8,7 +7,6 @@ import {
   requirePermission,
   requireSuperAdmin,
 } from '../../shared/middleware/auth.middleware.js';
-import { uploadToR2 } from '../../shared/storage/r2.js';
 
 import { PermissionsModuleError, buildPermissionsService } from './permissions.service.js';
 import {
@@ -18,7 +16,6 @@ import {
   createAdministrativeUserBodySchema,
   createPositionBodySchema,
   positionIdParamsSchema,
-  sealUploadQuerySchema,
   resetAdministrativeUserPasswordBodySchema,
   removeAssignmentParamsSchema,
   updateAdministrativeUserBodySchema,
@@ -138,133 +135,6 @@ export default async function permissionsController(app: FastifyInstance): Promi
         });
 
         return reply.send(result);
-      } catch (error) {
-        return handleError(request, reply, error);
-      }
-    }
-  );
-
-  app.post(
-    '/api/v1/permissions/config/school/logo',
-    { preHandler: requirePermission('settings.school') },
-    async (request, reply) => {
-      try {
-        const claims = request.claims!;
-
-        const data = await request.file();
-        if (!data) {
-          throw new PermissionsModuleError('No file provided', 400, 'BAD_REQUEST');
-        }
-
-        const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/webp']);
-        if (!ALLOWED_MIME.has(data.mimetype)) {
-          throw new PermissionsModuleError(
-            'Type de fichier non supporté. Utilisez PNG, JPEG ou WEBP.',
-            400,
-            'INVALID_FILE_TYPE'
-          );
-        }
-
-        const MAX_SIZE = 500 * 1024; // 500 KB
-        const chunks: Buffer[] = [];
-        let totalSize = 0;
-        for await (const chunk of data.file) {
-          totalSize += chunk.length;
-          if (totalSize > MAX_SIZE) {
-            throw new PermissionsModuleError(
-              'Fichier trop volumineux. Maximum 500 KB.',
-              400,
-              'FILE_TOO_LARGE'
-            );
-          }
-          chunks.push(chunk);
-        }
-        const buffer = Buffer.concat(chunks);
-
-        // Magic byte verification to block files with spoofed MIME type
-        const detectMagicBytes = (b: Buffer): string | null => {
-          if (b.length < 4) return null;
-          if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
-          if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
-          if (
-            b.length >= 12 &&
-            b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
-            b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50
-          ) return 'image/webp';
-          return null;
-        };
-        const detectedMime = detectMagicBytes(buffer);
-        if (!detectedMime || detectedMime !== data.mimetype) {
-          throw new PermissionsModuleError(
-            'Le contenu du fichier ne correspond pas à son type déclaré.',
-            400,
-            'INVALID_FILE_CONTENT'
-          );
-        }
-
-        const ext = data.mimetype.split('/')[1]?.replace('jpeg', 'jpg') ?? 'png';
-        const key = `logos/${claims.schemaName}/${randomUUID()}.${ext}`;
-        const { url } = await uploadToR2(key, buffer, data.mimetype);
-
-        const result = await withTenantSchema(claims.schemaName, async (tenantDb) => {
-          return buildPermissionsService(tenantDb).updateSchoolConfig(claims.schemaName, {
-            logoUrl: url,
-          });
-        });
-
-        return reply.send({ ...result, logoUrl: url });
-      } catch (error) {
-        return handleError(request, reply, error);
-      }
-    }
-  );
-
-  // Upload du cachet ou de la signature de l'école (bulletins PDF uniquement).
-  app.post(
-    '/api/v1/permissions/config/school/seal',
-    { preHandler: requirePermission('settings.school') },
-    async (request, reply) => {
-      try {
-        const claims = request.claims!;
-        const query = sealUploadQuerySchema.parse(request.query ?? {});
-
-        const data = await request.file();
-        if (!data) {
-          throw new PermissionsModuleError('No file provided', 400, 'BAD_REQUEST');
-        }
-
-        const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/webp']);
-        if (!ALLOWED_MIME.has(data.mimetype)) {
-          throw new PermissionsModuleError(
-            'Type de fichier non supporté. Utilisez PNG, JPEG ou WEBP.',
-            400,
-            'INVALID_FILE_TYPE'
-          );
-        }
-
-        const MAX_SIZE = 500 * 1024;
-        const chunks: Buffer[] = [];
-        let totalSize = 0;
-        for await (const chunk of data.file) {
-          totalSize += chunk.length;
-          if (totalSize > MAX_SIZE) {
-            throw new PermissionsModuleError('Fichier trop volumineux. Maximum 500 KB.', 400, 'FILE_TOO_LARGE');
-          }
-          chunks.push(chunk);
-        }
-        const buffer = Buffer.concat(chunks);
-
-        const ext = data.mimetype.split('/')[1]?.replace('jpeg', 'jpg') ?? 'png';
-        const key = `seals/${claims.schemaName}/${query.kind}/${randomUUID()}.${ext}`;
-        const { url } = await uploadToR2(key, buffer, data.mimetype);
-
-        await withTenantSchema(claims.schemaName, async (tenantDb) => {
-          return buildPermissionsService(tenantDb).updateSchoolConfig(claims.schemaName,
-            query.kind === 'stamp' ? { stampImageUrl: url } : { signatureImageUrl: url },
-          );
-        });
-
-        return reply.send({ url });
       } catch (error) {
         return handleError(request, reply, error);
       }

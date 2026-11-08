@@ -2,7 +2,12 @@ import { sql } from 'drizzle-orm';
 
 import { db } from '../database/db.js';
 
+import { toPdfEmbeddable } from '../image/image-processing.js';
+import { SafeFetchError, safeFetchBuffer } from '../image/safe-fetch.js';
+
 import type { DocumentBranding, LoadedLogo } from './builder.js';
+
+const LOGO_FETCH_MAX_BYTES = 5 * 1024 * 1024;
 
 /**
  * Récupération du branding d'une école (nom, logo, ville, intitulé du
@@ -58,24 +63,12 @@ const parseDataUri = (value: string): { contentType: string; data: Uint8Array } 
   }
 };
 
-const detectImageFormat = (bytes: Uint8Array, contentType?: string): 'png' | 'jpg' | null => {
-  if (bytes.length >= 8) {
-    const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-    if (png.every((v, i) => bytes[i] === v)) return 'png';
-  }
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
-    return 'jpg';
-  }
-  const type = contentType?.toLowerCase() ?? '';
-  if (type.includes('png')) return 'png';
-  if (type.includes('jpeg') || type.includes('jpg')) return 'jpg';
-  return null;
-};
-
 /**
  * Charge un logo depuis une data-URI ou une URL HTTP(S), avec retry (backoff
- * exponentiel) et détection de format. Renvoie null en cas d'échec - le builder
- * affiche alors un cartouche avec les initiales de l'école.
+ * exponentiel). PNG/JPEG sont intégrés tels quels ; WebP et SVG (logos hérités)
+ * sont rastérisés côté serveur. Les URL passent par un téléchargement protégé
+ * contre le SSRF. Renvoie null en cas d'échec - le builder affiche alors un
+ * cartouche avec les initiales de l'école.
  */
 export const loadLogo = async (
   logoUrl: string | null,
@@ -85,12 +78,12 @@ export const loadLogo = async (
 
   const dataUri = parseDataUri(logoUrl);
   if (dataUri) {
-    const format = detectImageFormat(dataUri.data, dataUri.contentType);
-    if (!format) {
+    const loaded = await toPdfEmbeddable(dataUri.data);
+    if (!loaded) {
       logger?.warn('[pdf] Invalid image format in data URI', { logoUrl: logoUrl.slice(0, 48) });
       return null;
     }
-    return { bytes: dataUri.data, format };
+    return loaded;
   }
 
   if (!/^https?:\/\//i.test(logoUrl)) {
@@ -104,19 +97,17 @@ export const loadLogo = async (
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      const response = await fetch(logoUrl, { signal: AbortSignal.timeout(8000) });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      const format = detectImageFormat(bytes, response.headers.get('content-type') ?? undefined);
-      if (!format) {
+      // allowHttp : compatibilité avec d'anciens logos enregistrés en http (jamais pour un nouvel import).
+      const bytes = await safeFetchBuffer(logoUrl, { maxBytes: LOGO_FETCH_MAX_BYTES, timeoutMs: 8000, allowHttp: true });
+      const loaded = await toPdfEmbeddable(new Uint8Array(bytes));
+      if (!loaded) {
         logger?.warn('[pdf] Invalid image format from URL', { logoUrl });
         return null;
       }
-      return { bytes, format };
+      return loaded;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
+      if (error instanceof SafeFetchError && error.code !== 'FETCH_FAILED') break;
       if (attempt < maxRetries - 1) {
         await new Promise((resolve) => setTimeout(resolve, baseDelay * Math.pow(2, attempt)));
       }

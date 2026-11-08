@@ -218,6 +218,30 @@ const resolveVacataireStatus = (input: {
 
   return input.paidHours + HOURS_PRECISION_EPSILON >= input.hoursDone ? 'paid' : 'pending';
 };
+/**
+ * Une fiche doit être recalculée quand elle devrait exister mais n'existe pas, ou quand ses heures figées
+ * ne correspondent plus aux pointages actuels. Mêmes règles d'éligibilité que computeSalaryRecords
+ * (aucune fiche pour un vacataire sans taux ni activité, ni pour un permanent sans heure planifiée).
+ */
+export const needsSalaryRecalculation = (row: {
+  teacher_type: 'vacataire' | 'permanent';
+  hourly_rate: number | null;
+  hours_planned: string | number;
+  hours_done: string | number;
+  salary_record_id: string | null;
+  stored_hours_done: string | number | null;
+}): boolean => {
+  const hoursPlanned = roundHours(BillingRepository.toNumber(row.hours_planned));
+  const hoursDone = roundHours(BillingRepository.toNumber(row.hours_done));
+  const eligible =
+    row.teacher_type === 'permanent'
+      ? hoursPlanned > 0
+      : row.hourly_rate !== null && (hoursPlanned > 0 || hoursDone > 0);
+  if (!eligible) return false;
+  if (row.salary_record_id === null || row.stored_hours_done === null) return true;
+  return Math.abs(roundHours(BillingRepository.toNumber(row.stored_hours_done)) - hoursDone) > HOURS_PRECISION_EPSILON;
+};
+
 export class BillingService {
   constructor(private readonly repository: BillingRepository) {}
 
@@ -315,6 +339,7 @@ export class BillingService {
           salaryRecordId: row.salary_record_id,
           isPartiallyPaid: false,
           paidAt: row.paid_at,
+          needsRecalculation: needsSalaryRecalculation(row),
         };
       }
 
@@ -356,6 +381,7 @@ export class BillingService {
         salaryRecordId: row.salary_record_id,
         isPartiallyPaid: normalizedStatus !== 'paid' ? isPartiallyPaid : false,
         paidAt: row.paid_at,
+        needsRecalculation: needsSalaryRecalculation(row),
       };
     });
 

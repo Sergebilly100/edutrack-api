@@ -18,6 +18,8 @@ type SalaryMetricRow = {
   hours_done: string | number;
   total_fcfa: string | number;
   salary_record_id: string | null;
+  /** Heures figées dans la fiche au dernier calcul (null = fiche absente). */
+  stored_hours_done: string | number | null;
   salary_status: SalaryRecordStatus | null;
   paid_at: string | null;
   paid_by: string | null;
@@ -227,6 +229,7 @@ export class BillingRepository {
           ELSE ROUND(COALESCE(dh.hours_done, 0) * t.hourly_rate)::int
         END AS total_fcfa,
         sr.id AS salary_record_id,
+        sr.hours_done::numeric(8,2) AS stored_hours_done,
         sr.status::text AS salary_status,
         sr.paid_at::text AS paid_at,
         sr.paid_by,

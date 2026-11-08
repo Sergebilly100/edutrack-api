@@ -474,7 +474,7 @@ export default async function financeController(
       const query = recoveryStudentsQuerySchema.parse(request.query ?? {});
       const result = await withTenantSchema(request.claims!.schemaName, (db) =>
         new RecoveryService(new RecoveryRepository(db)).getClassStudents(
-          query.school_year_id, query.class_id, query.level_id, query.page, query.limit));
+          query.school_year_id, query.class_id, query.level_id, query.page, query.limit, query.search, query.status));
       return reply.send(result);
     } catch (error) { return handleError(request, reply, error); }
   });

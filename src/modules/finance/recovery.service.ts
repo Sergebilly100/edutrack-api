@@ -64,18 +64,23 @@ export class RecoveryService {
     };
   }
 
-  async getClassStudents(yearId: string, classId: string, levelId: string | undefined, page: number, limit: number) {
+  async getClassStudents(yearId: string, classId: string, levelId: string | undefined, page: number, limit: number, search?: string, status?: 'late' | 'up_to_date') {
     await this.validate(yearId, levelId, classId);
-    const total = await this.repository.countClassStudents(yearId, classId);
+    const term = search?.trim() || undefined;
+    const [total, counts] = await Promise.all([
+      this.repository.countClassStudents(yearId, classId, term, status),
+      this.repository.countClassStudentsByStatus(yearId, classId),
+    ]);
     const totalPages = Math.max(1, Math.ceil(total / limit));
     const currentPage = Math.min(page, totalPages);
-    const students = await this.repository.listClassStudents(yearId, classId, limit, (currentPage - 1) * limit);
+    const students = await this.repository.listClassStudents(yearId, classId, limit, (currentPage - 1) * limit, term, status);
     return {
       students: students.map((row) => ({
         studentId: row.student_id, name: row.full_name, matricule: row.matricule,
         status: row.status, expected: Number(row.expected), paid: Number(row.paid),
         remaining: Number(row.remaining), daysLate: row.days_late,
       })),
+      counts,
       pagination: { page: currentPage, limit, total, totalPages },
     };
   }

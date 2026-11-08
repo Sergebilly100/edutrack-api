@@ -169,7 +169,8 @@ export const updateSchoolConfigBodySchema = z
     teachingType: z
       .enum(['general', 'technical', 'mixed', 'primaire', 'secondaire', 'superieur', 'mixte'])
       .optional(),
-    logoUrl: z.string().trim().max(2_000_000).nullable().optional(),
+    // Seul le retrait (null) passe par ce PATCH : tout nouveau logo est importé via POST /logo ou /logo/from-url.
+    logoUrl: z.null().optional(),
     activeSchoolYear: z
       .string()
       .trim()
@@ -206,7 +207,3 @@ export const STAFF_BASE_PERMISSIONS: readonly PermissionKey[] = [];
 
 // Backward-compatible alias during role transition.
 export const SECRETARY_BASE_PERMISSIONS = STAFF_BASE_PERMISSIONS;
-
-export const sealUploadQuerySchema = z.object({
-  kind: z.enum(['stamp', 'signature']),
-});

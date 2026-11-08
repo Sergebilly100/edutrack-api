@@ -143,3 +143,10 @@ export const readR2Buffer = async (key: string): Promise<Buffer> => {
   if (!result.Body) throw new Error('R2 object has no body');
   return Buffer.from(await result.Body.transformToByteArray());
 };
+
+/** Clé d'objet correspondant à une URL publique R2 de ce bucket, ou null si l'URL n'en vient pas. */
+export const keyFromPublicUrl = (url: string | null | undefined): string | null => {
+  if (!url || !PUBLIC_URL_BASE || !url.startsWith(`${PUBLIC_URL_BASE}/`)) return null;
+  const key = url.slice(PUBLIC_URL_BASE.length + 1);
+  return key.length > 0 && !key.includes('..') ? key : null;
+};

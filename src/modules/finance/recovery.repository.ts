@@ -79,16 +79,44 @@ export class RecoveryRepository {
     return rows(result);
   }
 
-  async countClassStudents(yearId: string, classId: string): Promise<number> {
+  private classStudentFilter(search?: string, status?: 'late' | 'up_to_date') {
+    const pattern = search ? `%${search.replace(/[\\%_]/g, (char) => `\\${char}`)}%` : null;
+    return sql`
+      AND (${pattern}::text IS NULL
+           OR concat_ws(' ', s.first_name, s.last_name) ILIKE ${pattern}
+           OR concat_ws(' ', s.last_name, s.first_name) ILIKE ${pattern}
+           OR COALESCE(s.matricule, '') ILIKE ${pattern})
+      AND (${status ?? null}::text IS NULL OR sfs.status::text = ${status ?? null})
+    `;
+  }
+
+  async countClassStudents(yearId: string, classId: string, search?: string, status?: 'late' | 'up_to_date'): Promise<number> {
     const result = await this.db.execute<{ count: number }>(sql`
       SELECT COUNT(*)::int AS count FROM enrollments e
       INNER JOIN students s ON s.id = e.student_id AND s.is_active = true
+      LEFT JOIN student_financial_status sfs ON sfs.student_id = s.id AND sfs.school_year_id = e.school_year_id
       WHERE e.school_year_id = ${yearId}::uuid AND e.class_id = ${classId}::uuid AND e.status = 'confirmed'
+      ${this.classStudentFilter(search, status)}
     `);
     return Number(rows<{ count: number }>(result)[0]?.count ?? 0);
   }
 
-  async listClassStudents(yearId: string, classId: string, limit: number, offset: number): Promise<RecoveryStudentRow[]> {
+  /** Compteurs des pastilles : indépendants de la recherche et du filtre de statut. */
+  async countClassStudentsByStatus(yearId: string, classId: string): Promise<{ all: number; late: number; upToDate: number }> {
+    const result = await this.db.execute<{ all_count: number; late_count: number; up_to_date_count: number }>(sql`
+      SELECT COUNT(*)::int AS all_count,
+             COUNT(*) FILTER (WHERE sfs.status = 'late')::int AS late_count,
+             COUNT(*) FILTER (WHERE sfs.status = 'up_to_date')::int AS up_to_date_count
+      FROM enrollments e
+      INNER JOIN students s ON s.id = e.student_id AND s.is_active = true
+      LEFT JOIN student_financial_status sfs ON sfs.student_id = s.id AND sfs.school_year_id = e.school_year_id
+      WHERE e.school_year_id = ${yearId}::uuid AND e.class_id = ${classId}::uuid AND e.status = 'confirmed'
+    `);
+    const row = rows<{ all_count: number; late_count: number; up_to_date_count: number }>(result)[0];
+    return { all: Number(row?.all_count ?? 0), late: Number(row?.late_count ?? 0), upToDate: Number(row?.up_to_date_count ?? 0) };
+  }
+
+  async listClassStudents(yearId: string, classId: string, limit: number, offset: number, search?: string, status?: 'late' | 'up_to_date'): Promise<RecoveryStudentRow[]> {
     const result = await this.db.execute<RecoveryStudentRow>(sql`
       SELECT s.id::text AS student_id,
              concat_ws(' ', s.first_name, s.last_name) AS full_name,
@@ -103,6 +131,7 @@ export class RecoveryRepository {
       INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = e.school_year_id AND c.is_active = true
       LEFT JOIN student_financial_status sfs ON sfs.student_id = s.id AND sfs.school_year_id = e.school_year_id
       WHERE e.school_year_id = ${yearId}::uuid AND e.class_id = ${classId}::uuid AND e.status = 'confirmed'
+      ${this.classStudentFilter(search, status)}
       ORDER BY CASE WHEN sfs.status = 'late' THEN 0 ELSE 1 END,
                sfs.days_late DESC NULLS LAST, s.last_name, s.first_name, s.id
       LIMIT ${limit} OFFSET ${offset}

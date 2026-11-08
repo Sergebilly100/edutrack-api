@@ -922,7 +922,7 @@ export default async function billingController(
    */
   app.post(
     '/api/v1/salaries/recalculate',
-    { preHandler: requirePermission('salary.view') },
+    { preHandler: requirePermission('salary.compute') },
     async (request, reply) => {
       try {
         const claims = request.claims!;

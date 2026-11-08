@@ -654,4 +654,92 @@ describe('finance routes integration', () => {
       agreement: { scheduleSteps: [{ dueDate: isoDate(45), cumulativeAmountExpected: 100_000 }] },
     });
   });
+
+  it('journal : les annulés sont visibles avec payments.cancel, exclus des totaux et masqués sans ce droit', async () => {
+    const context = await createFinanceContext(`journal-cancel-${Date.now()}`);
+    const cash = await request().post('/api/v1/payments').set(context.headers).send({
+      studentId: context.studentId, schoolYearId: context.schoolYearId, amount: 20_000, method: 'cash',
+    });
+    const mobile = await request().post('/api/v1/payments').set(context.headers).send({
+      studentId: context.studentId, schoolYearId: context.schoolYearId, amount: 15_000, method: 'mobile_money', providerReference: 'MM-JRN-01',
+    });
+    expect(cash.status).toBe(201);
+    expect(mobile.status).toBe(201);
+    const cancel = await request().post(`/api/v1/payments/${mobile.body.payment.id}/cancel`).set(context.headers).send({ reason: 'Erreur de saisie' });
+    expect(cancel.status, JSON.stringify(cancel.body)).toBe(200);
+
+    const today = isoDate(0);
+    const base = `/api/v1/payments/cash-journal?school_year_id=${context.schoolYearId}&class_id=${context.classId}&from=${today}&to=${today}`;
+
+    const all = await request().get(base).set(context.headers);
+    expect(all.status, JSON.stringify(all.body)).toBe(200);
+    expect(all.body.journal.entries).toHaveLength(2);
+    expect(all.body.journal.counts).toEqual({ confirmed: 1, cancelled: 1 });
+    expect(all.body.journal.totals).toMatchObject({ cash: 20_000, mobile_money: 0, bank_transfer: 0, grandTotal: 20_000 });
+    const cancelledEntry = all.body.journal.entries.find((entry: { status: string }) => entry.status === 'cancelled');
+    expect(cancelledEntry).toMatchObject({ cancellationReason: 'Erreur de saisie', cancelledByUserId: getSeedContext().directorUserId });
+    expect(cancelledEntry.cancelledBy).toEqual(expect.any(String));
+    expect(cancelledEntry.cancelledAt).toBeTruthy();
+
+    const onlyCancelled = await request().get(`${base}&status=cancelled`).set(context.headers);
+    expect(onlyCancelled.body.journal.entries).toHaveLength(1);
+    expect(onlyCancelled.body.journal.pagination.total).toBe(1);
+    expect(onlyCancelled.body.journal.totals.grandTotal).toBe(20_000);
+    const onlyConfirmed = await request().get(`${base}&status=confirmed`).set(context.headers);
+    expect(onlyConfirmed.body.journal.entries).toHaveLength(1);
+    expect(onlyConfirmed.body.journal.entries[0].status).toBe('confirmed');
+
+    const excel = await request().get(`/api/v1/payments/cash-journal/export?format=xlsx&school_year_id=${context.schoolYearId}&from=${today}&to=${today}`).set(context.headers);
+    expect(excel.status).toBe(200);
+
+    // Personnel avec payments.view seulement : jamais d'annulé, ni lecture ni export dédié.
+    await queryTenant(`DELETE FROM ${tenantTable('position_assignments')} WHERE user_id = $1::uuid`, [getSeedContext().staffUserId]);
+    const [viewOnly] = await queryTenant<{ id: string }>(`
+      INSERT INTO ${tenantTable('admin_positions')} (name, permissions, created_by)
+      VALUES ($1, '["payments.view"]'::jsonb, $2::uuid) RETURNING id::text
+    `, [`Lecture caisse ${Date.now()}`, getSeedContext().directorUserId]);
+    await queryTenant(`
+      INSERT INTO ${tenantTable('position_assignments')} (user_id, position_id, assigned_by) VALUES ($1::uuid, $2::uuid, $3::uuid)
+    `, [getSeedContext().staffUserId, viewOnly!.id, getSeedContext().directorUserId]);
+    const staffHeaders = await getAuthHeaders('staff');
+
+    const staffJournal = await request().get(base).set(staffHeaders);
+    expect(staffJournal.status, JSON.stringify(staffJournal.body)).toBe(200);
+    expect(staffJournal.body.journal.entries).toHaveLength(1);
+    expect(staffJournal.body.journal.entries[0].status).toBe('confirmed');
+    expect(staffJournal.body.journal.counts).toEqual({ confirmed: 1, cancelled: 0 });
+    expect((await request().get(`${base}&status=cancelled`).set(staffHeaders)).status).toBe(403);
+    expect((await request().get(`/api/v1/payments/cash-journal/export?format=xlsx&status=cancelled&school_year_id=${context.schoolYearId}`).set(staffHeaders)).status).toBe(403);
+    expect((await request().get(`/api/v1/payments/cash-journal/export?format=xlsx&school_year_id=${context.schoolYearId}`).set(staffHeaders)).status).toBe(200);
+  });
+
+  it('recouvrement : recherche et filtre de statut côté serveur sur les élèves d’une classe', async () => {
+    const context = await createFinanceContext(`recovery-search-${Date.now()}`);
+    const payment = await request().post('/api/v1/payments').set(context.headers).send({
+      studentId: context.studentId, schoolYearId: context.schoolYearId, amount: 20_000, method: 'cash',
+    });
+    expect(payment.status).toBe(201);
+    const recalculation = await request().post(`/api/v1/finance/recalculate?school_year_id=${context.schoolYearId}`).set(context.headers);
+    expect(recalculation.status, JSON.stringify(recalculation.body)).toBe(200);
+
+    const base = `/api/v1/finance/recovery/class-students?school_year_id=${context.schoolYearId}&class_id=${context.classId}`;
+    const byName = await request().get(`${base}&search=awa`).set(context.headers);
+    expect(byName.status, JSON.stringify(byName.body)).toBe(200);
+    expect(byName.body.students).toHaveLength(1);
+    expect(byName.body.pagination.total).toBe(1);
+    const byMatricule = await request().get(`${base}&search=${encodeURIComponent(context.matricule.toLowerCase())}`).set(context.headers);
+    expect(byMatricule.body.students).toHaveLength(1);
+    const none = await request().get(`${base}&search=zzz-inconnu`).set(context.headers);
+    expect(none.body.students).toHaveLength(0);
+    expect(none.body.counts.all).toBe(1);
+    const wildcard = await request().get(`${base}&search=${encodeURIComponent('%')}`).set(context.headers);
+    expect(wildcard.body.students).toHaveLength(0);
+
+    const late = await request().get(`${base}&status=late`).set(context.headers);
+    expect(late.body.students).toHaveLength(1);
+    expect(late.body.counts).toEqual({ all: 1, late: 1, upToDate: 0 });
+    const upToDate = await request().get(`${base}&status=up_to_date`).set(context.headers);
+    expect(upToDate.body.students).toHaveLength(0);
+    expect((await request().get(`${base}&status=inconnu`).set(context.headers)).status).toBe(400);
+  });
 });

@@ -101,5 +101,6 @@
   "0096_tuition_registration_amount.sql": "c440235345f22b92771c39451486d2486e104ced8ca2ea5b994612664367ab94",
   "0097_parent_alerts_enrollment.sql": "99d9c815fa0d8563c61867708ea19d40981ff0c787abeebdc34d99ed5c43c1eb",
   "0098_parent_alert_dedup_status.sql": "7b6ae76404e939c2f8660a5fa123ded963d7dc97319a651b6dfc00d2d242c8f2",
-  "0099_identity_fields.sql": "5f709bf148436df8a74805b144cd74e3ada3e67b975e37401ef80ca91e1b1733"
+  "0099_identity_fields.sql": "5f709bf148436df8a74805b144cd74e3ada3e67b975e37401ef80ca91e1b1733",
+  "0100_school_seal_image.sql": "0db9d366030194976509458f519ce235636bf824fa309aa18f2f7315edf42f63"
 }
