@@ -1,3 +1,4 @@
+import { formatTeacherLabel } from '../../shared/pdf/report-card-format.js';
 import { ReportCardsRepository } from './report-cards.repository.js';
 import type { ReportCardPdfPayload, ReportCardLinePayload } from '../../shared/pdf/index.js';
 import type { ClassReadiness, ReportCardDetail } from './report-cards.types.js';
@@ -449,12 +450,30 @@ export class ReportCardsService {
   async getPdfPayload(cardId: string): Promise<ReportCardPdfPayload> {
     const card = await this.getDetail(cardId);
 
+    const [identity, teacherRows, commentRows, schoolPhone] = await Promise.all([
+      this.repository.findPdfIdentity(cardId),
+      this.repository.listPdfTeachers(card.classId),
+      this.repository.listLineComments(cardId),
+      this.repository.findSchoolPhone(),
+    ]);
+    const teachersBySubject = new Map<string, string[]>();
+    for (const row of teacherRows) {
+      const labels = teachersBySubject.get(row.subject_id) ?? [];
+      labels.push(formatTeacherLabel(row.name, row.sex));
+      teachersBySubject.set(row.subject_id, labels);
+    }
+    const commentByLine = new Map(commentRows.map((row) => [row.id, row.teacher_comment]));
+
+    // Moyenne de classe par matière : non figée dans le snapshot, donc non affichée (colonne masquée).
     const lines: ReportCardLinePayload[] = card.lines.map((line) => ({
       label: line.subjectName ?? 'Conduite',
       average: line.average,
       coefficient: line.coefficient,
       rank: line.rank,
       isConduct: line.lineType === 'conduct',
+      teachers: line.subjectId ? teachersBySubject.get(line.subjectId) ?? [] : [],
+      classAverage: null,
+      appreciation: commentByLine.get(line.id) ?? null,
     }));
 
     return {
@@ -477,6 +496,18 @@ export class ReportCardsService {
               ? 'Redouble'
               : 'Exclu(e)',
       lines,
+      student: identity
+        ? {
+            matricule: identity.matricule,
+            birthDate: identity.birth_date,
+            birthPlace: identity.birth_place,
+            sex: identity.sex,
+            nationality: identity.nationality,
+            isRepeating: identity.is_repeating,
+          }
+        : undefined,
+      schoolPhone,
+      issuedAt: new Date(),
     };
   }
 

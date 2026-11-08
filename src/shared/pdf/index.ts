@@ -1,6 +1,7 @@
 export { PdfBuilder } from './builder.js';
 export type { DocumentBranding, LoadedLogo } from './builder.js';
 export { fetchSchoolBranding, loadLogo } from './branding.js';
+export { loadSchoolSealsForBulletin, type BulletinSeals } from './school-seal.js';
 export { buildTheme, defaultTheme } from './theme.js';
 export type { PdfTheme } from './theme.js';
 export * from './format.js';
@@ -41,6 +42,7 @@ export { renderReportCard } from './templates/report-card.js';
 export type {
   ReportCardPdfPayload,
   ReportCardLinePayload,
+  ReportCardStudentIdentity,
 } from './templates/report-card.js';
 export { renderCashJournal } from './templates/cash-journal.js';
 export type { CashJournalPdfPayload } from './templates/cash-journal.js';

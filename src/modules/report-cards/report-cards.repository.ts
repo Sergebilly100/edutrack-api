@@ -981,4 +981,64 @@ export class ReportCardsRepository {
       subject_rank: number | null;
     }>(result);
   }
+  /** Identité de l'élève pour le PDF du bulletin (lecture seule ; redoublant = inscription de l'année du bulletin). */
+  async findPdfIdentity(cardId: string) {
+    const result = await this.db.execute<{
+      matricule: string | null;
+      birth_date: string | null;
+      birth_place: string | null;
+      sex: string | null;
+      nationality: string | null;
+      is_repeating: boolean | null;
+    }>(sql`
+      SELECT s.matricule, s.birth_date::text AS birth_date, s.birth_place, s.sex, s.nationality,
+             (SELECT e.is_repeating FROM enrollments e
+               WHERE e.student_id = rc.student_id AND e.class_id = rc.class_id
+                 AND e.school_year_id = gp.school_year_id AND e.status = 'confirmed'
+               ORDER BY e.created_at DESC LIMIT 1) AS is_repeating
+      FROM report_cards rc
+      INNER JOIN students s ON s.id = rc.student_id
+      INNER JOIN grading_periods gp ON gp.id = rc.grading_period_id
+      WHERE rc.id = ${cardId}::uuid
+      LIMIT 1
+    `);
+    return getRows<{
+      matricule: string | null;
+      birth_date: string | null;
+      birth_place: string | null;
+      sex: string | null;
+      nationality: string | null;
+      is_repeating: boolean | null;
+    }>(result)[0] ?? null;
+  }
+
+  /** Professeurs affectés par matière pour une classe (affectation actuelle, sans dimension de période). */
+  async listPdfTeachers(classId: string) {
+    const result = await this.db.execute<{ subject_id: string; name: string; sex: string | null }>(sql`
+      SELECT tsa.subject_id::text AS subject_id, u.name, t.sex
+      FROM teacher_subject_assignments tsa
+      INNER JOIN teachers t ON t.id = tsa.teacher_id
+      INNER JOIN users u ON u.id = t.user_id
+      WHERE tsa.class_id = ${classId}::uuid
+      ORDER BY tsa.created_at ASC, u.name ASC
+    `);
+    return getRows<{ subject_id: string; name: string; sex: string | null }>(result);
+  }
+
+  /** Appréciations par ligne (colonne snapshot existante, aujourd'hui sans saisie). */
+  async listLineComments(cardId: string) {
+    const result = await this.db.execute<{ id: string; teacher_comment: string | null }>(sql`
+      SELECT id::text, teacher_comment FROM report_card_lines
+      WHERE report_card_id = ${cardId}::uuid AND teacher_comment IS NOT NULL
+    `);
+    return getRows<{ id: string; teacher_comment: string | null }>(result);
+  }
+
+  /** Téléphone de l'école : celui du directeur, comme dans les informations de l'école. */
+  async findSchoolPhone(): Promise<string | null> {
+    const result = await this.db.execute<{ phone: string | null }>(sql`
+      SELECT phone FROM users WHERE role = 'director' ORDER BY created_at ASC LIMIT 1
+    `);
+    return getRows<{ phone: string | null }>(result)[0]?.phone ?? null;
+  }
 }

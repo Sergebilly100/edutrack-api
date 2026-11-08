@@ -187,6 +187,9 @@ describe('report-cards routes (5c)', () => {
     expect(pdfPayload.lines).toEqual(expect.arrayContaining([
       expect.objectContaining({ isConduct: true, average: 17, coefficient: 2 }),
     ]));
+    // Données d'affichage ajoutées au PDF : identité lue en base, professeurs par matière (liste), aucune moyenne de classe par matière.
+    expect(pdfPayload.student).toEqual(expect.objectContaining({ matricule: expect.anything() }));
+    expect(pdfPayload.lines.every((line) => Array.isArray(line.teachers) && line.classAverage === null)).toBe(true);
     const coefficientChange = await request().put(`/api/v1/conduct/policy/${yearId}`).set(directorHeaders)
       .send({ mode: 'homeroom', coefficient: 3 });
     expect(coefficientChange.status).toBe(409);

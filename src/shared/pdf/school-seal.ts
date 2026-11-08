@@ -45,11 +45,30 @@ const loadUnified = async (key: string, schemaName: string, logger?: Logger): Pr
   }
 };
 
-/** Ne lève jamais : tout échec de lecture devient `null` pour ne pas casser la génération. */
+/** Délai global de lecture des images du bulletin : au-delà, case vide plutôt qu'un bulletin bloqué. */
+const SEAL_LOAD_TIMEOUT_MS = 10_000;
+
+/** Ne lève jamais : tout échec ou dépassement de délai devient une case vide. */
 export const loadSchoolSealsForBulletin = async (
   schemaName: string,
-  logger?: Logger
+  logger?: Logger,
+  timeoutMs: number = SEAL_LOAD_TIMEOUT_MS
 ): Promise<BulletinSeals> => {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<BulletinSeals>((resolve) => {
+    timer = setTimeout(() => {
+      logger?.warn('[pdf] School seals load timed out', { schemaName });
+      resolve(EMPTY);
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([readSchoolSeals(schemaName, logger), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+const readSchoolSeals = async (schemaName: string, logger?: Logger): Promise<BulletinSeals> => {
   try {
     const result = await db.execute<SealRow>(sql`
       SELECT seal_processed_key, stamp_image_url, signature_image_url

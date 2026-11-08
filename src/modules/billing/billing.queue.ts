@@ -5,12 +5,11 @@ import path from 'node:path';
 import archiver from 'archiver';
 import { Queue, Worker, type Job } from 'bullmq';
 import type { Redis } from 'ioredis';
-import { sql } from 'drizzle-orm';
 
 import { logger as appLogger } from '../../shared/observability/logger.js';
 import {
   fetchSchoolBranding,
-  loadLogo,
+  loadSchoolSealsForBulletin,
   renderPaymentHistory,
   renderReportCard,
   renderRevenueReport,
@@ -23,10 +22,9 @@ import {
   renderTuitionReceipt,
   renderCashJournal,
   type DocumentBranding,
-  type LoadedLogo,
   type TeacherSalaryDetails,
 } from '../../shared/pdf/index.js';
-import { withTenantSchema, db } from '../../shared/database/db.js';
+import { withTenantSchema } from '../../shared/database/db.js';
 import { isR2Configured, uploadBuffer } from '../../shared/storage/r2.js';
 import { buildAttendanceService } from '../attendance/attendance.service.js';
 import { buildStudentsService } from '../students/students.service.js';
@@ -38,25 +36,10 @@ import { buildFinanceService } from '../finance/finance.service.js';
 import { buildBillingService } from './billing.service.js';
 import { buildReportCardsService } from '../report-cards/report-cards.service.js';
 
+/** Journal des incidents d'images PDF : identifiants techniques uniquement, jamais de donnée personnelle. */
+const pdfLogger = { warn: (msg: string, meta?: Record<string, unknown>) => appLogger.warn({ ...meta }, msg) };
+
 export const BILLING_PDF_QUEUE_NAME = 'pdf-exports';
-
-type SchoolSealsRow = { stamp_image_url: string | null; signature_image_url: string | null };
-
-/** Charge cachet + signature de l'école (data-URI ou URL), tolérant aux échecs. */
-const loadSchoolSeals = async (
-  schemaName: string
-): Promise<{ stamp: LoadedLogo | null; signature: LoadedLogo | null }> => {
-  const result = await db.execute<SchoolSealsRow>(sql`
-    SELECT stamp_image_url, signature_image_url
-    FROM public.tenants WHERE schema_name = ${schemaName} LIMIT 1
-  `);
-  const row = result.rows?.[0] ?? null;
-  const logger = { warn: (msg: string) => appLogger.warn(msg) };
-  return {
-    stamp: await loadLogo(row?.stamp_image_url ?? null, logger),
-    signature: await loadLogo(row?.signature_image_url ?? null, logger),
-  };
-};
 
 // Configurable via variable d'environnement (fallback: /tmp pour dev local)
 // En production Railway, utiliser un volume persistant ou un stockage cloud (R2/S3)
@@ -497,10 +480,10 @@ export const processBillingPdfJob = async (
     if (job.data.type === 'report-card') {
       // Cachet et signature : images de paramétrage école, réservées aux
       // bulletins - les reçus ne les utilisent jamais.
-      const seals = await loadSchoolSeals(job.data.schemaName);
+      const seals = await loadSchoolSealsForBulletin(job.data.schemaName, pdfLogger);
       const payload = await buildReportCardsService(tenantDb).getPdfPayload(job.data.reportCardId);
       const fileName = `bulletin_${toSafeFilePart(job.data.reportCardId)}.pdf`;
-      const bytes = await renderReportCard(branding, payload, seals);
+      const bytes = await renderReportCard(branding, payload, seals, { logger: pdfLogger });
       const result = await persistPdf(bytes, fileName);
       return { ...result, fileType: 'pdf' };
     }
