@@ -25,7 +25,7 @@ import {
 } from './academic-grading.types.js';
 import { AcademicModuleError, buildAcademicService } from './academic.service.js';
 import { EvaluationReviewError, buildEvaluationReviewService } from './evaluation-review.service.js';
-import { evaluationReminderBodySchema, evaluationReminderParamsSchema, evaluationReviewOptionsSchema, evaluationReviewQuerySchema } from './evaluation-review.types.js';
+import { evaluationBatchReminderSchema, evaluationReminderBodySchema, evaluationReminderParamsSchema, evaluationReviewOptionsSchema, evaluationReviewQuerySchema } from './evaluation-review.types.js';
 import {
   classIdParamsSchema,
   createClassBodySchema,
@@ -121,6 +121,15 @@ export default async function academicController(app: FastifyInstance): Promise<
       const query = evaluationReviewQuerySchema.parse(request.query ?? {});
       return reply.send(await withTenantSchema(request.claims!.schemaName, (db) =>
         buildEvaluationReviewService(db).listSpontaneous(query)));
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+  app.post('/api/v1/academic/evaluations/remind', { preHandler: requirePermission('evaluations.view') }, async (request, reply) => {
+    try {
+      const { evaluationIds, force } = evaluationBatchReminderSchema.parse(request.body ?? {});
+      return reply.send(await withTenantSchema(request.claims!.schemaName, (db) =>
+        buildEvaluationReviewService(db).remindMany(evaluationIds, force)));
     } catch (error) {
       return handleError(request, reply, error);
     }

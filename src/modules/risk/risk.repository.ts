@@ -51,6 +51,7 @@ export type TeacherRiskListInput = {
   page: number;
   limit: number;
   month?: string;
+  signal?: 'absences' | 'lateness';
   atRisk: boolean;
 };
 
@@ -350,7 +351,7 @@ export class RiskRepository {
         WITH ${gradeRiskCtes},
         scoped_student_risks AS (
           SELECT srs.student_id,
-                 concat_ws(' ', s.first_name, s.last_name) AS student_name,
+                 format_person_name(s.first_name, s.last_name) AS student_name,
                  l.id AS school_level_id,
                  l.name AS school_level_name,
                  c.id AS class_id,
@@ -456,6 +457,8 @@ export class RiskRepository {
       ? sql`(${latenessRule.isActive} AND lateness_count >= ${latenessRule.thresholdValue})` : sql`FALSE`;
     const score = sql`(CASE WHEN ${absenceSignal} THEN 1 ELSE 0 END + CASE WHEN ${latenessSignal} THEN 1 ELSE 0 END)`;
     const isAtRisk = sql`(${absenceSignal} OR ${latenessSignal})`;
+    // Filtre par motif (lien depuis le tableau de bord) : même définition que les signaux ci-dessus.
+    const signalFilter = input.signal === 'absences' ? absenceSignal : input.signal === 'lateness' ? latenessSignal : sql`TRUE`;
     const [itemsResult, totalResult] = await Promise.all([
       this.db.execute<TeacherRiskRow>(sql`
         WITH teacher_counts AS (${teacherCounts})
@@ -469,7 +472,7 @@ export class RiskRepository {
                ${score}::int AS risk_score,
                CASE WHEN ${score} = 2 THEN 'warning' WHEN ${score} = 1 THEN 'attention' ELSE 'none' END AS level
         FROM teacher_counts
-        WHERE (${input.atRisk} = false OR ${isAtRisk})
+        WHERE (${input.atRisk} = false OR ${isAtRisk}) AND ${signalFilter}
         ORDER BY ${score} DESC, absence_count DESC, lateness_count DESC, teacher_name ASC
         LIMIT ${input.limit}
         OFFSET ${offset}
@@ -478,7 +481,7 @@ export class RiskRepository {
         WITH teacher_counts AS (${teacherCounts})
         SELECT COUNT(*) AS total
         FROM teacher_counts
-        WHERE (${input.atRisk} = false OR ${isAtRisk})
+        WHERE (${input.atRisk} = false OR ${isAtRisk}) AND ${signalFilter}
       `),
     ]);
     return {

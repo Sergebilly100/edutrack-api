@@ -2,8 +2,9 @@ import { dateValidationProblem } from '../../shared/utils/date-validation.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 
-import { sql } from 'drizzle-orm';
-import { db as publicDb, withTenantSchema } from '../../shared/database/db.js';
+import { withTenantSchema } from '../../shared/database/db.js';
+import { buildTuitionPlanCopyService } from './tuition-plan-copy.js';
+import { isDataExportAllowed } from '../../shared/export/data-export-guard.js';
 import {
   authenticateRequest,
   checkStudentAccess,
@@ -28,6 +29,7 @@ import {
   recordPaymentBodySchema,
   schoolYearQuerySchema,
   financialSummaryQuerySchema,
+  agingStudentsQuerySchema,
   recoveryQuerySchema,
   recoveryStudentsQuerySchema,
   classFinancialStatusQuerySchema,
@@ -35,6 +37,7 @@ import {
   financialAlertRuleTypeParamsSchema,
   studentFinancialParamsSchema,
   tuitionPlanLevelParamsSchema,
+  tuitionPlanCopyBodySchema,
   tuitionPlansQuerySchema,
   upsertProviderSettingBodySchema,
   upsertTuitionPlanBodySchema,
@@ -62,14 +65,6 @@ const resolveJournalScope = (request: FastifyRequest, reply: FastifyReply, statu
 
 const forbiddenCancelled = (reply: FastifyReply) =>
   reply.code(403).send({ error: 'Permission payments.cancel required', code: 'FORBIDDEN', statusCode: 403 });
-
-const isDataExportAllowed = async (schemaName: string): Promise<boolean> => {
-  const result = await publicDb.execute<{ allowed: boolean }>(sql`
-    SELECT COALESCE(can_export_data, true) AS allowed FROM public.tenants WHERE schema_name = ${schemaName} LIMIT 1
-  `);
-  const list = (Array.isArray(result) ? result : (result as { rows?: Array<{ allowed: boolean }> }).rows ?? []) as Array<{ allowed: boolean }>;
-  return list[0]?.allowed !== false;
-};
 
 const handleError = (request: FastifyRequest, reply: FastifyReply, error: unknown) => {
   if (error instanceof ZodError) {
@@ -528,6 +523,20 @@ export default async function financeController(
     }
   );
 
+  app.get(
+    '/api/v1/finance/aging/students',
+    { preHandler: requirePermission('payments.view') },
+    async (request, reply) => {
+      try {
+        const query = agingStudentsQuerySchema.parse(request.query ?? {});
+        const result = await withService(request, (service) => service.listFinancialAgingStudents({
+          schoolYearId: query.school_year_id, bucket: query.bucket, page: query.page, limit: query.limit, search: query.search, classId: query.class_id,
+        }));
+        return reply.send(result);
+      } catch (error) { return handleError(request, reply, error); }
+    }
+  );
+
   app.post(
     '/api/v1/finance/recalculate',
     { preHandler: requirePermission('payments.view') },
@@ -681,6 +690,25 @@ export default async function financeController(
       const body = upsertTuitionPlanBodySchema.parse(request.body);
       return reply.send({ tuitionPlan: await withService(request, (service) =>
         service.upsertTuitionPlan(levelId, body)) });
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  // Copie du plan de frais d'un niveau vers d'autres niveaux (même année) : récapitulatif puis exécution.
+  app.get('/api/v1/tuition-plans/levels/:levelId/copy-preview', { preHandler: requirePermission('tuition.edit') }, async (request, reply) => {
+    try {
+      const { levelId } = tuitionPlanLevelParamsSchema.parse(request.params);
+      const { school_year_id: schoolYearId } = schoolYearQuerySchema.parse(request.query);
+      return reply.send(await withTenantSchema(request.claims!.schemaName, (db) =>
+        buildTuitionPlanCopyService(db).preview(levelId, schoolYearId)));
+    } catch (error) { return handleError(request, reply, error); }
+  });
+
+  app.post('/api/v1/tuition-plans/levels/:levelId/copy', { preHandler: requirePermission('tuition.edit') }, async (request, reply) => {
+    try {
+      const { levelId } = tuitionPlanLevelParamsSchema.parse(request.params);
+      const body = tuitionPlanCopyBodySchema.parse(request.body);
+      return reply.send(await withTenantSchema(request.claims!.schemaName, (db) =>
+        buildTuitionPlanCopyService(db).copy(levelId, body)));
     } catch (error) { return handleError(request, reply, error); }
   });
 

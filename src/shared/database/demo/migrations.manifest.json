@@ -102,5 +102,7 @@
   "0097_parent_alerts_enrollment.sql": "99d9c815fa0d8563c61867708ea19d40981ff0c787abeebdc34d99ed5c43c1eb",
   "0098_parent_alert_dedup_status.sql": "7b6ae76404e939c2f8660a5fa123ded963d7dc97319a651b6dfc00d2d242c8f2",
   "0099_identity_fields.sql": "5f709bf148436df8a74805b144cd74e3ada3e67b975e37401ef80ca91e1b1733",
-  "0100_school_seal_image.sql": "0db9d366030194976509458f519ce235636bf824fa309aa18f2f7315edf42f63"
+  "0100_school_seal_image.sql": "0db9d366030194976509458f519ce235636bf824fa309aa18f2f7315edf42f63",
+  "0101_payment_receipt_day_counter.sql": "f6a5cce5c5a3e06eb0380b1edf96d30ed2b188ad6cea2b68a0f0502dcfc7231b",
+  "0102_format_person_name.sql": "f52ac89f27c81d630985b125c64c59477dcc6fc1ede7c8641b1e83a87a462b5c"
 }

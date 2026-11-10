@@ -197,7 +197,7 @@ describe('ReportCardsService.generateForClass', () => {
     baseRepo();
     repository.listClassStudents.mockResolvedValue([{ id: 'student-a', fullName: 'Awa Koné' }]);
     repository.listGeneralAverages.mockResolvedValue([{ studentId: 'student-a', average: 15 }]);
-    repository.listSubjectAverages.mockResolvedValue([]);
+    repository.listSubjectAverages.mockResolvedValue([{ studentId: 'student-a', subjectId: 'subject-1', average: 15 }]);
     repository.findExistingCard.mockResolvedValue(null);
     repository.findConductGrade.mockResolvedValue({ note: 15, coefficient: 1 });
 
@@ -212,7 +212,7 @@ describe('ReportCardsService.generateForClass', () => {
     repository.isLastPeriodOfYear.mockResolvedValue(true);
     repository.listClassStudents.mockResolvedValue([{ id: 'student-a', fullName: 'Awa Koné' }]);
     repository.listGeneralAverages.mockResolvedValue([{ studentId: 'student-a', average: 15 }]);
-    repository.listSubjectAverages.mockResolvedValue([]);
+    repository.listSubjectAverages.mockResolvedValue([{ studentId: 'student-a', subjectId: 'subject-1', average: 15 }]);
     repository.findExistingCard.mockResolvedValue(null);
     repository.findConductGrade.mockResolvedValue({ note: 15, coefficient: 1 });
     repository.findValidatedDecision.mockResolvedValue({ id: 'decision-1', decision: 'promoted' });
@@ -233,7 +233,10 @@ describe('ReportCardsService.generateForClass', () => {
       { studentId: 'student-published', average: 15 },
       { studentId: 'student-draft', average: 10 },
     ]);
-    repository.listSubjectAverages.mockResolvedValue([]);
+    repository.listSubjectAverages.mockResolvedValue([
+      { studentId: 'student-published', subjectId: 'subject-1', average: 15 },
+      { studentId: 'student-draft', subjectId: 'subject-1', average: 10 },
+    ]);
     repository.findExistingCard.mockImplementation(async (studentId: string) =>
       studentId === 'student-published'
         ? { id: 'card-pub', status: 'published' as const }
@@ -283,6 +286,21 @@ describe('ReportCardsService.generateForClass', () => {
     await expect(new ReportCardsService(repository).generateForClass('class-1', 'period-1'))
       .rejects.toMatchObject({ code: 'CONDUCT_GRADES_PENDING', statusCode: 409 });
     expect(repository.replaceGeneratedCard).not.toHaveBeenCalled();
+  });
+
+  it("refuse de générer en ignorant en silence un élève sans aucune moyenne de matière", async () => {
+    baseRepo();
+    repository.listClassStudents.mockResolvedValue([
+      { id: 'student-a', fullName: 'Awa Koné' },
+      { id: 'student-b', fullName: 'Mohamed Koffi' },
+    ]);
+    repository.listSubjectAverages.mockResolvedValue([{ studentId: 'student-a', subjectId: 'subject-1', average: 14 }]);
+    // La conduite seule suffirait à fabriquer une « moyenne générale » : elle ne doit pas masquer le manque.
+    repository.findConductGrade.mockResolvedValue({ note: 15, coefficient: 1 });
+    await expect(new ReportCardsService(repository).generateForClass('class-1', 'period-1'))
+      .rejects.toMatchObject({ code: 'GENERAL_AVERAGES_PENDING', statusCode: 409, message: expect.stringContaining('Mohamed Koffi') });
+    expect(repository.replaceGeneratedCard).not.toHaveBeenCalled();
+    expect(repository.upsertGeneralAverage).not.toHaveBeenCalled();
   });
 
   it('refuse la génération tant qu’une matière de la classe n’est pas validée', async () => {

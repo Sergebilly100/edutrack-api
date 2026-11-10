@@ -4,7 +4,8 @@ import { z, ZodError } from 'zod';
 import { withTenantSchema } from '../../shared/database/db.js';
 import { authenticateRequest } from '../../shared/middleware/auth.middleware.js';
 import type { PermissionKey } from '../../shared/types/index.js';
-import { buildDashboardActionsService } from './dashboard-actions.service.js';
+import { buildDashboardActionsService, DIRECTOR_ONLY_ACTION_TYPES } from './dashboard-actions.service.js';
+import { refreshDashboardActionsForSchema } from './dashboard-actions.worker.js';
 
 const forbidden = (reply: FastifyReply, message: string): FastifyReply =>
   reply.code(403).send({ error: message, code: 'FORBIDDEN', statusCode: 403 });
@@ -48,10 +49,17 @@ export default async function dashboardActionsController(app: FastifyInstance): 
     async (request, reply) => {
       try {
         const claims = request.claims!;
+        // Recalcul à la lecture : un échec n'empêche pas de servir la dernière liste connue.
+        await refreshDashboardActionsForSchema(claims.schemaName).catch((error) =>
+          request.log.warn({ err: error }, '[dashboard-actions] refresh on read failed'));
         const items = await withTenantSchema(claims.schemaName, async (tenantDb) =>
           buildDashboardActionsService(tenantDb).listOpen()
         );
-        return reply.send({ items });
+        // Configuration et décisions de conduite : visibles uniquement du directeur.
+        const visible = request.claims?.role === 'director'
+          ? items
+          : items.filter((item) => !DIRECTOR_ONLY_ACTION_TYPES.includes(item.type));
+        return reply.send({ items: visible });
       } catch (error) {
         return handleError(request, reply, error);
       }

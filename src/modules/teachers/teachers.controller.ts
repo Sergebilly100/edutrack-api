@@ -3,6 +3,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 
 import { withTenantSchema } from '../../shared/database/db.js';
+import { exportDisabledBody, isDataExportAllowed } from '../../shared/export/data-export-guard.js';
+import { XLSX_CONTENT_TYPE } from '../../shared/export/xlsx-safe.js';
 import { authenticateRequest, requirePermission } from '../../shared/middleware/auth.middleware.js';
 import type { PermissionKey } from '../../shared/types/index.js';
 import type { PdfExportQueueHandle } from '../billing/billing.queue.js';
@@ -14,6 +16,7 @@ import {
   teacherParamsSchema,
   teacherStatsQuerySchema,
   teacherTeachingOptionsQuerySchema,
+  teachersExportQuerySchema,
   teachersListQuerySchema,
   updateTeacherBodySchema,
   type CreateTeacherInput,
@@ -123,6 +126,25 @@ export default async function teachersController(
       }
 
       return reply.send(result);
+    } catch (error) {
+      return handleError(request, reply, error);
+    }
+  });
+
+  // ─── GET /api/v1/teachers/export ──────────────────────────────────────────
+  // Export Excel : permission teachers.view ET réglage de l'école can_export_data.
+  app.get('/api/v1/teachers/export', { preHandler: requirePermission('teachers.view') }, async (request, reply) => {
+    try {
+      const claims = request.claims!;
+      const query = teachersExportQuerySchema.parse(request.query ?? {});
+      if (!(await isDataExportAllowed(claims.schemaName))) {
+        return reply.code(403).send(exportDisabledBody);
+      }
+      const file = await withTenantSchema(claims.schemaName, async (tenantDb) =>
+        buildTeachersService(tenantDb).exportTeachers(query));
+      reply.header('Content-Type', XLSX_CONTENT_TYPE);
+      reply.header('Content-Disposition', `attachment; filename="${file.fileName}"`);
+      return reply.send(file.buffer);
     } catch (error) {
       return handleError(request, reply, error);
     }

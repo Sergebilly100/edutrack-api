@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 
+import { BUSINESS_DATE_SQL } from '../../shared/database/business-date.js';
 import type { TenantDb } from '../../shared/database/db.js';
 
 type Rows<T> = { rows?: T[] };
@@ -21,7 +22,21 @@ export type ActionItemType =
   | 'teacher_absences_high'
   | 'salary_pending'
   | 'validations_pending'
-  | 'commission_overdue';
+  | 'commission_overdue'
+  | 'conduct_decision_pending'
+  | 'config_active_year'
+  | 'config_school_info'
+  | 'config_levels'
+  | 'config_subjects'
+  | 'config_rooms'
+  | 'config_fees'
+  | 'config_required_documents'
+  | 'config_schedule'
+  | 'config_grading_periods'
+  | 'config_teachers'
+  | 'config_reminder_rules'
+  | 'config_risk_rules'
+  | 'config_document_identity';
 
 export type ActionItemPriority = 'low' | 'medium' | 'high';
 
@@ -58,19 +73,44 @@ export class DashboardActionsRepository {
   }
 
   /**
-   * Remplace l'ensemble des items ouverts du type : les conditions sources qui
-   * ont disparu sont automatiquement résolues, puis on insère le nouvel état.
+   * Synchronise les items du type avec l'état courant des sources (idempotent, appelable à chaque lecture) :
+   * - condition disparue → item ouvert résolu automatiquement, et un rejet manuel antérieur est « oublié »
+   *   (resolved_by_user_id remis à NULL, rien n'est supprimé) pour que l'alerte puisse réapparaître plus tard ;
+   * - condition toujours vraie → item ouvert mis à jour en place (même id) ;
+   * - condition vraie mais alerte écartée par le directeur → rien n'est recréé.
    */
   async replaceType(type: string, items: Array<{ referenceId: string | null; priority: ActionItemPriority; message?: string }>): Promise<void> {
+    const keyOf = (referenceId: string | null) => referenceId ?? 'global';
+    const keys = items.map((item) => keyOf(item.referenceId));
+    const absent = keys.length
+      ? sql`COALESCE(reference_id::text, 'global') NOT IN (${sql.join(keys.map((key) => sql`${key}`), sql`, `)})`
+      : sql`TRUE`;
     await this.db.execute(sql`
-      UPDATE dashboard_action_items
-      SET resolved_at = NOW()
-      WHERE type = ${type} AND resolved_at IS NULL
+      UPDATE dashboard_action_items SET resolved_at = NOW()
+      WHERE type = ${type} AND resolved_at IS NULL AND ${absent}
+    `);
+    await this.db.execute(sql`
+      UPDATE dashboard_action_items SET resolved_by_user_id = NULL
+      WHERE type = ${type} AND resolved_by_user_id IS NOT NULL AND ${absent}
     `);
     for (const item of items) {
+      const key = keyOf(item.referenceId);
+      const updated = await this.db.execute(sql`
+        UPDATE dashboard_action_items SET priority = ${item.priority}::dashboard_action_priority, message = ${item.message ?? null}
+        WHERE type = ${type} AND resolved_at IS NULL AND COALESCE(reference_id::text, 'global') = ${key}
+        RETURNING id::text
+      `);
+      if (getRows(updated).length > 0) continue;
+      const dismissed = await this.db.execute(sql`
+        SELECT 1 FROM dashboard_action_items
+        WHERE type = ${type} AND resolved_by_user_id IS NOT NULL AND COALESCE(reference_id::text, 'global') = ${key}
+        LIMIT 1
+      `);
+      if (getRows(dismissed).length > 0) continue;
       await this.db.execute(sql`
         INSERT INTO dashboard_action_items (type, reference_id, priority, message)
         VALUES (${type}, ${item.referenceId ?? null}::uuid, ${item.priority}::dashboard_action_priority, ${item.message ?? null})
+        ON CONFLICT DO NOTHING
       `);
     }
   }
@@ -83,6 +123,38 @@ export class DashboardActionsRepository {
       RETURNING id::text
     `);
     return getRows(result).length > 0;
+  }
+
+  /** État de configuration non couvert par l'assistant de démarrage (une seule requête, lecture seule). */
+  async readConfigState(): Promise<{
+    requiredDocuments: boolean; scheduleConfigured: boolean; gradingPeriods: boolean;
+    reminderRules: boolean; riskRules: boolean; hasLogo: boolean; hasSeal: boolean;
+  }> {
+    const result = await this.db.execute<{
+      required_documents: boolean; schedule_configured: boolean; grading_periods: boolean;
+      reminder_rules: boolean; risk_rules: boolean; has_logo: boolean; has_seal: boolean;
+    }>(sql`
+      SELECT
+        EXISTS (SELECT 1 FROM required_document_types WHERE is_active = true) AS required_documents,
+        EXISTS (SELECT 1 FROM schedules s JOIN schedule_periods sp ON sp.id = s.schedule_period_id
+                WHERE s.is_active = true AND sp.is_active = true) AS schedule_configured,
+        EXISTS (SELECT 1 FROM grading_periods gp JOIN school_years sy ON sy.id = gp.school_year_id
+                WHERE sy.status = 'active') AS grading_periods,
+        EXISTS (SELECT 1 FROM financial_alert_rules WHERE is_active = true) AS reminder_rules,
+        EXISTS (SELECT 1 FROM risk_alert_rules WHERE is_active = true) AS risk_rules,
+        COALESCE((SELECT logo_url IS NOT NULL AND logo_url <> '' FROM public.tenants WHERE schema_name = current_schema()), false) AS has_logo,
+        COALESCE((SELECT seal_processed_key IS NOT NULL OR (stamp_image_url IS NOT NULL AND stamp_image_url <> '')
+                  FROM public.tenants WHERE schema_name = current_schema()), false) AS has_seal
+    `);
+    const row = getRows<{
+      required_documents: boolean; schedule_configured: boolean; grading_periods: boolean;
+      reminder_rules: boolean; risk_rules: boolean; has_logo: boolean; has_seal: boolean;
+    }>(result)[0];
+    return {
+      requiredDocuments: row?.required_documents ?? false, scheduleConfigured: row?.schedule_configured ?? false,
+      gradingPeriods: row?.grading_periods ?? false, reminderRules: row?.reminder_rules ?? false,
+      riskRules: row?.risk_rules ?? false, hasLogo: row?.has_logo ?? false, hasSeal: row?.has_seal ?? false,
+    };
   }
 
   async countRiskByLevel(): Promise<Record<string, number>> {
@@ -105,23 +177,39 @@ export class DashboardActionsRepository {
     return getRows<{ count: number }>(result)[0]?.count ?? 0;
   }
 
-  async listBlockedClasses(limit = 10): Promise<Array<{ classId: string; className: string; incomplete: number }>> {
-    const result = await this.db.execute<{ class_id: string; class_name: string; incomplete: number }>(sql`
-      SELECT c.id::text AS class_id, c.name AS class_name, COUNT(*)::int AS incomplete
-      FROM class_subject_completion csc
-      INNER JOIN classes c ON c.id = csc.class_id AND c.is_active = true
-      WHERE csc.status <> 'completed'
-        AND csc.grading_period_id IN (SELECT id FROM grading_periods WHERE school_year_id = (SELECT id FROM school_years WHERE status='active' LIMIT 1))
-      GROUP BY c.id, c.name
-      HAVING COUNT(*) >= 1
-      ORDER BY incomplete DESC
+  /**
+   * Classes dont les bulletins sont bloqués : matières aux moyennes non validées, uniquement pour les périodes
+   * dont la revue est ouverte (comme la page Bulletins) et dont la classe n'est pas déjà clôturée.
+   * Une seule ligne par classe : la période la plus récente concernée.
+   */
+  async listBlockedClasses(limit = 10): Promise<Array<{ classId: string; className: string; periodLabel: string; incomplete: number }>> {
+    const result = await this.db.execute<{ class_id: string; class_name: string; period_label: string; incomplete: number }>(sql`
+      WITH pending AS (
+        SELECT c.id AS class_id, c.name AS class_name, gp.label AS period_label, gp.order_index, COUNT(*)::int AS incomplete
+        FROM class_subject_completion csc
+        INNER JOIN classes c ON c.id = csc.class_id AND c.is_active = true
+        INNER JOIN grading_periods gp ON gp.id = csc.grading_period_id
+        WHERE csc.status <> 'completed'
+          AND gp.school_year_id = (SELECT id FROM school_years WHERE status = 'active' LIMIT 1)
+          AND gp.review_start_date <= ${BUSINESS_DATE_SQL}
+          AND NOT EXISTS (
+            SELECT 1 FROM grading_period_class_closures closure
+            WHERE closure.class_id = c.id AND closure.grading_period_id = gp.id
+          )
+        GROUP BY c.id, c.name, gp.id, gp.label, gp.order_index
+      ),
+      latest AS (
+        SELECT DISTINCT ON (class_id) class_id, class_name, period_label, incomplete
+        FROM pending ORDER BY class_id, order_index DESC
+      )
+      SELECT class_id::text AS class_id, class_name, period_label, incomplete
+      FROM latest ORDER BY incomplete DESC, class_name ASC
       LIMIT ${limit}
     `);
-    return getRows<{
-      class_id: string; class_name: string; incomplete: number;
-    }>(result).map((row) => ({
+    return getRows<{ class_id: string; class_name: string; period_label: string; incomplete: number }>(result).map((row) => ({
       classId: row.class_id,
       className: row.class_name,
+      periodLabel: row.period_label,
       incomplete: Number(row.incomplete),
     }));
   }

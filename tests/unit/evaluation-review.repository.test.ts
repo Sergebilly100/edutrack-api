@@ -27,8 +27,8 @@ describe('assemblage paginé des notes de direction', () => {
     expect(result.summary).toEqual({ evaluations: 2, grades: 1, missing: 3 });
     expect(result.items).toHaveLength(2);
     expect(result.items[0]?.notes).toEqual(expect.arrayContaining([
-      expect.objectContaining({ studentName: 'Kouassi Awa', score: 14, maxScore: 20, comment: 'Bien' }),
-      expect.objectContaining({ studentName: 'Koné Moussa', score: null, maxScore: null }),
+      expect.objectContaining({ studentName: 'KOUASSI Awa', score: 14, maxScore: 20, comment: 'Bien' }),
+      expect.objectContaining({ studentName: 'KONÉ Moussa', score: null, maxScore: null }),
     ]));
     expect(result.items[1]?.notes.every((note) => note.score === null)).toBe(true);
     expect(execute).toHaveBeenCalledTimes(4);
@@ -48,7 +48,7 @@ describe('assemblage paginé des notes de direction', () => {
       ] });
     const repository = new EvaluationReviewRepository({ execute } as unknown as ConstructorParameters<typeof EvaluationReviewRepository>[0]);
     const result = await repository.listSpontaneous({ schoolYearId: id('10'), gradingPeriodId: id('11'), page: 1, pageSize: 1 });
-    expect(result).toMatchObject({ totalStudents: 2, totalNotes: 3, page: 1, students: [{ name: 'Kouassi Awa', matricule: 'CI-001',
+    expect(result).toMatchObject({ totalStudents: 2, totalNotes: 3, page: 1, students: [{ name: 'KOUASSI Awa', matricule: 'CI-001',
       subjects: [{ name: 'Maths', notes: [expect.objectContaining({ adjustment: 3, teacher: { id: id('03'), name: 'Professeur A' } })] },
         { name: 'Français', notes: [expect.objectContaining({ adjustment: -2, date: '2026-10-02' })] }],
     }] });

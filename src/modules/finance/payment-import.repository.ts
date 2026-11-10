@@ -23,7 +23,7 @@ export class PaymentImportRepository extends MappingRepository {
       id: string; matricule: string; student_name: string; class_name: string;
     }>(sql`
       SELECT s.id::text, s.matricule,
-             concat_ws(' ', s.first_name, s.last_name) AS student_name,
+             format_person_name(s.first_name, s.last_name) AS student_name,
              c.name AS class_name
       FROM students s
       INNER JOIN enrollments e ON e.student_id = s.id

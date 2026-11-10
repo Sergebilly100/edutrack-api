@@ -16,6 +16,11 @@ export const evaluationReviewQuerySchema = z.object({
 export const evaluationReminderParamsSchema = z.object({ id: z.string().uuid() });
 export const evaluationReminderBodySchema = z.object({ force: z.boolean().optional() }).default({});
 
+export const evaluationBatchReminderSchema = z.object({
+  evaluationIds: z.array(z.string().uuid()).min(1).max(50).transform((ids) => [...new Set(ids)]),
+  force: z.boolean().optional(),
+});
+
 export const evaluationReviewOptionsSchema = z.object({
   schoolYearId: z.string().uuid().optional(),
   gradingPeriodId: z.string().uuid().optional(),

@@ -1,112 +1,104 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { DashboardActionsRepository } from '../../src/modules/dashboard-actions/dashboard-actions.repository.js';
 import { DashboardActionsService } from '../../src/modules/dashboard-actions/dashboard-actions.service.js';
 
-const repository = {
-  listOpen: vi.fn(),
-  replaceType: vi.fn(),
-  resolve: vi.fn(),
-  countRiskByLevel: vi.fn(),
-  countTeachersAtRisk: vi.fn(),
-  listBlockedClasses: vi.fn(),
-} as unknown as DashboardActionsRepository;
+const build = (riskCounts: Record<string, number>) => {
+  const replaceType = vi.fn().mockResolvedValue(undefined);
+  const repository = {
+    replaceType,
+    countRiskByLevel: vi.fn().mockResolvedValue(riskCounts),
+    countTeachersAtRisk: vi.fn().mockResolvedValue(1),
+    listBlockedClasses: vi.fn().mockResolvedValue([{ classId: 'c1', className: '6ème A', periodLabel: 'Trimestre 2', incomplete: 1 }]),
+  };
+  return { service: new DashboardActionsService(repository as unknown as DashboardActionsRepository), replaceType };
+};
+const messagesOf = (replaceType: ReturnType<typeof vi.fn>) =>
+  replaceType.mock.calls.flatMap(([, items]) => (items as Array<{ message?: string }>).map((item) => item.message ?? ''));
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  repository.countRiskByLevel.mockResolvedValue({});
-  repository.countTeachersAtRisk.mockResolvedValue(0);
-  repository.listBlockedClasses.mockResolvedValue([]);
-  repository.replaceType.mockResolvedValue(undefined);
+describe('messages des actions prioritaires', () => {
+  it('sont en français lisible : ni jargon technique ni "(s)"', async () => {
+    const { service, replaceType } = build({ warning: 3, critical: 2 });
+    await service.generateAll({ weeklyAbsenceCount: 5, salaryPendingCount: 1, pendingValidations: 2, commissionOverdueCount: 1 });
+    const messages = messagesOf(replaceType);
+    expect(messages).toContain('5 élèves à suivre');
+    expect(messages).toContain('1 fiche de salaire à terminer');
+    expect(messages).toContain('2 décisions à prendre sur les pointages');
+    expect(messages).toContain('En 6ème A (Trimestre 2), les moyennes de 1 matière ne sont pas validées : les bulletins ne peuvent pas être générés. Les professeurs doivent clôturer ces matières.');
+    for (const message of messages) {
+      expect(message).not.toMatch(/warning|critical|\(s\)/i);
+    }
+  });
+
+  it('accorde le singulier', async () => {
+    const { service, replaceType } = build({ warning: 1 });
+    await service.generateAll({});
+    expect(messagesOf(replaceType)).toContain('1 élève à suivre');
+  });
 });
 
-describe('DashboardActionsService.generateAll (8 types)', () => {
-  const sources = {
-    weeklyAbsenceCount: 5,
-    salaryPendingCount: 2,
-    pendingValidations: 4,
-    commissionOverdueCount: 1,
-  };
+const fullConfig = {
+  activeYear: true, schoolInfoComplete: true, levels: true, subjects: true, rooms: true, fees: true, teachers: true,
+  requiredDocuments: true, scheduleConfigured: true, gradingPeriods: true, reminderRules: true, riskRules: true,
+  hasLogo: true, hasSeal: true,
+};
+const itemsByType = (replaceType: ReturnType<typeof vi.fn>) =>
+  new Map(replaceType.mock.calls.map(([type, items]) => [type as string, items as Array<{ priority: string; message: string }>]));
 
-  it('génère les 4 items migrés quand les conditions sources sont réunies', async () => {
-    const service = new DashboardActionsService(repository);
-    await service.generateAll(sources);
-
-    const types = repository.replaceType.mock.calls.map((call) => call[0]);
-    expect(types).toContain('teacher_absences_high');
-    expect(types).toContain('salary_pending');
-    expect(types).toContain('validations_pending');
-    expect(types).toContain('commission_overdue');
-
-    // Priorités attendues
-    const byType = new Map(
-      repository.replaceType.mock.calls.map((call) => [call[0], call[1] as Array<Record<string, unknown>>]),
-    );
-    expect(byType.get('teacher_absences_high')![0]!.priority).toBe('high');
-    expect(byType.get('validations_pending')![0]!.priority).toBe('high');
-    expect(byType.get('salary_pending')![0]!.priority).toBe('medium');
-    expect(byType.get('commission_overdue')![0]!.priority).toBe('medium');
+describe('actions de configuration', () => {
+  it('école entièrement configurée : aucune action de configuration', async () => {
+    const { service, replaceType } = build({});
+    await service.generateAll({ config: fullConfig });
+    const byType = itemsByType(replaceType);
+    for (const [type, items] of byType) if (type.startsWith('config_')) expect(items, type).toEqual([]);
   });
 
-  it("résout automatiquement un item dont la condition source disparaît", async () => {
-    const service = new DashboardActionsService(repository);
-    // Aucune absence cette semaine : le type est régénéré à vide → resolved.
-    await service.generateAll({ ...sources, weeklyAbsenceCount: 2 });
-
-    const call = repository.replaceType.mock.calls.find((call) => call[0] === 'teacher_absences_high');
-    expect(call).toBeDefined();
-    expect(call![1]).toHaveLength(0);
+  it('chaque prérequis manquant crée son action avec une priorité et un message clair', async () => {
+    const { service, replaceType } = build({});
+    await service.generateAll({ config: { ...fullConfig, subjects: false, requiredDocuments: false, reminderRules: false, riskRules: false, scheduleConfigured: false } });
+    const byType = itemsByType(replaceType);
+    expect(byType.get('config_subjects')).toEqual([expect.objectContaining({ priority: 'high', message: 'Aucune matière n’est configurée.' })]);
+    expect(byType.get('config_required_documents')?.[0].priority).toBe('medium');
+    expect(byType.get('config_reminder_rules')).toHaveLength(1);
+    expect(byType.get('config_risk_rules')).toHaveLength(1);
+    expect(byType.get('config_schedule')?.[0].priority).toBe('high');
+    expect(byType.get('config_levels')).toEqual([]);
   });
 
-  it('utilise le seuil > 3 repris du bloc remplacé', async () => {
-    const service = new DashboardActionsService(repository);
-    await service.generateAll({ ...sources, weeklyAbsenceCount: 3 });
-    let call = repository.replaceType.mock.calls.find((call) => call[0] === 'teacher_absences_high');
-    expect(call![1]).toHaveLength(0); // 3 = pas au-dessus du seuil
-
-    vi.clearAllMocks();
-    repository.countRiskByLevel.mockResolvedValue({});
-    repository.listBlockedClasses.mockResolvedValue([]);
-    await service.generateAll({ ...sources, weeklyAbsenceCount: 4 });
-    call = repository.replaceType.mock.calls.find((call) => call[0] === 'teacher_absences_high');
-    expect(call![1]).toHaveLength(1);
+  it("identité visuelle : message selon l'élément manquant", async () => {
+    const run = async (hasLogo: boolean, hasSeal: boolean) => {
+      const { service, replaceType } = build({});
+      await service.generateAll({ config: { ...fullConfig, hasLogo, hasSeal } });
+      return itemsByType(replaceType).get('config_document_identity')?.[0]?.message;
+    };
+    expect(await run(false, false)).toMatch(/logo et le cachet/);
+    expect(await run(false, true)).toMatch(/logo de l’école manque/);
+    expect(await run(true, false)).toMatch(/cachet de l’école manque/);
+    expect(await run(true, true)).toBeUndefined();
   });
 
-  it('ne mélange jamais les risques élèves avec les actions professeurs', async () => {
-    const service = new DashboardActionsService(repository);
-    repository.countRiskByLevel.mockResolvedValue({ warning: 6, critical: 2 });
-    await service.generateAll({});
-
-    const calls = repository.replaceType.mock.calls;
-    const studentCall = calls.find((call) => call[0] === 'student_at_risk')!;
-    const teacherCall = calls.find((call) => call[0] === 'teacher_at_risk')!;
-    expect(studentCall[1][0]!.message).toContain('8 élève(s)');
-    expect(studentCall[1][0]!.priority).toBe('high'); // >= 5
-    expect(teacherCall[1]).toHaveLength(0);
+  it("sans année active, les actions qui en dépendent (frais, emploi du temps, périodes) ne s'ajoutent pas", async () => {
+    const { service, replaceType } = build({});
+    await service.generateAll({ config: { ...fullConfig, activeYear: false, fees: false, scheduleConfigured: false, gradingPeriods: false } });
+    const byType = itemsByType(replaceType);
+    expect(byType.get('config_active_year')).toHaveLength(1);
+    expect(byType.get('config_fees')).toEqual([]);
+    expect(byType.get('config_schedule')).toEqual([]);
+    expect(byType.get('config_grading_periods')).toEqual([]);
   });
 
-  it('génère report_cards_blocked par classe avec référence', async () => {
-    const service = new DashboardActionsService(repository);
-    repository.listBlockedClasses.mockResolvedValue([
-      { classId: 'class-9', className: '5ème B', incomplete: 3 },
-    ]);
-    await service.generateAll({});
-
-    const call = repository.replaceType.mock.calls.find((call) => call[0] === 'report_cards_blocked')!;
-    expect(call[1]).toHaveLength(1);
-    expect(call[1][0]).toMatchObject({
-      referenceId: 'class-9',
-      priority: 'medium',
-      message: expect.stringContaining('5ème B'),
-    });
+  it('décisions de conduite : message accordé', async () => {
+    const { service, replaceType } = build({});
+    await service.generateAll({ conductPendingStudents: 12, conductPendingClasses: 2 });
+    expect(itemsByType(replaceType).get('conduct_decision_pending')?.[0].message).toBe('12 élèves attendent une décision de conduite (2 classes).');
+    const second = build({});
+    await second.service.generateAll({ conductPendingStudents: 1, conductPendingClasses: 1 });
+    expect(itemsByType(second.replaceType).get('conduct_decision_pending')?.[0].message).toBe('1 élève attend une décision de conduite (1 classe).');
   });
 
-  it('génère le suivi enseignant sans aucun risque élève et compte uniquement les actions créées', async () => {
-    repository.countTeachersAtRisk.mockResolvedValue(2);
-    const result = await new DashboardActionsService(repository).generateAll();
-    expect(repository.replaceType).toHaveBeenCalledWith('teacher_at_risk', [expect.objectContaining({
-      message: '2 professeur(s) à suivre pour leur assiduité',
-    })]);
-    expect(result.generated).toBe(1);
+  it('le compteur élèves à suivre utilise la source alignée sur la page', async () => {
+    const { service, replaceType } = build({ warning: 9, critical: 9 });
+    await service.generateAll({ studentsAtRiskCount: 4 });
+    expect(itemsByType(replaceType).get('student_at_risk')?.[0].message).toBe('4 élèves à suivre');
   });
 });

@@ -62,23 +62,28 @@ const bucketForAge = (days: number): FinancialAgingBucket['bucket'] => {
   return '>60';
 };
 
-export const summarizeFinancialInstallments = (
-  rows: readonly InstallmentLedgerRow[],
-): FinancialInstallmentSummary => {
-  const students = new Map<string, InstallmentLedgerRow[]>();
+type StudentLedgerAnalysis = {
+  studentId: string;
+  upcoming: Array<{ dueDate: string; amountCents: number }>;
+  overdue: Array<{ bucket: FinancialAgingBucket['bucket']; amountCents: number; dueDate: string; daysLate: number }>;
+};
+
+/**
+ * Affectation FIFO des paiements confirmés aux échéances, par élève. Source UNIQUE des tranches d'ancienneté :
+ * le tableau de bord et la liste détaillée d'une tranche passent par cette fonction, donc leurs totaux concordent.
+ */
+const analyzeLedger = (rows: readonly InstallmentLedgerRow[]): { scheduleComplete: boolean; students: StudentLedgerAnalysis[] } => {
+  const byStudent = new Map<string, InstallmentLedgerRow[]>();
   for (const row of rows) {
-    const studentRows = students.get(row.student_id) ?? [];
+    const studentRows = byStudent.get(row.student_id) ?? [];
     studentRows.push(row);
-    students.set(row.student_id, studentRows);
+    byStudent.set(row.student_id, studentRows);
   }
 
-  const upcomingByDate = new Map<string, { amount: number; students: Set<string> }>();
-  const agingTotals = new Map<FinancialAgingBucket['bucket'], { amount: number; students: Set<string> }>(
-    AGING_BUCKETS.map((bucket) => [bucket, { amount: 0, students: new Set<string>() }]),
-  );
+  const students: StudentLedgerAnalysis[] = [];
   let scheduleComplete = true;
 
-  for (const [studentId, studentRows] of students) {
+  for (const [studentId, studentRows] of byStudent) {
     studentRows.sort((first, second) => (first.due_date ?? '').localeCompare(second.due_date ?? ''));
     const firstRow = studentRows[0]!;
     const totalPaid = cents(firstRow.total_paid, 'total_paid');
@@ -99,6 +104,7 @@ export const summarizeFinancialInstallments = (
 
     const asOfDate = studentRows[0]!.as_of_date;
     let unappliedPayment = totalPaid;
+    const analysis: StudentLedgerAnalysis = { studentId, upcoming: [], overdue: [] };
 
     for (const row of studentRows) {
       if (row.as_of_date !== asOfDate) {
@@ -116,17 +122,39 @@ export const summarizeFinancialInstallments = (
       if (outstandingAmount === 0) continue;
 
       if (row.due_date > asOfDate) {
-        const dueDate = upcomingByDate.get(row.due_date) ?? { amount: 0, students: new Set<string>() };
-        dueDate.amount += outstandingAmount;
-        dueDate.students.add(studentId);
-        upcomingByDate.set(row.due_date, dueDate);
+        analysis.upcoming.push({ dueDate: row.due_date, amountCents: outstandingAmount });
         continue;
       }
 
-      const ageBucket = bucketForAge(daysBetween(row.due_date, asOfDate));
-      const bucket = agingTotals.get(ageBucket)!;
-      bucket.amount += outstandingAmount;
-      bucket.students.add(studentId);
+      const daysLate = daysBetween(row.due_date, asOfDate);
+      analysis.overdue.push({ bucket: bucketForAge(daysLate), amountCents: outstandingAmount, dueDate: row.due_date, daysLate });
+    }
+    students.push(analysis);
+  }
+
+  return { scheduleComplete, students };
+};
+
+export const summarizeFinancialInstallments = (
+  rows: readonly InstallmentLedgerRow[],
+): FinancialInstallmentSummary => {
+  const { scheduleComplete, students } = analyzeLedger(rows);
+  const upcomingByDate = new Map<string, { amount: number; students: Set<string> }>();
+  const agingTotals = new Map<FinancialAgingBucket['bucket'], { amount: number; students: Set<string> }>(
+    AGING_BUCKETS.map((bucket) => [bucket, { amount: 0, students: new Set<string>() }]),
+  );
+
+  for (const student of students) {
+    for (const item of student.upcoming) {
+      const dueDate = upcomingByDate.get(item.dueDate) ?? { amount: 0, students: new Set<string>() };
+      dueDate.amount += item.amountCents;
+      dueDate.students.add(student.studentId);
+      upcomingByDate.set(item.dueDate, dueDate);
+    }
+    for (const item of student.overdue) {
+      const bucket = agingTotals.get(item.bucket)!;
+      bucket.amount += item.amountCents;
+      bucket.students.add(student.studentId);
     }
   }
 
@@ -149,4 +177,34 @@ export const summarizeFinancialInstallments = (
   });
 
   return { scheduleComplete, upcomingInstallments, aging: scheduleComplete ? aging : null };
+};
+
+export type AgingBucketStudent = {
+  studentId: string;
+  /** Reste dû sur les échéances échues de cette tranche. */
+  amountCents: number;
+  /** Plus ancienne échéance impayée de la tranche et son retard en jours. */
+  oldestDueDate: string;
+  daysLate: number;
+};
+
+/** Élèves d'une tranche, calculés par la même analyse que le tableau de bord (totaux et effectifs identiques). */
+export const listAgingBucketStudents = (
+  rows: readonly InstallmentLedgerRow[],
+  bucket: FinancialAgingBucket['bucket'],
+): { scheduleComplete: boolean; totalCents: number; students: AgingBucketStudent[] } => {
+  const { scheduleComplete, students } = analyzeLedger(rows);
+  const result: AgingBucketStudent[] = [];
+  for (const student of students) {
+    const inBucket = student.overdue.filter((item) => item.bucket === bucket);
+    if (inBucket.length === 0) continue;
+    const oldest = inBucket.reduce((first, item) => (item.daysLate > first.daysLate ? item : first));
+    result.push({
+      studentId: student.studentId,
+      amountCents: inBucket.reduce((sum, item) => sum + item.amountCents, 0),
+      oldestDueDate: oldest.dueDate,
+      daysLate: oldest.daysLate,
+    });
+  }
+  return { scheduleComplete, totalCents: result.reduce((sum, item) => sum + item.amountCents, 0), students: result };
 };

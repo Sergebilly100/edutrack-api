@@ -399,6 +399,27 @@ export class FinancialCacheRepository {
     return getRows(result);
   }
 
+  /** Identité, classe et dernier paiement confirmé des élèves d'une liste (fenêtre de détail d'une tranche). */
+  async listStudentAgingIdentities(schoolYearId: string, studentIds: readonly string[]) {
+    if (studentIds.length === 0) return [];
+    const result = await this.db.execute<{
+      student_id: string; first_name: string; last_name: string; matricule: string | null;
+      class_id: string; class_name: string; last_payment_date: string | null;
+    }>(sql`
+      SELECT s.id::text AS student_id, s.first_name, s.last_name, s.matricule, c.id::text AS class_id, c.name AS class_name,
+             (SELECT MAX(p.payment_date)::text FROM payments p
+              WHERE p.student_id = s.id AND p.school_year_id = ${schoolYearId}::uuid AND p.status = 'confirmed') AS last_payment_date
+      FROM students s
+      INNER JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = ${schoolYearId}::uuid AND e.status = 'confirmed'
+      INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = e.school_year_id AND c.is_active = true
+      WHERE s.id IN (${sql.join(studentIds.map((id) => sql`${id}::uuid`), sql`, `)})
+    `);
+    return getRows<{
+      student_id: string; first_name: string; last_name: string; matricule: string | null;
+      class_id: string; class_name: string; last_payment_date: string | null;
+    }>(result);
+  }
+
   async listInstallmentLedger(schoolYearId: string) {
     const result = await this.db.execute<{
       student_id: string;
@@ -518,7 +539,8 @@ export class FinancialCacheRepository {
       SELECT p.id::text AS payment_id,
              p.student_id::text AS student_id,
              p.payment_date::text AS payment_date,
-             concat_ws(' ', s.first_name, s.last_name) AS student_name,
+             p.paid_at::text AS paid_at,
+             format_person_name(s.first_name, s.last_name) AS student_name,
              s.matricule AS student_matricule,
              c.name AS class_name,
              p.method::text AS method,
@@ -561,7 +583,7 @@ export class FinancialCacheRepository {
       days_late: number | null;
     }>(sql`
       SELECT s.id::text,
-             concat_ws(' ', s.first_name, s.last_name) AS full_name,
+             format_person_name(s.first_name, s.last_name) AS full_name,
              s.matricule,
              sfs.total_expected_to_date::text,
              sfs.total_paid::text,

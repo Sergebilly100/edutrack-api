@@ -107,7 +107,8 @@ export class EnrollmentsRepository {
           OR s.matricule ILIKE ${search} OR concat_ws(' ', s.last_name, s.first_name) ILIKE ${search}
           OR concat_ws(' ', s.first_name, s.last_name) ILIKE ${search})
       GROUP BY e.id, c.name, sy.label, s.first_name, s.last_name
-      ORDER BY e.enrolled_at DESC
+      -- Date d'inscription décroissante ; départage stable (création puis identifiant) pour une pagination sans doublon ni trou.
+      ORDER BY e.enrolled_at DESC, e.created_at DESC, e.id DESC
       LIMIT ${filters.limit}
       OFFSET ${offset}
     `),
@@ -711,14 +712,18 @@ export class EnrollmentsRepository {
     return rows<{ id: string }>(result).length > 0;
   }
 
+  /**
+   * Un document requis ajouté ou réactivé apparaît « manquant » dans TOUS les dossiers de l'année active du niveau
+   * (en cours comme confirmés), pas seulement dans les dossiers ouverts : la liste courante fait foi.
+   */
   async syncRequiredDocumentToOpenEnrollments(documentTypeId: string, levelId: string) {
     await this.db.execute(sql`
       INSERT INTO student_documents (student_id, document_type_id, status)
       SELECT DISTINCT e.student_id, ${documentTypeId}::uuid, 'missing'::student_document_status
       FROM enrollments e
       INNER JOIN classes c ON c.id = e.class_id
+      INNER JOIN school_years sy ON sy.id = e.school_year_id AND sy.status = 'active'
       WHERE c.level_id = ${levelId}::uuid
-        AND e.status IN ('pending_cashier', 'pending_dossier', 'blocked_unpaid')
       ON CONFLICT (student_id, document_type_id) DO NOTHING
     `);
   }
@@ -733,8 +738,8 @@ export class EnrollmentsRepository {
           SELECT c.level_id
           FROM enrollments e
           INNER JOIN classes c ON c.id = e.class_id
+          INNER JOIN school_years sy ON sy.id = e.school_year_id AND sy.status = 'active'
           WHERE e.student_id = ${studentId}::uuid
-            AND e.status IN ('pending_cashier', 'pending_dossier', 'blocked_unpaid')
           ORDER BY e.enrolled_at DESC
           LIMIT 1
         )

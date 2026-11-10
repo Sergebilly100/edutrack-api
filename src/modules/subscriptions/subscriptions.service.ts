@@ -2,6 +2,7 @@ import argon2 from 'argon2';
 import { sql } from 'drizzle-orm';
 
 import { SubscriptionsRepository } from './subscriptions.repository.js';
+import { evaluateSubscriptionAvailability } from './subscriptions.window.js';
 import {
   calculateImposedParentAlertsAmount,
   isParentAlertsRenewalEligible,
@@ -231,6 +232,48 @@ export class SubscriptionsService {
     return this.repository.listSubscriptionStudentsByClass(query);
   }
 
+  /** Disponibilité des nouveaux abonnements : année active non terminée et mois restants. */
+  async getAvailability() {
+    return evaluateSubscriptionAvailability(todayInBusinessTimezone(), await this.repository.getActiveSchoolYearWindow());
+  }
+
+  /** Règle appliquée côté API : refuse après la fin d'année et au-delà des mois restants. */
+  private async assertWithinSchoolYear(durationMonths: number): Promise<void> {
+    const availability = await this.getAvailability();
+    if (!availability.canSubscribe) {
+      throw new SubscriptionsModuleError(availability.message, 409, availability.reason);
+    }
+    if (durationMonths > availability.remainingMonths) {
+      throw new SubscriptionsModuleError(
+        `La durée dépasse la fin de l’année scolaire ${availability.schoolYearLabel} : ${availability.remainingMonths} mois restant${availability.remainingMonths > 1 ? 's' : ''} au maximum.`,
+        422,
+        'DURATION_EXCEEDS_SCHOOL_YEAR'
+      );
+    }
+  }
+
+  async listEnrolledParents(query: { page: number; limit: number; search?: string }) {
+    const { rows, total } = await this.repository.listEnrolledParents(query);
+    const today = todayInBusinessTimezone();
+    return {
+      data: rows.map((row) => ({
+        phone: `225${row.phone_key}`,
+        full_name: row.parent_name ?? '',
+        email: row.parent_email,
+        students: row.students,
+        subscription: row.subscription_id
+          ? {
+              id: row.subscription_id,
+              parent_id: row.parent_id,
+              status: row.subscription_status === 'active' && (row.subscription_ends_at ?? '') < today ? 'expired' : row.subscription_status,
+              ends_at: row.subscription_ends_at,
+            }
+          : null,
+      })),
+      pagination: { page: query.page, limit: query.limit, total, totalPages: Math.max(1, Math.ceil(total / query.limit)) },
+    };
+  }
+
   async createParentSubscription(input: {
     schemaName: string;
     actorUserId: string;
@@ -243,6 +286,8 @@ export class SubscriptionsService {
         'SUBSCRIPTION_PAYMENT_REQUIRED'
       );
     }
+
+    await this.assertWithinSchoolYear(input.payload.duration_months);
 
     const tenantId = await this.repository.getTenantIdBySchemaName(input.schemaName);
     if (!tenantId) {
@@ -390,6 +435,7 @@ export class SubscriptionsService {
         'SUBSCRIPTION_RENEWAL_PAYMENT_REQUIRED'
       );
     }
+    await this.assertWithinSchoolYear(input.payload.duration_months);
     const parent = await this.repository.getParentById(input.parentId);
     if (!parent) {
       throw new SubscriptionsModuleError('Parent not found', 404, 'PARENT_NOT_FOUND');

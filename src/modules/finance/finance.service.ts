@@ -72,6 +72,8 @@ const mapPayment = (row: PaymentRow) => ({
   cancelledByUserId: row.cancelled_by_user_id,
   cancellationReason: row.cancellation_reason,
   paymentDate: row.payment_date,
+  // Heure réelle du paiement : null quand elle n'est pas connue (imports, rétrodatages, anciens paiements).
+  paidAt: iso(row.paid_at),
   createdAt: iso(row.created_at),
 });
 
@@ -183,6 +185,10 @@ export class FinanceService {
   async getFinancialInstallmentSummary(schoolYearId?: string) {
     const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
     return cache.getInstallmentSummary(schoolYearId);
+  }
+  async listFinancialAgingStudents(input: { schoolYearId?: string; bucket: '0-30' | '31-60' | '>60'; page: number; limit: number; search?: string; classId?: string }) {
+    const cache = new FinancialCacheService(new FinancialCacheRepository(this.repository.db));
+    return cache.listAgingStudents(input);
   }
   async listAgreementsRegister(input: { schoolYearId: string; kind: 'overrides' | 'schedules'; search?: string; studentId?: string; classId?: string; levelId?: string; from?: string; to?: string; status: 'active' | 'withdrawn' | 'replaced' | 'reset' | 'all'; page: number; limit: number }) {
     const result = await this.repository.listAgreementsRegister(input);
@@ -1013,6 +1019,8 @@ export class FinanceService {
       currency: payment.currency,
       method: payment.method,
       createdAt: iso(payment.created_at)!,
+      paymentDate: payment.payment_date,
+      paidAt: iso(payment.paid_at),
       schoolReceiptReference: payment.school_receipt_reference,
       remainingDue: status.remainingDue,
       subscriptionLines: payment.show_parent_alerts_on_receipt

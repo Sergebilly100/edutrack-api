@@ -119,7 +119,7 @@ export class RecoveryRepository {
   async listClassStudents(yearId: string, classId: string, limit: number, offset: number, search?: string, status?: 'late' | 'up_to_date'): Promise<RecoveryStudentRow[]> {
     const result = await this.db.execute<RecoveryStudentRow>(sql`
       SELECT s.id::text AS student_id,
-             concat_ws(' ', s.first_name, s.last_name) AS full_name,
+             format_person_name(s.first_name, s.last_name) AS full_name,
              s.matricule, sfs.status::text,
              COALESCE(sfs.total_expected_to_date, 0)::text AS expected,
              COALESCE(sfs.total_paid, 0)::text AS paid,

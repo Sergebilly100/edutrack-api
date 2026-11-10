@@ -138,6 +138,20 @@ export const upsertTuitionPlanBodySchema = z.object({
   }).strict()).default([]),
 }).strict();
 
+export const MAX_TUITION_COPY_TARGETS = 30;
+
+export const tuitionPlanCopyBodySchema = z.object({
+  schoolYearId: uuidSchema,
+  targets: z.array(z.object({
+    levelId: uuidSchema,
+    /** Écraser le plan existant du niveau cible (confirmation explicite, niveau par niveau). */
+    overwrite: z.boolean().default(false),
+    /** Confirmer que des élèves inscrits sur ce niveau verront ce plan s'appliquer à eux. */
+    confirmEnrolled: z.boolean().default(false),
+  }).strict()).min(1).max(MAX_TUITION_COPY_TARGETS),
+}).strict();
+export type TuitionPlanCopyInput = z.infer<typeof tuitionPlanCopyBodySchema>;
+
 export const upsertStudentTuitionScheduleBodySchema = z.object({
   schoolYearId: uuidSchema,
   reason: z.string().trim().min(1, 'Le motif de l’accord est obligatoire').max(1_000),
@@ -164,6 +178,15 @@ export type UpsertTuitionPlanInput = z.infer<typeof upsertTuitionPlanBodySchema>
 
 export const financialSummaryQuerySchema = z.object({
   school_year_id: uuidSchema.optional(),
+});
+
+export const agingStudentsQuerySchema = z.object({
+  school_year_id: uuidSchema.optional(),
+  bucket: z.enum(['0-30', '31-60', '>60']),
+  class_id: uuidSchema.optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  search: z.string().trim().min(1).max(120).optional(),
 });
 
 export const recoveryQuerySchema = z.object({

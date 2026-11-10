@@ -39,6 +39,10 @@ export const studentsListQuerySchema = z.object({
   search: z.string().trim().min(1).max(100).optional(),
 });
 
+export const studentsExportQuerySchema = studentsListQuerySchema
+  .omit({ page: true, limit: true, include_blocked_reenrollments: true })
+  .extend({ enrollment_status: z.enum(['pending_cashier', 'pending_dossier', 'confirmed', 'blocked_unpaid']).optional() });
+
 export const createStudentBodySchema = z.object({
   class_id: z.uuid().nullable().optional().default(null),
   first_name: z.string().trim().min(1).max(100),
@@ -347,6 +351,7 @@ export type StudentAbsenceDetailRecord = {
 // ─── Inferred input types ─────────────────────────────────────────────────────
 
 export type BulkAttendanceInput = z.infer<typeof bulkAttendanceBodySchema>;
+export type StudentsExportQuery = z.infer<typeof studentsExportQuerySchema>;
 export type StudentsListQuery = z.infer<typeof studentsListQuerySchema>;
 export type CreateStudentInput = z.infer<typeof createStudentBodySchema>;
 export type UpdateStudentInput = z.infer<typeof updateStudentBodySchema>;

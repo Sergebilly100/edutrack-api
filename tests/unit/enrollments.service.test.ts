@@ -165,7 +165,7 @@ describe('enrollment workflow rules', () => {
       source_school_year_status: 'active', final_decision: 'promoted', next_level_id: 'level-2', next_level_name: '5e',
       enrollment_id: null, enrollment_status: null, enrollment_class_name: null, is_historical_source: false, ...overrides,
     });
-    const repository = { getFollowingSchoolYear: vi.fn().mockResolvedValue(null), listReEnrollmentCandidates: vi.fn().mockResolvedValue([
+    const repository = { getFollowingSchoolYear: vi.fn().mockResolvedValue(null), getSchoolYear: vi.fn().mockResolvedValue({ id: 'origin-year', label: '2025-2026', status: 'closed' }), listReEnrollmentCandidates: vi.fn().mockResolvedValue([
       candidate('pending', { final_decision: null, next_level_id: null }),
       candidate('ready'), candidate('unpaid'),
       candidate('awaiting', { enrollment_id: 'e-1', enrollment_status: 'pending_cashier' }),
@@ -367,5 +367,35 @@ describe('enrollment workflow rules', () => {
       parentPhones: ['2250700000001'],
       missingDocumentNames: ['Extrait'],
     });
+  });
+});
+
+describe('réinscription : année d’origine', () => {
+  const input = { sourceSchoolYearId: 'origin-year', campaignStatus: 'all' as const, page: 1, limit: 20 };
+  const build = (status: 'draft' | 'active' | 'closed' | null) => {
+    const repository = {
+      getSchoolYear: vi.fn().mockResolvedValue(status ? { id: 'origin-year', label: '2025-2026', status } : null),
+      listReEnrollmentCandidates: vi.fn().mockResolvedValue([]),
+      getFollowingSchoolYear: vi.fn().mockResolvedValue(null),
+    };
+    const finance = { listReEnrollmentBalances: vi.fn().mockResolvedValue(new Map()) };
+    return { service: new EnrollmentsService(repository as never, finance as never), repository };
+  };
+
+  it('refuse une année active comme origine : il faut une année terminée', async () => {
+    const { service, repository } = build('active');
+    await expect(service.listReEnrollmentCandidates(input)).rejects.toMatchObject({ code: 'RE_ENROLLMENT_SOURCE_NOT_CLOSED', statusCode: 409 });
+    expect(repository.listReEnrollmentCandidates).not.toHaveBeenCalled();
+  });
+
+  it('refuse une année non ouverte (brouillon) et une année inconnue', async () => {
+    await expect(build('draft').service.listReEnrollmentCandidates(input)).rejects.toMatchObject({ code: 'RE_ENROLLMENT_SOURCE_NOT_CLOSED' });
+    await expect(build(null).service.listReEnrollmentCandidates(input)).rejects.toMatchObject({ code: 'SCHOOL_YEAR_NOT_FOUND', statusCode: 404 });
+  });
+
+  it('accepte une année terminée', async () => {
+    const { service, repository } = build('closed');
+    await expect(service.listReEnrollmentCandidates(input)).resolves.toBeDefined();
+    expect(repository.listReEnrollmentCandidates).toHaveBeenCalled();
   });
 });

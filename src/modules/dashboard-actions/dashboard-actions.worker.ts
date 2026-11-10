@@ -1,4 +1,5 @@
 import { withTenantSchema } from '../../shared/database/db.js';
+import { DashboardActionsRepository } from './dashboard-actions.repository.js';
 import { buildDashboardActionsService } from './dashboard-actions.service.js';
 
 // Composition des sources migrées : les 4 calculs métier restent la propriété
@@ -37,11 +38,62 @@ export const runDashboardActionsForSchema = async (params: {
       commissionOverdueCount = 0;
     }
 
+    // 5. Élèves et professeurs à suivre : même requête que les pages « à suivre » (compteur = résultats).
+    const { buildRiskService } = await import('../risk/risk.service.js');
+    const riskService = buildRiskService(tenantDb);
+    const studentsAtRiskCount = (await riskService.listStudentRisks({ page: 1, limit: 1, atRisk: true, includePayments: true })).pagination.total;
+    const teachersAtRiskCount = (await riskService.listTeacherRisks({ page: 1, limit: 1, atRisk: true })).pagination.total;
+
+    // 6. Configuration de l'école : assistant de démarrage + règles et réglages complémentaires.
+    const { OnboardingService } = await import('../school/onboarding.service.js');
+    const { OnboardingRepository } = await import('../school/onboarding.repository.js');
+    const onboarding = await new OnboardingService(new OnboardingRepository(tenantDb as never)).status(params.schemaName);
+    const extra = await new DashboardActionsRepository(tenantDb).readConfigState();
+
+    // 7. Décisions de conduite en attente (périmètre complet de la direction).
+    let conductPendingStudents = 0;
+    let conductPendingClasses = 0;
+    try {
+      const { buildConductReviewService } = await import('../conduct-review/conduct-review.service.js');
+      const workspace = await buildConductReviewService(tenantDb).getDecisionWorkspace({
+        userId: '00000000-0000-0000-0000-000000000000', canFinalize: true,
+      });
+      const open = workspace.decisionScopes.filter((scope) =>
+        scope.schoolYearStatus === 'active' && scope.reviewOpen && !scope.isClosed && scope.studentCount > 0 && scope.pendingCount > 0);
+      conductPendingStudents = open.reduce((total, scope) => total + scope.pendingCount, 0);
+      conductPendingClasses = new Set(open.map((scope) => scope.classId)).size;
+    } catch {
+      conductPendingStudents = 0;
+    }
+
     return buildDashboardActionsService(tenantDb).generateAll({
       weeklyAbsenceCount,
       salaryPendingCount: (salaryAlerts?.count ?? 0),
       pendingValidations: pending.total,
       commissionOverdueCount,
+      studentsAtRiskCount,
+      teachersAtRiskCount,
+      conductPendingStudents,
+      conductPendingClasses,
+      config: {
+        activeYear: onboarding.activeYear, schoolInfoComplete: onboarding.schoolInfoComplete, levels: onboarding.levels,
+        subjects: onboarding.subjects, rooms: onboarding.rooms, fees: onboarding.fees, teachers: onboarding.teachers,
+        requiredDocuments: extra.requiredDocuments, scheduleConfigured: extra.scheduleConfigured,
+        gradingPeriods: extra.gradingPeriods, reminderRules: extra.reminderRules, riskRules: extra.riskRules,
+        hasLogo: extra.hasLogo, hasSeal: extra.hasSeal,
+      },
     });
   });
+};
+
+// Rafraîchissement à la demande : les items sont recalculés à chaque lecture pour refléter une action
+// qui vient d'être effectuée. Les lectures simultanées d'une même école partagent un seul calcul.
+const inFlight = new Map<string, Promise<unknown>>();
+
+export const refreshDashboardActionsForSchema = async (schemaName: string): Promise<void> => {
+  const running = inFlight.get(schemaName);
+  if (running) { await running.catch(() => undefined); return; }
+  const job = runDashboardActionsForSchema({ schemaName }).finally(() => inFlight.delete(schemaName));
+  inFlight.set(schemaName, job);
+  await job;
 };

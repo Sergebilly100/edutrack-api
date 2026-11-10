@@ -22,6 +22,7 @@ import {
   cancelSubscriptionBodySchema,
   cancelSubscriptionParamsSchema,
   createParentSubscriptionBodySchema,
+  enrolledParentsQuerySchema,
   listParentsQuerySchema,
   parentIdParamsSchema,
   resetPasswordParamsSchema,
@@ -227,6 +228,37 @@ export default async function subscriptionsController(
             search: query.search,
           });
         });
+        return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.get(
+    '/api/v1/subscriptions/availability',
+    { preHandler: requirePermission('subscriptions.view') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) =>
+          new SubscriptionsService(new SubscriptionsRepository(tenantDb)).getAvailability());
+        return reply.send(result);
+      } catch (error) {
+        return handleError(request, reply, error);
+      }
+    }
+  );
+
+  app.get(
+    '/api/v1/subscriptions/enrolled-parents',
+    { preHandler: requirePermission('subscriptions.view') },
+    async (request, reply) => {
+      try {
+        const query = enrolledParentsQuerySchema.parse(request.query ?? {});
+        const claims = request.claims!;
+        const result = await withTenantSchema(claims.schemaName, async (tenantDb) =>
+          new SubscriptionsService(new SubscriptionsRepository(tenantDb)).listEnrolledParents(query));
         return reply.send(result);
       } catch (error) {
         return handleError(request, reply, error);

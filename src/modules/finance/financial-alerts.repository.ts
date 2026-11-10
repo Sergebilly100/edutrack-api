@@ -99,7 +99,7 @@ export class FinancialAlertsRepository {
   }>> {
     const result = await this.db.execute<Record<string, string | number | null>>(sql`
       SELECT s.id::text AS student_id,
-             concat_ws(' ', s.first_name, s.last_name) AS student_name,
+             format_person_name(s.first_name, s.last_name) AS student_name,
              COALESCE(s.parent_phone, s.parent_phone_2) AS parent_phone,
              sfs.status::text AS status,
              sfs.days_late,
@@ -251,7 +251,7 @@ export class FinancialAlertsRepository {
   async listLogsPage(input: { limit: number; offset: number }): Promise<FinancialAlertLog[]> {
     const result = await this.db.execute<FinancialAlertLog>(sql`
       SELECT l.id::text, l.student_id::text,
-             concat_ws(' ', s.first_name, s.last_name) AS student_name,
+             format_person_name(s.first_name, s.last_name) AS student_name,
              r.type::text AS rule_type, l.channel::text, l.status, l.sent_at::text
       FROM financial_alert_logs l
       INNER JOIN students_with_class s ON s.id = l.student_id

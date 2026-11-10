@@ -1,5 +1,6 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { confirmedSchoolClassCount, confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
+import { resolveExportSchoolYear } from '../../shared/export/school-year.js';
 import { teacherClassRelation } from '../../shared/database/teacher-class-relation.js';
 
 import {
@@ -24,6 +25,7 @@ import type {
   StudentRecentAbsence,
   StudentAbsencesQuery,
   StudentRecord,
+  StudentsExportQuery,
   StudentsListQuery,
   TodayAbsenceRow,
   UpdateStudentInput,
@@ -387,6 +389,25 @@ const runInTransaction = async <T>(
 
 // ─── Repository ───────────────────────────────────────────────────────────────
 
+export type StudentExportRow = {
+  matricule: string | null;
+  last_name: string;
+  first_name: string;
+  sex: string | null;
+  birth_date: string | null;
+  birth_place: string | null;
+  nationality: string | null;
+  level_name: string | null;
+  class_name: string;
+  enrollment_status: string;
+  is_repeating: boolean | null;
+  parent_name: string | null;
+  parent_phone: string | null;
+  parent_email: string | null;
+  parent_name_2: string | null;
+  parent_phone_2: string | null;
+};
+
 export class StudentsRepository {
   constructor(
     private readonly db: TransactionalQueryExecutor,
@@ -413,6 +434,47 @@ export class StudentsRepository {
       LIMIT 1
     `);
     return getRows<{ enabled: boolean }>(result)[0]?.enabled ?? false;
+  }
+
+  findExportSchoolYear(schoolYearId?: string) {
+    return resolveExportSchoolYear(this.db, schoolYearId);
+  }
+
+  /**
+   * Lignes d'export des élèves inscrits sur l'année choisie : une ligne par élève (inscription unique par année).
+   * Aucune donnée financière. Mêmes critères de filtre que la liste (classe, niveau, statut actif, recherche).
+   */
+  async listStudentsForExport(query: Omit<StudentsExportQuery, 'school_year_id'>, schoolYearId: string): Promise<StudentExportRow[]> {
+    const where: SQL[] = [
+      sql`e.school_year_id = ${schoolYearId}::uuid`,
+      // La liste de l'année active n'affiche que les classes actives ; les années passées n'ont pas ce filtre.
+      sql`(c.is_active = true OR sy.status <> 'active')`,
+    ];
+    if (query.enrollment_status) where.push(sql`e.status = ${query.enrollment_status}::enrollment_status`);
+    if (query.class_id) where.push(sql`c.id = ${query.class_id}::uuid`);
+    if (query.level_id) where.push(sql`c.level_id = ${query.level_id}::uuid`);
+    if (typeof query.is_active === 'boolean') where.push(sql`s.is_active = ${query.is_active}`);
+    if (query.search) {
+      const search = `%${query.search}%`;
+      where.push(sql`(s.first_name ILIKE ${search} OR s.last_name ILIKE ${search}
+        OR s.matricule ILIKE ${search}
+        OR concat_ws(' ', s.last_name, s.first_name) ILIKE ${search}
+        OR concat_ws(' ', s.first_name, s.last_name) ILIKE ${search})`);
+    }
+    const result = await this.db.execute(sql`
+      SELECT s.matricule, s.last_name, s.first_name, s.sex, s.birth_date::text AS birth_date,
+        s.birth_place, s.nationality, lvl.name AS level_name, c.name AS class_name,
+        e.status::text AS enrollment_status, e.is_repeating,
+        s.parent_name, s.parent_phone, s.parent_email, s.parent_name_2, s.parent_phone_2
+      FROM enrollments e
+      INNER JOIN students s ON s.id = e.student_id
+      INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = e.school_year_id
+      INNER JOIN school_years sy ON sy.id = e.school_year_id
+      LEFT JOIN levels lvl ON lvl.id = c.level_id
+      ${makeWhereClause(where)}
+      ORDER BY lvl.order_index NULLS LAST, c.name, lower(s.last_name), lower(s.first_name), s.id
+    `);
+    return getRows<StudentExportRow>(result);
   }
 
   async listStudents(query: StudentsListQuery, scope: StudentListScope = 'enrolled'): Promise<{ rows: StudentRecord[]; total: number }> {

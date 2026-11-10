@@ -33,6 +33,9 @@ const buildRepositoryMock = () => ({
   listRenewalAlertsInSevenDays: vi.fn(),
   insertSubscriptionExpiryAlertLog: vi.fn(),
   resolveActorUserId: vi.fn().mockResolvedValue('resolved-actor-1'),
+  // Année active qui se termine très loin dans le futur : la règle « fin d'année » n'interfère pas avec les autres cas.
+  getActiveSchoolYearWindow: vi.fn().mockResolvedValue({ id: 'year-1', label: '2099-2100', endDate: '2100-12-31' }),
+  listEnrolledParents: vi.fn(),
 });
 
 describe('subscriptions.service', () => {
@@ -515,6 +518,62 @@ describe('subscriptions.service', () => {
         expect(result).toMatchObject({ required: false, amountFcfa: 0, parentContactMissing: false });
         expect(repository.getEnrollmentParentContext).not.toHaveBeenCalled();
       });
+    });
+  });
+
+  describe('règle fin d’année', () => {
+    const payload = { full_name: 'Awa Koné', phone: '2250700000001', student_ids: ['s1'], duration_months: 1, payment_method: 'cash' as const, paid_now: true };
+
+    it('refuse une création quand l’année scolaire est terminée, sans rien écrire', async () => {
+      const repository = buildRepositoryMock();
+      repository.getActiveSchoolYearWindow.mockResolvedValue({ id: 'y', label: '2024-2025', endDate: '2025-06-30' });
+      const service = new SubscriptionsService(repository as never);
+      await expect(service.createParentSubscription({ schemaName: 'school_test', actorUserId: 'u1', payload }))
+        .rejects.toMatchObject({ code: 'SCHOOL_YEAR_ENDED', statusCode: 409 });
+      expect(repository.createParentWithSubscriptionTx).not.toHaveBeenCalled();
+    });
+
+    it('refuse un renouvellement après la fin de l’année', async () => {
+      const repository = buildRepositoryMock();
+      repository.getActiveSchoolYearWindow.mockResolvedValue({ id: 'y', label: '2024-2025', endDate: '2025-06-30' });
+      const service = new SubscriptionsService(repository as never);
+      await expect(service.renewParentSubscription({ parentId: 'p1', actorUserId: 'u1', schemaName: 'school_test', payload: { duration_months: 1, payment_method: 'cash', paid_now: true } }))
+        .rejects.toMatchObject({ code: 'SCHOOL_YEAR_ENDED' });
+      expect(repository.renewSubscriptionTx).not.toHaveBeenCalled();
+    });
+
+    it('refuse une durée qui dépasse les mois restants de l’année', async () => {
+      const repository = buildRepositoryMock();
+      const now = new Date();
+      const endDate = `${now.getUTCFullYear() + 1}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-28`; // 13 mois restants au plus ; on en demande 120
+      repository.getActiveSchoolYearWindow.mockResolvedValue({ id: 'y', label: 'courante', endDate });
+      const service = new SubscriptionsService(repository as never);
+      await expect(service.createParentSubscription({ schemaName: 'school_test', actorUserId: 'u1', payload: { ...payload, duration_months: 120 } }))
+        .rejects.toMatchObject({ code: 'DURATION_EXCEEDS_SCHOOL_YEAR', statusCode: 422 });
+    });
+
+    it('expose la disponibilité (année terminée)', async () => {
+      const repository = buildRepositoryMock();
+      repository.getActiveSchoolYearWindow.mockResolvedValue({ id: 'y', label: '2024-2025', endDate: '2025-06-30' });
+      const service = new SubscriptionsService(repository as never);
+      await expect(service.getAvailability()).resolves.toMatchObject({ canSubscribe: false, reason: 'SCHOOL_YEAR_ENDED' });
+    });
+  });
+
+  describe('parents des élèves inscrits', () => {
+    it('ajoute le statut d’abonnement et préfixe le téléphone', async () => {
+      const repository = buildRepositoryMock();
+      repository.listEnrolledParents.mockResolvedValue({ total: 2, rows: [
+        { phone_key: '0700000001', parent_name: 'Koné Awa', parent_email: null, students: [{ id: 's1', full_name: 'A', class_name: '6e A', matricule: 'M1' }, { id: 's2', full_name: 'B', class_name: '4e B', matricule: null }], parent_id: null, subscription_id: null, subscription_status: null, subscription_ends_at: null },
+        { phone_key: '0700000002', parent_name: 'Yao', parent_email: null, students: [], parent_id: 'p2', subscription_id: 'sub2', subscription_status: 'active', subscription_ends_at: '2000-01-01' },
+      ] });
+      const service = new SubscriptionsService(repository as never);
+      const result = await service.listEnrolledParents({ page: 1, limit: 20 });
+      expect(result.data[0]).toMatchObject({ phone: '2250700000001', subscription: null });
+      expect(result.data[0].students).toHaveLength(2);
+      // « active » mais date dépassée → expiré
+      expect(result.data[1].subscription).toMatchObject({ id: 'sub2', status: 'expired' });
+      expect(result.pagination.total).toBe(2);
     });
   });
 });

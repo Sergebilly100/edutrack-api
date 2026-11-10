@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { formatPersonName } from '../../shared/utils/person-name.js';
 import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { QueryResult, QueryResultRow } from 'pg';
@@ -19,6 +20,11 @@ const scopeFilter = (query: EvaluationReviewQuery) => {
     AND (${subject}::uuid IS NULL OR e.subject_id = ${subject}::uuid)
     AND (${teacher}::uuid IS NULL OR e.teacher_id = ${teacher}::uuid)`;
 };
+
+/** Lignes de relance (individuelle ou groupée) concernant une évaluation. */
+const reminderLogOf = (evaluationId: ReturnType<typeof sql>) => sql`(nl.channel = 'in_app' AND nl.type = 'custom'
+  AND nl.metadata->>'kind' = 'evaluation_reminder'
+  AND (nl.related_id = ${evaluationId} OR nl.metadata->'evaluationIds' @> to_jsonb(${evaluationId}::text)))`;
 
 export class EvaluationReviewRepository {
   constructor(private readonly db: Db) {}
@@ -147,8 +153,7 @@ export class EvaluationReviewRepository {
         gp.id::text AS period_id, gp.label AS period_name,
         counts.expected_count, counts.entered_count,
         (SELECT MAX(nl.created_at) FROM notifications_log nl
-         WHERE nl.related_id = e.id AND nl.channel = 'in_app' AND nl.type = 'custom'
-           AND nl.metadata->>'kind' = 'evaluation_reminder') AS last_reminder_at
+         WHERE ${reminderLogOf(sql`e.id`)}) AS last_reminder_at
       FROM evaluations e JOIN classes c ON c.id = e.class_id JOIN levels l ON l.id = c.level_id
       JOIN subjects s ON s.id = e.subject_id JOIN teachers t ON t.id = e.teacher_id
       JOIN users u ON u.id = t.user_id JOIN grading_periods gp ON gp.id = e.grading_period_id
@@ -188,7 +193,7 @@ export class EvaluationReviewRepository {
     const notesByEvaluation = new Map<string, Array<{ studentId: string; studentName: string; score: number | null; maxScore: number | null; comment: string | null }>>();
     for (const note of notes) {
       const list = notesByEvaluation.get(note.evaluation_id) ?? [];
-      list.push({ studentId: note.student_id, studentName: `${note.last_name} ${note.first_name}`, score: note.score === null ? null : Number(note.score), maxScore: note.max_score === null ? null : Number(note.max_score), comment: note.comment });
+      list.push({ studentId: note.student_id, studentName: formatPersonName({ lastName: note.last_name, firstName: note.first_name }), score: note.score === null ? null : Number(note.score), maxScore: note.max_score === null ? null : Number(note.max_score), comment: note.comment });
       notesByEvaluation.set(note.evaluation_id, list);
     }
     return {
@@ -204,15 +209,25 @@ export class EvaluationReviewRepository {
     };
   }
 
-  async remind(evaluationId: string, force = false): Promise<string | 'not_found' | 'not_due' | 'too_soon'> {
+  /**
+   * Relance un ou plusieurs évaluations. Un même professeur reçoit UNE seule notification :
+   * 1 évaluation → message détaillé (matière, classe) ; plusieurs → message listant les classes.
+   * La notification est tracée sur chaque évaluation (related_id + metadata.evaluationIds).
+   */
+  async remindMany(evaluationIds: string[], force = false): Promise<Array<{
+    evaluationId: string; status: 'sent' | 'not_found' | 'not_due' | 'too_soon'; lastReminderAt?: string;
+  }>> {
     return this.db.transaction(async (tx) => {
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${evaluationId}, 0))`);
-      const context = rows(await tx.execute<{
-        label: string; subject_name: string; class_name: string; teacher_user_id: string;
+      for (const id of [...evaluationIds].sort()) {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${id}, 0))`);
+      }
+      const idList = sql.join(evaluationIds.map((id) => sql`${id}::uuid`), sql`, `);
+      const contexts = rows(await tx.execute<{
+        id: string; label: string; subject_name: string; class_name: string; teacher_user_id: string;
         expected_count: string; entered_count: string; days_since: number | null;
-        grace_days: number; last_reminder_at: Date | null; reminded_recently: boolean; reminded_just_now: boolean;
+        grace_days: number; reminded_recently: boolean; reminded_just_now: boolean;
       }>(sql`
-        SELECT e.label, s.name AS subject_name, c.name AS class_name, t.user_id::text AS teacher_user_id,
+        SELECT e.id::text, e.label, s.name AS subject_name, c.name AS class_name, t.user_id::text AS teacher_user_id,
           (SELECT COUNT(DISTINCT st.id)::text FROM enrollments en
            JOIN students st ON st.id = en.student_id AND st.is_active = true
            WHERE en.class_id = c.id AND en.school_year_id = c.school_year_id
@@ -224,34 +239,41 @@ export class EvaluationReviewRepository {
            WHERE eg.evaluation_id = e.id AND c.is_active = true) AS entered_count,
           CASE WHEN e.evaluation_date IS NULL THEN NULL ELSE CURRENT_DATE - e.evaluation_date END AS days_since,
           tenant.evaluation_grace_days AS grace_days,
-          (SELECT MAX(nl.created_at) FROM notifications_log nl WHERE nl.related_id = e.id
-            AND nl.channel = 'in_app' AND nl.type = 'custom'
-            AND nl.metadata->>'kind' = 'evaluation_reminder') AS last_reminder_at,
-          EXISTS (SELECT 1 FROM notifications_log nl WHERE nl.related_id = e.id
-            AND nl.channel = 'in_app' AND nl.type = 'custom'
-            AND nl.metadata->>'kind' = 'evaluation_reminder'
+          EXISTS (SELECT 1 FROM notifications_log nl WHERE ${reminderLogOf(sql`e.id`)}
             AND nl.created_at > NOW() - INTERVAL '24 hours') AS reminded_recently,
-          EXISTS (SELECT 1 FROM notifications_log nl WHERE nl.related_id = e.id
-            AND nl.channel = 'in_app' AND nl.type = 'custom'
-            AND nl.metadata->>'kind' = 'evaluation_reminder'
+          EXISTS (SELECT 1 FROM notifications_log nl WHERE ${reminderLogOf(sql`e.id`)}
             AND nl.created_at > NOW() - INTERVAL '60 seconds') AS reminded_just_now
         FROM evaluations e JOIN classes c ON c.id = e.class_id
         JOIN subjects s ON s.id = e.subject_id JOIN teachers t ON t.id = e.teacher_id
         JOIN users u ON u.id = t.user_id AND u.is_active = true
         JOIN public.tenants tenant ON tenant.schema_name = current_schema()
-        WHERE e.id = ${evaluationId}::uuid AND e.type = 'scheduled' LIMIT 1`))[0];
-      if (!context) return 'not_found';
-      if (Number(context.expected_count) === 0 || Number(context.expected_count) <= Number(context.entered_count)
-        || context.days_since === null || context.days_since <= context.grace_days) return 'not_due';
-      // Anti-doublon : plancher de 60 s même confirmé ; 24 h sauf confirmation renforcée (force).
-      if (context.reminded_just_now || (context.reminded_recently && !force)) return 'too_soon';
-      const message = `Merci de saisir les notes de ${context.label} en ${context.subject_name} (${context.class_name}).`;
-      const inserted = rows(await tx.execute<{ created_at: Date }>(sql`
-        INSERT INTO notifications_log (type, channel, recipient_id, recipient_phone, message, status, related_id, metadata, sent_at)
-        VALUES ('custom', 'in_app', ${context.teacher_user_id}::uuid, '', ${message}, 'sent', ${evaluationId}::uuid,
-          ${JSON.stringify({ kind: 'evaluation_reminder', url: '/academic/evaluations' })}::jsonb, NOW())
-        RETURNING created_at`))[0];
-      return new Date(inserted.created_at).toISOString();
+        WHERE e.id IN (${idList}) AND e.type = 'scheduled'`));
+      const byId = new Map(contexts.map((context) => [context.id, context]));
+      const outcome = new Map<string, { status: 'sent' | 'not_found' | 'not_due' | 'too_soon'; lastReminderAt?: string }>();
+      const eligibleByTeacher = new Map<string, typeof contexts>();
+      for (const id of evaluationIds) {
+        const context = byId.get(id);
+        if (!context) { outcome.set(id, { status: 'not_found' }); continue; }
+        if (Number(context.expected_count) === 0 || Number(context.expected_count) <= Number(context.entered_count)
+          || context.days_since === null || context.days_since <= context.grace_days) { outcome.set(id, { status: 'not_due' }); continue; }
+        // Anti-doublon : plancher de 60 s même confirmé ; 24 h sauf confirmation renforcée (force).
+        if (context.reminded_just_now || (context.reminded_recently && !force)) { outcome.set(id, { status: 'too_soon' }); continue; }
+        eligibleByTeacher.set(context.teacher_user_id, [...(eligibleByTeacher.get(context.teacher_user_id) ?? []), context]);
+      }
+      for (const [teacherUserId, items] of eligibleByTeacher) {
+        const classNames = [...new Set(items.map((item) => item.class_name))];
+        const message = items.length === 1
+          ? `Bonjour, la direction attend l’avancement de la saisie des notes de ${items[0].label} en ${items[0].subject_name} (${items[0].class_name}). Pourriez-vous les renseigner dans l’application dès que possible ? Merci !`
+          : `Bonjour, la direction attend l’avancement de la saisie des notes des évaluations réalisées avec les classes suivantes : ${classNames.join(', ')}. Pourriez-vous les renseigner dans l’application dès que possible ? Merci !`;
+        const inserted = rows(await tx.execute<{ created_at: Date }>(sql`
+          INSERT INTO notifications_log (type, channel, recipient_id, recipient_phone, message, status, related_id, metadata, sent_at)
+          VALUES ('custom', 'in_app', ${teacherUserId}::uuid, '', ${message}, 'sent', ${items[0].id}::uuid,
+            ${JSON.stringify({ kind: 'evaluation_reminder', url: '/academic/evaluations', evaluationIds: items.map((item) => item.id) })}::jsonb, NOW())
+          RETURNING created_at`))[0];
+        const lastReminderAt = new Date(inserted.created_at).toISOString();
+        for (const item of items) outcome.set(item.id, { status: 'sent', lastReminderAt });
+      }
+      return evaluationIds.map((evaluationId) => ({ evaluationId, ...outcome.get(evaluationId)! }));
     });
   }
 
@@ -305,7 +327,7 @@ export class EvaluationReviewRepository {
       ORDER BY s.name, e.evaluation_date DESC NULLS LAST, e.created_at DESC, e.id DESC`));
     const grouped = students.map((student) => ({
       id: student.id,
-      name: `${student.last_name} ${student.first_name}`,
+      name: formatPersonName({ lastName: student.last_name, firstName: student.first_name }),
       matricule: student.matricule,
       subjects: [] as Array<{ id: string; name: string; notes: Array<{
         evaluationId: string; date: string | null; adjustment: number; teacher: { id: string; name: string };

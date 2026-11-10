@@ -1,6 +1,8 @@
 import argon2 from 'argon2';
 import { sql } from 'drizzle-orm';
 
+import { resolveExportSchoolYear } from '../../shared/export/school-year.js';
+
 import { logger } from '../../shared/observability/logger.js';
 import { toNumber } from '../../shared/utils/numbers.js';
 import { generateUsername } from '../../shared/utils/username.js';
@@ -214,6 +216,22 @@ const TEACHER_SELECT = sql`
   LEFT JOIN users upd ON upd.id = t.updated_by
 `;
 
+export type TeacherExportRow = {
+  matricule: string | null;
+  name: string;
+  sex: string | null;
+  birth_date: string | null;
+  birth_place: string | null;
+  nationality: string | null;
+  type: string;
+  subjects: string[] | null;
+  class_names: string[] | null;
+  phone: string | null;
+  email: string | null;
+  is_active: boolean;
+  is_blocked: boolean;
+};
+
 export class TeachersRepository {
   constructor(private readonly db: QueryExecutor) {}
 
@@ -336,6 +354,45 @@ export class TeachersRepository {
       rows: getRows<TeacherRow>(items),
       total: toTotal(getRows<TotalRow>(total)[0]),
     };
+  }
+
+  findExportSchoolYear(schoolYearId?: string) {
+    return resolveExportSchoolYear(this.db, schoolYearId);
+  }
+
+  /**
+   * Lignes d'export : aucune donnée financière (ni taux horaire ni salaire), aucun identifiant de connexion.
+   * Les classes affichées sont celles de l'année choisie (affectations matière-classe).
+   */
+  async listTeachersForExport(query: Omit<TeachersListQuery, 'page' | 'limit'>, schoolYearId: string): Promise<TeacherExportRow[]> {
+    const where = makeWhereClause(buildWhere(query as TeachersListQuery));
+    const result = await this.db.execute(sql`
+      SELECT
+        t.matricule,
+        u.name,
+        t.sex,
+        t.birth_date::text AS birth_date,
+        t.birth_place,
+        t.nationality,
+        t.type::text AS type,
+        t.subjects,
+        ARRAY(
+          SELECT DISTINCT c.name
+          FROM teacher_subject_assignments tsa
+          INNER JOIN classes c ON c.id = tsa.class_id AND c.school_year_id = ${schoolYearId}::uuid
+          WHERE tsa.teacher_id = t.id
+          ORDER BY c.name
+        ) AS class_names,
+        u.phone,
+        u.email,
+        u.is_active,
+        t.is_blocked
+      FROM teachers t
+      INNER JOIN users u ON u.id = t.user_id
+      ${where}
+      ORDER BY lower(u.name), t.id
+    `);
+    return getRows<TeacherExportRow>(result);
   }
 
   // Route dédiée - ne dépend pas du filtre is_active, retourne toujours le prof

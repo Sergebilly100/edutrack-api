@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { summarizeFinancialInstallments, type InstallmentLedgerRow } from '../../src/modules/finance/financial-installments.js';
+import { listAgingBucketStudents, summarizeFinancialInstallments, type InstallmentLedgerRow } from '../../src/modules/finance/financial-installments.js';
 
 const row = (
   student_id: string,
@@ -129,5 +129,39 @@ describe('financial installment summary', () => {
     expect(() => summarizeFinancialInstallments([
       row('student-invalid-date', '2026-02-31', '100.00', '0', '2026-03-02'),
     ])).toThrow('Invalid financial installment date.');
+  });
+});
+
+describe('détail des tranches d’ancienneté', () => {
+  // Élève A : paiement partiel ; élève B : 2 échéances dans 2 tranches ; élève C : remise (annual_due réduit) tout payé.
+  const ledger = [
+    row('A', '2026-02-01', '100.00', '40.00', '2026-03-02', '100.00', '100.00'),
+    row('B', '2025-12-01', '50.00', '0', '2026-03-02', '80.00', '80.00'),
+    row('B', '2026-02-20', '30.00', '0', '2026-03-02', '80.00', '80.00'),
+    row('C', '2026-02-10', '70.00', '70.00', '2026-03-02', '70.00', '70.00'),
+  ];
+
+  it('les totaux et effectifs de chaque tranche sont identiques à ceux du tableau de bord', () => {
+    const summary = summarizeFinancialInstallments(ledger);
+    for (const bucket of summary.aging!) {
+      const detail = listAgingBucketStudents(ledger, bucket.bucket);
+      expect((detail.totalCents / 100).toFixed(2)).toBe(bucket.total_amount);
+      expect(detail.students).toHaveLength(bucket.student_count);
+    }
+  });
+
+  it('paiement partiel : seul le reste dû figure, un élève soldé (remise) est absent, la somme des tranches = reste échu', () => {
+    const recent = listAgingBucketStudents(ledger, '0-30');
+    expect(recent.students.map((item) => item.studentId).sort()).toEqual(['A', 'B']);
+    expect(recent.students.find((item) => item.studentId === 'A')).toMatchObject({ amountCents: 6000, oldestDueDate: '2026-02-01', daysLate: 29 });
+    const old = listAgingBucketStudents(ledger, '>60');
+    expect(old.students).toEqual([expect.objectContaining({ studentId: 'B', amountCents: 5000, daysLate: 91 })]);
+    const total = (['0-30', '31-60', '>60'] as const).reduce((sum, bucket) => sum + listAgingBucketStudents(ledger, bucket).totalCents, 0);
+    expect(total).toBe(6000 + 3000 + 5000); // A 60 + B 30 (0-30) + B 50 (>60)
+  });
+
+  it('un élève ayant des retards dans deux tranches apparaît dans chacune avec son montant propre', () => {
+    expect(listAgingBucketStudents(ledger, '0-30').students.find((item) => item.studentId === 'B')?.amountCents).toBe(3000);
+    expect(listAgingBucketStudents(ledger, '>60').students.find((item) => item.studentId === 'B')?.amountCents).toBe(5000);
   });
 });

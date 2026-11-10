@@ -178,6 +178,18 @@ export class EnrollmentsService {
     if (!input.sourceSchoolYearLabel && !this.finance?.listReEnrollmentBalances) {
       throw new EnrollmentsModuleError('Financial module is unavailable', 503, 'FINANCE_MODULE_UNAVAILABLE');
     }
+    // Règle appliquée côté API : on ne parle de réinscription que depuis une année terminée (clôturée).
+    if (input.sourceSchoolYearId) {
+      const sourceYear = await this.repository.getSchoolYear(input.sourceSchoolYearId);
+      if (!sourceYear) throw new EnrollmentsModuleError('Année d’origine introuvable', 404, 'SCHOOL_YEAR_NOT_FOUND');
+      if (sourceYear.status !== 'closed') {
+        throw new EnrollmentsModuleError(
+          'L’année d’origine doit être terminée (clôturée) : la réinscription ne concerne pas l’année en cours.',
+          409,
+          'RE_ENROLLMENT_SOURCE_NOT_CLOSED'
+        );
+      }
+    }
     const rows = await this.repository.listReEnrollmentCandidates(input);
     const sourceYearId = input.sourceSchoolYearId ?? rows[0]?.current_school_year_id;
     const targetSchoolYear = input.sourceSchoolYearLabel

@@ -8,6 +8,8 @@ import { z } from 'zod';
 import type { Queue } from 'bullmq';
 
 import { withTenantSchema } from '../../shared/database/db.js';
+import { exportDisabledBody, isDataExportAllowed } from '../../shared/export/data-export-guard.js';
+import { XLSX_CONTENT_TYPE } from '../../shared/export/xlsx-safe.js';
 import {
   authenticateRequest,
   requirePermission,
@@ -80,6 +82,7 @@ import {
   excuseAbsenceParamsSchema,
   studentAbsencesParamsSchema,
   studentAbsencesQuerySchema,
+  studentsExportQuerySchema,
   studentsListQuerySchema,
   updateStudentBodySchema,
   updateStudentParamsSchema,
@@ -290,6 +293,29 @@ export default async function studentsController(
         });
 
         return reply.send(result);
+      } catch (error) {
+        return handleError(reply, error);
+      }
+    }
+  );
+
+  // Export Excel : permission students.view (jamais un professeur) ET réglage de l'école can_export_data.
+  app.get(
+    '/api/v1/students/export',
+    { preHandler: requirePermission('students.view') },
+    async (request, reply) => {
+      try {
+        const claims = request.claims!;
+        if (claims.role === 'teacher') return forbidden(reply, 'Permission students.view required');
+        const query = studentsExportQuerySchema.parse(request.query ?? {});
+        if (!(await isDataExportAllowed(claims.schemaName))) {
+          return reply.code(403).send(exportDisabledBody);
+        }
+        const file = await withTenantSchema(claims.schemaName, async (tenantDb) =>
+          buildStudentsService(tenantDb).exportStudents(query));
+        reply.header('Content-Type', XLSX_CONTENT_TYPE);
+        reply.header('Content-Disposition', `attachment; filename="${file.fileName}"`);
+        return reply.send(file.buffer);
       } catch (error) {
         return handleError(reply, error);
       }

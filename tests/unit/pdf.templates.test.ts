@@ -120,6 +120,8 @@ describe('pdf/templates - reçu de scolarité', () => {
       amount: 153_000,
       currency: 'FCFA',
       method: 'mobile_money',
+      paymentDate: '2026-08-19',
+      paidAt: '2026-08-19T10:00:00.000Z',
       createdAt: '2026-08-19T10:00:00.000Z',
       schoolReceiptReference: 'CARNET-42',
       remainingDue: 47_000,

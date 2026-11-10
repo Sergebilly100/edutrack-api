@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { confirmedSchoolStudent } from '../../shared/database/confirmed-school-membership.js';
+import { foldedSql, foldSearchTerm } from '../../shared/database/search-fold.js';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import { db as publicDb } from '../../shared/database/db.js';
@@ -12,6 +13,17 @@ import {
 import type { NotificationChannel, SubscriptionStatus } from './subscriptions.types.js';
 
 type TenantDb = NodePgDatabase<Record<string, unknown>>;
+
+export type EnrolledParentRow = {
+  phone_key: string;
+  parent_name: string | null;
+  parent_email: string | null;
+  students: Array<{ id: string; full_name: string; class_name: string; matricule: string | null }>;
+  parent_id: string | null;
+  subscription_id: string | null;
+  subscription_status: string | null;
+  subscription_ends_at: string | null;
+};
 
 type PublicFeatureRow = {
   tenant_id: string;
@@ -249,7 +261,7 @@ export class SubscriptionsRepository {
     const result = await this.tenantDb.execute<EnrollmentParentContextRow>(sql`
       SELECT
         s.id::text AS student_id,
-        concat_ws(' ', s.first_name, s.last_name) AS student_name,
+        format_person_name(s.first_name, s.last_name) AS student_name,
         linked.id::text AS parent_id,
         COALESCE(linked.full_name, NULLIF(s.parent_name, ''), NULLIF(s.parent_name_2, '')) AS parent_name,
         COALESCE(linked.phone, NULLIF(s.parent_phone, ''), NULLIF(s.parent_phone_2, '')) AS parent_phone,
@@ -630,7 +642,7 @@ export class SubscriptionsRepository {
         (SELECT u.name FROM users u WHERE u.id = ls.created_by) AS created_by_name,
         COALESCE(
           (
-            SELECT json_agg(json_build_object('id', s.id::text, 'full_name', CONCAT(s.first_name, ' ', s.last_name)))
+            SELECT json_agg(json_build_object('id', s.id::text, 'full_name', format_person_name(s.first_name, s.last_name)))
             FROM parent_student_links psl
             INNER JOIN students s ON s.id = psl.student_id
             WHERE psl.parent_id = p.id
@@ -762,7 +774,7 @@ export class SubscriptionsRepository {
     const result = await this.tenantDb.execute<ClassStudentCatalogRow>(sql`
       SELECT
         s.id::text AS id,
-        CONCAT(s.last_name, ' ', s.first_name) AS full_name,
+        format_person_name(s.first_name, s.last_name) AS full_name,
         c.id::text AS class_id,
         c.name AS class_name,
         s.matricule::text AS registration_number
@@ -824,7 +836,7 @@ export class SubscriptionsRepository {
   async getStudentsByIds(studentIds: string[]): Promise<StudentRow[]> {
     if (studentIds.length === 0) return [];
     const result = await this.tenantDb.execute<StudentRow>(sql`
-      SELECT s.id::text AS id, CONCAT(s.first_name, ' ', s.last_name) AS full_name
+      SELECT s.id::text AS id, format_person_name(s.first_name, s.last_name) AS full_name
       FROM students s
       WHERE s.id IN (${sql.join(studentIds.map((id) => sql`${id}::uuid`), sql`, `)})
         AND ${confirmedSchoolStudent(sql`s.id`, sql`(SELECT id FROM school_years WHERE status = 'active' LIMIT 1)`)}
@@ -993,7 +1005,7 @@ export class SubscriptionsRepository {
     const result = await this.tenantDb.execute<StudentRow>(sql`
       SELECT
         s.id::text AS id,
-        CONCAT(s.first_name, ' ', s.last_name) AS full_name,
+        format_person_name(s.first_name, s.last_name) AS full_name,
         c.name AS class_name,
         s.matricule::text AS registration_number
       FROM parent_student_links psl
@@ -1040,7 +1052,7 @@ export class SubscriptionsRepository {
       SELECT
         psl.subscription_id::text AS subscription_id,
         s.id::text AS id,
-        CONCAT(s.first_name, ' ', s.last_name) AS full_name,
+        format_person_name(s.first_name, s.last_name) AS full_name,
         c.name AS class_name,
         s.matricule::text AS registration_number
       FROM parent_student_links psl
@@ -1756,7 +1768,7 @@ export class SubscriptionsRepository {
       SELECT
         ps.id::text AS subscription_id,
         COALESCE(
-          NULLIF(concat_ws(' ', s.first_name, s.last_name), ''),
+          NULLIF(format_person_name(s.first_name, s.last_name), ''),
           linked.student_names,
           'votre enfant'
         ) AS student_name,
@@ -1767,7 +1779,7 @@ export class SubscriptionsRepository {
       INNER JOIN parents p ON p.id = ps.parent_id
       LEFT JOIN students s ON s.id = ps.student_id
       LEFT JOIN LATERAL (
-        SELECT string_agg(concat_ws(' ', linked_student.first_name, linked_student.last_name), ', ') AS student_names
+        SELECT string_agg(format_person_name(linked_student.first_name, linked_student.last_name), ', ') AS student_names
         FROM parent_student_links psl
         INNER JOIN students linked_student ON linked_student.id = psl.student_id
         WHERE psl.subscription_id = ps.id
@@ -1946,6 +1958,65 @@ export class SubscriptionsRepository {
 
       return { subscriptionId: subscriptionIds[0]!, subscriptionIds };
     });
+  }
+
+  async getActiveSchoolYearWindow(): Promise<{ id: string; label: string; endDate: string } | null> {
+    const result = await this.tenantDb.execute<{ id: string; label: string; end_date: string }>(sql`
+      SELECT id::text, label, end_date::text AS end_date FROM school_years WHERE status = 'active' LIMIT 1
+    `);
+    const row = result.rows[0];
+    return row ? { id: row.id, label: row.label, endDate: row.end_date } : null;
+  }
+
+  /**
+   * Parents des élèves inscrits (inscriptions confirmées de l'année active), lus sur la fiche élève comme
+   * les dossiers d'inscription. Un parent est identifié par son téléphone (10 derniers chiffres) et n'apparaît
+   * qu'une fois même avec plusieurs enfants. L'abonnement éventuel est rapproché par téléphone.
+   */
+  async listEnrolledParents(params: { page: number; limit: number; search?: string }): Promise<{
+    rows: EnrolledParentRow[]; total: number;
+  }> {
+    const offset = (params.page - 1) * params.limit;
+    const nameSearch = foldSearchTerm(params.search);
+    const digits = params.search?.replace(/\D/g, '') ?? '';
+    const phoneSearch = digits.length >= 3 ? `%${digits}%` : null;
+    const result = await this.tenantDb.execute<EnrolledParentRow & { total: number }>(sql`
+      WITH active_year AS (SELECT id FROM school_years WHERE status = 'active' LIMIT 1),
+      contacts AS (
+        SELECT s.id AS student_id, format_person_name(s.first_name, s.last_name) AS student_name, c.name AS class_name, s.matricule AS student_matricule,
+               NULLIF(btrim(v.name), '') AS contact_name, NULLIF(btrim(v.email), '') AS contact_email,
+               RIGHT(regexp_replace(COALESCE(v.phone, ''), '\D', '', 'g'), 10) AS phone_key
+        FROM students s
+        INNER JOIN active_year ay ON TRUE
+        INNER JOIN enrollments e ON e.student_id = s.id AND e.school_year_id = ay.id AND e.status = 'confirmed'
+        INNER JOIN classes c ON c.id = e.class_id AND c.school_year_id = e.school_year_id AND c.is_active = true
+        CROSS JOIN LATERAL (VALUES (s.parent_name, s.parent_phone, s.parent_email), (s.parent_name_2, s.parent_phone_2, NULL::text)) AS v(name, phone, email)
+        WHERE s.is_active = true
+      ),
+      grouped AS (
+        SELECT phone_key,
+               (ARRAY_AGG(contact_name ORDER BY length(contact_name) DESC NULLS LAST))[1] AS parent_name,
+               (ARRAY_AGG(contact_email) FILTER (WHERE contact_email IS NOT NULL))[1] AS parent_email,
+               jsonb_agg(DISTINCT jsonb_build_object('id', student_id::text, 'full_name', student_name, 'class_name', class_name, 'matricule', student_matricule)) AS students
+        FROM contacts WHERE length(phone_key) = 10 GROUP BY phone_key
+      )
+      SELECT g.phone_key, g.parent_name, g.parent_email, g.students,
+             p.id::text AS parent_id, ls.id::text AS subscription_id, ls.status::text AS subscription_status,
+             ls.ends_at::text AS subscription_ends_at, COUNT(*) OVER()::int AS total
+      FROM grouped g
+      LEFT JOIN LATERAL (
+        SELECT id FROM parents WHERE RIGHT(regexp_replace(phone, '\D', '', 'g'), 10) = g.phone_key LIMIT 1
+      ) p ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT id, status, ends_at FROM parent_subscriptions WHERE parent_id = p.id ORDER BY created_at DESC LIMIT 1
+      ) ls ON TRUE
+      WHERE (${nameSearch}::text IS NULL AND ${phoneSearch}::text IS NULL)
+         OR (${nameSearch}::text IS NOT NULL AND ${foldedSql(sql`g.parent_name`)} LIKE ${nameSearch})
+         OR (${phoneSearch}::text IS NOT NULL AND g.phone_key LIKE ${phoneSearch})
+      ORDER BY g.parent_name ASC NULLS LAST, g.phone_key ASC
+      LIMIT ${params.limit} OFFSET ${offset}
+    `);
+    return { rows: result.rows, total: result.rows[0]?.total ?? 0 };
   }
 
   computeStartsAndEnds(durationMonths: number): { startsAt: string; endsAt: string } {

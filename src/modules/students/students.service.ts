@@ -11,6 +11,9 @@ import {
 import type { NotificationJobData } from '../notifications/notifications.queue.js';
 
 import { StudentsRepository } from './students.repository.js';
+import { buildExportWorkbook, exportFileName, type ExportColumn } from '../../shared/export/xlsx-safe.js';
+import { getCountryName } from '../../shared/utils/nationality.js';
+import { formatFirstNames, formatLastName } from '../../shared/utils/person-name.js';
 import type {
   AbsenceStatsQuery,
   AttendanceHistoryQuery,
@@ -27,6 +30,7 @@ import type {
   HistoricalStudentProfile,
   StudentRecord,
   StudentAbsencesQuery,
+  StudentsExportQuery,
   StudentsListQuery,
   TodayAbsenceGroup,
   UpdateStudentInput,
@@ -87,6 +91,37 @@ const visibleStudentDetail = (student: StudentDetailRecord, visibility: StudentP
 
 const deduplicateAbsences = (ids: string[]): string[] => Array.from(new Set(ids));
 
+export const STUDENT_EXPORT_COLUMNS: readonly ExportColumn[] = [
+  { header: 'Matricule', key: 'matricule', width: 16 },
+  { header: 'Nom', key: 'lastName', width: 24 },
+  { header: 'Prénoms', key: 'firstNames', width: 28 },
+  { header: 'Sexe', key: 'sex', width: 8 },
+  { header: 'Date de naissance', key: 'birthDate', width: 18 },
+  { header: 'Lieu de naissance', key: 'birthPlace', width: 22 },
+  { header: 'Nationalité', key: 'nationality', width: 14 },
+  { header: 'Niveau', key: 'level', width: 16 },
+  { header: 'Classe', key: 'className', width: 16 },
+  { header: 'Statut d’inscription', key: 'enrollmentStatus', width: 22 },
+  { header: 'Redoublant', key: 'repeating', width: 12 },
+  { header: 'Parent 1 : nom', key: 'parent1Name', width: 28 },
+  { header: 'Parent 1 : téléphone', key: 'parent1Phone', width: 20 },
+  { header: 'Parent 1 : e-mail', key: 'parent1Email', width: 28 },
+  { header: 'Parent 2 : nom', key: 'parent2Name', width: 28 },
+  { header: 'Parent 2 : téléphone', key: 'parent2Phone', width: 20 },
+];
+
+const ENROLLMENT_STATUS_LABELS: Record<string, string> = {
+  confirmed: 'Inscrit',
+  pending_cashier: 'En attente de caisse',
+  pending_dossier: 'Dossier à compléter',
+  blocked_unpaid: 'Bloqué (impayé)',
+};
+
+const toFrenchDate = (value: string | null): string => {
+  const match = value ? /^(\d{4})-(\d{2})-(\d{2})/.exec(value) : null;
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : '';
+};
+
 export class StudentsService {
   private readonly deps: ServiceDependencies;
 
@@ -103,6 +138,37 @@ export class StudentsService {
   }> {
     const { rows, total } = await this.repository.listStudents(query);
     return { data: rows, pagination: toPaginationMeta(query.page, query.limit, total) };
+  }
+
+  /** Export Excel des élèves de l'année choisie (active par défaut), sans aucune donnée financière. */
+  async exportStudents(query: StudentsExportQuery): Promise<{ buffer: Buffer; fileName: string }> {
+    const year = await this.repository.findExportSchoolYear(query.school_year_id);
+    if (!year) throw new StudentsModuleError('School year not found', 404, 'SCHOOL_YEAR_NOT_FOUND');
+    const filters = { ...query, school_year_id: undefined };
+    const rows = await this.repository.listStudentsForExport(filters, year.id);
+    const buffer = await buildExportWorkbook({
+      name: 'Élèves',
+      columns: STUDENT_EXPORT_COLUMNS,
+      rows: rows.map((row) => ({
+        matricule: row.matricule,
+        lastName: formatLastName(row.last_name),
+        firstNames: formatFirstNames(row.first_name),
+        sex: row.sex,
+        birthDate: toFrenchDate(row.birth_date),
+        birthPlace: row.birth_place,
+        nationality: row.nationality ? getCountryName(row.nationality) : '',
+        level: row.level_name,
+        className: row.class_name,
+        enrollmentStatus: ENROLLMENT_STATUS_LABELS[row.enrollment_status] ?? row.enrollment_status,
+        repeating: row.is_repeating === null ? '' : row.is_repeating ? 'Oui' : 'Non',
+        parent1Name: row.parent_name,
+        parent1Phone: row.parent_phone,
+        parent1Email: row.parent_email,
+        parent2Name: row.parent_name_2,
+        parent2Phone: row.parent_phone_2,
+      })),
+    });
+    return { buffer, fileName: exportFileName('eleves', year.label) };
   }
 
   async listFinancialProfiles(query: StudentsListQuery): Promise<{

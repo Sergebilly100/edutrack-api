@@ -150,6 +150,11 @@ describe('consultation direction des évaluations', () => {
     expect((await request().post(`${path}/${first}/remind`).set(director)).status).toBe(409);
     // La confirmation renforcée ne contourne pas le plancher anti-doublon de 60 s.
     expect((await request().post(`${path}/${first}/remind`).set(director).send({ force: true })).status).toBe(409);
+    const batch = await request().post(`${path}/remind`).set(director).send({ evaluationIds: [first, first], force: true });
+    expect(batch.status, JSON.stringify(batch.body)).toBe(200);
+    expect(batch.body).toMatchObject({ sent: 0, skipped: 1, results: [{ evaluationId: first, status: 'too_soon' }] });
+    expect((await request().post(`${path}/remind`).set(teacher).send({ evaluationIds: [first] })).status).toBe(403);
+    expect((await request().post(`${path}/remind`).set(director).send({ evaluationIds: [] })).status).toBe(400);
     const teacherInbox = await request().get('/api/v1/teacher/notifications').set(teacher);
     expect(teacherInbox.status).toBe(200);
     expect(teacherInbox.body).toEqual(expect.arrayContaining([expect.objectContaining({

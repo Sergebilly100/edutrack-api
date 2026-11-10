@@ -39,11 +39,17 @@ export class EvaluationReviewService {
   }
 
   async remind(evaluationId: string, force = false) {
-    const result = await this.repository.remind(evaluationId, force);
-    if (result === 'not_found') throw new EvaluationReviewError('Évaluation introuvable', 'EVALUATION_NOT_FOUND');
-    if (result === 'not_due') throw new EvaluationReviewError('Relance indisponible pour cette évaluation', 'EVALUATION_NOT_DUE');
-    if (result === 'too_soon') throw new EvaluationReviewError('Une relance a déjà été envoyée dans les dernières 24 h', 'EVALUATION_REMINDER_TOO_SOON');
-    return { lastReminderAt: result };
+    const [result] = await this.repository.remindMany([evaluationId], force);
+    if (result.status === 'not_found') throw new EvaluationReviewError('Évaluation introuvable', 'EVALUATION_NOT_FOUND');
+    if (result.status === 'not_due') throw new EvaluationReviewError('Relance indisponible pour cette évaluation', 'EVALUATION_NOT_DUE');
+    if (result.status === 'too_soon') throw new EvaluationReviewError('Une relance a déjà été envoyée dans les dernières 24 h', 'EVALUATION_REMINDER_TOO_SOON');
+    return { lastReminderAt: result.lastReminderAt };
+  }
+
+  /** Relance groupée : un seul message par professeur ; un refus n'annule pas les autres évaluations. */
+  async remindMany(evaluationIds: string[], force = false) {
+    const results = await this.repository.remindMany(evaluationIds, force);
+    return { sent: results.filter((r) => r.status === 'sent').length, skipped: results.filter((r) => r.status !== 'sent').length, results };
   }
 
   private async validateScope(query: EvaluationReviewQuery): Promise<void> {

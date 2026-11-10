@@ -1,5 +1,5 @@
 import { FinancialCacheRepository } from './financial-cache.repository.js';
-import { summarizeFinancialInstallments } from './financial-installments.js';
+import { listAgingBucketStudents, summarizeFinancialInstallments, type FinancialAgingBucket } from './financial-installments.js';
 import {
   calculateAnnualFinancialBalances,
   resolveIndividualFinancialStatus,
@@ -122,6 +122,44 @@ export class FinancialCacheService {
     const yearId = schoolYearId ?? (await this.repository.getActiveSchoolYearId());
     if (!yearId) return summarizeFinancialInstallments([]);
     return summarizeFinancialInstallments(await this.repository.listInstallmentLedger(yearId));
+  }
+
+  /** Détail d'une tranche : mêmes calculs que le tableau de bord, enrichis (nom, classe, dernier paiement). */
+  async listAgingStudents(input: { schoolYearId?: string; bucket: FinancialAgingBucket['bucket']; page: number; limit: number; search?: string; classId?: string }) {
+    const yearId = input.schoolYearId ?? (await this.repository.getActiveSchoolYearId());
+    const empty = { bucket: input.bucket, total_amount: '0.00', student_count: 0, students: [], classes: [], pagination: { page: 1, limit: input.limit, total: 0, totalPages: 1 } };
+    if (!yearId) return empty;
+    const { scheduleComplete, totalCents, students } = listAgingBucketStudents(await this.repository.listInstallmentLedger(yearId), input.bucket);
+    if (!scheduleComplete) return { ...empty, schedule_complete: false };
+    const identities = new Map((await this.repository.listStudentAgingIdentities(yearId, students.map((item) => item.studentId))).map((row) => [row.student_id, row]));
+    const fold = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const term = input.search ? fold(input.search) : null;
+    const rows = students.flatMap((item) => {
+      const identity = identities.get(item.studentId);
+      if (!identity) return [];
+      return [{
+        student_id: item.studentId, first_name: identity.first_name, last_name: identity.last_name, matricule: identity.matricule,
+        class_id: identity.class_id, class_name: identity.class_name, remaining_amount: (item.amountCents / 100).toFixed(2), days_late: item.daysLate,
+        oldest_due_date: item.oldestDueDate, last_payment_date: identity.last_payment_date,
+      }];
+    });
+    // Classes présentes dans la tranche (indépendantes de la recherche et du filtre de classe) pour alimenter le filtre.
+    const classes = [...new Map(rows.map((row) => [row.class_id, row.class_name])).entries()]
+      .map(([id, name]) => ({ id, name })).sort((first, second) => first.name.localeCompare(second.name, 'fr'));
+    const filtered = rows.filter((row) => !input.classId || row.class_id === input.classId).filter((row) => !term || fold(`${row.first_name} ${row.last_name} ${row.last_name} ${row.first_name} ${row.matricule ?? ''} ${row.class_name}`).includes(term))
+      .sort((first, second) => second.days_late - first.days_late || Number(second.remaining_amount) - Number(first.remaining_amount) || first.last_name.localeCompare(second.last_name, 'fr'));
+    const totalPages = Math.max(1, Math.ceil(filtered.length / input.limit));
+    const page = Math.min(input.page, totalPages);
+    return {
+      bucket: input.bucket,
+      // Chiffres de la tranche (indépendants de la recherche) : identiques à ceux du tableau de bord.
+      total_amount: (totalCents / 100).toFixed(2),
+      student_count: students.length,
+      schedule_complete: true,
+      classes,
+      students: filtered.slice((page - 1) * input.limit, page * input.limit),
+      pagination: { page, limit: input.limit, total: filtered.length, totalPages },
+    };
   }
 
   async listRecentPayments(schoolYearId?: string) {

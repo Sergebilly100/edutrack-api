@@ -170,7 +170,7 @@ export class ConductRepository {
 
   async listDecisionStudents(classId: string, gradingPeriodId: string): Promise<Array<{ id: string; fullName: string }>> {
     const result = await this.db.execute<{ id: string; full_name: string }>(sql`
-      SELECT s.id::text, concat_ws(' ', s.first_name, s.last_name) AS full_name
+      SELECT s.id::text, format_person_name(s.first_name, s.last_name) AS full_name
       FROM classes c INNER JOIN grading_periods gp ON gp.school_year_id = c.school_year_id
       INNER JOIN students s ON ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
       WHERE c.id = ${classId}::uuid AND gp.id = ${gradingPeriodId}::uuid
@@ -316,7 +316,7 @@ export class ConductRepository {
       level_id: string;
     }>(sql`
       SELECT s.id::text AS student_id,
-             concat_ws(' ', s.first_name, s.last_name) AS full_name,
+             format_person_name(s.first_name, s.last_name) AS full_name,
              c.id::text AS class_id,
              c.name AS class_name,
              c.level_id::text AS level_id
@@ -509,7 +509,7 @@ export class ConductRepository {
       note: string | null; observation: string | null; created_at: string | null; is_locked: boolean;
     }>(sql`
       SELECT s.id::text AS student_id,
-             concat_ws(' ', s.first_name, s.last_name) AS full_name,
+             format_person_name(s.first_name, s.last_name) AS full_name,
              s.matricule,
              tci.note::text,
              tci.observation,

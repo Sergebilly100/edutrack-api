@@ -18,7 +18,7 @@ const options = {
 const build = () => {
   const repository = { options: vi.fn().mockResolvedValue(options), periodBelongsToYear: vi.fn().mockResolvedValue(true),
     list: vi.fn().mockResolvedValue({ items: [], total: 0 }),
-    remind: vi.fn().mockResolvedValue('2026-10-14T10:00:00Z'),
+    remindMany: vi.fn().mockResolvedValue([{ evaluationId: 'e1', status: 'sent', lastReminderAt: '2026-10-14T10:00:00Z' }]),
     listSpontaneous: vi.fn().mockResolvedValue({ students: [], totalStudents: 0, totalNotes: 0 }) };
   return { service: new EvaluationReviewService(repository as unknown as EvaluationReviewRepository), repository };
 };
@@ -27,10 +27,19 @@ describe('consultation des évaluations', () => {
   it('expose la trace de relance et refuse les demandes trop rapprochées', async () => {
     const { service, repository } = build();
     await expect(service.remind(ids.subject)).resolves.toEqual({ lastReminderAt: '2026-10-14T10:00:00Z' });
-    repository.remind.mockResolvedValueOnce('too_soon');
+    repository.remindMany.mockResolvedValueOnce([{ evaluationId: 'e1', status: 'too_soon' }]);
     await expect(service.remind(ids.subject)).rejects.toMatchObject({ code: 'EVALUATION_REMINDER_TOO_SOON' });
-    repository.remind.mockResolvedValueOnce('not_due');
+    repository.remindMany.mockResolvedValueOnce([{ evaluationId: 'e1', status: 'not_due' }]);
     await expect(service.remind(ids.subject)).rejects.toMatchObject({ code: 'EVALUATION_NOT_DUE' });
+  });
+  it('relance groupée : compte les envois et les évaluations ignorées', async () => {
+    const { service, repository } = build();
+    repository.remindMany.mockResolvedValueOnce([
+      { evaluationId: 'a', status: 'sent', lastReminderAt: '2026-10-14T10:00:00Z' },
+      { evaluationId: 'b', status: 'too_soon' },
+    ]);
+    await expect(service.remindMany(['a', 'b'], true)).resolves.toMatchObject({ sent: 1, skipped: 1 });
+    expect(repository.remindMany).toHaveBeenCalledWith(['a', 'b'], true);
   });
   it('refuse une classe, matière ou professeur hors du contexte sélectionné', async () => {
     const { service, repository } = build();

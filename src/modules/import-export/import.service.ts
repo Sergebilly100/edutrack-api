@@ -43,6 +43,7 @@ import type {
   TeacherImportRow,
 } from './import.types.js';
 import { IMPORT_PHONE_REGEX } from './import.types.js';
+import { formatPersonName } from '../../shared/utils/person-name.js';
 
 const STUDENTS_REQUIRED_HEADERS = ['Prénom*', 'Nom*'] as const;
 const TEACHERS_REQUIRED_HEADERS = ['Nom*', 'Prénom*', 'Type*'] as const;
@@ -831,7 +832,7 @@ export class ImportService {
         : existingByKey.get(rowKey);
 
       if (!existing) {
-        toAdd.push({ key: identityKey, displayName: `${fields.lastName} ${fields.firstName} (${fields.className})` });
+        toAdd.push({ key: identityKey, displayName: `${formatPersonName({ lastName: fields.lastName, firstName: fields.firstName })} (${fields.className})` });
         return;
       }
 
@@ -871,7 +872,7 @@ export class ImportService {
       }
 
       if (Object.keys(changes).length > 0) {
-        toUpdate.push({ key: identityKey, displayName: `${fields.lastName} ${fields.firstName} (${fields.className})`, changes });
+        toUpdate.push({ key: identityKey, displayName: `${formatPersonName({ lastName: fields.lastName, firstName: fields.firstName })} (${fields.className})`, changes });
       }
     });
 
@@ -889,7 +890,7 @@ export class ImportService {
             })
             .map((item) => ({
               key: item.key,
-              displayName: `${item.lastName} ${item.firstName} (${item.className})`,
+              displayName: `${formatPersonName({ lastName: item.lastName, firstName: item.firstName })} (${item.className})`,
             }))
         : [];
 

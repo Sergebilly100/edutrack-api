@@ -26,6 +26,12 @@ export const paymentReceiptNumbers = tenant.sequence('payment_receipt_numbers', 
   maxValue: 9_999_999_999,
 });
 
+/** Compteur journalier des numéros de reçus REC-AAAAMMJJ-NNNN (incrémenté dans la transaction du paiement). */
+export const paymentReceiptCounters = tenant.table('payment_receipt_counters', {
+  day: date('day', { mode: 'string' }).primaryKey(),
+  lastNumber: integer('last_number').notNull(),
+});
+
 export const userRoleEnum = tenant.enum('user_role', [
   'director',
   'staff',
@@ -643,6 +649,8 @@ export const payments = tenant.table(
     cancelledByUserId: uuid('cancelled_by_user_id').references(() => users.id),
     cancellationReason: text('cancellation_reason'),
     paymentDate: date('payment_date', { mode: 'string' }).notNull().default(sql`CURRENT_DATE`),
+    // Heure réelle du paiement : seulement quand elle est connue (encaissement à la caisse), sinon null.
+    paidAt: timestamp('paid_at', { withTimezone: true, mode: 'date' }),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   },
   (table) => ({

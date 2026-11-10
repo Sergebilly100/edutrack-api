@@ -31,6 +31,10 @@ export const teachersListQuerySchema = z.object({
   search: z.string().trim().min(1).max(100).optional(),
 });
 
+export const teachersExportQuerySchema = teachersListQuerySchema
+  .omit({ page: true, limit: true })
+  .extend({ school_year_id: z.uuid().optional() });
+
 const teacherTypeSchema = z.enum(['vacataire', 'permanent']);
 const teachingAssignmentSchema = z.object({
   subject_id: z.string().uuid(),
@@ -172,6 +176,7 @@ export const teacherTeachingOptionsQuerySchema = z.object({
   path: ['to'],
 });
 
+export type TeachersExportQuery = z.infer<typeof teachersExportQuerySchema>;
 export type TeachersListQuery = z.infer<typeof teachersListQuerySchema>;
 export type CreateTeacherInput = z.infer<typeof fullPayloadSchema> & {
   name: string;

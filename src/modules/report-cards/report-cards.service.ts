@@ -245,6 +245,19 @@ export class ReportCardsService {
         'CONDUCT_GRADES_PENDING'
       );
     }
+    // Jamais de bulletin silencieusement incomplet : un élève sans aucune moyenne de matière (seule la conduite
+    // donnerait une « moyenne générale ») bloque la génération au lieu d'être ignoré.
+    const levelSubjectIds = new Set(levelSubjects.map((subject) => subject.id));
+    const missingAverages = roster
+      .filter((student) => !subjectAverages.some((row) => row.studentId === student.id && levelSubjectIds.has(row.subjectId)))
+      .map((student) => student.fullName);
+    if (missingAverages.length > 0) {
+      throw new ReportCardsModuleError(
+        `Moyennes de matières manquantes pour : ${missingAverages.join(', ')}`,
+        409,
+        'GENERAL_AVERAGES_PENDING'
+      );
+    }
     const generalAverages = roster.flatMap((student) => {
       const entries = subjectAverages
         .filter((row) => row.studentId === student.id)

@@ -143,7 +143,7 @@ export class ReportCardsRepository {
     const result = await this.db.execute<ClaimListRow>(sql`
       SELECT r.id::text, r.class_id::text, r.student_id::text, r.subject_id::text, r.grading_period_id::text,
         gp.school_year_id::text, s.name AS subject_name, c.name AS class_name,
-        CASE WHEN student.id IS NULL THEN NULL ELSE concat_ws(' ', student.first_name, student.last_name) END AS student_name,
+        CASE WHEN student.id IS NULL THEN NULL ELSE format_person_name(student.first_name, student.last_name) END AS student_name,
         r.status, r.reason, r.phase, r.requested_by_user_id::text,
         r.decided_by_user_id::text, r.decision_reason, r.created_at::text,
         r.decided_at::text, r.revalidated_at::text, r.regenerated_at::text, r.republished_at::text
@@ -417,7 +417,7 @@ export class ReportCardsRepository {
 
   async listClassStudents(classId: string): Promise<Array<{ id: string; fullName: string }>> {
     const result = await this.db.execute<{ id: string; full_name: string }>(sql`
-      SELECT s.id::text, concat_ws(' ', s.first_name, s.last_name) AS full_name
+      SELECT s.id::text, format_person_name(s.first_name, s.last_name) AS full_name
       FROM students s
       INNER JOIN classes c ON c.id = ${classId}::uuid
       WHERE ${confirmedSchoolStudent(sql`s.id`, sql`c.school_year_id`, sql`c.id`)}
@@ -691,7 +691,7 @@ export class ReportCardsRepository {
       status: string;
     }>(sql`
       SELECT rc.id::text,
-             concat_ws(' ', s.first_name, s.last_name) AS student_name,
+             format_person_name(s.first_name, s.last_name) AS student_name,
              rc.general_average::text, ${visibleReportCardRank} AS rank, rc.status::text
       FROM report_cards rc
       INNER JOIN students s ON s.id = rc.student_id
@@ -907,7 +907,7 @@ export class ReportCardsRepository {
       decision: string | null;
     }>(sql`
       SELECT rc.id::text, rc.student_id::text,
-             concat_ws(' ', s.first_name, s.last_name) AS student_name,
+             format_person_name(s.first_name, s.last_name) AS student_name,
              rc.class_id::text, c.name AS class_name,
              rc.grading_period_id::text, gp.label AS period_label, sy.label AS school_year_label,
              rc.general_average::text, ${visibleReportCardRank} AS rank,

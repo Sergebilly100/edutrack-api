@@ -2,10 +2,13 @@ import type {
   CreateTeacherInput,
   TeacherAttendanceStatsQuery,
   TeacherTeachingOptionsQuery,
+  TeachersExportQuery,
   TeachersListQuery,
   UpdateTeacherInput,
 } from './teachers.types.js';
 import { TeachersRepository } from './teachers.repository.js';
+import { buildExportWorkbook, exportFileName, type ExportColumn } from '../../shared/export/xlsx-safe.js';
+import { getCountryName } from '../../shared/utils/nationality.js';
 import { getMaxUsersBySchemaName } from '../../shared/utils/users-limit.js';
 import { canonicalizeSubject, canonicalizeSubjectList } from '../../shared/utils/subject-normalization.js';
 import { defaultEmailSender } from '../notifications/notifications.service.js';
@@ -153,6 +156,26 @@ const toDTO = (row: {
   teaching_assignments: row.teaching_assignments ?? [],
   homeroom_classes: row.homeroom_classes ?? [],
 });
+
+export const TEACHER_EXPORT_COLUMNS: readonly ExportColumn[] = [
+  { header: 'Matricule', key: 'matricule', width: 16 },
+  { header: 'Nom complet', key: 'name', width: 34 },
+  { header: 'Sexe', key: 'sex', width: 8 },
+  { header: 'Date de naissance', key: 'birthDate', width: 18 },
+  { header: 'Lieu de naissance', key: 'birthPlace', width: 22 },
+  { header: 'Nationalité', key: 'nationality', width: 14 },
+  { header: 'Type', key: 'type', width: 14 },
+  { header: 'Matières', key: 'subjects', width: 34 },
+  { header: 'Classes', key: 'classes', width: 34 },
+  { header: 'Téléphone', key: 'phone', width: 18 },
+  { header: 'E-mail', key: 'email', width: 30 },
+  { header: 'Statut', key: 'status', width: 12 },
+];
+
+const toFrenchDate = (value: string | null): string => {
+  const match = value ? /^(\d{4})-(\d{2})-(\d{2})/.exec(value) : null;
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : '';
+};
 
 export class TeachersService {
   constructor(private readonly repository: TeachersRepository) {}
@@ -433,6 +456,36 @@ export class TeachersService {
       logger.error({ teacherId, err: error }, '[teachers] credentials email crashed');
       return { emailSent: false, email: reset.email, plainPassword: reset.plainPassword };
     }
+  }
+
+  /**
+   * Export Excel des professeurs (hors salaires et données financières). Tous les professeurs correspondant
+   * aux filtres sont exportés ; seules les classes dépendent de l'année scolaire choisie (active par défaut).
+   */
+  async exportTeachers(query: TeachersExportQuery): Promise<{ buffer: Buffer; fileName: string }> {
+    const year = await this.repository.findExportSchoolYear(query.school_year_id);
+    if (!year) throw new TeachersModuleError('School year not found', 404, 'SCHOOL_YEAR_NOT_FOUND');
+    const filters = { ...query, school_year_id: undefined };
+    const rows = await this.repository.listTeachersForExport(filters, year.id);
+    const buffer = await buildExportWorkbook({
+      name: 'Professeurs',
+      columns: TEACHER_EXPORT_COLUMNS,
+      rows: rows.map((row) => ({
+        matricule: row.matricule,
+        name: row.name,
+        sex: row.sex,
+        birthDate: toFrenchDate(row.birth_date),
+        birthPlace: row.birth_place,
+        nationality: row.nationality ? getCountryName(row.nationality) : '',
+        type: row.type === 'permanent' ? 'Permanent' : 'Vacataire',
+        subjects: (row.subjects ?? []).join(', '),
+        classes: (row.class_names ?? []).join(', '),
+        phone: row.phone,
+        email: row.email,
+        status: !row.is_active ? 'Inactif' : row.is_blocked ? 'Bloqué' : 'Actif',
+      })),
+    });
+    return { buffer, fileName: exportFileName('professeurs', year.label) };
   }
 
   /**
